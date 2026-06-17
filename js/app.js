@@ -180,9 +180,14 @@ function renderBranch(parent,games,seq,depth){
       const note = saved?.note || '';
       if(!mnem && !note){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
-        (mnem ? `<span class="meta-mnem"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`     : '');
+        (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
+        (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '');
       metaTr.style.display='';
+
+      const mnemEl = metaTd.querySelector('.meta-mnem');
+      if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
+      const noteEl = metaTd.querySelector('.meta-note');
+      if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     }
     refreshMeta();
 
