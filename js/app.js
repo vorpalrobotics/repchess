@@ -68,6 +68,15 @@ function replies(games,seq){
   return {counts,tot};
 }
 
+/* ---------- FEN for a move sequence ---------- */
+function fenForSeq(seq){
+  const chess = new Chess();
+  for(const mv of seq){
+    if(!chess.move(mv,{sloppy:true})) break;
+  }
+  return chess.fen();
+}
+
 /* ---------- toggle helper ---------- */
 function makeToggle(btn, branchRow){
   if(btn.dataset.ready) return;                 // only wire once
@@ -106,6 +115,7 @@ function renderBranch(parent,games,seq,depth){
       `<td class="move">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${depth+1}. ${seq.at(-1)} ${opp}
+         <button class="iconbtn eye" title="Show position on board">👁</button>
        </td>
        <td class="note"><input data-note size="4" style="width:4em"></td>
        <td class="mnem"><input data-mnemonic size="6" style="width:6em"></td>
@@ -119,13 +129,15 @@ function renderBranch(parent,games,seq,depth){
 
     /* element handles */
     const toggleBtn = tr.querySelector('.toggle');
+    const btnEye    = tr.querySelector('.eye');
     const inpNote   = tr.querySelector('[data-note]');
     const inpMnem   = tr.querySelector('[data-mnemonic]');
     const inpRep    = tr.querySelector('[data-reply]');
-    const [btnGo,btnEval] = tr.querySelectorAll('button.iconbtn:not(.toggle)');
+    const [btnGo,btnEval] = tr.querySelectorAll('td.resp button.iconbtn');
 
     /* restore note, mnemonic & reply from the preloaded PREFS map */
     const lineSeq = [...seq,opp];
+    btnEye.onclick = () => board.setPosition(fenForSeq(lineSeq));
     const saved = PREFS[prefKey(CURRENT_USER,lineSeq)];
     inpNote.value = saved?.note || '';
     inpMnem.value = saved?.mnemonic || '';
@@ -260,7 +272,7 @@ $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
 
 /* ---------- analysis board ---------- */
 const board = new Chessboard($('board'), {
-  position: 'start',
+  position: new Chess().fen(),
   orientation: COLOR.white,
   style: {
     pieces: {
