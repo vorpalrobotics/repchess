@@ -5,6 +5,7 @@
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/chessboard.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <style>
   body{font-family:Arial,sans-serif;margin:0;padding:1rem 1.2rem}
   .field{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin-bottom:.9rem}
@@ -19,8 +20,6 @@
   th{background:#f5f5f5}
 
   td.move {min-width:8em;white-space:nowrap}
-  td.note {min-width:4em}
-  td.mnem {min-width:6em}
   td.cnt  {min-width:8em;white-space:nowrap}
   td.resp {min-width:15em;white-space:nowrap}
 
@@ -29,6 +28,18 @@
 
   .iconbtn{background:none;border:none;font-size:1.1em;padding:0 .4em;cursor:pointer}
   .toggle {font-size:1.15em;vertical-align:middle}
+
+  tr.meta-row td{border-bottom:1px solid #ddd;padding-top:0;font-size:.78rem;color:#555}
+  tr.meta-row .meta-mnem,
+  tr.meta-row .meta-note{margin-right:1.3em}
+  tr.meta-row i{margin-right:.35em;color:#888}
+
+  .row-menu-wrap{position:relative;display:inline-block}
+  .row-menu{position:absolute;left:0;top:1.7em;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:10em;z-index:10}
+  .row-menu.show{display:flex}
+  .row-menu button{border:none;background:none;text-align:left;padding:.4em .8em;font-weight:400;font-size:.85rem;display:flex;align-items:center;gap:.5em}
+  .row-menu button:hover{background:#f0f0f0}
+  .row-menu i{width:1.1em;text-align:center;color:#888}
 
   #side{width:6em;flex:0 0 auto}
   #firstMove{width:8em;flex:0 0 auto}
@@ -106,6 +117,20 @@
     <p>Copyright (C) 2026 Vorpal Robotics, LLC</p>
     <div class="modal-actions">
       <button id="aboutCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- add note / mnemonic modal -->
+<div id="fieldOverlay" class="overlay">
+  <div class="modal">
+    <h2 id="fieldModalTitle">Add Note</h2>
+    <div class="field">
+      <input id="fieldModalInput" style="width:100%;max-width:22em">
+    </div>
+    <div class="modal-actions">
+      <button id="fieldModalCancelBtn">Cancel</button>
+      <button id="fieldModalSaveBtn">SAVE</button>
     </div>
   </div>
 </div>

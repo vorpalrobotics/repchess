@@ -90,6 +90,32 @@ function makeToggle(btn, branchRow){
   };
 }
 
+/* ---------- escape free text before inserting into innerHTML ---------- */
+const escapeHtml = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------- per-row "more" menu ---------- */
+function closeAllRowMenus(){
+  document.querySelectorAll('.row-menu.show').forEach(m=>m.classList.remove('show'));
+}
+document.addEventListener('click', closeAllRowMenus);
+
+/* ---------- add note / mnemonic modal ---------- */
+let fieldModalSave = null;
+function openFieldModal(field, currentValue, onSave){
+  $('fieldModalTitle').textContent = field==='note' ? 'Add Note' : 'Add Mnemonic';
+  $('fieldModalInput').value = currentValue || '';
+  fieldModalSave = onSave;
+  $('fieldOverlay').style.display='flex';
+  $('fieldModalInput').focus();
+}
+$('fieldModalCancelBtn').onclick = () => { $('fieldOverlay').style.display='none'; fieldModalSave=null; };
+$('fieldModalSaveBtn').onclick = () => {
+  const v = $('fieldModalInput').value.trim();
+  $('fieldOverlay').style.display='none';
+  if(fieldModalSave) fieldModalSave(v);
+  fieldModalSave = null;
+};
+
 /* ---------- recursive branch renderer ---------- */
 function renderBranch(parent,games,seq,depth){
   const {counts,tot}=replies(games,seq);
@@ -105,7 +131,7 @@ function renderBranch(parent,games,seq,depth){
 
   if(depth===0){
     tbl.innerHTML=
-      `<thead><tr><th>Move</th><th>Notes</th><th>Mnemonic</th><th>Count</th><th>Response</th></tr></thead>`;
+      `<thead><tr><th>Move</th><th>Count</th><th>Response</th></tr></thead>`;
   }
   const tb=tbl.appendChild(document.createElement('tbody'));
 
@@ -116,48 +142,84 @@ function renderBranch(parent,games,seq,depth){
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${depth+1}. ${seq.at(-1)} ${opp}
        </td>
-       <td class="note"><input data-note size="4" style="width:4em"></td>
-       <td class="mnem"><input data-mnemonic size="6" style="width:6em"></td>
        <td class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</td>
        <td class="resp">
          <input data-reply size="4">
          <button class="iconbtn" title="Expand">🔍</button>
          <button class="iconbtn" title="Analyse">📈</button>
+         <div class="row-menu-wrap">
+           <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+           <div class="row-menu">
+             <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+             <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+           </div>
+         </div>
        </td>`;
     tb.appendChild(tr);
 
-    /* element handles */
-    const toggleBtn = tr.querySelector('.toggle');
-    const inpNote   = tr.querySelector('[data-note]');
-    const inpMnem   = tr.querySelector('[data-mnemonic]');
-    const inpRep    = tr.querySelector('[data-reply]');
-    const [btnGo,btnEval] = tr.querySelectorAll('td.resp button.iconbtn');
+    const metaTr = document.createElement('tr');
+    metaTr.className = 'meta-row';
+    const metaTd = document.createElement('td');
+    metaTd.colSpan = 3;
+    metaTr.appendChild(metaTd);
+    tr.after(metaTr);
 
-    /* restore note, mnemonic & reply from the preloaded PREFS map */
+    /* element handles */
+    const toggleBtn  = tr.querySelector('.toggle');
+    const inpRep     = tr.querySelector('[data-reply]');
+    const [btnGo,btnEval] = tr.querySelectorAll('td.resp > button.iconbtn');
+    const rowMenuBtn = tr.querySelector('.rowMenuBtn');
+    const rowMenu    = tr.querySelector('.row-menu');
+
     const lineSeq = [...seq,opp];
-    const saved = PREFS[prefKey(CURRENT_USER,lineSeq)];
-    inpNote.value = saved?.note || '';
-    inpMnem.value = saved?.mnemonic || '';
-    const savedRep = saved?.reply;
+    const currentSaved = () => PREFS[prefKey(CURRENT_USER,lineSeq)];
+
+    function refreshMeta(){
+      const saved = currentSaved();
+      const mnem = saved?.mnemonic || '';
+      const note = saved?.note || '';
+      if(!mnem && !note){ metaTr.style.display='none'; return; }
+      metaTd.innerHTML =
+        (mnem ? `<span class="meta-mnem"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
+        (note ? `<span class="meta-note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`     : '');
+      metaTr.style.display='';
+    }
+    refreshMeta();
+
+    function saveField(field,value){
+      setPref(CURRENT_USER,lineSeq,{[field]:value});
+      const key = prefKey(CURRENT_USER,lineSeq);
+      (PREFS[key] ??= {key,user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''})[field]=value;
+      refreshMeta();
+    }
+
+    /* restore reply from the preloaded PREFS map */
+    const savedRep = currentSaved()?.reply;
     if(savedRep){
       inpRep.value = savedRep;
-      const tr1=document.createElement('tr'); tr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=5; tr1.appendChild(td1);
+      const tr1=document.createElement('tr'); metaTr.after(tr1);
+      const td1=document.createElement('td'); td1.colSpan=3; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       renderBranch(div,games,[...lineSeq,savedRep],depth+1);
       makeToggle(toggleBtn,tr1);
     }
 
-    /* save note / mnemonic on blur */
-    inpNote.onblur = () => {
-      const v=inpNote.value.trim();
-      setPref(CURRENT_USER,lineSeq,{note:v});
-      (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).note=v;
+    /* "more" menu: add note / add mnemonic */
+    rowMenuBtn.onclick = e => {
+      e.stopPropagation();
+      const showing = rowMenu.classList.contains('show');
+      closeAllRowMenus();
+      if(!showing) rowMenu.classList.add('show');
     };
-    inpMnem.onblur = () => {
-      const v=inpMnem.value.trim();
-      setPref(CURRENT_USER,lineSeq,{mnemonic:v});
-      (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).mnemonic=v;
+    rowMenu.querySelector('[data-act="note"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+    };
+    rowMenu.querySelector('[data-act="mnemonic"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     };
 
     /* expand under chosen reply */
@@ -167,10 +229,10 @@ function renderBranch(parent,games,seq,depth){
       setPref(CURRENT_USER,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
 
-      if(tr.nextSibling?.querySelector?.('.branch')) return; // already expanded
+      if(metaTr.nextSibling?.querySelector?.('.branch')) return; // already expanded
 
-      const tr1=document.createElement('tr'); tr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=5; tr1.appendChild(td1);
+      const tr1=document.createElement('tr'); metaTr.after(tr1);
+      const td1=document.createElement('td'); td1.colSpan=3; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       renderBranch(div,games,[...lineSeq,reply],depth+1);
       makeToggle(toggleBtn,tr1);
