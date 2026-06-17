@@ -347,7 +347,7 @@ const board = new Chessboard($('board'), {
 });
 
 /* ---------- engine ---------- */
-const ENGINE_DEPTH = 20, ENGINE_MULTIPV = 4, ENGINE_PV_PLIES = 8;
+const ENGINE_MULTIPV = 4, ENGINE_PV_PLIES = 8;
 const engine = new Engine();
 let engineRunId = 0;
 
@@ -410,11 +410,11 @@ async function runEngine(fen){
   if(runId !== engineRunId || !engine.ready) return;
   $('engineDepth').textContent = 'Thinking…';
   $('engineLines').innerHTML = '';
-  await engine.analyzeMultiPV(fen, {
-    depth: ENGINE_DEPTH,
+  // runs forever (go infinite) until the next runEngine() call stops it
+  engine.analyze(fen, {
     multipv: ENGINE_MULTIPV,
     onInfo: (depth,lines) => { if(runId === engineRunId) renderEngineLines(fen,depth,lines); }
-  });
+  }).catch(err => console.error('[engine] analyze failed', err));
 }
 
 function showPosition(fen){

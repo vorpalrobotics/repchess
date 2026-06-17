@@ -52,12 +52,28 @@ export class Engine {
     });
   }
 
-  // Runs a multi-PV search on `fen`, calling onInfo(depth, lines) every time a
-  // line updates. `lines` is keyed by PV rank (1..multipv), each entry is
-  // { score: {type:'cp'|'mate', value}, pv: [uci moves...] }, both relative
-  // to the side to move (as reported by the engine).
-  analyzeMultiPV(fen, { depth = 20, multipv = 4, onInfo } = {}) {
-    this._send('stop');
+  // Stops whatever search is currently running and waits for the engine to
+  // confirm (its `bestmove` reply) before the caller installs a new listener,
+  // so that reply can't be mistaken for the next search's result.
+  _stopCurrent() {
+    if (!this._listener) return Promise.resolve();
+    return new Promise(resolve => {
+      const prevListener = this._listener;
+      this._listener = line => {
+        prevListener(line);
+        if (line.startsWith('bestmove')) resolve();
+      };
+      this._send('stop');
+    });
+  }
+
+  // Runs an unbounded multi-PV search on `fen`, calling onInfo(depth, lines)
+  // every time a line updates. `lines` is keyed by PV rank (1..multipv), each
+  // entry is { score: {type:'cp'|'mate', value}, pv: [uci moves...] }, both
+  // relative to the side to move (as reported by the engine). The search runs
+  // until stop() is called (or another analyze() call supersedes it).
+  async analyze(fen, { multipv = 4, onInfo } = {}) {
+    await this._stopCurrent();
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);
 
@@ -90,12 +106,11 @@ export class Engine {
           resolve({ depth: curDepth, lines });
         }
       };
-      this._send(`go depth ${depth}`);
+      this._send('go infinite');
     });
   }
 
   stop() {
     this._send('stop');
-    this._listener = null;
   }
 }
