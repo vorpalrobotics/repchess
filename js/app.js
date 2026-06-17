@@ -12,6 +12,7 @@ const clr = ()=>{ $('progress').textContent='';$('progress').classList.remove('e
 
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
+const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
@@ -382,8 +383,24 @@ const engineMaxDepth  = () => {
   return v === 'infinity' ? Infinity : parseInt(v, 10);
 };
 
-$('engineLinesSelect').onchange = () => { if(currentEngineFen) runEngine(currentEngineFen); };
-$('engineMaxDepthSelect').onchange = () => { if(currentEngineFen) runEngine(currentEngineFen); };
+/* restore last-used line count / max depth, if they're still valid options */
+const savedLines = localStorage.getItem(LS_ENGINE_LINES);
+if(savedLines && [...$('engineLinesSelect').options].some(o=>o.value===savedLines)){
+  $('engineLinesSelect').value = savedLines;
+}
+const savedDepth = localStorage.getItem(LS_ENGINE_DEPTH);
+if(savedDepth && [...$('engineMaxDepthSelect').options].some(o=>o.value===savedDepth)){
+  $('engineMaxDepthSelect').value = savedDepth;
+}
+
+$('engineLinesSelect').onchange = () => {
+  localStorage.setItem(LS_ENGINE_LINES, $('engineLinesSelect').value);
+  if(currentEngineFen) runEngine(currentEngineFen);
+};
+$('engineMaxDepthSelect').onchange = () => {
+  localStorage.setItem(LS_ENGINE_DEPTH, $('engineMaxDepthSelect').value);
+  if(currentEngineFen) runEngine(currentEngineFen);
+};
 
 engine.init().catch(err => {
   console.error('[engine] init failed', err);
