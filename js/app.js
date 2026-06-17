@@ -106,6 +106,11 @@ function closeAllRowMenus(){
 }
 document.addEventListener('click', closeAllRowMenus);
 
+/* ---------- canonicalize move-input case (castling + piece letters) ----------
+   O/Q/N/K/R never collide with file letters (a-h), so they're safe to
+   uppercase unconditionally; B is ambiguous with the b-file so left alone. */
+const canonicalizeMoveCase = v => v.replace(/[oqnkr]/gi, c => c.toUpperCase());
+
 /* ---------- add note / mnemonic / response modal ---------- */
 let fieldModalSave = null, fieldModalValidate = null;
 // `validate(rawInput)` is optional; return {ok:true, value} to accept (value
@@ -252,6 +257,7 @@ function renderBranch(parent,games,seq,depth){
       rowMenu.classList.remove('show');
       openFieldModal('response', currentSaved()?.reply, v=>setStandardResponse(v), v=>{
         if(!v) return {ok:false, error:'enter a move'};
+        v = canonicalizeMoveCase(v);
         const chess = new Chess(fenForSeq(lineSeq));
         const mv = chess.move(v,{sloppy:true});
         if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
