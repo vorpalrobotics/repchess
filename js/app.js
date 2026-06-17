@@ -227,7 +227,31 @@ $('dlBtn').onclick = async ()=>{
     log(`fetched ${GAMES.length}, writing to database…`);
     await putGames(CURRENT_USER,GAMES);
     log(`downloaded ${GAMES.length}`);
+    $('downloadOverlay').style.display='none';
   }catch(e){ console.error('[dlBtn] download failed',e); log(e.message,true); }
 };
 
 $('rootBtn').onclick = searchRoot;
+
+/* ---------- hamburger menu ---------- */
+$('menuBtn').onclick = e=>{
+  e.stopPropagation();
+  $('menuList').style.display = $('menuList').style.display==='flex' ? 'none' : 'flex';
+};
+document.addEventListener('click', e=>{
+  if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
+});
+
+/* ---------- download modal ---------- */
+$('menuDownload').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('downloadOverlay').style.display='flex';
+};
+$('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
+
+/* ---------- about modal ---------- */
+$('menuAbout').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('aboutOverlay').style.display='flex';
+};
+$('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
