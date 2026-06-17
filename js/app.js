@@ -150,6 +150,43 @@ $('fieldModalSaveBtn').onclick = () => {
   fieldModalSave = null; fieldModalValidate = null;
 };
 
+/* ---------- focus on a single line, hiding sibling branches above it ----------
+   Walks from the clicked row up through each ancestor table, hiding every
+   other reply group at that depth; everything at or below the focused row
+   is left exactly as rendered (untouched). */
+let focusHidden = [];
+function clearFocus(){
+  focusHidden.forEach(el=>el.classList.remove('focus-hidden'));
+  focusHidden = [];
+  $('unfocusBtn').style.display='none';
+}
+function rowGroup(tbody, dataRow){
+  const rows = Array.from(tbody.children);
+  const group = [dataRow];
+  for(let i=rows.indexOf(dataRow)+1; i<rows.length; i++){
+    if(rows[i].classList.contains('data-row')) break;
+    group.push(rows[i]);
+  }
+  return group;
+}
+function focusOnLine(dataRow){
+  clearFocus();
+  let node = dataRow;
+  while(node){
+    const tbody = node.parentElement;
+    const keep = new Set(rowGroup(tbody, node));
+    Array.from(tbody.children).forEach(row=>{
+      if(!keep.has(row)){ row.classList.add('focus-hidden'); focusHidden.push(row); }
+    });
+    const branchRow = tbody.parentElement.closest('tr.branch-row');
+    if(!branchRow) break;
+    const metaRow = branchRow.previousElementSibling;
+    node = metaRow ? metaRow.previousElementSibling : null;
+  }
+  $('unfocusBtn').style.display='inline-block';
+}
+$('unfocusBtn').onclick = clearFocus;
+
 /* ---------- recursive branch renderer ---------- */
 function renderBranch(parent,games,seq,depth){
   const {counts,tot}=replies(games,seq);
@@ -166,12 +203,14 @@ function renderBranch(parent,games,seq,depth){
 
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const tr=document.createElement('tr');
+    tr.className = 'data-row';
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse">📈</button>
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
+             <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
@@ -230,7 +269,7 @@ function renderBranch(parent,games,seq,depth){
       const old = metaTr.nextSibling;
       if(old?.querySelector?.('.branch')) old.remove();
 
-      const tr1=document.createElement('tr'); metaTr.after(tr1);
+      const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       renderBranch(div,games,[...lineSeq,reply],depth+1);
@@ -253,6 +292,11 @@ function renderBranch(parent,games,seq,depth){
       const showing = rowMenu.classList.contains('show');
       closeAllRowMenus();
       if(!showing) rowMenu.classList.add('show');
+    };
+    rowMenu.querySelector('[data-act="focus"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      focusOnLine(tr);
     };
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
       e.stopPropagation();
@@ -297,6 +341,8 @@ $('fileImport').addEventListener('change', async e=>{
 /* ---------- main search action ---------- */
 async function searchRoot(){
   clr();
+  focusHidden = [];
+  $('unfocusBtn').style.display='none';
   $('tree').innerHTML='';
 
   const first=$('firstMove').value.trim();
