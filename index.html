@@ -5,10 +5,10 @@
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  body{font-family:Arial,sans-serif;max-width:920px;margin:auto;padding:1rem}
+  body{font-family:Arial,sans-serif;margin:0;padding:1rem 1.2rem}
   .field{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin-bottom:.9rem}
   label{flex:0 0 100px}
-  input,select{flex:1 1 160px;padding:.3rem .5rem}
+  input,select{padding:.3rem .5rem}
   button{padding:.35rem .75rem;font-weight:600;cursor:pointer;border:1px solid #888;border-radius:4px;background:#f5f5f5}
   #progress{margin-top:.7rem;font-style:italic}
   #progress.error{color:#c62828;font-weight:700;font-style:normal}
@@ -28,26 +28,73 @@
 
   .iconbtn{background:none;border:none;font-size:1.1em;padding:0 .4em;cursor:pointer}
   .toggle {font-size:1.15em;vertical-align:middle}
+
+  #side{width:6em;flex:0 0 auto}
+  #firstMove{width:8em;flex:0 0 auto}
+
+  .topbar{display:flex;justify-content:space-between;align-items:center}
+  #menuBtn{font-size:1.4em;border:none;background:none;padding:.1em .4em}
+
+  #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
+  #menuList button{border:none;background:none;text-align:left;padding:.5em .9em;border-radius:0;font-weight:400}
+  #menuList button:hover{background:#f0f0f0}
+
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:20}
+  .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  .modal h2{margin-top:0}
+  .modal .modal-actions{margin-top:1rem;text-align:right}
 </style>
 </head>
 <body>
-<h1>REPchess</h1>
-
-<div class="field">
-  <label>Lichess ID:</label><input id="userId">
-  <label>Max:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
-  <button id="dlBtn">DOWNLOAD</button>
+<div class="topbar">
+  <h1>REPchess</h1>
+  <div style="position:relative">
+    <button id="menuBtn" title="Menu">&#9776;</button>
+    <div id="menuList">
+      <button id="menuDownload">Download Games</button>
+      <button id="menuAbout">About</button>
+    </div>
+  </div>
 </div>
 
 <div class="field">
   <label>Side:</label>
   <select id="side"><option value="white">White</option><option value="black">Black</option></select>
-  <label>First move:</label><input id="firstMove" value="d4" style="width:5em">
+  <label>First move:</label><input id="firstMove" value="d4">
 </div>
 
 <button id="rootBtn" title="Search openings">🔍</button>
 <div id="progress"></div>
 <div id="tree"></div>
+
+<!-- download games modal -->
+<div id="downloadOverlay" class="overlay">
+  <div class="modal">
+    <h2>Download Games</h2>
+    <div class="field">
+      <label>Lichess ID:</label><input id="userId">
+    </div>
+    <div class="field">
+      <label>Max:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
+    </div>
+    <div class="modal-actions">
+      <button id="downloadCancelBtn">Cancel</button>
+      <button id="dlBtn">DOWNLOAD</button>
+    </div>
+  </div>
+</div>
+
+<!-- about modal -->
+<div id="aboutOverlay" class="overlay">
+  <div class="modal">
+    <h2>About REPchess</h2>
+    <p>Version 0.1</p>
+    <p>Copyright (C) 2026 Vorpal Robotics, LLC</p>
+    <div class="modal-actions">
+      <button id="aboutCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
 
 <!-- hidden file chooser for manual NDJSON uploads -->
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
