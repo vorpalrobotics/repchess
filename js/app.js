@@ -1,3 +1,5 @@
+import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
+
 /* ---------- version (injected at deploy time, see workflow) ---------- */
 document.title = `REPchess (${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
 
@@ -255,3 +257,14 @@ $('menuAbout').onclick = ()=>{
   $('aboutOverlay').style.display='flex';
 };
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
+
+/* ---------- analysis board ---------- */
+const board = new Chessboard($('board'), {
+  position: 'start',
+  orientation: COLOR.white,
+  style: {
+    pieces: {
+      file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg'
+    }
+  }
+});

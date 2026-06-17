@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/chessboard.css">
 <style>
   body{font-family:Arial,sans-serif;margin:0;padding:1rem 1.2rem}
   .field{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin-bottom:.9rem}
@@ -43,6 +44,11 @@
   .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
   .modal h2{margin-top:0}
   .modal .modal-actions{margin-top:1rem;text-align:right}
+
+  .main-layout{display:flex;align-items:flex-start;gap:1.5rem}
+  #tree-col{flex:1 1 auto;min-width:0}
+  #board-col{flex:0 0 auto;width:420px}
+  #board{width:420px;height:420px}
 </style>
 </head>
 <body>
@@ -65,7 +71,15 @@
 
 <button id="rootBtn" title="Search openings">🔍</button>
 <div id="progress"></div>
-<div id="tree"></div>
+
+<div class="main-layout">
+  <div id="tree-col">
+    <div id="tree"></div>
+  </div>
+  <div id="board-col">
+    <div id="board"></div>
+  </div>
+</div>
 
 <!-- download games modal -->
 <div id="downloadOverlay" class="overlay">
@@ -102,6 +116,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
 <script src="js/db.js"></script>
-<script src="js/app.js"></script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>
