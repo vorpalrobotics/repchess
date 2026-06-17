@@ -24,6 +24,7 @@ function ensureFreshStart(){
     }
     for(const k of toRemove) localStorage.removeItem(k);
 
+    console.log('[db] fresh start: wiping legacy localStorage keys and old IndexedDB');
     const req = indexedDB.deleteDatabase(DB_NAME);
     const done = () => { localStorage.setItem(FRESH_START_FLAG,'1'); resolve(); };
     req.onsuccess = done;
@@ -49,8 +50,8 @@ function openDB(){
         ps.createIndex('user','user');
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror   = () => reject(req.error);
+    req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
+    req.onerror   = () => { console.error('[db] open failed',req.error); reject(req.error); };
   }));
   return dbPromise;
 }
@@ -64,6 +65,7 @@ function hashStr(s){
 /* ---------- games ---------- */
 /* games: array of parsed Lichess game objects (already JSON.parse'd) */
 async function putGames(user, games){
+  console.log(`[db] writing ${games.length} games for ${user}…`);
   const db = await openDB();
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('games','readwrite');
@@ -72,8 +74,8 @@ async function putGames(user, games){
       const gameId = g.id || hashStr(JSON.stringify(g));
       store.put({ id:`${user}:${gameId}`, user, gameId, moves:g.moves, raw:g });
     }
-    txn.oncomplete = () => resolve();
-    txn.onerror    = () => reject(txn.error);
+    txn.oncomplete = () => { console.log(`[db] wrote ${games.length} games for ${user}`); resolve(); };
+    txn.onerror    = () => { console.error('[db] putGames failed',txn.error); reject(txn.error); };
   });
 }
 
@@ -82,8 +84,8 @@ async function getGames(user){
   return new Promise((resolve,reject)=>{
     const store = db.transaction('games','readonly').objectStore('games');
     const req = store.index('user').getAll(user);
-    req.onsuccess = () => resolve(req.result.map(r=>r.raw));
-    req.onerror   = () => reject(req.error);
+    req.onsuccess = () => { console.log(`[db] loaded ${req.result.length} games for ${user}`); resolve(req.result.map(r=>r.raw)); };
+    req.onerror   = () => { console.error('[db] getGames failed',req.error); reject(req.error); };
   });
 }
 
