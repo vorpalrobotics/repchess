@@ -2,7 +2,8 @@ import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/
 import { Engine } from './engine.js';
 
 /* ---------- version (injected at deploy time, see workflow) ---------- */
-document.title = `REPchess (${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
+document.getElementById('buildStamp').textContent =
+  `(${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
 
 /* ---------- helpers ---------- */
 const $   = id => document.getElementById(id);
