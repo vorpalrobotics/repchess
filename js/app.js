@@ -181,14 +181,14 @@ function renderBranch(parent,games,seq,depth){
        <td class="move" style="padding-left:${depth}em">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${depth+1}. ${seq.at(-1)} ${opp}
-       </td>
-       <td class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</td>`;
+         <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
+       </td>`;
     tb.appendChild(tr);
 
     const metaTr = document.createElement('tr');
     metaTr.className = 'meta-row';
     const metaTd = document.createElement('td');
-    metaTd.colSpan = 3;
+    metaTd.colSpan = 2;
     metaTr.appendChild(metaTd);
     tr.after(metaTr);
 
@@ -231,7 +231,7 @@ function renderBranch(parent,games,seq,depth){
       if(old?.querySelector?.('.branch')) old.remove();
 
       const tr1=document.createElement('tr'); metaTr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=3; tr1.appendChild(td1);
+      const td1=document.createElement('td'); td1.colSpan=2; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       renderBranch(div,games,[...lineSeq,reply],depth+1);
       makeToggle(toggleBtn,tr1);
