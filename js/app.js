@@ -1,9 +1,16 @@
 import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
 import { Engine } from './engine.js';
 
-/* ---------- version (injected at deploy time, see workflow) ---------- */
+/* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
+   Displayed in the visitor's local timezone so it matches their wall clock. */
+function formatBuildStamp(utcStamp){
+  const d = new Date(utcStamp);
+  if(isNaN(d)) return utcStamp;
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}@${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 document.getElementById('buildStamp').textContent =
-  `(${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
+  `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'})`;
 
 /* ---------- helpers ---------- */
 const $   = id => document.getElementById(id);

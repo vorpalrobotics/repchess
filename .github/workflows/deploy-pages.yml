@@ -29,7 +29,7 @@ jobs:
 
       - name: Stamp version
         run: |
-          STAMP="$(date -u +'%Y.%m.%d@%H:%M')"
+          STAMP="$(date -u +'%Y-%m-%dT%H:%MZ')"
           echo "const APP_VERSION = '${STAMP}';" > js/version.js
 
       - name: Upload artifact
