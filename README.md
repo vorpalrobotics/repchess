@@ -1,1 +1,30 @@
-IyBSRVBjaGVzcyDigJQgTGljaGVzcyBPcGVuaW5nIFJlcGVydG9pcmUgQnVpbGRlcgoKQSBzaW5nbGUtcGFnZSB3ZWIgYXBwIHRoYXQgaGVscHMgeW91IGJ1aWxkIGFuZCBtYWludGFpbiBhIGNoZXNzIG9wZW5pbmcgcmVwZXJ0b2lyZSBmcm9tIHlvdXIgb3duIExpY2hlc3MgZ2FtZSBoaXN0b3J5LgoKTGl2ZSBhdDogaHR0cHM6Ly92b3JwYWxyb2JvdGljcy5naXRodWIuaW8vcmVwY2hlc3MvCgojIyBXaGF0IGl0IGRvZXMKCi0gKipEb3dubG9hZCBnYW1lcyoqOiBFbnRlciBhIExpY2hlc3MgdXNlcm5hbWUgYW5kIGEgbWF4IGdhbWUgY291bnQsIGFuZCB0aGUgYXBwIGZldGNoZXMgeW91ciByZWNlbnQgZ2FtZXMgZGlyZWN0bHkgZnJvbSB0aGUgcHVibGljIExpY2hlc3MgQVBJIChubyBzZXJ2ZXIsIG5vIEFQSSBrZXkgcmVxdWlyZWQpLgotICoqRmluZCBmcmVxdWVudCByZXBsaWVzKio6IFBpY2sgYSBzdGFydGluZyBtb3ZlICsoZS5nLiBgZDRgKSwgYW5kIHRoZSBhcHAgc2NhbnMgeW91ciBkb3dubG9hZGVkIGdhbWVzIHRvIHNob3cgZXZlcnkgcmVwbHkgeW91ciBvcHBvbmVudHMgcGxheWVkIGF0IHRoYXQgcG9pbnQsIHNvcnRlZCBieSBmcmVxdWVuY3kgYW5kIHBlcmNlbnRhZ2UuCi0gKipCdWlsZCBhIHJlcGVydG9pcmUqKjogRm9yIGVhY2ggb3Bwb25lbnQgcmVwbHksIGVudGVyIHlvdXIgcHJlZmVycmVkIHJlc3BvbnNlIGFuZCBleHBhbmQgdGhlIGxpbmUgdG8gc2VlIGhvdyBvcHBvbmVudHMgcmVwbGllZCB0byAqdGhhdCosIHJlY3VyaXNpdmVseSwgYXMgZGVlcCBhcyB5b3VyIGdhbWVzIGdvLgotICoqS2VlcCBub3RlcyoqOiBBdHRhY2ggYSBmcmVlLXRleHQgbm90ZSB0byBhbnkgbGluZSBpbiB0aGUgdHJlZS4KLSAqKlBlcnNpc3RlbmNlKio6IFlvdXIgY2hvc2VuIHJlcGxpZXMgYW5kIG5vdGVzIGFyZSBzYXZlZCBpbiB0aGUgYnJvd3NlcidzIGBsb2NhbFN0b3JhZ2VgLCBrZXllZCBieSBMaWNoZXNzIHVzZXJuYW1lLCBzbyB5b3VyIHJlcGVydG9pcmUgdHJlZSByZWJ1aWxkcyBhdXRvbWF0aWNhbGx5IG5leHQgdGltZSB5b3UgdmlzaXQuCi0gKipNYW51YWwgaW1wb3J0Kio6IElmIHlvdSdkIHJhdGhlciBub3QgaGl0IHRoZSBMaWNoZXNzIEFQSSwgeW91IGNhbiBpbXBvcnQgYSBsb2NhbCBOREpTT04gZmlsZSBvZiBnYW1lcyBpbnN0ZWFkLgoKIyMgUnVubmluZyBsb2NhbGx5CgpUaGlzIGlzIGEgc3RhdGljIEhUTUwgZmlsZSB3aXRoIG5vIGJ1aWxkIHN0ZXAgb3IgZGVwZW5kZW5jaWVzIGJleW9uZCBhIENETi1ob3N0ZWQgY29weSBvZiBgY2hlc3MuanNgLiBKdXN0IG9wZW4gYGluZGV4Lmh0bWxgIGluIGEgYnJvd3Nlciwgb3Igc2VydmUgdGhlIGRpcmVjdG9yeSB3aXRoIGFueSBzdGF0aWMgZmlsZSBzZXJ2ZXIuCgojIyBEZXBsb3ltZW50CgpUaGUgc2l0ZSBhdXRvLWRlcGxveXMgdG8gR2l0SHViIFBhZ2VzIHZpYSBgLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95LXBhZ2VzLnltbGAgb24gZXZlcnkgcHVzaCB0byBgbWFpbmAuIEluIHRoZSByZXBvIHNldHRpbmdzLCAqKlNldHRpbmdzIOKGkiBQYWdlcyDihpIgU291cmNlKiogbXVzdCBiZSBzZXQgdG8gKipHaXRIdWIgQWN0aW9ucyoqLgoKIyMgU3RhdHVzCgpFYXJseSBzdGFnZS4gS25vd24gZ2FwczoKLSBUaGUgIlNpZGUiIChXaGl0ZS9CbGFjaykgc2VsZWN0b3IgaXNuJ3Qgd2lyZWQgdXAgeWV0IC0tIGdhbWUgbWF0Y2hpbmcgZG9lc24ndCBmaWx0ZXIgYnkgY29sb3IuCi0gVGhlICJBbmFseXNlIiBidXR0b24gaXMgYSBwbGFjZWhvbGRlciAobm8gZW5naW5lIGV2YWx1YXRpb24geWV0KS4KLSBObyBib2FyZC9QR04gcHJldmlldyBmb3IgaW5kaXZpZHVhbCBnYW1lcy4KLSBObyBleHBvcnQgb2YgdGhlIGJ1aWx0IHJlcGVydG9pcmUgb3V0c2lkZSBvZiBicm93c2VyIGBsb2NhbFN0b3JhZ2VgLgo=
+# REPchess — Lichess Opening Repertoire Builder
+
+A single-page web app that helps you build and maintain a chess opening repertoire from your own Lichess game history.
+
+Live at: https://vorpalrobotics.github.io/repchess/
+
+## What it does
+
+- **Download games**: Enter a Lichess username and a max game count, and the app fetches your recent games directly from the public Lichess API (no server, no API key required).
+- **Find frequent replies**: Pick a starting move (e.g. `d4`), and the app scans your downloaded games to show every reply your opponents played at that point, sorted by frequency and percentage.
+- **Build a repertoire**: For each opponent reply, enter your preferred response and expand the line to see how opponents replied to *that*, recursively, as deep as your games go.
+- **Keep notes**: Attach a free-text note to any line in the tree.
+- **Persistence**: Your chosen replies and notes are saved in the browser's `localStorage`, keyed by Lichess username, so your repertoire tree rebuilds automatically next time you visit.
+- **Manual import**: If you'd rather not hit the Lichess API, you can import a local NDJSON file of games instead.
+
+## Running locally
+
+This is a static HTML file with no build step or dependencies beyond a CDN-hosted copy of `chess.js`. Just open `index.html` in a browser, or serve the directory with any static file server.
+
+## Deployment
+
+The site auto-deploys to GitHub Pages via `.github/workflows/deploy-pages.yml` on every push to `main`. In the repo settings, **Settings → Pages → Source** must be set to **GitHub Actions**.
+
+## Status
+
+Early stage. Known gaps:
+- The "Side" (White/Black) selector isn't wired up yet — game matching doesn't filter by color.
+- The "Analyse" button is a placeholder (no engine evaluation yet).
+- No board/PGN preview for individual games.
+- No export of the built repertoire outside of browser `localStorage`.
