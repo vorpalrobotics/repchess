@@ -1,3 +1,6 @@
+/* ---------- version (injected at deploy time, see workflow) ---------- */
+document.title = `REPchess (${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
+
 /* ---------- helpers ---------- */
 const $   = id => document.getElementById(id);
 const log = (m,e=false)=>{ $('progress').textContent=m; $('progress').classList.toggle('error',e); };
@@ -173,7 +176,6 @@ async function searchRoot(){
   }
 
   if(CURRENT_USER){
-    await migrateFromLocalStorage(CURRENT_USER);
     PREFS = await getAllPrefs(CURRENT_USER);
   }
 
