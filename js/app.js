@@ -160,7 +160,6 @@ function renderBranch(parent,games,seq,depth){
   }
 
   const tbl=document.createElement('table');
-  tbl.style.marginLeft=`${depth}em`;
   parent.appendChild(tbl);
 
   const tb=tbl.appendChild(document.createElement('tbody'));
@@ -179,7 +178,7 @@ function renderBranch(parent,games,seq,depth){
            </div>
          </div>
        </td>
-       <td class="move">
+       <td class="move" style="padding-left:${depth}em">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${depth+1}. ${seq.at(-1)} ${opp}
        </td>
