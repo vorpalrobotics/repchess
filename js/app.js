@@ -231,7 +231,7 @@ function renderBranch(parent,games,seq,depth){
       if(old?.querySelector?.('.branch')) old.remove();
 
       const tr1=document.createElement('tr'); metaTr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=2; tr1.appendChild(td1);
+      const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       renderBranch(div,games,[...lineSeq,reply],depth+1);
       makeToggle(toggleBtn,tr1);
