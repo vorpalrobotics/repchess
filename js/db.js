@@ -5,10 +5,38 @@
 const DB_NAME = 'repchess-db';
 const DB_VERSION = 1;
 
+/* ---------- one-time wipe of pre-release test data ----------
+   No legacy data is worth preserving; localStorage is no longer read
+   at all going forward, and any IndexedDB data from earlier testing
+   is wiped once so everyone starts fresh.
+*/
+const FRESH_START_FLAG = 'repchess-fresh-start-v1';
+let freshStartPromise = null;
+function ensureFreshStart(){
+  if(freshStartPromise) return freshStartPromise;
+  freshStartPromise = new Promise(resolve=>{
+    if(localStorage.getItem(FRESH_START_FLAG)){ resolve(); return; }
+
+    const toRemove=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith('lichess-')) toRemove.push(k);
+    }
+    for(const k of toRemove) localStorage.removeItem(k);
+
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    const done = () => { localStorage.setItem(FRESH_START_FLAG,'1'); resolve(); };
+    req.onsuccess = done;
+    req.onerror   = done;
+    req.onblocked = done;
+  });
+  return freshStartPromise;
+}
+
 let dbPromise = null;
 function openDB(){
   if(dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve,reject)=>{
+  dbPromise = ensureFreshStart().then(()=> new Promise((resolve,reject)=>{
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = e => {
       const db = e.target.result;
@@ -23,10 +51,9 @@ function openDB(){
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror   = () => reject(req.error);
-  });
+  }));
   return dbPromise;
 }
-
 /* simple non-cryptographic hash, used only when a game has no id */
 function hashStr(s){
   let h=0;
@@ -91,47 +118,4 @@ async function setPref(user, seq, patch){
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });
-}
-
-/* ---------- one-time migration from the old localStorage scheme ---------- */
-async function migrateFromLocalStorage(user){
-  const flag = `repchess-migrated-${user}`;
-  if(localStorage.getItem(flag)) return;
-
-  const replyPrefix = `lichess-${user}-`;
-  const notePrefix   = `lichess-note-${user}-`;
-  const bySeq = {};
-
-  for(let i=0;i<localStorage.length;i++){
-    const k = localStorage.key(i);
-    if(k.startsWith(notePrefix)){
-      const seqStr = k.slice(notePrefix.length);
-      (bySeq[seqStr] ??= {}).note = localStorage.getItem(k);
-    } else if(k.startsWith(replyPrefix)){
-      const seqStr = k.slice(replyPrefix.length);
-      (bySeq[seqStr] ??= {}).reply = localStorage.getItem(k);
-    }
-  }
-
-  const seqStrs = Object.keys(bySeq);
-  if(seqStrs.length){
-    const db = await openDB();
-    await new Promise((resolve,reject)=>{
-      const txn = db.transaction('prefs','readwrite');
-      const store = txn.objectStore('prefs');
-      for(const seqStr of seqStrs){
-        const seq = seqStr.split(',');
-        store.put({
-          key: prefKey(user,seq), user, seq,
-          reply: bySeq[seqStr].reply || '',
-          note:  bySeq[seqStr].note  || '',
-          mnemonic: ''
-        });
-      }
-      txn.oncomplete = resolve;
-      txn.onerror    = () => reject(txn.error);
-    });
-  }
-
-  localStorage.setItem(flag,'1');
 }
