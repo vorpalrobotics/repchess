@@ -347,9 +347,19 @@ const board = new Chessboard($('board'), {
 });
 
 /* ---------- engine ---------- */
-const ENGINE_MULTIPV = 4, ENGINE_PV_PLIES = 8;
+const ENGINE_PV_PLIES = 8;
 const engine = new Engine();
 let engineRunId = 0;
+let currentEngineFen = null;
+
+const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
+const engineMaxDepth  = () => {
+  const v = $('engineMaxDepthSelect').value;
+  return v === 'infinity' ? Infinity : parseInt(v, 10);
+};
+
+$('engineLinesSelect').onchange = () => { if(currentEngineFen) runEngine(currentEngineFen); };
+$('engineMaxDepthSelect').onchange = () => { if(currentEngineFen) runEngine(currentEngineFen); };
 
 engine.init().catch(err => {
   console.error('[engine] init failed', err);
@@ -390,12 +400,12 @@ function pvToSan(fen, uciMoves, maxPlies){
   return parts.join(' ');
 }
 
-function renderEngineLines(fen, depth, lines){
+function renderEngineLines(fen, depth, lines, multipv){
   $('engineDepth').textContent = `Depth ${depth}`;
   const turn = fen.split(' ')[1];
   const ol = $('engineLines');
   ol.innerHTML = '';
-  for(let i=1;i<=ENGINE_MULTIPV;i++){
+  for(let i=1;i<=multipv;i++){
     const line = lines[i];
     if(!line) continue;
     const li = document.createElement('li');
@@ -405,15 +415,18 @@ function renderEngineLines(fen, depth, lines){
 }
 
 async function runEngine(fen){
+  currentEngineFen = fen;
   const runId = ++engineRunId;
   if(!engine.ready) await engine.init().catch(()=>{});
   if(runId !== engineRunId || !engine.ready) return;
   $('engineDepth').textContent = 'Thinking…';
   $('engineLines').innerHTML = '';
-  // runs forever (go infinite) until the next runEngine() call stops it
+  const multipv = engineMultiPV();
+  // runs until maxDepth is reached, or forever ("infinity") until superseded
   engine.analyze(fen, {
-    multipv: ENGINE_MULTIPV,
-    onInfo: (depth,lines) => { if(runId === engineRunId) renderEngineLines(fen,depth,lines); }
+    multipv,
+    depth: engineMaxDepth(),
+    onInfo: (depth,lines) => { if(runId === engineRunId) renderEngineLines(fen,depth,lines,multipv); }
   }).catch(err => console.error('[engine] analyze failed', err));
 }
 

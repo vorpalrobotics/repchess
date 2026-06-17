@@ -64,7 +64,11 @@
   #board{width:420px;height:420px}
 
   #engine-panel{width:420px;margin-top:.6rem;font-family:'Courier New',monospace;font-size:.85rem}
-  #engineDepth{font-weight:700;margin-bottom:.3rem}
+  #engine-controls{display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;font-family:Arial,sans-serif;font-size:.8rem}
+  #engineDepth{font-weight:700}
+  #engine-options{display:flex;gap:.8rem}
+  #engine-options label{display:inline-flex;align-items:center;gap:.3rem}
+  #engine-options select{font-size:.8rem;padding:.1rem .3rem}
   #engineLines{margin:0;padding-left:1.3em}
   #engineLines li{margin-bottom:.25rem}
 </style>
@@ -97,7 +101,24 @@
   <div id="board-col">
     <div id="board"></div>
     <div id="engine-panel">
-      <div id="engineDepth"></div>
+      <div id="engine-controls">
+        <div id="engineDepth"></div>
+        <div id="engine-options">
+          <label>Lines:
+            <select id="engineLinesSelect">
+              <option>1</option><option>2</option><option>3</option>
+              <option selected>4</option><option>5</option><option>6</option>
+            </select>
+          </label>
+          <label>Depth:
+            <select id="engineMaxDepthSelect">
+              <option>15</option><option>20</option><option>25</option>
+              <option selected>30</option><option>35</option><option>40</option>
+              <option value="infinity">infinity</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <ol id="engineLines"></ol>
     </div>
   </div>

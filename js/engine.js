@@ -67,12 +67,13 @@ export class Engine {
     });
   }
 
-  // Runs an unbounded multi-PV search on `fen`, calling onInfo(depth, lines)
-  // every time a line updates. `lines` is keyed by PV rank (1..multipv), each
-  // entry is { score: {type:'cp'|'mate', value}, pv: [uci moves...] }, both
-  // relative to the side to move (as reported by the engine). The search runs
-  // until stop() is called (or another analyze() call supersedes it).
-  async analyze(fen, { multipv = 4, onInfo } = {}) {
+  // Runs a multi-PV search on `fen`, calling onInfo(depth, lines) every time a
+  // line updates. `lines` is keyed by PV rank (1..multipv), each entry is
+  // { score: {type:'cp'|'mate', value}, pv: [uci moves...] }, both relative to
+  // the side to move (as reported by the engine). With no `depth` (or
+  // depth=Infinity) the search runs until stop() is called (or another
+  // analyze() call supersedes it); otherwise it stops itself at that depth.
+  async analyze(fen, { multipv = 4, depth = Infinity, onInfo } = {}) {
     await this._stopCurrent();
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);
@@ -106,7 +107,7 @@ export class Engine {
           resolve({ depth: curDepth, lines });
         }
       };
-      this._send('go infinite');
+      this._send(Number.isFinite(depth) ? `go depth ${depth}` : 'go infinite');
     });
   }
 
