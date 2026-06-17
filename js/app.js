@@ -344,7 +344,9 @@ $('dlBtn').onclick = async ()=>{
   }catch(e){ console.error('[dlBtn] download failed',e); log(e.message,true); }
 };
 
-$('rootBtn').onclick = searchRoot;
+$('firstMove').addEventListener('change', searchRoot);
+$('firstMove').addEventListener('keydown', e => { if(e.key==='Enter') searchRoot(); });
+if($('firstMove').value.trim()) searchRoot();
 
 /* ---------- hamburger menu ---------- */
 $('menuBtn').onclick = e=>{
