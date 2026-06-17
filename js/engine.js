@@ -54,16 +54,32 @@ export class Engine {
 
   // Stops whatever search is currently running and waits for the engine to
   // confirm (its `bestmove` reply) before the caller installs a new listener,
-  // so that reply can't be mistaken for the next search's result.
+  // so that reply can't be mistaken for the next search's result. Falls back
+  // to a timeout so a missing/late `bestmove` can't wedge future searches.
   _stopCurrent() {
     if (!this._listener) return Promise.resolve();
+    console.debug('[engine] stopping previous search');
     return new Promise(resolve => {
+      let settled = false;
+      const done = reason => {
+        if (settled) return;
+        settled = true;
+        console.debug(`[engine] previous search stopped (${reason})`);
+        resolve();
+      };
       const prevListener = this._listener;
       this._listener = line => {
         prevListener(line);
-        if (line.startsWith('bestmove')) resolve();
+        if (line.startsWith('bestmove')) done('bestmove received');
       };
       this._send('stop');
+      setTimeout(() => {
+        if (!settled) {
+          console.warn('[engine] stop timed out waiting for bestmove; forcing listener clear');
+          this._listener = null;
+        }
+        done('timeout');
+      }, 4000);
     });
   }
 
@@ -104,10 +120,13 @@ export class Engine {
         }
         if (line.startsWith('bestmove')) {
           this._listener = null;
+          console.debug(`[engine] bestmove received, final depth=${curDepth}`);
           resolve({ depth: curDepth, lines });
         }
       };
-      this._send(Number.isFinite(depth) ? `go depth ${depth}` : 'go infinite');
+      const goCmd = Number.isFinite(depth) ? `go depth ${depth}` : 'go infinite';
+      console.debug(`[engine] ${goCmd} (multipv=${multipv}) fen=${fen}`);
+      this._send(goCmd);
     });
   }
 

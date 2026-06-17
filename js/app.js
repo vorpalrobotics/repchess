@@ -72,8 +72,14 @@ function replies(games,seq){
 /* ---------- FEN for a move sequence ---------- */
 function fenForSeq(seq){
   const chess = new Chess();
-  for(const mv of seq){
-    if(!chess.move(mv,{sloppy:true})) break;
+  for(let i=0;i<seq.length;i++){
+    const mv = seq[i];
+    if(!chess.move(mv,{sloppy:true})){
+      console.warn(`[fenForSeq] move ${i+1}/${seq.length} "${mv}" failed to apply; ` +
+        `returning position after move ${i} instead. seq=${JSON.stringify(seq)} ` +
+        `fen-before-failure=${chess.fen()}`);
+      break;
+    }
   }
   return chess.fen();
 }
@@ -414,20 +420,31 @@ function renderEngineLines(fen, depth, lines, multipv){
 async function runEngine(fen){
   currentEngineFen = fen;
   const runId = ++engineRunId;
+  console.debug(`[runEngine] runId=${runId} fen=${fen}`);
   if(!engine.ready) await engine.init().catch(()=>{});
-  if(runId !== engineRunId || !engine.ready) return;
+  if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} superseded before engine ready, dropping`); return; }
+  if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
   $('engineDepth').textContent = 'Thinking…';
   $('engineLines').innerHTML = '';
   const multipv = engineMultiPV();
+  const depth = engineMaxDepth();
+  console.debug(`[runEngine] runId=${runId} starting analyze multipv=${multipv} depth=${depth}`);
+  const t0 = performance.now();
   // runs until maxDepth is reached, or forever ("infinity") until superseded
   engine.analyze(fen, {
     multipv,
-    depth: engineMaxDepth(),
-    onInfo: (depth,lines) => { if(runId === engineRunId) renderEngineLines(fen,depth,lines,multipv); }
-  }).catch(err => console.error('[engine] analyze failed', err));
+    depth,
+    onInfo: (d,lines) => {
+      if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
+      renderEngineLines(fen,d,lines,multipv);
+    }
+  }).then(result => {
+    console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
+  }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
 function showPosition(fen){
+  console.debug(`[showPosition] fen=${fen}`);
   board.setPosition(fen);
   runEngine(fen);
 }
