@@ -105,22 +105,36 @@ function closeAllRowMenus(){
 }
 document.addEventListener('click', closeAllRowMenus);
 
-/* ---------- add note / mnemonic modal ---------- */
-let fieldModalSave = null;
-function openFieldModal(field, currentValue, onSave){
+/* ---------- add note / mnemonic / response modal ---------- */
+let fieldModalSave = null, fieldModalValidate = null;
+// `validate(rawInput)` is optional; return {ok:true, value} to accept (value
+// is what gets passed to onSave, letting the caller normalize the input), or
+// {ok:false, error} to reject and keep the modal open with the error shown.
+function openFieldModal(field, currentValue, onSave, validate){
   $('fieldModalTitle').textContent =
     field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' : 'Set Standard Response';
   $('fieldModalInput').value = currentValue || '';
+  $('fieldModalError').textContent = '';
   fieldModalSave = onSave;
+  fieldModalValidate = validate || null;
   $('fieldOverlay').style.display='flex';
   $('fieldModalInput').focus();
 }
-$('fieldModalCancelBtn').onclick = () => { $('fieldOverlay').style.display='none'; fieldModalSave=null; };
+$('fieldModalInput').addEventListener('input', () => { $('fieldModalError').textContent = ''; });
+$('fieldModalCancelBtn').onclick = () => {
+  $('fieldOverlay').style.display='none';
+  fieldModalSave = null; fieldModalValidate = null;
+};
 $('fieldModalSaveBtn').onclick = () => {
-  const v = $('fieldModalInput').value.trim();
+  let v = $('fieldModalInput').value.trim();
+  if(fieldModalValidate){
+    const result = fieldModalValidate(v);
+    if(!result.ok){ $('fieldModalError').textContent = result.error; return; }
+    v = result.value;
+  }
   $('fieldOverlay').style.display='none';
   if(fieldModalSave) fieldModalSave(v);
-  fieldModalSave = null;
+  fieldModalSave = null; fieldModalValidate = null;
 };
 
 /* ---------- recursive branch renderer ---------- */
@@ -235,7 +249,13 @@ function renderBranch(parent,games,seq,depth){
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      openFieldModal('response', currentSaved()?.reply, v=>{ v=v.trim(); if(v) setStandardResponse(v); });
+      openFieldModal('response', currentSaved()?.reply, v=>setStandardResponse(v), v=>{
+        if(!v) return {ok:false, error:'enter a move'};
+        const chess = new Chess(fenForSeq(lineSeq));
+        const mv = chess.move(v,{sloppy:true});
+        if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+        return {ok:true, value:mv.san};
+      });
     };
     rowMenu.querySelector('[data-act="note"]').onclick = e => {
       e.stopPropagation();
