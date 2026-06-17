@@ -28,7 +28,9 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Stamp version
-        run: echo "const APP_VERSION = '${GITHUB_SHA::7}';" > js/version.js
+        run: |
+          STAMP="$(date -u +'%Y.%m.%d@%H:%M')"
+          echo "const APP_VERSION = '${STAMP}';" > js/version.js
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
