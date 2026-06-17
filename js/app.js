@@ -1,4 +1,5 @@
 import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
+import { Engine } from './engine.js';
 
 /* ---------- version (injected at deploy time, see workflow) ---------- */
 document.title = `REPchess (${typeof APP_VERSION!=='undefined' ? APP_VERSION : 'dev'})`;
@@ -243,7 +244,7 @@ function renderBranch(parent,games,seq,depth){
       makeToggle(toggleBtn,tr1);
     };
 
-    btnEval.onclick = () => board.setPosition(fenForSeq(lineSeq));
+    btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
   });
 }
 
@@ -344,3 +345,81 @@ const board = new Chessboard($('board'), {
     }
   }
 });
+
+/* ---------- engine ---------- */
+const ENGINE_DEPTH = 20, ENGINE_MULTIPV = 4, ENGINE_PV_PLIES = 8;
+const engine = new Engine();
+let engineRunId = 0;
+
+engine.init().catch(err => {
+  console.error('[engine] init failed', err);
+  $('engineDepth').textContent = 'Engine unavailable';
+});
+
+function formatScore(score, turn){
+  // engine scores are relative to the side to move; flip to a White-relative sign
+  const sign = turn === 'w' ? 1 : -1;
+  if(score.type === 'mate'){
+    const m = score.value * sign;
+    return (m >= 0 ? '#' : '-#') + Math.abs(m);
+  }
+  const cp = score.value * sign / 100;
+  return (cp >= 0 ? '+' : '') + cp.toFixed(1);
+}
+
+function pvToSan(fen, uciMoves, maxPlies){
+  const chess = new Chess(fen);
+  let moveNum = parseInt(fen.split(' ')[5], 10) || 1;
+  let turn = fen.split(' ')[1];
+  const parts = [];
+  let first = true;
+  for(const uci of uciMoves.slice(0, maxPlies)){
+    const from = uci.slice(0,2), to = uci.slice(2,4), promotion = uci.slice(4,5) || undefined;
+    const mv = chess.move({from,to,promotion},{sloppy:true});
+    if(!mv) break;
+    if(turn === 'w'){
+      parts.push(`${moveNum}.${mv.san}`);
+    } else {
+      if(first) parts.push(`${moveNum}...${mv.san}`);
+      else parts.push(mv.san);
+      moveNum++;
+    }
+    first = false;
+    turn = turn === 'w' ? 'b' : 'w';
+  }
+  return parts.join(' ');
+}
+
+function renderEngineLines(fen, depth, lines){
+  $('engineDepth').textContent = `Depth ${depth}`;
+  const turn = fen.split(' ')[1];
+  const ol = $('engineLines');
+  ol.innerHTML = '';
+  for(let i=1;i<=ENGINE_MULTIPV;i++){
+    const line = lines[i];
+    if(!line) continue;
+    const li = document.createElement('li');
+    li.textContent = `${formatScore(line.score,turn)}  ${pvToSan(fen,line.pv,ENGINE_PV_PLIES)}`;
+    ol.appendChild(li);
+  }
+}
+
+async function runEngine(fen){
+  const runId = ++engineRunId;
+  if(!engine.ready) await engine.init().catch(()=>{});
+  if(runId !== engineRunId || !engine.ready) return;
+  $('engineDepth').textContent = 'Thinking…';
+  $('engineLines').innerHTML = '';
+  await engine.analyzeMultiPV(fen, {
+    depth: ENGINE_DEPTH,
+    multipv: ENGINE_MULTIPV,
+    onInfo: (depth,lines) => { if(runId === engineRunId) renderEngineLines(fen,depth,lines); }
+  });
+}
+
+function showPosition(fen){
+  board.setPosition(fen);
+  runEngine(fen);
+}
+
+showPosition(new Chess().fen());
