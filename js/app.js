@@ -163,21 +163,12 @@ function renderBranch(parent,games,seq,depth){
   tbl.style.marginLeft=`${depth}em`;
   parent.appendChild(tbl);
 
-  if(depth===0){
-    tbl.innerHTML=
-      `<thead><tr><th>Move</th><th>Count</th><th>Response</th></tr></thead>`;
-  }
   const tb=tbl.appendChild(document.createElement('tbody'));
 
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const tr=document.createElement('tr');
     tr.innerHTML=
-      `<td class="move">
-         <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
-         ${depth+1}. ${seq.at(-1)} ${opp}
-       </td>
-       <td class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</td>
-       <td class="resp">
+      `<td class="resp">
          <button class="iconbtn" title="Analyse">📈</button>
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
@@ -187,7 +178,12 @@ function renderBranch(parent,games,seq,depth){
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
            </div>
          </div>
-       </td>`;
+       </td>
+       <td class="move">
+         <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
+         ${depth+1}. ${seq.at(-1)} ${opp}
+       </td>
+       <td class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</td>`;
     tb.appendChild(tr);
 
     const metaTr = document.createElement('tr');
