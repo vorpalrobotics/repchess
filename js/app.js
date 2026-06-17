@@ -15,12 +15,42 @@ $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 let GAMES=null, CURRENT_USER='', PREFS={};
 
 /* ---------- fetch games from Lichess ---------- */
-async function fetchLatest(user,max){
+async function fetchLatest(user,max,onProgress){
   const url=`https://lichess.org/api/games/user/${encodeURIComponent(user)}?max=${max}&moves=true&tags=false&opening=false`;
-  const txt=await (await fetch(url,{headers:{Accept:'application/x-ndjson'}})).text();
-  return txt.trim().split(/\r?\n/).filter(Boolean)
-    .map(l=>{ try{ return JSON.parse(l); }catch{ return null; } })
-    .filter(Boolean);
+  console.log(`[fetchLatest] requesting ${url}`);
+  const resp = await fetch(url,{headers:{Accept:'application/x-ndjson'}});
+  if(!resp.ok) throw new Error(`lichess returned ${resp.status}`);
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  const games = [];
+  let buf='', lastReport=Date.now();
+
+  while(true){
+    const {done,value} = await reader.read();
+    if(value) buf += decoder.decode(value,{stream:true});
+
+    let nl;
+    while((nl=buf.indexOf('\n'))>=0){
+      const line=buf.slice(0,nl).trim();
+      buf=buf.slice(nl+1);
+      if(!line) continue;
+      try{ games.push(JSON.parse(line)); }catch{ /* skip malformed line */ }
+    }
+
+    const now=Date.now();
+    if(onProgress && (now-lastReport>=15000 || done)){
+      onProgress(games.length);
+      lastReport=now;
+    }
+    if(done) break;
+  }
+
+  const tail=buf.trim();
+  if(tail){ try{ games.push(JSON.parse(tail)); }catch{ /* skip malformed line */ } }
+
+  console.log(`[fetchLatest] received ${games.length} games`);
+  return games;
 }
 
 /* ---------- compute reply frequencies ---------- */
@@ -193,10 +223,11 @@ $('dlBtn').onclick = async ()=>{
 
   try{
     log('fetching…');
-    GAMES = await fetchLatest(CURRENT_USER,max);
+    GAMES = await fetchLatest(CURRENT_USER,max,n=>log(`fetching… got ${n}`));
+    log(`fetched ${GAMES.length}, writing to database…`);
     await putGames(CURRENT_USER,GAMES);
     log(`downloaded ${GAMES.length}`);
-  }catch(e){ log(e.message,true); }
+  }catch(e){ console.error('[dlBtn] download failed',e); log(e.message,true); }
 };
 
 $('rootBtn').onclick = searchRoot;
