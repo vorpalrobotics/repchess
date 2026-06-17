@@ -115,7 +115,6 @@ function renderBranch(parent,games,seq,depth){
       `<td class="move">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${depth+1}. ${seq.at(-1)} ${opp}
-         <button class="iconbtn eye" title="Show position on board">👁</button>
        </td>
        <td class="note"><input data-note size="4" style="width:4em"></td>
        <td class="mnem"><input data-mnemonic size="6" style="width:6em"></td>
@@ -129,7 +128,6 @@ function renderBranch(parent,games,seq,depth){
 
     /* element handles */
     const toggleBtn = tr.querySelector('.toggle');
-    const btnEye    = tr.querySelector('.eye');
     const inpNote   = tr.querySelector('[data-note]');
     const inpMnem   = tr.querySelector('[data-mnemonic]');
     const inpRep    = tr.querySelector('[data-reply]');
@@ -137,7 +135,6 @@ function renderBranch(parent,games,seq,depth){
 
     /* restore note, mnemonic & reply from the preloaded PREFS map */
     const lineSeq = [...seq,opp];
-    btnEye.onclick = () => board.setPosition(fenForSeq(lineSeq));
     const saved = PREFS[prefKey(CURRENT_USER,lineSeq)];
     inpNote.value = saved?.note || '';
     inpMnem.value = saved?.mnemonic || '';
@@ -179,7 +176,7 @@ function renderBranch(parent,games,seq,depth){
       makeToggle(toggleBtn,tr1);
     };
 
-    btnEval.onclick = () => alert('analysis coming soon');
+    btnEval.onclick = () => board.setPosition(fenForSeq(lineSeq));
   });
 }
 
