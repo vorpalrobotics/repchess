@@ -80,11 +80,9 @@ function fenForSeq(seq){
 
 /* ---------- toggle helper ---------- */
 function makeToggle(btn, branchRow){
-  if(btn.dataset.ready) return;                 // only wire once
-  btn.dataset.ready='1';
   btn.style.visibility='visible';
-  btn.textContent='⊖';
-  btn.onclick=()=>{
+  btn.textContent='⊖';                          // newly (re-)expanded, so shown
+  btn.onclick=()=>{                              // rewired each call to target the current branchRow
     const shown = branchRow.style.display !== 'none';
     branchRow.style.display = shown ? 'none' : '';
     btn.textContent         = shown ? '⊕'   : '⊖';
@@ -103,7 +101,8 @@ document.addEventListener('click', closeAllRowMenus);
 /* ---------- add note / mnemonic modal ---------- */
 let fieldModalSave = null;
 function openFieldModal(field, currentValue, onSave){
-  $('fieldModalTitle').textContent = field==='note' ? 'Add Note' : 'Add Mnemonic';
+  $('fieldModalTitle').textContent =
+    field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' : 'Set Standard Response';
   $('fieldModalInput').value = currentValue || '';
   fieldModalSave = onSave;
   $('fieldOverlay').style.display='flex';
@@ -145,12 +144,11 @@ function renderBranch(parent,games,seq,depth){
        </td>
        <td class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</td>
        <td class="resp">
-         <input data-reply size="4">
-         <button class="iconbtn" title="Expand">🔍</button>
          <button class="iconbtn" title="Analyse">📈</button>
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
+             <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
            </div>
@@ -167,8 +165,7 @@ function renderBranch(parent,games,seq,depth){
 
     /* element handles */
     const toggleBtn  = tr.querySelector('.toggle');
-    const inpRep     = tr.querySelector('[data-reply]');
-    const [btnGo,btnEval] = tr.querySelectorAll('td.resp > button.iconbtn');
+    const btnEval    = tr.querySelector('td.resp > button.iconbtn');
     const rowMenuBtn = tr.querySelector('.rowMenuBtn');
     const rowMenu    = tr.querySelector('.row-menu');
 
@@ -199,23 +196,39 @@ function renderBranch(parent,games,seq,depth){
       refreshMeta();
     }
 
-    /* restore reply from the preloaded PREFS map */
-    const savedRep = currentSaved()?.reply;
-    if(savedRep){
-      inpRep.value = savedRep;
+    /* expand the branch table under the chosen standard response */
+    function expandWith(reply){
+      const old = metaTr.nextSibling;
+      if(old?.querySelector?.('.branch')) old.remove();
+
       const tr1=document.createElement('tr'); metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=3; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      renderBranch(div,games,[...lineSeq,savedRep],depth+1);
+      renderBranch(div,games,[...lineSeq,reply],depth+1);
       makeToggle(toggleBtn,tr1);
     }
 
-    /* "more" menu: add note / add mnemonic */
+    function setStandardResponse(reply){
+      setPref(CURRENT_USER,lineSeq,{reply});
+      (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
+      expandWith(reply);
+    }
+
+    /* restore reply from the preloaded PREFS map */
+    const savedRep = currentSaved()?.reply;
+    if(savedRep) expandWith(savedRep);
+
+    /* "more" menu: set standard response / add note / add mnemonic */
     rowMenuBtn.onclick = e => {
       e.stopPropagation();
       const showing = rowMenu.classList.contains('show');
       closeAllRowMenus();
       if(!showing) rowMenu.classList.add('show');
+    };
+    rowMenu.querySelector('[data-act="response"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openFieldModal('response', currentSaved()?.reply, v=>{ v=v.trim(); if(v) setStandardResponse(v); });
     };
     rowMenu.querySelector('[data-act="note"]').onclick = e => {
       e.stopPropagation();
@@ -226,22 +239,6 @@ function renderBranch(parent,games,seq,depth){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-    };
-
-    /* expand under chosen reply */
-    btnGo.onclick = () => {
-      const reply = inpRep.value.trim();
-      if(!reply){ log('enter move',true); return; }
-      setPref(CURRENT_USER,lineSeq,{reply});
-      (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
-
-      if(metaTr.nextSibling?.querySelector?.('.branch')) return; // already expanded
-
-      const tr1=document.createElement('tr'); metaTr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=3; tr1.appendChild(td1);
-      const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      renderBranch(div,games,[...lineSeq,reply],depth+1);
-      makeToggle(toggleBtn,tr1);
     };
 
     btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
