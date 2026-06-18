@@ -127,7 +127,8 @@ let fieldModalSave = null, fieldModalValidate = null;
 function openFieldModal(field, currentValue, onSave, validate){
   $('fieldModalTitle').textContent =
     field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' :
-    field==='lineName' ? 'Rename Line' : 'Set Standard Response';
+    field==='lineName' ? 'Rename Line' : field==='branchName' ? 'Name this Branch' :
+    'Set Standard Response';
   $('fieldModalInput').value = currentValue || '';
   $('fieldModalError').textContent = '';
   fieldModalSave = onSave;
@@ -243,6 +244,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+             <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Name this Branch</button>
            </div>
          </div>
        </td>
@@ -250,6 +252,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${moveHtml}
          <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
+         <span class="branchName" style="display:none"></span>
          <span class="evaltag" style="display:none"></span>
        </td>`;
     tb.appendChild(tr);
@@ -268,6 +271,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const rowMenu    = tr.querySelector('.row-menu');
     const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
     const evalSpan   = tr.querySelector('.evaltag');
+    const nameSpan   = tr.querySelector('.branchName');
 
     const lineSeq = [...seq,opp];
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -343,6 +347,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
     refreshHidden();
     refreshEvalSpan(evalSpan, currentSaved()?.eval);
+    refreshBranchName(nameSpan, currentSaved()?.name);
 
     /* "more" menu: set standard response / add note / add mnemonic */
     rowMenuBtn.onclick = e => {
@@ -388,6 +393,14 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
     };
+    rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openFieldModal('branchName', currentSaved()?.name, v=>{
+        saveField('name', v);
+        refreshBranchName(nameSpan, v);
+      });
+    };
 
     btnEval.onclick = () => {
       const fen = fenForSeq(lineSeq);
@@ -421,12 +434,14 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+           <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Name this Branch</button>
          </div>
        </div>
      </td>
      <td class="move">
        <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
        1. ${trigger} <span class="ourReply">...</span>
+       <span class="branchName" style="display:none"></span>
        <span class="evaltag" style="display:none"></span>
      </td>`;
   tb.appendChild(tr);
@@ -444,6 +459,7 @@ function renderBlackRoot(parent,games,trigger){
   const rowMenu    = tr.querySelector('.row-menu');
   const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
   const evalSpan   = tr.querySelector('.evaltag');
+  const nameSpan   = tr.querySelector('.branchName');
 
   const lineSeq = [trigger];
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -515,6 +531,7 @@ function renderBlackRoot(parent,games,trigger){
   }
   refreshHidden();
   refreshEvalSpan(evalSpan, currentSaved()?.eval);
+  refreshBranchName(nameSpan, currentSaved()?.name);
 
   rowMenuBtn.onclick = e => {
     e.stopPropagation();
@@ -558,6 +575,14 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
+  };
+  rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openFieldModal('branchName', currentSaved()?.name, v=>{
+      saveField('name', v);
+      refreshBranchName(nameSpan, v);
+    });
   };
 
   btnEval.onclick = () => {
@@ -920,6 +945,12 @@ function refreshEvalSpan(evalSpan, evalObj){
   evalSpan.textContent = formatEvalTag(evalObj);
   evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
   evalSpan.style.display='';
+}
+
+function refreshBranchName(nameSpan, name){
+  if(!name){ nameSpan.style.display='none'; return; }
+  nameSpan.textContent = name;
+  nameSpan.style.display='';
 }
 
 /* only overwrite a saved eval if the engine has now searched deeper than before */
