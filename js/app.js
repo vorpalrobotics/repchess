@@ -188,6 +188,21 @@ function focusOnLine(dataRow){
 }
 $('unfocusBtn').onclick = clearFocus;
 
+/* ---------- hidden-branch visibility toggle ----------
+   showAllBranches=true (open eye): everything shown, hidden branches in red.
+   showAllBranches=false (closed eye): hidden branches are not rendered. */
+let showAllBranches = true;
+function applyVisibilityMode(){
+  $('tree').classList.toggle('filter-hidden', !showAllBranches);
+  $('visibilityToggleBtn').innerHTML = showAllBranches
+    ? '<i class="fa-solid fa-eye"></i>'
+    : '<i class="fa-solid fa-eye-slash"></i>';
+}
+$('visibilityToggleBtn').onclick = () => {
+  showAllBranches = !showAllBranches;
+  applyVisibilityMode();
+};
+
 /* ---------- recursive branch renderer ---------- */
 function renderBranch(parent,games,seq,depth){
   const {counts,tot}=replies(games,seq);
@@ -212,6 +227,7 @@ function renderBranch(parent,games,seq,depth){
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
+             <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
@@ -237,6 +253,7 @@ function renderBranch(parent,games,seq,depth){
     const btnEval    = tr.querySelector('td.resp > button.iconbtn');
     const rowMenuBtn = tr.querySelector('.rowMenuBtn');
     const rowMenu    = tr.querySelector('.row-menu');
+    const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
 
     const lineSeq = [...seq,opp];
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -261,8 +278,25 @@ function renderBranch(parent,games,seq,depth){
     function saveField(field,value){
       setPref(CURRENT_LINE.id,lineSeq,{[field]:value});
       const key = prefKey(CURRENT_LINE.id,lineSeq);
-      (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:''})[field]=value;
+      (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
       refreshMeta();
+      refreshHidden();
+    }
+
+    /* group of rows belonging to this entry: the data row, its meta row,
+       and (if expanded) the branch row holding the nested table */
+    function getGroupRows(){
+      const rows=[tr, metaTr];
+      const next = metaTr.nextElementSibling;
+      if(next && next.classList.contains('branch-row')) rows.push(next);
+      return rows;
+    }
+    function refreshHidden(){
+      const isHidden = !!currentSaved()?.hidden;
+      getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
+      hideBtn.innerHTML = isHidden
+        ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
+        : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
     }
 
     /* expand the branch table under the chosen standard response */
@@ -279,13 +313,14 @@ function renderBranch(parent,games,seq,depth){
 
     function setStandardResponse(reply){
       setPref(CURRENT_LINE.id,lineSeq,{reply});
-      (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
+      (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
       expandWith(reply);
     }
 
     /* restore reply from the preloaded PREFS map */
     const savedRep = currentSaved()?.reply;
     if(savedRep) expandWith(savedRep);
+    refreshHidden();
 
     /* "more" menu: set standard response / add note / add mnemonic */
     rowMenuBtn.onclick = e => {
@@ -298,6 +333,11 @@ function renderBranch(parent,games,seq,depth){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       focusOnLine(tr);
+    };
+    hideBtn.onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      saveField('hidden', !currentSaved()?.hidden);
     };
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
       e.stopPropagation();
@@ -393,6 +433,8 @@ async function openLine(line){
   clr();
   focusHidden = [];
   $('unfocusBtn').style.display='none';
+  showAllBranches = true;
+  applyVisibilityMode();
   $('tree').innerHTML='';
 
   if(!GAMES && CURRENT_USER){

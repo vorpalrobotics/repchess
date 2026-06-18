@@ -27,6 +27,9 @@
   .indent{margin-left:5em}
   .focus-hidden{display:none}
 
+  .hidden-branch td.move{color:#c62828}
+  #tree.filter-hidden tr.hidden-branch{display:none}
+
   .iconbtn{background:none;border:none;font-size:1.1em;padding:0 .4em;cursor:pointer}
   .toggle {font-size:1.15em;vertical-align:middle}
 
@@ -117,6 +120,7 @@
   <div class="main-layout">
     <div id="tree-col">
       <button id="unfocusBtn" style="display:none;margin-bottom:.5rem">Unfocus</button>
+      <button id="visibilityToggleBtn" title="Toggle hidden branches" style="margin-bottom:.5rem"><i class="fa-solid fa-eye"></i></button>
       <div id="tree"></div>
     </div>
     <div id="board-col">
