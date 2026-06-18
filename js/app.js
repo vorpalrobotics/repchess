@@ -20,6 +20,7 @@ const clr = ()=>{ $('progress').textContent='';$('progress').classList.remove('e
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
+const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
@@ -191,7 +192,7 @@ $('unfocusBtn').onclick = clearFocus;
 /* ---------- hidden-branch visibility toggle ----------
    showAllBranches=true (open eye): everything shown, hidden branches in red.
    showAllBranches=false (closed eye): hidden branches are not rendered. */
-let showAllBranches = true;
+let showAllBranches = localStorage.getItem(LS_SHOW_ALL_BRANCHES) !== 'false';
 function applyVisibilityMode(){
   $('tree').classList.toggle('filter-hidden', !showAllBranches);
   $('visibilityToggleBtn').innerHTML = showAllBranches
@@ -200,6 +201,7 @@ function applyVisibilityMode(){
 }
 $('visibilityToggleBtn').onclick = () => {
   showAllBranches = !showAllBranches;
+  localStorage.setItem(LS_SHOW_ALL_BRANCHES, showAllBranches);
   applyVisibilityMode();
 };
 
@@ -616,7 +618,6 @@ async function openLine(line){
   clr();
   focusHidden = [];
   $('unfocusBtn').style.display='none';
-  showAllBranches = true;
   applyVisibilityMode();
   $('tree').innerHTML='';
 
