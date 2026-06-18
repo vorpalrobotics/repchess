@@ -10,7 +10,7 @@ const DB_VERSION = 1;
    at all going forward, and any IndexedDB data from earlier testing
    is wiped once so everyone starts fresh.
 */
-const FRESH_START_FLAG = 'repchess-fresh-start-v1';
+const FRESH_START_FLAG = 'repchess-fresh-start-v2';
 let freshStartPromise = null;
 function ensureFreshStart(){
   if(freshStartPromise) return freshStartPromise;
@@ -45,9 +45,13 @@ function openDB(){
         const gs = db.createObjectStore('games', {keyPath:'id'});
         gs.createIndex('user','user');
       }
+      if(!db.objectStoreNames.contains('lines')){
+        const ls = db.createObjectStore('lines', {keyPath:'id'});
+        ls.createIndex('user','user');
+      }
       if(!db.objectStoreNames.contains('prefs')){
         const ps = db.createObjectStore('prefs', {keyPath:'key'});
-        ps.createIndex('user','user');
+        ps.createIndex('lineId','lineId');
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -89,14 +93,65 @@ async function getGames(user){
   });
 }
 
-/* ---------- prefs (reply / note / mnemonic per move sequence) ---------- */
-const prefKey = (user,seq) => `${user}|${seq.join(',')}`;
+/* ---------- lines (named repertoire roots) ---------- */
+async function createLine(user, {name, color, openingMove}){
+  const db = await openDB();
+  const id = `${user}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
+  const line = {id, user, name, color, openingMove: openingMove || '', createdAt: Date.now()};
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('lines','readwrite');
+    txn.objectStore('lines').put(line);
+    txn.oncomplete = () => resolve(line);
+    txn.onerror    = () => reject(txn.error);
+  });
+}
 
-async function getAllPrefs(user){
+async function getLines(user){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const store = db.transaction('lines','readonly').objectStore('lines');
+    const req = store.index('user').getAll(user);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function updateLine(id, patch){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('lines','readwrite');
+    const store = txn.objectStore('lines');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      if(!getReq.result) return;
+      store.put({...getReq.result, ...patch});
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+async function deleteLine(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction(['lines','prefs'],'readwrite');
+    txn.objectStore('lines').delete(id);
+    const prefStore = txn.objectStore('prefs');
+    const idxReq = prefStore.index('lineId').getAllKeys(id);
+    idxReq.onsuccess = () => { for(const k of idxReq.result) prefStore.delete(k); };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+/* ---------- prefs (reply / note / mnemonic per move sequence, scoped to a line) ---------- */
+const prefKey = (lineId,seq) => `${lineId}|${seq.join(',')}`;
+
+async function getAllPrefs(lineId){
   const db = await openDB();
   return new Promise((resolve,reject)=>{
     const store = db.transaction('prefs','readonly').objectStore('prefs');
-    const req = store.index('user').getAll(user);
+    const req = store.index('lineId').getAll(lineId);
     req.onsuccess = () => {
       const map = {};
       for(const r of req.result) map[r.key] = r;
@@ -106,15 +161,15 @@ async function getAllPrefs(user){
   });
 }
 
-async function setPref(user, seq, patch){
+async function setPref(lineId, seq, patch){
   const db = await openDB();
-  const key = prefKey(user,seq);
+  const key = prefKey(lineId,seq);
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('prefs','readwrite');
     const store = txn.objectStore('prefs');
     const getReq = store.get(key);
     getReq.onsuccess = () => {
-      const existing = getReq.result || {key,user,seq,reply:'',note:'',mnemonic:''};
+      const existing = getReq.result || {key,lineId,seq,reply:'',note:'',mnemonic:''};
       store.put({...existing, ...patch});
     };
     txn.oncomplete = () => resolve();

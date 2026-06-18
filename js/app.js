@@ -24,7 +24,7 @@ $('userId').value  = localStorage.getItem(LS_ID)  || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
 /* ---------- globals ---------- */
-let GAMES=null, CURRENT_USER='', PREFS={};
+let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_LINE=null;
 
 /* ---------- fetch games from Lichess ---------- */
 async function fetchLatest(user,max,onProgress){
@@ -125,7 +125,8 @@ let fieldModalSave = null, fieldModalValidate = null;
 // {ok:false, error} to reject and keep the modal open with the error shown.
 function openFieldModal(field, currentValue, onSave, validate){
   $('fieldModalTitle').textContent =
-    field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' : 'Set Standard Response';
+    field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' :
+    field==='lineName' ? 'Rename Line' : 'Set Standard Response';
   $('fieldModalInput').value = currentValue || '';
   $('fieldModalError').textContent = '';
   fieldModalSave = onSave;
@@ -238,7 +239,7 @@ function renderBranch(parent,games,seq,depth){
     const rowMenu    = tr.querySelector('.row-menu');
 
     const lineSeq = [...seq,opp];
-    const currentSaved = () => PREFS[prefKey(CURRENT_USER,lineSeq)];
+    const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
     function refreshMeta(){
       const saved = currentSaved();
@@ -258,9 +259,9 @@ function renderBranch(parent,games,seq,depth){
     refreshMeta();
 
     function saveField(field,value){
-      setPref(CURRENT_USER,lineSeq,{[field]:value});
-      const key = prefKey(CURRENT_USER,lineSeq);
-      (PREFS[key] ??= {key,user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''})[field]=value;
+      setPref(CURRENT_LINE.id,lineSeq,{[field]:value});
+      const key = prefKey(CURRENT_LINE.id,lineSeq);
+      (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:''})[field]=value;
       refreshMeta();
     }
 
@@ -277,8 +278,8 @@ function renderBranch(parent,games,seq,depth){
     }
 
     function setStandardResponse(reply){
-      setPref(CURRENT_USER,lineSeq,{reply});
-      (PREFS[prefKey(CURRENT_USER,lineSeq)] ??= {key:prefKey(CURRENT_USER,lineSeq),user:CURRENT_USER,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
+      setPref(CURRENT_LINE.id,lineSeq,{reply});
+      (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:''}).reply=reply;
       expandWith(reply);
     }
 
@@ -335,40 +336,118 @@ $('fileImport').addEventListener('change', async e=>{
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   clr();
-  searchRoot();               // re-run automatically
+  if(CURRENT_LINE) openLine(CURRENT_LINE);  // re-run automatically
 });
 
-/* ---------- main search action ---------- */
-async function searchRoot(){
+/* ---------- home screen: list of lines ---------- */
+async function renderHome(){
+  $('homeScreen').style.display='';
+  $('lineScreen').style.display='none';
+  CURRENT_LINE = null;
+  clr();
+
+  const list = $('linesList');
+  list.innerHTML='';
+  if(!CURRENT_USER){
+    list.innerHTML = '<p>Set your Lichess ID via the menu &rarr; Download Games, then create a line.</p>';
+    return;
+  }
+
+  const lines = await getLines(CURRENT_USER);
+  if(!lines.length){
+    list.innerHTML = '<p>No lines yet &mdash; click + to create one.</p>';
+    return;
+  }
+
+  lines.sort((a,b)=>a.name.localeCompare(b.name)).forEach(line=>{
+    const row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML =
+      `<span class="line-name">${escapeHtml(line.name)}</span>
+       <span class="line-color">${escapeHtml(line.color)}</span>
+       <span class="line-opening">${escapeHtml(line.openingMove || '(not set)')}</span>
+       <button class="iconbtn line-edit" title="Rename"><i class="fa-solid fa-pen"></i></button>
+       <button class="iconbtn line-delete" title="Delete"><i class="fa-solid fa-trash"></i></button>`;
+    row.onclick = () => openLine(line);
+    row.querySelector('.line-edit').onclick = e => {
+      e.stopPropagation();
+      openFieldModal('lineName', line.name, async v=>{ await updateLine(line.id,{name:v}); renderHome(); });
+    };
+    row.querySelector('.line-delete').onclick = async e => {
+      e.stopPropagation();
+      if(!confirm(`Delete line "${line.name}"?`)) return;
+      await deleteLine(line.id);
+      renderHome();
+    };
+    list.appendChild(row);
+  });
+}
+
+/* ---------- line screen: tree + engine for one line ---------- */
+async function openLine(line){
+  CURRENT_LINE = line;
+  $('homeScreen').style.display='none';
+  $('lineScreen').style.display='';
+  $('lineTitle').textContent = `${line.name} (${line.color})`;
+
   clr();
   focusHidden = [];
   $('unfocusBtn').style.display='none';
   $('tree').innerHTML='';
 
-  const first=$('firstMove').value.trim();
-  if(!first){ log('enter first move',true); return; }
-
-  if(!CURRENT_USER){
-    CURRENT_USER = $('userId').value.trim().toLowerCase();
-  }
-
   if(!GAMES && CURRENT_USER){
     GAMES = await getGames(CURRENT_USER);
     if(!GAMES.length) GAMES=null;
   }
-
-  /* prompt for NDJSON if nothing is loaded yet */
   if(!GAMES){
     $('fileImport').click();
     return;
   }
 
-  if(CURRENT_USER){
-    PREFS = await getAllPrefs(CURRENT_USER);
+  PREFS = await getAllPrefs(line.id);
+
+  if(line.color==='white' && line.openingMove){
+    renderBranch($('tree'),GAMES,[line.openingMove],0);
+  } else if(!line.openingMove){
+    $('tree').innerHTML = '<p>This line has no opening move configured yet.</p>';
+  }
+}
+
+$('backBtn').onclick = renderHome;
+
+/* ---------- new-line modal ---------- */
+$('lineColorInput').onchange = () => {
+  $('lineOpeningField').style.display = $('lineColorInput').value==='white' ? 'inline-flex' : 'none';
+};
+$('newLineBtn').onclick = () => {
+  $('lineNameInput').value='';
+  $('lineColorInput').value='white';
+  $('lineOpeningField').style.display='inline-flex';
+  $('lineOpeningInput').value='';
+  $('lineModalError').textContent='';
+  $('lineOverlay').style.display='flex';
+  $('lineNameInput').focus();
+};
+$('lineCancelBtn').onclick = () => { $('lineOverlay').style.display='none'; };
+$('lineSaveBtn').onclick = async () => {
+  const name = $('lineNameInput').value.trim();
+  const color = $('lineColorInput').value;
+  if(!name){ $('lineModalError').textContent='enter a name'; return; }
+  if(!CURRENT_USER){ $('lineModalError').textContent='set your Lichess ID first (menu → Download Games)'; return; }
+
+  let openingMove = '';
+  if(color==='white'){
+    openingMove = canonicalizeMoveCase($('lineOpeningInput').value.trim());
+    if(!openingMove){ $('lineModalError').textContent='enter an opening move'; return; }
+    const mv = new Chess().move(openingMove,{sloppy:true});
+    if(!mv){ $('lineModalError').textContent=`"${openingMove}" is not a legal move`; return; }
+    openingMove = mv.san;
   }
 
-  renderBranch($('tree'),GAMES,[first],0);
-}
+  await createLine(CURRENT_USER, {name, color, openingMove});
+  $('lineOverlay').style.display='none';
+  renderHome();
+};
 
 /* ---------- UI actions ---------- */
 $('dlBtn').onclick = async ()=>{
@@ -386,12 +465,12 @@ $('dlBtn').onclick = async ()=>{
     await putGames(CURRENT_USER,GAMES);
     log(`downloaded ${GAMES.length}`);
     $('downloadOverlay').style.display='none';
+    if(CURRENT_LINE) await openLine(CURRENT_LINE);
+    else await renderHome();
   }catch(e){ console.error('[dlBtn] download failed',e); log(e.message,true); }
 };
 
-$('firstMove').addEventListener('change', searchRoot);
-$('firstMove').addEventListener('keydown', e => { if(e.key==='Enter') searchRoot(); });
-if($('firstMove').value.trim()) searchRoot();
+renderHome();
 
 /* ---------- hamburger menu ---------- */
 $('menuBtn').onclick = e=>{
