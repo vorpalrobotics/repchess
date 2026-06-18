@@ -227,6 +227,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const tr=document.createElement('tr');
     tr.className = 'data-row';
+    tr.dataset.opp = opp;
     const moveHtml = flip
       ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
       : `${depth+1}. ${seq.at(-1)} ${opp}`;
@@ -241,6 +242,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
            </div>
          </div>
        </td>
@@ -288,9 +290,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     refreshMeta();
 
     function saveField(field,value){
-      setPref(CURRENT_LINE.id,lineSeq,{[field]:value});
-      const key = prefKey(CURRENT_LINE.id,lineSeq);
-      (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+      savePrefField(lineSeq,field,value);
       refreshMeta();
       refreshHidden();
     }
@@ -312,6 +312,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
 
     /* expand the branch table under the chosen standard response */
+    let childrenSeq = null, branchDiv = null;
     function expandWith(reply){
       const old = metaTr.nextSibling;
       if(old?.querySelector?.('.branch')) old.remove();
@@ -319,7 +320,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      renderBranch(div,games,[...lineSeq,reply],depth+1,flip);
+      childrenSeq = [...lineSeq,reply];
+      branchDiv = div;
+      renderBranch(div,games,childrenSeq,depth+1,flip);
       makeToggle(toggleBtn,tr1);
     }
 
@@ -380,6 +383,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     };
+    rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
+    };
 
     btnEval.onclick = () => {
       const fen = fenForSeq(lineSeq);
@@ -412,6 +420,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
          </div>
        </div>
      </td>
@@ -457,9 +466,7 @@ function renderBlackRoot(parent,games,trigger){
   refreshMeta();
 
   function saveField(field,value){
-    setPref(CURRENT_LINE.id,lineSeq,{[field]:value});
-    const key = prefKey(CURRENT_LINE.id,lineSeq);
-    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+    savePrefField(lineSeq,field,value);
     refreshMeta();
     refreshHidden();
   }
@@ -478,6 +485,7 @@ function renderBlackRoot(parent,games,trigger){
       : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
   }
 
+  let childrenSeq = null, branchDiv = null;
   function expandWith(reply){
     const old = metaTr.nextSibling;
     if(old?.querySelector?.('.branch')) old.remove();
@@ -485,7 +493,9 @@ function renderBlackRoot(parent,games,trigger){
     const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
     const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
     const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-    renderBranch(div,games,[...lineSeq,reply],1,true);
+    childrenSeq = [...lineSeq,reply];
+    branchDiv = div;
+    renderBranch(div,games,childrenSeq,1,true);
     makeToggle(toggleBtn,tr1);
   }
 
@@ -543,6 +553,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
+  };
+  rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
   };
 
   btnEval.onclick = () => {
@@ -834,10 +849,7 @@ let engineRunId = 0;
 let currentEngineFen = null;
 
 const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
-const engineMaxDepth  = () => {
-  const v = $('engineMaxDepthSelect').value;
-  return v === 'infinity' ? Infinity : parseInt(v, 10);
-};
+const engineMaxDepth  = () => parseInt($('engineMaxDepthSelect').value, 10);
 
 /* restore last-used line count / max depth, if they're still valid options */
 const savedLines = localStorage.getItem(LS_ENGINE_LINES);
@@ -919,6 +931,57 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
   refreshEvalSpan(evalSpan, evalObj);
 }
 
+function savePrefField(seq,field,value){
+  setPref(CURRENT_LINE.id,seq,{[field]:value});
+  const key = prefKey(CURRENT_LINE.id,seq);
+  (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+}
+
+function uciToSan(fen, uci){
+  const chess = new Chess(fen);
+  const mv = chess.move({from:uci.slice(0,2), to:uci.slice(2,4), promotion:uci.slice(4,5)||undefined}, {sloppy:true});
+  return mv ? mv.san : null;
+}
+
+/* "Analyze Child Nodes": one multi-PV search on the parent position covers every
+   sibling row in a single pass, since each PV's first move is itself a sibling's
+   move. This also reuses Stockfish's transposition hash across all of them,
+   which sequential one-at-a-time (or one-worker-per-child) searches would not. */
+async function analyzeChildNodes(parentSeq, branchDiv){
+  const rows = [...branchDiv.querySelectorAll(':scope > table > tbody > tr.data-row')];
+  const entries = rows
+    .map(tr => ({ opp: tr.dataset.opp, evalSpan: tr.querySelector('.evaltag') }))
+    .filter(e => e.opp && e.evalSpan);
+  if(!entries.length) return;
+
+  const fen = fenForSeq(parentSeq);
+  entries.forEach(({evalSpan}) => {
+    evalSpan.textContent = '…';
+    evalSpan.className = 'evaltag eval-neutral';
+    evalSpan.style.display = '';
+  });
+
+  await engine.analyze(fen, {
+    multipv: entries.length,
+    depth: engineMaxDepth(),
+    onInfo: (d, lines) => {
+      for(const line of Object.values(lines)){
+        const uci = line.pv[0];
+        if(!uci) continue;
+        const san = uciToSan(fen, uci);
+        const entry = entries.find(e => e.opp === san);
+        if(!entry) continue;
+        const childSeq = [...parentSeq, entry.opp];
+        const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
+        if(existing && existing.depth >= d) continue;
+        const evalObj = {...evalToWhiteRelative(line.score, fen), depth: d};
+        savePrefField(childSeq, 'eval', evalObj);
+        refreshEvalSpan(entry.evalSpan, evalObj);
+      }
+    }
+  });
+}
+
 function pvToSan(fen, uciMoves, maxPlies){
   const chess = new Chess(fen);
   let moveNum = parseInt(fen.split(' ')[5], 10) || 1;
@@ -969,7 +1032,6 @@ async function runEngine(fen, onEvalUpdate){
   const depth = engineMaxDepth();
   console.debug(`[runEngine] runId=${runId} starting analyze multipv=${multipv} depth=${depth}`);
   const t0 = performance.now();
-  // runs until maxDepth is reached, or forever ("infinity") until superseded
   engine.analyze(fen, {
     multipv,
     depth,
