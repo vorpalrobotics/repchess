@@ -253,8 +253,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
          ${moveHtml}
          <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
-         <span class="branchName" style="display:none"></span>
          <span class="evaltag" style="display:none"></span>
+         <span class="branchName" style="display:none"></span>
        </td>`;
     tb.appendChild(tr);
 
@@ -444,8 +444,8 @@ function renderBlackRoot(parent,games,trigger){
        <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
        1. ${trigger} <span class="ourReply">...</span>
        <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
-       <span class="branchName" style="display:none"></span>
        <span class="evaltag" style="display:none"></span>
+       <span class="branchName" style="display:none"></span>
      </td>`;
   tb.appendChild(tr);
 
