@@ -89,6 +89,8 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuDownload">Download Games</button>
+      <button id="menuExport">Export Backup</button>
+      <button id="menuImport">Import Backup</button>
       <button id="menuAbout">About</button>
     </div>
   </div>
@@ -213,6 +215,9 @@
 
 <!-- hidden file chooser for manual NDJSON uploads -->
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
+
+<!-- hidden file chooser for backup restore -->
+<input id="backupImport" type="file" accept=".json" style="display:none">
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>

@@ -488,6 +488,63 @@ $('menuDownload').onclick = ()=>{
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
 
+/* ---------- export / import backup ---------- */
+async function exportBackup(){
+  if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
+  const lines = await getLines(CURRENT_USER);
+  const data = {
+    version: 1,
+    user: CURRENT_USER,
+    exportedAt: new Date().toISOString(),
+    lines: await Promise.all(lines.map(async line=>({
+      name: line.name, color: line.color, openingMove: line.openingMove,
+      prefs: Object.values(await getAllPrefs(line.id)).map(p=>({seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic}))
+    })))
+  };
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `repchess-backup-${CURRENT_USER}-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log(`exported ${lines.length} line(s)`);
+}
+
+async function importBackup(data){
+  if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
+  if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
+  for(const lineData of data.lines){
+    const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMove:lineData.openingMove});
+    for(const pref of (lineData.prefs||[])){
+      await setPref(line.id, pref.seq, {reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||''});
+    }
+  }
+  log(`imported ${data.lines.length} line(s)`);
+  await renderHome();
+}
+
+$('menuExport').onclick = ()=>{
+  $('menuList').style.display='none';
+  exportBackup();
+};
+$('menuImport').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('backupImport').click();
+};
+$('backupImport').addEventListener('change', async e=>{
+  const f = e.target.files[0];
+  e.target.value = '';
+  if(!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    await importBackup(data);
+  }catch(err){
+    console.error('[import] failed',err);
+    log('import failed: '+err.message,true);
+  }
+});
+
 /* ---------- about modal ---------- */
 $('menuAbout').onclick = ()=>{
   $('menuList').style.display='none';
