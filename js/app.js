@@ -365,7 +365,7 @@ async function renderHome(){
     row.innerHTML =
       `<span class="line-name">${escapeHtml(line.name)}</span>
        <span class="line-color">${escapeHtml(line.color)}</span>
-       <span class="line-opening">${escapeHtml(line.openingMove || '(not set)')}</span>
+       <span class="line-opening">${escapeHtml(summarizeMoves(line.openingMoves))}</span>
        <button class="iconbtn line-edit" title="Rename"><i class="fa-solid fa-pen"></i></button>
        <button class="iconbtn line-delete" title="Delete"><i class="fa-solid fa-trash"></i></button>`;
     row.onclick = () => openLine(line);
@@ -406,24 +406,45 @@ async function openLine(line){
 
   PREFS = await getAllPrefs(line.id);
 
-  if(line.color==='white' && line.openingMove){
-    renderBranch($('tree'),GAMES,[line.openingMove],0);
-  } else if(!line.openingMove){
+  const triggers = line.openingMoves || [];
+  if(!triggers.length){
     $('tree').innerHTML = '<p>This line has no opening move configured yet.</p>';
+    return;
   }
+  triggers.forEach(mv=>{
+    $('tree').insertAdjacentHTML('beforeend', `<h3 class="trigger-heading">Against 1. ${escapeHtml(mv)}</h3>`);
+    renderBranch($('tree'),GAMES,[mv],0);
+  });
 }
 
 $('backBtn').onclick = renderHome;
 
 /* ---------- new-line modal ---------- */
-$('lineColorInput').onchange = () => {
-  $('lineOpeningField').style.display = $('lineColorInput').value==='white' ? 'inline-flex' : 'none';
-};
+/* every legal White first move: 16 pawn pushes + 4 knight moves */
+const ALL_FIRST_MOVES = ['a3','a4','b3','b4','c3','c4','d3','d4','e3','e4','f3','f4','g3','g4','h3','h4','Na3','Nc3','Nf3','Nh3'];
+
+function summarizeMoves(moves){
+  if(!moves || !moves.length) return '(not set)';
+  if(moves.length<=3) return moves.join(', ');
+  return `${moves.slice(0,3).join(', ')} (+${moves.length-3} more)`;
+}
+
+function updateLineModalFields(){
+  const color = $('lineColorInput').value;
+  $('lineOpeningField').style.display = color==='white' ? 'inline-flex' : 'none';
+  $('lineTriggerModeField').style.display = color==='black' ? 'inline-flex' : 'none';
+  $('lineTriggersField').style.display = (color==='black' && $('lineTriggerModeInput').value==='specific') ? 'inline-flex' : 'none';
+}
+$('lineColorInput').onchange = updateLineModalFields;
+$('lineTriggerModeInput').onchange = updateLineModalFields;
+
 $('newLineBtn').onclick = () => {
   $('lineNameInput').value='';
   $('lineColorInput').value='white';
-  $('lineOpeningField').style.display='inline-flex';
   $('lineOpeningInput').value='';
+  $('lineTriggerModeInput').value='specific';
+  $('lineTriggersInput').value='';
+  updateLineModalFields();
   $('lineModalError').textContent='';
   $('lineOverlay').style.display='flex';
   $('lineNameInput').focus();
@@ -435,16 +456,27 @@ $('lineSaveBtn').onclick = async () => {
   if(!name){ $('lineModalError').textContent='enter a name'; return; }
   if(!CURRENT_USER){ $('lineModalError').textContent='set your Lichess ID first (menu → Download Games)'; return; }
 
-  let openingMove = '';
+  let openingMoves = [];
   if(color==='white'){
-    openingMove = canonicalizeMoveCase($('lineOpeningInput').value.trim());
-    if(!openingMove){ $('lineModalError').textContent='enter an opening move'; return; }
-    const mv = new Chess().move(openingMove,{sloppy:true});
-    if(!mv){ $('lineModalError').textContent=`"${openingMove}" is not a legal move`; return; }
-    openingMove = mv.san;
+    let mv = canonicalizeMoveCase($('lineOpeningInput').value.trim());
+    if(!mv){ $('lineModalError').textContent='enter an opening move'; return; }
+    const parsed = new Chess().move(mv,{sloppy:true});
+    if(!parsed){ $('lineModalError').textContent=`"${mv}" is not a legal move`; return; }
+    openingMoves = [parsed.san];
+  } else if($('lineTriggerModeInput').value==='any'){
+    openingMoves = ALL_FIRST_MOVES;
+  } else {
+    const raw = $('lineTriggersInput').value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(!raw.length){ $('lineModalError').textContent='enter at least one White move'; return; }
+    for(const r of raw){
+      const mv = canonicalizeMoveCase(r);
+      const parsed = new Chess().move(mv,{sloppy:true});
+      if(!parsed){ $('lineModalError').textContent=`"${r}" is not a legal move`; return; }
+      openingMoves.push(parsed.san);
+    }
   }
 
-  await createLine(CURRENT_USER, {name, color, openingMove});
+  await createLine(CURRENT_USER, {name, color, openingMoves});
   $('lineOverlay').style.display='none';
   renderHome();
 };
@@ -497,7 +529,7 @@ async function exportBackup(){
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
     lines: await Promise.all(lines.map(async line=>({
-      name: line.name, color: line.color, openingMove: line.openingMove,
+      name: line.name, color: line.color, openingMoves: line.openingMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic}))
     })))
   };
@@ -515,7 +547,7 @@ async function importBackup(data){
   if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
   if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
   for(const lineData of data.lines){
-    const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMove:lineData.openingMove});
+    const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||''});
     }

@@ -10,7 +10,7 @@ const DB_VERSION = 1;
    at all going forward, and any IndexedDB data from earlier testing
    is wiped once so everyone starts fresh.
 */
-const FRESH_START_FLAG = 'repchess-fresh-start-v2';
+const FRESH_START_FLAG = 'repchess-fresh-start-v3';
 let freshStartPromise = null;
 function ensureFreshStart(){
   if(freshStartPromise) return freshStartPromise;
@@ -94,10 +94,10 @@ async function getGames(user){
 }
 
 /* ---------- lines (named repertoire roots) ---------- */
-async function createLine(user, {name, color, openingMove}){
+async function createLine(user, {name, color, openingMoves}){
   const db = await openDB();
   const id = `${user}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
-  const line = {id, user, name, color, openingMove: openingMove || '', createdAt: Date.now()};
+  const line = {id, user, name, color, openingMoves: openingMoves || [], createdAt: Date.now()};
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('lines','readwrite');
     txn.objectStore('lines').put(line);

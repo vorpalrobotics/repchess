@@ -56,6 +56,8 @@
   .line-opening{color:#666;font-size:.85em;font-family:'Courier New',monospace}
 
   .line-header{display:flex;align-items:center;gap:.8rem;margin-bottom:.6rem}
+  .trigger-heading{margin:1rem 0 .3rem;font-size:1rem}
+  .trigger-heading:first-child{margin-top:0}
   #menuBtn{font-size:1.4em;border:none;background:none;padding:.1em .4em}
 
   #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
@@ -204,6 +206,16 @@
     </div>
     <div class="field" id="lineOpeningField">
       <label>Opening move:</label><input id="lineOpeningInput" style="width:8em">
+    </div>
+    <div class="field" id="lineTriggerModeField" style="display:none">
+      <label>Triggers:</label>
+      <select id="lineTriggerModeInput">
+        <option value="specific">Specific White move(s)</option>
+        <option value="any">Any White first move</option>
+      </select>
+    </div>
+    <div class="field" id="lineTriggersField" style="display:none">
+      <label>White moves:</label><input id="lineTriggersInput" style="width:14em" placeholder="e.g. e4, d4">
     </div>
     <div id="lineModalError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
     <div class="modal-actions">
