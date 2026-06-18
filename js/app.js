@@ -997,8 +997,15 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
     .filter(e => e.opp && e.evalSpan);
   if(!entries.length) return;
 
+  const targetDepth = engineMaxDepth();
+  const pending = entries.filter(({opp}) => {
+    const existing = PREFS[prefKey(CURRENT_LINE.id, [...parentSeq,opp])]?.eval;
+    return !existing || existing.depth < targetDepth;
+  });
+  if(!pending.length) return; // every child already analyzed to at least this depth
+
   const fen = fenForSeq(parentSeq);
-  entries.forEach(({evalSpan}) => {
+  pending.forEach(({evalSpan}) => {
     evalSpan.textContent = '…';
     evalSpan.className = 'evaltag eval-neutral';
     evalSpan.style.display = '';
@@ -1014,7 +1021,7 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
   try {
     await engine.analyze(fen, {
       multipv: entries.length,
-      depth: engineMaxDepth(),
+      depth: targetDepth,
       onInfo: (d, lines) => {
         for(const line of Object.values(lines)){
           const uci = line.pv[0];
