@@ -246,6 +246,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${moveHtml}
          <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
+         <span class="evaltag" style="display:none"></span>
        </td>`;
     tb.appendChild(tr);
 
@@ -262,6 +263,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const rowMenuBtn = tr.querySelector('.rowMenuBtn');
     const rowMenu    = tr.querySelector('.row-menu');
     const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
+    const evalSpan   = tr.querySelector('.evaltag');
 
     const lineSeq = [...seq,opp];
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -335,6 +337,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       expandWith(savedRep);
     }
     refreshHidden();
+    refreshEvalSpan(evalSpan, currentSaved()?.eval);
 
     /* "more" menu: set standard response / add note / add mnemonic */
     rowMenuBtn.onclick = e => {
@@ -376,7 +379,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
       openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     };
 
-    btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
+    btnEval.onclick = () => {
+      const fen = fenForSeq(lineSeq);
+      showPosition(fen, (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen));
+    };
   });
 }
 
@@ -410,6 +416,7 @@ function renderBlackRoot(parent,games,trigger){
      <td class="move">
        <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
        1. ${trigger} <span class="ourReply">...</span>
+       <span class="evaltag" style="display:none"></span>
      </td>`;
   tb.appendChild(tr);
 
@@ -425,6 +432,7 @@ function renderBlackRoot(parent,games,trigger){
   const rowMenuBtn = tr.querySelector('.rowMenuBtn');
   const rowMenu    = tr.querySelector('.row-menu');
   const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
+  const evalSpan   = tr.querySelector('.evaltag');
 
   const lineSeq = [trigger];
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -494,6 +502,7 @@ function renderBlackRoot(parent,games,trigger){
     expandWith(savedRep);
   }
   refreshHidden();
+  refreshEvalSpan(evalSpan, currentSaved()?.eval);
 
   rowMenuBtn.onclick = e => {
     e.stopPropagation();
@@ -534,7 +543,10 @@ function renderBlackRoot(parent,games,trigger){
     openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
   };
 
-  btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
+  btnEval.onclick = () => {
+    const fen = fenForSeq(lineSeq);
+    showPosition(fen, (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen));
+  };
 }
 
 /* ---------- local file import ---------- */
@@ -861,6 +873,51 @@ function formatScore(score, turn){
   return (cp >= 0 ? '+' : '') + cp.toFixed(1);
 }
 
+/* ---------- persisted position evals (saved per move-sequence in prefs) ----------
+   Engine scores are relative to the side to move; convert once to a fixed
+   White-relative value so the saved number means the same thing regardless
+   of who was on move when it was computed. */
+function evalToWhiteRelative(score, fen){
+  const sign = fen.split(' ')[1] === 'w' ? 1 : -1;
+  return { type: score.type, value: score.value * sign };
+}
+
+function formatEvalTag({type, value, depth}){
+  const scoreText = type === 'mate'
+    ? (value >= 0 ? `#${value}` : `-#${Math.abs(value)}`)
+    : `${value >= 0 ? '+' : ''}${(value/100).toFixed(1)}`;
+  return `${scoreText}/${depth}`;
+}
+
+/* favor is from the perspective of the line's own color: positive White-relative
+   values are good for a White line, bad for a Black line, and vice versa. */
+function evalClass({type, value}, lineColor){
+  const favor = lineColor === 'black' ? -value : value;
+  if(type === 'mate') return favor >= 0 ? 'eval-winning' : 'eval-losing';
+  const pawns = favor / 100;
+  if(Math.abs(pawns) <= 0.5) return 'eval-neutral';
+  if(pawns > 1.25) return 'eval-winning';
+  if(pawns > 0) return 'eval-superior';
+  if(pawns < -1.25) return 'eval-losing';
+  return 'eval-inferior';
+}
+
+function refreshEvalSpan(evalSpan, evalObj){
+  if(!evalObj){ evalSpan.style.display='none'; return; }
+  evalSpan.textContent = formatEvalTag(evalObj);
+  evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
+  evalSpan.style.display='';
+}
+
+/* only overwrite a saved eval if the engine has now searched deeper than before */
+function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, fen){
+  const existing = currentSaved()?.eval;
+  if(existing && existing.depth >= depth) return;
+  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth};
+  saveField('eval', evalObj);
+  refreshEvalSpan(evalSpan, evalObj);
+}
+
 function pvToSan(fen, uciMoves, maxPlies){
   const chess = new Chess(fen);
   let moveNum = parseInt(fen.split(' ')[5], 10) || 1;
@@ -898,7 +955,7 @@ function renderEngineLines(fen, depth, lines, multipv){
   }
 }
 
-async function runEngine(fen){
+async function runEngine(fen, onEvalUpdate){
   currentEngineFen = fen;
   const runId = ++engineRunId;
   console.debug(`[runEngine] runId=${runId} fen=${fen}`);
@@ -918,16 +975,17 @@ async function runEngine(fen){
     onInfo: (d,lines) => {
       if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
       renderEngineLines(fen,d,lines,multipv);
+      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(d, lines[1].score);
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
   }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
-function showPosition(fen){
+function showPosition(fen, onEvalUpdate){
   console.debug(`[showPosition] fen=${fen}`);
   board.setPosition(fen);
-  runEngine(fen);
+  runEngine(fen, onEvalUpdate);
 }
 
 showPosition(new Chess().fen());
