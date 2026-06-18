@@ -203,8 +203,13 @@ $('visibilityToggleBtn').onclick = () => {
   applyVisibilityMode();
 };
 
-/* ---------- recursive branch renderer ---------- */
-function renderBranch(parent,games,seq,depth){
+/* ---------- recursive branch renderer ----------
+   flip=true is used for Black lines from move-pair 2 onward: the enumerated
+   move (opp) is White's actual move (data), and "our" move is the standard
+   reply we set, displayed after it once chosen (e.g. "2. e4 d5"). For White
+   lines (flip=false) the enumerated move is the opponent's reply to our own
+   already-known move, e.g. "1. e4 e5". */
+function renderBranch(parent,games,seq,depth,flip=false){
   const {counts,tot}=replies(games,seq);
   if(!tot){
     parent.insertAdjacentHTML('beforeend',
@@ -220,6 +225,9 @@ function renderBranch(parent,games,seq,depth){
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const tr=document.createElement('tr');
     tr.className = 'data-row';
+    const moveHtml = flip
+      ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
+      : `${depth+1}. ${seq.at(-1)} ${opp}`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse">📈</button>
@@ -236,7 +244,7 @@ function renderBranch(parent,games,seq,depth){
        </td>
        <td class="move" style="padding-left:${depth}em">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
-         ${depth+1}. ${seq.at(-1)} ${opp}
+         ${moveHtml}
          <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
        </td>`;
     tb.appendChild(tr);
@@ -307,19 +315,25 @@ function renderBranch(parent,games,seq,depth){
       const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      renderBranch(div,games,[...lineSeq,reply],depth+1);
+      renderBranch(div,games,[...lineSeq,reply],depth+1,flip);
       makeToggle(toggleBtn,tr1);
     }
 
     function setStandardResponse(reply){
       setPref(CURRENT_LINE.id,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
+      const replySpan = tr.querySelector('.ourReply');
+      if(replySpan) replySpan.textContent = reply;
       expandWith(reply);
     }
 
     /* restore reply from the preloaded PREFS map */
     const savedRep = currentSaved()?.reply;
-    if(savedRep) expandWith(savedRep);
+    if(savedRep){
+      const replySpan = tr.querySelector('.ourReply');
+      if(replySpan) replySpan.textContent = savedRep;
+      expandWith(savedRep);
+    }
     refreshHidden();
 
     /* "more" menu: set standard response / add note / add mnemonic */
@@ -364,6 +378,163 @@ function renderBranch(parent,games,seq,depth){
 
     btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
   });
+}
+
+/* ---------- Black-line root row ----------
+   For a Black line, White's move 1 (trigger) is fixed by the line itself,
+   not data-enumerated. There's nothing to pick from here — we just need to
+   set our own standard reply directly. Once set, the regular renderBranch
+   (flip=true) takes over from White's move 2 onward, since that's where
+   actual data enumeration (White's choices) resumes. */
+function renderBlackRoot(parent,games,trigger){
+  const tbl=document.createElement('table');
+  parent.appendChild(tbl);
+  const tb=tbl.appendChild(document.createElement('tbody'));
+
+  const tr=document.createElement('tr');
+  tr.className='data-row';
+  tr.innerHTML=
+    `<td class="resp">
+       <button class="iconbtn" title="Analyse">📈</button>
+       <div class="row-menu-wrap">
+         <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+         <div class="row-menu">
+           <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
+           <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+           <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
+           <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+           <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+         </div>
+       </div>
+     </td>
+     <td class="move">
+       <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
+       1. ${trigger} <span class="ourReply">...</span>
+     </td>`;
+  tb.appendChild(tr);
+
+  const metaTr = document.createElement('tr');
+  metaTr.className = 'meta-row';
+  const metaTd = document.createElement('td');
+  metaTd.colSpan = 2;
+  metaTr.appendChild(metaTd);
+  tr.after(metaTr);
+
+  const toggleBtn  = tr.querySelector('.toggle');
+  const btnEval    = tr.querySelector('td.resp > button.iconbtn');
+  const rowMenuBtn = tr.querySelector('.rowMenuBtn');
+  const rowMenu    = tr.querySelector('.row-menu');
+  const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
+
+  const lineSeq = [trigger];
+  const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
+
+  function refreshMeta(){
+    const saved = currentSaved();
+    const mnem = saved?.mnemonic || '';
+    const note = saved?.note || '';
+    if(!mnem && !note){ metaTr.style.display='none'; return; }
+    metaTd.innerHTML =
+      (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
+      (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '');
+    metaTr.style.display='';
+
+    const mnemEl = metaTd.querySelector('.meta-mnem');
+    if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
+    const noteEl = metaTd.querySelector('.meta-note');
+    if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+  }
+  refreshMeta();
+
+  function saveField(field,value){
+    setPref(CURRENT_LINE.id,lineSeq,{[field]:value});
+    const key = prefKey(CURRENT_LINE.id,lineSeq);
+    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+    refreshMeta();
+    refreshHidden();
+  }
+
+  function getGroupRows(){
+    const rows=[tr, metaTr];
+    const next = metaTr.nextElementSibling;
+    if(next && next.classList.contains('branch-row')) rows.push(next);
+    return rows;
+  }
+  function refreshHidden(){
+    const isHidden = !!currentSaved()?.hidden;
+    getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
+    hideBtn.innerHTML = isHidden
+      ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
+      : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
+  }
+
+  function expandWith(reply){
+    const old = metaTr.nextSibling;
+    if(old?.querySelector?.('.branch')) old.remove();
+
+    const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
+    const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
+    const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
+    renderBranch(div,games,[...lineSeq,reply],1,true);
+    makeToggle(toggleBtn,tr1);
+  }
+
+  function setStandardResponse(reply){
+    setPref(CURRENT_LINE.id,lineSeq,{reply});
+    (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
+    const replySpan = tr.querySelector('.ourReply');
+    if(replySpan) replySpan.textContent = reply;
+    expandWith(reply);
+  }
+
+  const savedRep = currentSaved()?.reply;
+  if(savedRep){
+    const replySpan = tr.querySelector('.ourReply');
+    if(replySpan) replySpan.textContent = savedRep;
+    expandWith(savedRep);
+  }
+  refreshHidden();
+
+  rowMenuBtn.onclick = e => {
+    e.stopPropagation();
+    const showing = rowMenu.classList.contains('show');
+    closeAllRowMenus();
+    if(!showing) rowMenu.classList.add('show');
+  };
+  rowMenu.querySelector('[data-act="focus"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    focusOnLine(tr);
+  };
+  hideBtn.onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    saveField('hidden', !currentSaved()?.hidden);
+  };
+  rowMenu.querySelector('[data-act="response"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openFieldModal('response', currentSaved()?.reply, v=>setStandardResponse(v), v=>{
+      if(!v) return {ok:false, error:'enter a move'};
+      v = canonicalizeMoveCase(v);
+      const chess = new Chess(fenForSeq(lineSeq));
+      const mv = chess.move(v,{sloppy:true});
+      if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+      return {ok:true, value:mv.san};
+    });
+  };
+  rowMenu.querySelector('[data-act="note"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+  };
+  rowMenu.querySelector('[data-act="mnemonic"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
+  };
+
+  btnEval.onclick = () => showPosition(fenForSeq(lineSeq));
 }
 
 /* ---------- local file import ---------- */
@@ -448,6 +619,8 @@ async function openLine(line){
 
   PREFS = await getAllPrefs(line.id);
 
+  board.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
+
   const triggers = line.openingMoves || [];
   if(!triggers.length){
     $('tree').innerHTML = '<p>This line has no opening move configured yet.</p>';
@@ -455,7 +628,11 @@ async function openLine(line){
   }
   triggers.forEach(mv=>{
     $('tree').insertAdjacentHTML('beforeend', `<h3 class="trigger-heading">Against 1. ${escapeHtml(mv)}</h3>`);
-    renderBranch($('tree'),GAMES,[mv],0);
+    if(line.color==='black'){
+      renderBlackRoot($('tree'),GAMES,mv);
+    } else {
+      renderBranch($('tree'),GAMES,[mv],0);
+    }
   });
 }
 
