@@ -252,6 +252,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${moveHtml}
          <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
+         <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
          <span class="branchName" style="display:none"></span>
          <span class="evaltag" style="display:none"></span>
        </td>`;
@@ -272,6 +273,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
     const evalSpan   = tr.querySelector('.evaltag');
     const nameSpan   = tr.querySelector('.branchName');
+    const analyzingIcon = tr.querySelector('.analyzingIcon');
 
     const lineSeq = [...seq,opp];
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -391,7 +393,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
+      if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
     };
     rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
       e.stopPropagation();
@@ -441,6 +443,7 @@ function renderBlackRoot(parent,games,trigger){
      <td class="move">
        <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
        1. ${trigger} <span class="ourReply">...</span>
+       <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
        <span class="branchName" style="display:none"></span>
        <span class="evaltag" style="display:none"></span>
      </td>`;
@@ -460,6 +463,7 @@ function renderBlackRoot(parent,games,trigger){
   const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
   const evalSpan   = tr.querySelector('.evaltag');
   const nameSpan   = tr.querySelector('.branchName');
+  const analyzingIcon = tr.querySelector('.analyzingIcon');
 
   const lineSeq = [trigger];
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
@@ -574,7 +578,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv);
+    if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
   };
   rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
     e.stopPropagation();
@@ -977,8 +981,16 @@ function uciToSan(fen, uci){
 /* "Analyze Child Nodes": one multi-PV search on the parent position covers every
    sibling row in a single pass, since each PV's first move is itself a sibling's
    move. This also reuses Stockfish's transposition hash across all of them,
-   which sequential one-at-a-time (or one-worker-per-child) searches would not. */
-async function analyzeChildNodes(parentSeq, branchDiv){
+   which sequential one-at-a-time (or one-worker-per-child) searches would not.
+
+   Each multipv rank advances at its own pace (the engine reports rank 1's
+   deeper iterations well before rank 12's), so every line's update must be
+   tagged with *its own* depth (line.depth) rather than whatever depth the
+   most-recently-changed rank happens to be at — otherwise a lagging rank gets
+   stamped with a depth it hasn't actually reached, which then blocks all of
+   its real future updates (existing.depth >= d looks "already deep enough"). */
+let activeChildAnalysisIcon = null;
+async function analyzeChildNodes(parentSeq, branchDiv, icon){
   const rows = [...branchDiv.querySelectorAll(':scope > table > tbody > tr.data-row')];
   const entries = rows
     .map(tr => ({ opp: tr.dataset.opp, evalSpan: tr.querySelector('.evaltag') }))
@@ -992,25 +1004,38 @@ async function analyzeChildNodes(parentSeq, branchDiv){
     evalSpan.style.display = '';
   });
 
-  await engine.analyze(fen, {
-    multipv: entries.length,
-    depth: engineMaxDepth(),
-    onInfo: (d, lines) => {
-      for(const line of Object.values(lines)){
-        const uci = line.pv[0];
-        if(!uci) continue;
-        const san = uciToSan(fen, uci);
-        const entry = entries.find(e => e.opp === san);
-        if(!entry) continue;
-        const childSeq = [...parentSeq, entry.opp];
-        const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
-        if(existing && existing.depth >= d) continue;
-        const evalObj = {...evalToWhiteRelative(line.score, fen), depth: d};
-        savePrefField(childSeq, 'eval', evalObj);
-        refreshEvalSpan(entry.evalSpan, evalObj);
+  if(activeChildAnalysisIcon && activeChildAnalysisIcon !== icon){
+    activeChildAnalysisIcon.style.display = 'none';
+  }
+  activeChildAnalysisIcon = icon;
+  icon.style.display = '';
+  icon.onclick = e => { e.stopPropagation(); engine.stop(); };
+
+  try {
+    await engine.analyze(fen, {
+      multipv: entries.length,
+      depth: engineMaxDepth(),
+      onInfo: (d, lines) => {
+        for(const line of Object.values(lines)){
+          const uci = line.pv[0];
+          if(!uci) continue;
+          const san = uciToSan(fen, uci);
+          const entry = entries.find(e => e.opp === san);
+          if(!entry) continue;
+          const childSeq = [...parentSeq, entry.opp];
+          const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
+          if(existing && existing.depth >= line.depth) continue;
+          const evalObj = {...evalToWhiteRelative(line.score, fen), depth: line.depth};
+          savePrefField(childSeq, 'eval', evalObj);
+          refreshEvalSpan(entry.evalSpan, evalObj);
+        }
       }
-    }
-  });
+    });
+  } finally {
+    if(activeChildAnalysisIcon === icon) activeChildAnalysisIcon = null;
+    icon.style.display = 'none';
+    icon.onclick = null;
+  }
 }
 
 function pvToSan(fen, uciMoves, maxPlies){
@@ -1069,7 +1094,7 @@ async function runEngine(fen, onEvalUpdate){
     onInfo: (d,lines) => {
       if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
       renderEngineLines(fen,d,lines,multipv);
-      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(d, lines[1].score);
+      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score);
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);

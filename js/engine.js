@@ -85,10 +85,14 @@ export class Engine {
 
   // Runs a multi-PV search on `fen`, calling onInfo(depth, lines) every time a
   // line updates. `lines` is keyed by PV rank (1..multipv), each entry is
-  // { score: {type:'cp'|'mate', value}, pv: [uci moves...] }, both relative to
-  // the side to move (as reported by the engine). With no `depth` (or
-  // depth=Infinity) the search runs until stop() is called (or another
-  // analyze() call supersedes it); otherwise it stops itself at that depth.
+  // { score: {type:'cp'|'mate', value}, pv: [uci moves...], depth }, score
+  // relative to the side to move (as reported by the engine). `depth` is the
+  // depth that *specific* PV rank last reported at — ranks update at slightly
+  // different times, so don't assume they all share the depth passed to
+  // onInfo (that's only the depth of whichever rank most recently changed).
+  // With no `depth` (or depth=Infinity) the search runs until stop() is
+  // called (or another analyze() call supersedes it); otherwise it stops
+  // itself at that depth.
   async analyze(fen, { multipv = 4, depth = Infinity, onInfo } = {}) {
     await this._stopCurrent();
     this._send(`setoption name MultiPV value ${multipv}`);
@@ -113,7 +117,8 @@ export class Engine {
               score: cpMatch
                 ? { type: 'cp', value: parseInt(cpMatch[1], 10) }
                 : { type: 'mate', value: parseInt(mateMatch[1], 10) },
-              pv: pvMatch[1].trim().split(' ')
+              pv: pvMatch[1].trim().split(' '),
+              depth: curDepth
             };
             onInfo?.(curDepth, lines);
           }
