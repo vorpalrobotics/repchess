@@ -248,6 +248,24 @@
   </div>
 </div>
 
+<!-- analyze child nodes depth modal -->
+<div id="analyzeChildrenOverlay" class="overlay">
+  <div class="modal">
+    <h2>Analyze Child Nodes</h2>
+    <div class="field">
+      <label>Depth:</label>
+      <select id="analyzeChildrenDepthInput">
+        <option>15</option><option>20</option><option>25</option>
+        <option>30</option><option>35</option><option>40</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button id="analyzeChildrenCancelBtn">Cancel</button>
+      <button id="analyzeChildrenGoBtn">GO</button>
+    </div>
+  </div>
+</div>
+
 <!-- hidden file chooser for manual NDJSON uploads -->
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
 

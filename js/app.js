@@ -1138,6 +1138,28 @@ function sanToUci(fen, san){
    most-recently-changed rank happens to be at — otherwise a lagging rank gets
    stamped with a depth it hasn't actually reached, which then blocks all of
    its real future updates (existing.depth >= d looks "already deep enough"). */
+let analyzeChildrenResolve = null;
+function openAnalyzeChildrenModal(defaultDepth){
+  return new Promise(resolve => {
+    const select = $('analyzeChildrenDepthInput');
+    const opts = [...select.options].map(o=>o.value);
+    select.value = opts.includes(String(defaultDepth)) ? String(defaultDepth) : opts[opts.length-1];
+    $('analyzeChildrenOverlay').style.display='flex';
+    analyzeChildrenResolve = resolve;
+  });
+}
+$('analyzeChildrenCancelBtn').onclick = () => {
+  $('analyzeChildrenOverlay').style.display='none';
+  analyzeChildrenResolve?.(null);
+  analyzeChildrenResolve = null;
+};
+$('analyzeChildrenGoBtn').onclick = () => {
+  const depth = parseInt($('analyzeChildrenDepthInput').value, 10);
+  $('analyzeChildrenOverlay').style.display='none';
+  analyzeChildrenResolve?.(depth);
+  analyzeChildrenResolve = null;
+};
+
 let activeChildAnalysisIcon = null;
 async function analyzeChildNodes(parentSeq, branchDiv, icon){
   const fen = fenForSeq(parentSeq);
@@ -1149,7 +1171,8 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
     .filter(e => e.uci);
   if(!entries.length) return;
 
-  const targetDepth = engineMaxDepth();
+  const targetDepth = await openAnalyzeChildrenModal(engineMaxDepth());
+  if(!targetDepth) return;
   const pending = entries.filter(({opp}) => {
     const existing = PREFS[prefKey(CURRENT_LINE.id, [...parentSeq,opp])]?.eval;
     return !existing || existing.depth < targetDepth;
