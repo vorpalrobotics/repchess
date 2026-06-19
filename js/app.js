@@ -295,6 +295,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const analyzingIcon = tr.querySelector('.analyzingIcon');
 
     const lineSeq = [...seq,opp];
+    attachHoverPreview(btnEval, lineSeq);
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
     function refreshMeta(){
@@ -543,6 +544,7 @@ function renderBlackRoot(parent,games,trigger){
   const analyzingIcon = tr.querySelector('.analyzingIcon');
 
   const lineSeq = [trigger];
+  attachHoverPreview(btnEval, lineSeq);
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
   function refreshMeta(){
@@ -957,6 +959,42 @@ const board = new Chessboard($('board'), {
     }
   }
 });
+
+/* ---------- hover preview mini-board ---------- */
+const hoverPreviewBoard = new Chessboard($('hoverPreviewBoard'), {
+  position: new Chess().fen(),
+  orientation: COLOR.white,
+  style: {
+    pieces: {
+      file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg'
+    }
+  }
+});
+let hoverPreviewTimer = null;
+function hideHoverPreview(){
+  clearTimeout(hoverPreviewTimer);
+  hoverPreviewTimer = null;
+  $('hoverPreview').style.display = 'none';
+}
+function attachHoverPreview(icon, seq){
+  icon.addEventListener('mouseenter', () => {
+    clearTimeout(hoverPreviewTimer);
+    hoverPreviewTimer = setTimeout(() => {
+      const fen = fenForSeq(seq);
+      hoverPreviewBoard.setPosition(fen);
+      hoverPreviewBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+      const r = icon.getBoundingClientRect();
+      const preview = $('hoverPreview');
+      preview.style.display = 'block';
+      const size = 168; // preview box incl. border/padding
+      const left = Math.min(r.left, window.innerWidth - size - 8);
+      const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
+      preview.style.left = `${Math.round(Math.max(8,left))}px`;
+      preview.style.top = `${Math.round(Math.max(8,top))}px`;
+    }, 2000);
+  });
+  icon.addEventListener('mouseleave', hideHoverPreview);
+}
 
 /* ---------- engine ---------- */
 const ENGINE_PV_PLIES = 8;

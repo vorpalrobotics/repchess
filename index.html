@@ -52,6 +52,9 @@
   .iconbtn.btnEval-onBoard{border:2px solid #000;border-radius:4px}
   .toggle {font-size:1.15em;vertical-align:middle}
 
+  #hoverPreview{position:fixed;display:none;z-index:50;background:#fff;border:2px solid #333;border-radius:4px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.3)}
+  #hoverPreview #hoverPreviewBoard{width:160px;height:160px}
+
   tr.meta-row td{border-bottom:1px solid #ddd;padding-top:0;font-size:.78rem;color:#555}
   tr.meta-row .meta-mnem,
   tr.meta-row .meta-note{margin-right:1.3em;cursor:pointer}
@@ -265,6 +268,9 @@
     </div>
   </div>
 </div>
+
+<!-- hover preview mini-board (shown on dwell over an analyse icon) -->
+<div id="hoverPreview"><div id="hoverPreviewBoard"></div></div>
 
 <!-- hidden file chooser for manual NDJSON uploads -->
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
