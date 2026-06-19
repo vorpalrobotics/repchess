@@ -223,17 +223,17 @@ function renderBranch(parent,games,seq,depth,flip=false){
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
 
-  if(!Object.keys(counts).length){
-    parent.insertAdjacentHTML('beforeend',
-      `<p class="indent" style="margin-left:${depth}em">(no further games)</p>`);
-    appendAddMoveControl(parent,games,seq,depth,flip);
-    return;
-  }
-
   const tbl=document.createElement('table');
   parent.appendChild(tbl);
 
   const tb=tbl.appendChild(document.createElement('tbody'));
+
+  if(!Object.keys(counts).length){
+    tb.insertAdjacentHTML('beforeend',
+      `<tr><td class="resp"></td><td class="move" style="padding-left:${depth}em">(no further games)</td></tr>`);
+    appendAddMoveControl(tb,parent,games,seq,depth,flip);
+    return;
+  }
 
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const isManual = c===0 && manualReplies.includes(opp);
@@ -441,19 +441,25 @@ function renderBranch(parent,games,seq,depth,flip=false){
     };
   });
 
-  appendAddMoveControl(parent,games,seq,depth,flip);
+  appendAddMoveControl(tb,parent,games,seq,depth,flip);
 }
 
 /* lets the user record an opponent move that hasn't appeared in any imported
    game yet (e.g. a known theoretical try), so it shows up alongside the
-   data-driven rows with a 0 count until games actually contain it */
-function appendAddMoveControl(parent,games,seq,depth,flip){
-  const div=document.createElement('div');
-  div.className='add-move indent';
-  div.style.marginLeft=`${depth}em`;
-  div.innerHTML=`<button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>`;
-  parent.appendChild(div);
-  div.querySelector('.addMoveBtn').onclick = () => {
+   data-driven rows with a 0 count until games actually contain it.
+   Appended as a row in the same table as the data rows (rather than a
+   separate element) so its move column lines up with theirs — both share
+   that table's column widths, regardless of the (empty) resp cell here. */
+function appendAddMoveControl(tb,parent,games,seq,depth,flip){
+  const tr=document.createElement('tr');
+  tr.className='add-move';
+  tr.innerHTML=
+    `<td class="resp"></td>
+     <td class="move" style="padding-left:${depth}em">
+       <button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>
+     </td>`;
+  tb.appendChild(tr);
+  tr.querySelector('.addMoveBtn').onclick = () => {
     openFieldModal('addMove', '', v=>{
       addManualReply(seq,v);
       parent.innerHTML='';
