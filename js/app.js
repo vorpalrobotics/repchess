@@ -16,6 +16,7 @@ document.getElementById('buildStamp').textContent =
 const $   = id => document.getElementById(id);
 const log = (m,e=false)=>{ $('progress').textContent=m; $('progress').classList.toggle('error',e); };
 const clr = ()=>{ $('progress').textContent='';$('progress').classList.remove('error'); };
+const logDl = (m,e=false)=>{ $('downloadProgress').textContent=m; $('downloadProgress').classList.toggle('error',e); };
 
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
@@ -443,7 +444,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const fen = fenForSeq(lineSeq);
       markLiveEval(evalSpan, btnEval);
       showPosition(fen,
-        (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
+        (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
         ()=>clearLiveEval(evalSpan));
     };
   });
@@ -676,7 +677,7 @@ function renderBlackRoot(parent,games,trigger){
     const fen = fenForSeq(lineSeq);
     markLiveEval(evalSpan, btnEval);
     showPosition(fen,
-      (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
+      (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
       ()=>clearLiveEval(evalSpan));
   };
 }
@@ -849,22 +850,22 @@ $('lineSaveBtn').onclick = async () => {
 /* ---------- UI actions ---------- */
 $('dlBtn').onclick = async ()=>{
   CURRENT_USER=$('userId').value.trim().toLowerCase();
-  if(!CURRENT_USER){ log('enter id',true); return; }
+  if(!CURRENT_USER){ logDl('enter id',true); return; }
   localStorage.setItem(LS_ID,CURRENT_USER);
 
   const max=+$('maxGames').value||300;
   localStorage.setItem(LS_MAX,max);
 
   try{
-    log('fetching…');
-    GAMES = await fetchLatest(CURRENT_USER,max,n=>log(`fetching… got ${n}`));
-    log(`fetched ${GAMES.length}, writing to database…`);
+    logDl('fetching…');
+    GAMES = await fetchLatest(CURRENT_USER,max,n=>logDl(`fetching… got ${n}`));
+    logDl(`fetched ${GAMES.length}, writing to database…`);
     await putGames(CURRENT_USER,GAMES);
-    log(`downloaded ${GAMES.length}`);
+    logDl(`downloaded ${GAMES.length}`);
     $('downloadOverlay').style.display='none';
     if(CURRENT_LINE) await openLine(CURRENT_LINE);
     else await renderHome();
-  }catch(e){ console.error('[dlBtn] download failed',e); log(e.message,true); }
+  }catch(e){ console.error('[dlBtn] download failed',e); logDl(e.message,true); }
 };
 
 renderHome();
@@ -881,6 +882,7 @@ document.addEventListener('click', e=>{
 /* ---------- download modal ---------- */
 $('menuDownload').onclick = ()=>{
   $('menuList').style.display='none';
+  logDl('');
   $('downloadOverlay').style.display='flex';
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
@@ -1299,11 +1301,13 @@ function refreshEvalSpan(evalSpan, evalObj){
   evalSpan.textContent = formatEvalTag(evalObj);
   evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
   evalSpan.dataset.depth = evalObj.depth;
+  evalSpan.dataset.pv = evalObj.pv || '';
+  const pvSuffix = evalObj.pv ? `\nBest line: ${evalObj.pv}` : '';
   if(evalSpan === liveEvalSpan){
     evalSpan.classList.add('evaltag-live');
-    evalSpan.title = 'Live analysis in progress…';
+    evalSpan.title = 'Live analysis in progress…' + pvSuffix;
   } else {
-    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click 📈 to refresh`;
+    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click 📈 to refresh${pvSuffix}`;
   }
   evalSpan.style.display='';
 }
@@ -1325,7 +1329,8 @@ function clearLiveEval(evalSpan){
   liveEvalSpan = null;
   evalSpan.classList.remove('evaltag-live');
   const depth = evalSpan.dataset.depth;
-  evalSpan.title = depth ? `Saved eval, depth ${depth} — click 📈 to refresh` : '';
+  const pvSuffix = evalSpan.dataset.pv ? `\nBest line: ${evalSpan.dataset.pv}` : '';
+  evalSpan.title = depth ? `Saved eval, depth ${depth} — click 📈 to refresh${pvSuffix}` : '';
   liveEvalBtn?.classList.remove('btnEval-onBoard');
   liveEvalBtn = null;
 }
@@ -1350,10 +1355,12 @@ function refreshRowMenuLabels(rowMenu, saved){
 }
 
 /* only overwrite a saved eval if the engine has now searched deeper than before */
-function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, fen){
+const EVAL_TAG_PV_PLIES = 16;
+function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, fen, pv){
   const existing = currentSaved()?.eval;
   if(existing && existing.depth >= depth) return;
-  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth};
+  const pvSan = pv?.length ? pvToSan(fen, pv, EVAL_TAG_PV_PLIES) : '';
+  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan};
   saveField('eval', evalObj);
   refreshEvalSpan(evalSpan, evalObj);
 }
@@ -1463,7 +1470,8 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
           const childSeq = [...parentSeq, entry.opp];
           const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
           if(existing && existing.depth >= line.depth) continue;
-          const evalObj = {...evalToWhiteRelative(line.score, fen), depth: line.depth};
+          const pvSan = line.pv?.length ? pvToSan(fen, line.pv, EVAL_TAG_PV_PLIES) : '';
+          const evalObj = {...evalToWhiteRelative(line.score, fen), depth: line.depth, pv: pvSan};
           savePrefField(childSeq, 'eval', evalObj);
           refreshEvalSpan(entry.evalSpan, evalObj);
         }
@@ -1546,7 +1554,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
     onInfo: (d,lines) => {
       if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
       renderEngineLines(fen,d,lines,multipv);
-      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score);
+      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score, lines[1].pv);
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);

@@ -14,6 +14,8 @@
   button{padding:.35rem .75rem;font-weight:600;cursor:pointer;border:1px solid #888;border-radius:4px;background:#f5f5f5}
   #progress{margin-top:.7rem;font-style:italic}
   #progress.error{color:#c62828;font-weight:700;font-style:normal}
+  #downloadProgress{margin-top:.5rem;font-style:italic;min-height:1.2em}
+  #downloadProgress.error{color:#c62828;font-weight:700;font-style:normal}
 
   table{border-collapse:collapse;margin-top:.4rem;table-layout:auto}
   th,td{padding:.1rem .4rem;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
@@ -235,6 +237,7 @@
     <div class="field">
       <label>Max:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
     </div>
+    <div id="downloadProgress"></div>
     <div class="modal-actions">
       <button id="downloadCancelBtn">Cancel</button>
       <button id="dlBtn">DOWNLOAD</button>
