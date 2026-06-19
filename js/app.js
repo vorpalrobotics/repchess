@@ -338,6 +338,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const replySpan = tr.querySelector('.ourReply');
       if(replySpan) replySpan.textContent = reply;
       expandWith(reply);
+      analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
     }
 
     /* restore reply from the preloaded PREFS map */
@@ -525,6 +526,7 @@ function renderBlackRoot(parent,games,trigger){
     const replySpan = tr.querySelector('.ourReply');
     if(replySpan) replySpan.textContent = reply;
     expandWith(reply);
+    analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
   }
 
   const savedRep = currentSaved()?.reply;
