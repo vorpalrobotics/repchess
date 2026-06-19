@@ -949,6 +949,74 @@ $('menuAbout').onclick = ()=>{
 };
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
 
+/* ---------- manage mnemonics ---------- */
+const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
+const MNEM_PIECE_LABEL = {pawn:'P',knight:'N',bishop:'B',rook:'R',queen:'Q',king:'K'};
+let MNEMONICS = {};
+let MNEM_EDIT_SQUARE = null;
+
+function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
+
+async function renderMnemonicsGrid(){
+  MNEMONICS = await getAllMnemonics();
+  const grid = $('mnemonicsGrid');
+  grid.innerHTML='';
+  for(let row=0;row<8;row++){
+    for(let col=0;col<8;col++){
+      const sq = squareName(col,row);
+      const isLight = (col+row)%2===0;
+      const entry = MNEMONICS[sq] || {};
+      const words = MNEM_PIECES
+        .filter(p=>entry[p])
+        .map(p=>`<div class="mnem-word">${MNEM_PIECE_LABEL[p]}:${escapeHtml(entry[p])}</div>`)
+        .join('');
+      const div = document.createElement('div');
+      div.className = `mnem-square ${isLight?'light':'dark'}`;
+      div.dataset.square = sq;
+      div.innerHTML =
+        (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
+        (col===0 ? `<span class="mnem-coord-rank">${sq[1]}</span>` : '') +
+        words;
+      div.onclick = ()=> openMnemonicsEditor(sq);
+      grid.appendChild(div);
+    }
+  }
+}
+
+function openMnemonicsEditor(sq){
+  MNEM_EDIT_SQUARE = sq;
+  const entry = MNEMONICS[sq] || {};
+  $('mnemonicsEditorTitle').textContent = `Edit Square ${sq}`;
+  $('mnemPawnInput').value   = entry.pawn   || '';
+  $('mnemKnightInput').value = entry.knight || '';
+  $('mnemBishopInput').value = entry.bishop || '';
+  $('mnemRookInput').value   = entry.rook   || '';
+  $('mnemQueenInput').value  = entry.queen  || '';
+  $('mnemKingInput').value   = entry.king   || '';
+  $('mnemonicsEditorOverlay').style.display='flex';
+}
+
+$('menuMnemonics').onclick = ()=>{
+  $('menuList').style.display='none';
+  renderMnemonicsGrid();
+  $('mnemonicsOverlay').style.display='flex';
+};
+$('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+
+$('mnemonicsEditorCancelBtn').onclick = ()=>{ $('mnemonicsEditorOverlay').style.display='none'; };
+$('mnemonicsEditorSaveBtn').onclick = async ()=>{
+  await setMnemonicSquare(MNEM_EDIT_SQUARE, {
+    pawn:   $('mnemPawnInput').value.trim(),
+    knight: $('mnemKnightInput').value.trim(),
+    bishop: $('mnemBishopInput').value.trim(),
+    rook:   $('mnemRookInput').value.trim(),
+    queen:  $('mnemQueenInput').value.trim(),
+    king:   $('mnemKingInput').value.trim(),
+  });
+  $('mnemonicsEditorOverlay').style.display='none';
+  await renderMnemonicsGrid();
+};
+
 /* ---------- analysis board ---------- */
 const board = new Chessboard($('board'), {
   position: new Chess().fen(),

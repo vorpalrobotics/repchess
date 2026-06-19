@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -52,6 +52,9 @@ function openDB(){
       if(!db.objectStoreNames.contains('prefs')){
         const ps = db.createObjectStore('prefs', {keyPath:'key'});
         ps.createIndex('lineId','lineId');
+      }
+      if(!db.objectStoreNames.contains('mnemonics')){
+        db.createObjectStore('mnemonics', {keyPath:'square'});
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -170,6 +173,38 @@ async function setPref(lineId, seq, patch){
     const getReq = store.get(key);
     getReq.onsuccess = () => {
       const existing = getReq.result || {key,lineId,seq,reply:'',note:'',mnemonic:''};
+      store.put({...existing, ...patch});
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+/* ---------- mnemonics (memory-palace words, per destination square per piece) ---------- */
+const BLANK_MNEMONIC_SQUARE = {pawn:'',knight:'',bishop:'',rook:'',queen:'',king:''};
+
+async function getAllMnemonics(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const store = db.transaction('mnemonics','readonly').objectStore('mnemonics');
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const map = {};
+      for(const r of req.result) map[r.square] = r;
+      resolve(map);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function setMnemonicSquare(square, patch){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('mnemonics','readwrite');
+    const store = txn.objectStore('mnemonics');
+    const getReq = store.get(square);
+    getReq.onsuccess = () => {
+      const existing = getReq.result || {square, ...BLANK_MNEMONIC_SQUARE};
       store.put({...existing, ...patch});
     };
     txn.oncomplete = () => resolve();

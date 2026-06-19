@@ -110,6 +110,25 @@
   #engineLines li{margin-bottom:.25rem;display:flex;align-items:flex-start;gap:.2rem}
   #engineLines .pvToggle{font-size:.9em;padding:0 .3em;flex:0 0 auto}
   #engineLines .pvText{flex:1 1 auto}
+
+  #mnemonicsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
+  .mnem-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
+  .mnem-header h2{margin:0}
+  #mnemonicsGrid{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);flex:1 1 auto;min-height:0;aspect-ratio:1/1;margin:0 auto;border:2px solid #333}
+  .mnem-square{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:center;overflow:hidden;padding:2px}
+  .mnem-square.light{background:#f0d9b5}
+  .mnem-square.dark{background:#b58863}
+  .mnem-square:hover{outline:2px solid #1565c0;outline-offset:-2px}
+  .mnem-square .mnem-word{font-weight:600;color:#222}
+  .mnem-square .mnem-word.mnem-empty{color:transparent}
+  .mnem-coord-file,.mnem-coord-rank{position:absolute;font-size:.65rem;font-weight:700;color:#0006}
+  .mnem-coord-file{left:2px;bottom:1px}
+  .mnem-coord-rank{left:2px;top:1px}
+
+  #mnemonicsEditorOverlay .modal{min-width:24em}
+  .mnem-editor-grid{display:grid;grid-template-columns:repeat(3,auto);gap:.5rem .9rem;margin:.6rem 0}
+  .mnem-editor-grid label{display:flex;flex-direction:column;font-size:.8rem;gap:.2rem}
+  .mnem-editor-grid input{width:9ch}
 </style>
 </head>
 <body>
@@ -119,6 +138,7 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuDownload">Download Games</button>
+      <button id="menuMnemonics">Manage Mnemonics</button>
       <button id="menuExport">Export Backup</button>
       <button id="menuImport">Import Backup</button>
       <button id="menuAbout">About</button>
@@ -267,6 +287,36 @@
     <div class="modal-actions">
       <button id="analyzeChildrenCancelBtn">Cancel</button>
       <button id="analyzeChildrenGoBtn">GO</button>
+    </div>
+  </div>
+</div>
+
+<!-- manage mnemonics modal (full-screen grid) -->
+<div id="mnemonicsOverlay" class="overlay">
+  <div class="modal">
+    <div class="mnem-header">
+      <h2>Manage Mnemonics</h2>
+      <button id="mnemonicsCloseBtn">Close</button>
+    </div>
+    <div id="mnemonicsGrid"></div>
+  </div>
+</div>
+
+<!-- mnemonics square editor modal -->
+<div id="mnemonicsEditorOverlay" class="overlay">
+  <div class="modal">
+    <h2 id="mnemonicsEditorTitle">Edit Square</h2>
+    <div class="mnem-editor-grid">
+      <label>Pawn<input id="mnemPawnInput" maxlength="40"></label>
+      <label>Knight<input id="mnemKnightInput" maxlength="40"></label>
+      <label>Bishop<input id="mnemBishopInput" maxlength="40"></label>
+      <label>Rook<input id="mnemRookInput" maxlength="40"></label>
+      <label>Queen<input id="mnemQueenInput" maxlength="40"></label>
+      <label>King<input id="mnemKingInput" maxlength="40"></label>
+    </div>
+    <div class="modal-actions">
+      <button id="mnemonicsEditorCancelBtn">Cancel</button>
+      <button id="mnemonicsEditorSaveBtn">SAVE</button>
     </div>
   </div>
 </div>
