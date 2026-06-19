@@ -750,7 +750,8 @@ async function openLine(line){
     return;
   }
   triggers.forEach(mv=>{
-    $('tree').insertAdjacentHTML('beforeend', `<h3 class="trigger-heading">Against 1. ${escapeHtml(mv)}</h3>`);
+    const heading = line.color==='black' ? 'Against' : 'Playing';
+    $('tree').insertAdjacentHTML('beforeend', `<h3 class="trigger-heading">${heading} 1. ${escapeHtml(mv)}</h3>`);
     const wrap = document.createElement('div');
     $('tree').appendChild(wrap);
     if(line.color==='black'){
