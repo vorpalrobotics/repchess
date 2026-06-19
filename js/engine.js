@@ -93,7 +93,15 @@ export class Engine {
   // With no `depth` (or depth=Infinity) the search runs until stop() is
   // called (or another analyze() call supersedes it); otherwise it stops
   // itself at that depth.
-  async analyze(fen, { multipv = 4, depth = Infinity, onInfo } = {}) {
+  // `searchmoves`, if given (array of UCI moves), restricts the root move
+  // list to exactly those moves. Without it, a multipv count smaller than
+  // the legal move count just gets the engine's own top-N moves by its own
+  // judgment — any specific move you actually wanted ranked can fail to
+  // appear at all, or can drop out partway through deepening once the
+  // engine decides other (unrequested) moves are better, freezing its last
+  // depth. searchmoves guarantees every listed move gets ranked among only
+  // each other, so all of them keep reporting through to the target depth.
+  async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo } = {}) {
     await this._stopCurrent();
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);
@@ -129,7 +137,8 @@ export class Engine {
           resolve({ depth: curDepth, lines });
         }
       };
-      const goCmd = Number.isFinite(depth) ? `go depth ${depth}` : 'go infinite';
+      const searchmovesPart = searchmoves?.length ? ` searchmoves ${searchmoves.join(' ')}` : '';
+      const goCmd = (Number.isFinite(depth) ? `go depth ${depth}` : 'go infinite') + searchmovesPart;
       console.debug(`[engine] ${goCmd} (multipv=${multipv}) fen=${fen}`);
       this._send(goCmd);
     });

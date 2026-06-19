@@ -1070,10 +1070,10 @@ function removeManualReply(seq,move){
   savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
 }
 
-function uciToSan(fen, uci){
+function sanToUci(fen, san){
   const chess = new Chess(fen);
-  const mv = chess.move({from:uci.slice(0,2), to:uci.slice(2,4), promotion:uci.slice(4,5)||undefined}, {sloppy:true});
-  return mv ? mv.san : null;
+  const mv = chess.move(san, {sloppy:true});
+  return mv ? mv.from + mv.to + (mv.promotion || '') : null;
 }
 
 /* "Analyze Child Nodes": one multi-PV search on the parent position covers every
@@ -1089,10 +1089,13 @@ function uciToSan(fen, uci){
    its real future updates (existing.depth >= d looks "already deep enough"). */
 let activeChildAnalysisIcon = null;
 async function analyzeChildNodes(parentSeq, branchDiv, icon){
+  const fen = fenForSeq(parentSeq);
   const rows = [...branchDiv.querySelectorAll(':scope > table > tbody > tr.data-row')];
   const entries = rows
     .map(tr => ({ opp: tr.dataset.opp, evalSpan: tr.querySelector('.evaltag') }))
-    .filter(e => e.opp && e.evalSpan);
+    .filter(e => e.opp && e.evalSpan)
+    .map(e => ({ ...e, uci: sanToUci(fen, e.opp) }))
+    .filter(e => e.uci);
   if(!entries.length) return;
 
   const targetDepth = engineMaxDepth();
@@ -1102,7 +1105,6 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
   });
   if(!pending.length) return; // every child already analyzed to at least this depth
 
-  const fen = fenForSeq(parentSeq);
   pending.forEach(({evalSpan}) => {
     evalSpan.textContent = '…';
     evalSpan.className = 'evaltag eval-neutral';
@@ -1120,12 +1122,12 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
     await engine.analyze(fen, {
       multipv: entries.length,
       depth: targetDepth,
+      searchmoves: entries.map(e => e.uci),
       onInfo: (d, lines) => {
         for(const line of Object.values(lines)){
           const uci = line.pv[0];
           if(!uci) continue;
-          const san = uciToSan(fen, uci);
-          const entry = entries.find(e => e.opp === san);
+          const entry = entries.find(e => e.uci === uci);
           if(!entry) continue;
           const childSeq = [...parentSeq, entry.opp];
           const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
