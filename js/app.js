@@ -998,12 +998,35 @@ function openMnemonicsEditor(sq){
   $('mnemonicsEditorOverlay').style.display='flex';
 }
 
-$('menuMnemonics').onclick = ()=>{
+$('menuMnemonics').onclick = async ()=>{
   $('menuList').style.display='none';
   renderMnemonicsGrid();
+  $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
   $('mnemonicsOverlay').style.display='flex';
 };
 $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+
+/* ---------- mnemonics notes (autosave) ---------- */
+const MNEM_NOTES_KEY = 'mnemonicsNotes';
+let mnemNotesSaveTimer = null;
+function saveMnemonicsNotes(){
+  clearTimeout(mnemNotesSaveTimer);
+  setMeta(MNEM_NOTES_KEY, $('mnemonicsNotes').value).then(()=>{
+    const saved = $('mnemonicsNotesSaved');
+    saved.textContent = 'Saved';
+    saved.classList.add('show');
+    clearTimeout(saved._hideTimer);
+    saved._hideTimer = setTimeout(()=> saved.classList.remove('show'), 1500);
+  });
+}
+$('mnemonicsNotes').addEventListener('input', ()=>{
+  clearTimeout(mnemNotesSaveTimer);
+  mnemNotesSaveTimer = setTimeout(saveMnemonicsNotes, 800);
+});
+$('mnemonicsNotes').addEventListener('blur', ()=>{
+  clearTimeout(mnemNotesSaveTimer);
+  saveMnemonicsNotes();
+});
 
 $('mnemonicsEditorCancelBtn').onclick = ()=>{ $('mnemonicsEditorOverlay').style.display='none'; };
 $('mnemonicsEditorSaveBtn').onclick = async ()=>{

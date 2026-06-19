@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -55,6 +55,9 @@ function openDB(){
       }
       if(!db.objectStoreNames.contains('mnemonics')){
         db.createObjectStore('mnemonics', {keyPath:'square'});
+      }
+      if(!db.objectStoreNames.contains('meta')){
+        db.createObjectStore('meta', {keyPath:'key'});
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -210,6 +213,26 @@ async function setMnemonicSquare(square, patch){
       const existing = getReq.result || {square, ...BLANK_MNEMONIC_SQUARE};
       store.put({...existing, ...patch});
     };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+/* ---------- meta (small flat key/value settings, e.g. mnemonics notes) ---------- */
+async function getMeta(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('meta','readonly').objectStore('meta').get(key);
+    req.onsuccess = () => resolve(req.result ? req.result.value : '');
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function setMeta(key, value){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('meta','readwrite');
+    txn.objectStore('meta').put({key, value});
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });
