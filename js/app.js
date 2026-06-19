@@ -442,7 +442,7 @@ function appendAddMoveControl(parent,games,seq,depth,flip){
   const div=document.createElement('div');
   div.className='add-move indent';
   div.style.marginLeft=`${depth}em`;
-  div.innerHTML=`<button class="iconbtn addMoveBtn" title="Record a possible opponent reply not yet seen in any game"><i class="fa-solid fa-plus"></i> Add Opponent Response</button>`;
+  div.innerHTML=`<button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>`;
   parent.appendChild(div);
   div.querySelector('.addMoveBtn').onclick = () => {
     openFieldModal('addMove', '', v=>{
