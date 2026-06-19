@@ -991,7 +991,7 @@ function attachHoverPreview(icon, seq){
       const r = icon.getBoundingClientRect();
       const preview = $('hoverPreview');
       preview.style.display = 'block';
-      const size = 168; // preview box incl. border/padding
+      const size = 252; // preview box incl. border/padding (240 board + padding/border)
       const left = Math.min(r.left, window.innerWidth - size - 8);
       const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
       preview.style.left = `${Math.round(Math.max(8,left))}px`;
@@ -1006,6 +1006,7 @@ function attachHoverPreview(icon, seq){
 
 /* ---------- engine ---------- */
 const ENGINE_PV_PLIES = 8;
+let expandedPvLines = new Set();
 const engine = new Engine();
 let engineRunId = 0;
 let currentEngineFen = null;
@@ -1296,8 +1297,17 @@ function renderEngineLines(fen, depth, lines, multipv){
   for(let i=1;i<=multipv;i++){
     const line = lines[i];
     if(!line) continue;
+    const expanded = expandedPvLines.has(i);
     const li = document.createElement('li');
-    li.textContent = `${formatScore(line.score,turn)}  ${pvToSan(fen,line.pv,ENGINE_PV_PLIES)}`;
+    li.innerHTML =
+      `<button class="iconbtn pvToggle" title="${expanded ? 'Show fewer moves' : 'Show full line'}">` +
+        `<i class="fa-solid fa-caret-${expanded ? 'down' : 'right'}"></i>` +
+      `</button>` +
+      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${escapeHtml(pvToSan(fen,line.pv,expanded ? Infinity : ENGINE_PV_PLIES))}</span>`;
+    li.querySelector('.pvToggle').onclick = () => {
+      if(expanded) expandedPvLines.delete(i); else expandedPvLines.add(i);
+      renderEngineLines(fen, depth, lines, multipv);
+    };
     ol.appendChild(li);
   }
 }
@@ -1311,6 +1321,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
   $('engineDepth').textContent = 'Live — Thinking…';
   $('engineLines').innerHTML = '';
+  expandedPvLines.clear();
   const multipv = engineMultiPV();
   const depth = engineMaxDepth();
   console.debug(`[runEngine] runId=${runId} starting analyze multipv=${multipv} depth=${depth}`);
