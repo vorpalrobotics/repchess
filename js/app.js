@@ -230,7 +230,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
   if(!Object.keys(counts).length){
     tb.insertAdjacentHTML('beforeend',
-      `<tr><td class="resp"></td><td class="move" style="padding-left:${depth}em">(no further games)</td></tr>`);
+      `<tr><td class="resp"></td><td class="move" colspan="4" style="padding-left:${depth}em">(no further games)</td></tr>`);
     appendAddMoveControl(tb,parent,games,seq,depth,flip);
     return;
   }
@@ -264,9 +264,15 @@ function renderBranch(parent,games,seq,depth,flip=false){
        <td class="move" style="padding-left:${depth}em">
          <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
          ${moveHtml}
+       </td>
+       <td class="cnt-col" style="padding-left:${depth}em">
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
+       </td>
+       <td class="eval-col">
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
          <span class="evaltag" style="display:none"></span>
+       </td>
+       <td class="name-col">
          <span class="branchName" style="display:none"></span>
        </td>`;
     tb.appendChild(tr);
@@ -274,7 +280,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const metaTr = document.createElement('tr');
     metaTr.className = 'meta-row';
     const metaTd = document.createElement('td');
-    metaTd.colSpan = 2;
+    metaTd.colSpan = 5;
     metaTr.appendChild(metaTd);
     tr.after(metaTr);
 
@@ -339,7 +345,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(old?.querySelector?.('.branch')) old.remove();
 
       const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
-      const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
+      const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
@@ -455,7 +461,7 @@ function appendAddMoveControl(tb,parent,games,seq,depth,flip){
   tr.className='add-move';
   tr.innerHTML=
     `<td class="resp"></td>
-     <td class="move" style="padding-left:${depth}em">
+     <td class="move" colspan="4" style="padding-left:${depth}em">
        <button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>
      </td>`;
   tb.appendChild(tr);
@@ -508,8 +514,13 @@ function renderBlackRoot(parent,games,trigger){
      <td class="move">
        <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
        1. ${trigger} <span class="ourReply">...</span>
+     </td>
+     <td class="cnt-col"></td>
+     <td class="eval-col">
        <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
        <span class="evaltag" style="display:none"></span>
+     </td>
+     <td class="name-col">
        <span class="branchName" style="display:none"></span>
      </td>`;
   tb.appendChild(tr);
@@ -517,7 +528,7 @@ function renderBlackRoot(parent,games,trigger){
   const metaTr = document.createElement('tr');
   metaTr.className = 'meta-row';
   const metaTd = document.createElement('td');
-  metaTd.colSpan = 2;
+  metaTd.colSpan = 5;
   metaTr.appendChild(metaTd);
   tr.after(metaTr);
 
@@ -578,7 +589,7 @@ function renderBlackRoot(parent,games,trigger){
     if(old?.querySelector?.('.branch')) old.remove();
 
     const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
-    const td1=document.createElement('td'); td1.colSpan=2; td1.style.padding='0'; tr1.appendChild(td1);
+    const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
     const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
     childrenSeq = [...lineSeq,reply];
     branchDiv = div;
