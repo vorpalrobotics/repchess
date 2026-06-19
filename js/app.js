@@ -250,9 +250,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+             <hr class="row-menu-sep">
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
-             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
              <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
              <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
            </div>
@@ -488,9 +489,10 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+           <hr class="row-menu-sep">
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
-           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
            <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
          </div>
        </div>
