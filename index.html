@@ -122,6 +122,24 @@
   .mnem-notes-saved{font-weight:400;font-size:.8em;color:#2e7d32;opacity:0;transition:opacity .3s}
   .mnem-notes-saved.show{opacity:1}
   #mnemonicsNotes{flex:1 1 auto;resize:none;font-family:inherit;font-size:.9rem;padding:.6rem;border:1px solid #bbb;border-radius:4px}
+
+  #quizOverlay .modal{min-width:24em;text-align:center}
+  .quiz-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
+  .quiz-header h2{margin:0}
+  #quizClock{font-family:'Courier New',monospace;font-size:1.1rem;font-weight:700}
+  #quizTrialNum{font-size:.85rem;color:#666;margin-bottom:.5rem}
+  #quizPromptArea{border:2px solid #ccc;border-radius:6px;padding:1.4rem 1rem;margin-bottom:.8rem;transition:background-color .15s,border-color .15s}
+  #quizPromptArea.quiz-correct{border-color:#2e7d32;background:#e8f5e9}
+  #quizPromptArea.quiz-wrong{border-color:#c62828;background:#fdecea}
+  #quizPrompt{font-size:2rem;font-weight:700}
+  #quizPrompt .quiz-square{margin-left:.3em;text-transform:lowercase}
+  #quizFeedback{min-height:1.4em;font-size:1.3rem}
+  #quizFeedback .fa-check{color:#2e7d32}
+  #quizInput{font-size:1.2rem;width:10em;text-align:center;padding:.3rem .5rem;margin-bottom:.7rem}
+  #quizGiveUpBtn{display:block;margin:0 auto}
+  #quizSummary{display:none}
+  #quizSummary .quiz-score{font-size:1.6rem;font-weight:700;margin:.6rem 0}
+  #quizEmpty{display:none;color:#666}
   .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 4px}
   .mnem-square.light{background:#f0d9b5}
   .mnem-square.dark{background:#b58863}
@@ -149,6 +167,7 @@
     <div id="menuList">
       <button id="menuDownload">Download Games</button>
       <button id="menuMnemonics">Manage Mnemonics</button>
+      <button id="menuQuiz">Quiz Mnemonics</button>
       <button id="menuExport">Export Backup</button>
       <button id="menuImport">Import Backup</button>
       <button id="menuAbout">About</button>
@@ -313,6 +332,38 @@
       <div class="mnem-notes-col">
         <label for="mnemonicsNotes">Notes <span id="mnemonicsNotesSaved" class="mnem-notes-saved"></span></label>
         <textarea id="mnemonicsNotes" placeholder="Rules for piece disambiguation, underpromotion, castling, etc."></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- quiz mnemonics modal -->
+<div id="quizOverlay" class="overlay">
+  <div class="modal">
+    <div class="quiz-header">
+      <h2>Quiz Mnemonics</h2>
+      <button id="quizCloseBtn">Close</button>
+    </div>
+
+    <div id="quizEmpty">Add some mnemonics first (Manage Mnemonics) before quizzing.</div>
+
+    <div id="quizPlay">
+      <div id="quizClock">0:00</div>
+      <div id="quizTrialNum"></div>
+      <div id="quizPromptArea">
+        <div id="quizPrompt"></div>
+      </div>
+      <input id="quizInput" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div id="quizFeedback"></div>
+      <button id="quizGiveUpBtn">GIVE UP</button>
+    </div>
+
+    <div id="quizSummary">
+      <div class="quiz-score" id="quizScorePct"></div>
+      <div id="quizScoreTime"></div>
+      <div class="modal-actions">
+        <button id="quizAgainBtn">Quiz Again</button>
+        <button id="quizDoneBtn">Close</button>
       </div>
     </div>
   </div>

@@ -1040,6 +1040,124 @@ $('mnemonicsEditorSaveBtn').onclick = async ()=>{
   await renderMnemonicsGrid();
 };
 
+/* ---------- quiz mnemonics ---------- */
+const QUIZ_TRIALS = 10;
+const MNEM_PIECE_LETTER = {pawn:'',knight:'n',bishop:'b',rook:'r',queen:'q',king:'k'};
+let QUIZ = null; // {pool, results, idx, mode, item, expected, startTime, timerInterval}
+
+function buildMnemonicsPool(mnemMap){
+  const pool = [];
+  for(const sq of Object.keys(mnemMap)){
+    const entry = mnemMap[sq];
+    for(const p of MNEM_PIECES){
+      if(entry[p]) pool.push({square:sq, piece:p, word:entry[p]});
+    }
+  }
+  return pool;
+}
+
+function quizFormatClock(ms){
+  const s = Math.floor(ms/1000);
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+}
+
+function quizTickClock(){
+  $('quizClock').textContent = quizFormatClock(Date.now() - QUIZ.startTime);
+}
+
+function quizLoadTrial(){
+  $('quizInput').value = '';
+  $('quizFeedback').innerHTML = '';
+  $('quizPromptArea').classList.remove('quiz-correct','quiz-wrong');
+  $('quizTrialNum').textContent = `Trial ${QUIZ.idx+1} of ${QUIZ_TRIALS}`;
+
+  const item = QUIZ.pool[Math.floor(Math.random()*QUIZ.pool.length)];
+  const mode = Math.random() < 0.5 ? 'word' : 'square';
+  QUIZ.item = item;
+  QUIZ.mode = mode;
+
+  if(mode === 'word'){
+    QUIZ.expected = (MNEM_PIECE_LETTER[item.piece] + item.square).toLowerCase();
+    $('quizPrompt').textContent = item.word;
+  } else {
+    QUIZ.expected = item.word.toLowerCase();
+    $('quizPrompt').innerHTML = `<i class="fa-solid ${MNEM_PIECE_ICON[item.piece]}"></i><span class="quiz-square">${escapeHtml(item.square)}</span>`;
+  }
+  $('quizInput').focus();
+}
+
+function quizAdvance(){
+  QUIZ.idx++;
+  if(QUIZ.idx >= QUIZ_TRIALS) quizFinish();
+  else quizLoadTrial();
+}
+
+function quizGiveUp(){
+  if(!QUIZ || QUIZ.finished) return;
+  QUIZ.results.push(false);
+  $('quizPromptArea').classList.add('quiz-wrong');
+  $('quizFeedback').textContent = `Answer: ${QUIZ.mode==='word' ? QUIZ.item.word : QUIZ.expected}`;
+  $('quizInput').disabled = true;
+  setTimeout(()=>{ $('quizInput').disabled = false; quizAdvance(); }, 1200);
+}
+
+function quizFinish(){
+  QUIZ.finished = true;
+  clearInterval(QUIZ.timerInterval);
+  const elapsed = Date.now() - QUIZ.startTime;
+  const correct = QUIZ.results.filter(Boolean).length;
+  $('quizPlay').style.display = 'none';
+  $('quizSummary').style.display = 'block';
+  $('quizScorePct').textContent = `${correct}/${QUIZ_TRIALS} correct (${Math.round(correct/QUIZ_TRIALS*100)}%)`;
+  $('quizScoreTime').textContent = `Time: ${quizFormatClock(elapsed)}`;
+}
+
+async function quizStart(){
+  $('quizSummary').style.display = 'none';
+  const pool = buildMnemonicsPool(await getAllMnemonics());
+  if(pool.length === 0){
+    $('quizEmpty').style.display = 'block';
+    $('quizPlay').style.display = 'none';
+    return;
+  }
+  $('quizEmpty').style.display = 'none';
+  $('quizPlay').style.display = 'block';
+  QUIZ = {pool, results:[], idx:0, startTime: Date.now(), finished:false};
+  QUIZ.timerInterval = setInterval(quizTickClock, 200);
+  quizTickClock();
+  quizLoadTrial();
+}
+
+$('menuQuiz').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('quizOverlay').style.display='flex';
+  quizStart();
+};
+$('quizCloseBtn').onclick = ()=>{
+  if(QUIZ) clearInterval(QUIZ.timerInterval);
+  $('quizOverlay').style.display='none';
+};
+$('quizDoneBtn').onclick = ()=>{ $('quizOverlay').style.display='none'; };
+$('quizAgainBtn').onclick = ()=>{ quizStart(); };
+$('quizGiveUpBtn').onclick = quizGiveUp;
+
+$('quizInput').addEventListener('input', ()=>{
+  if(!QUIZ || QUIZ.finished) return;
+  const typed = $('quizInput').value.trim().toLowerCase();
+  if(QUIZ.expected.startsWith(typed)){
+    $('quizPromptArea').classList.remove('quiz-wrong');
+    if(typed.length>0 && typed === QUIZ.expected){
+      QUIZ.results.push(true);
+      $('quizPromptArea').classList.add('quiz-correct');
+      $('quizFeedback').innerHTML = '<i class="fa-solid fa-check"></i>';
+      $('quizInput').disabled = true;
+      setTimeout(()=>{ $('quizInput').disabled = false; quizAdvance(); }, 600);
+    }
+  } else {
+    $('quizPromptArea').classList.add('quiz-wrong');
+  }
+});
+
 /* ---------- analysis board ---------- */
 const board = new Chessboard($('board'), {
   position: new Chess().fen(),
