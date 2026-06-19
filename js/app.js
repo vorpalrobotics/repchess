@@ -128,6 +128,7 @@ function openFieldModal(field, currentValue, onSave, validate){
   $('fieldModalTitle').textContent =
     field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' :
     field==='lineName' ? 'Rename Line' : field==='branchName' ? 'Name this Branch' :
+    field==='addMove' ? 'Add Opponent Response' :
     'Set Standard Response';
   $('fieldModalInput').value = currentValue || '';
   $('fieldModalError').textContent = '';
@@ -214,9 +215,13 @@ $('visibilityToggleBtn').onclick = () => {
    already-known move, e.g. "1. e4 e5". */
 function renderBranch(parent,games,seq,depth,flip=false){
   const {counts,tot}=replies(games,seq);
-  if(!tot){
+  const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+
+  if(!Object.keys(counts).length){
     parent.insertAdjacentHTML('beforeend',
       `<p class="indent" style="margin-left:${depth}em">(no further games)</p>`);
+    appendAddMoveControl(parent,games,seq,depth,flip);
     return;
   }
 
@@ -226,6 +231,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
   const tb=tbl.appendChild(document.createElement('tbody'));
 
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
+    const isManual = c===0 && manualReplies.includes(opp);
     const tr=document.createElement('tr');
     tr.className = 'data-row';
     tr.dataset.opp = opp;
@@ -245,13 +251,14 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
              <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Name this Branch</button>
+             <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
            </div>
          </div>
        </td>
        <td class="move" style="padding-left:${depth}em">
          <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
          ${moveHtml}
-         <span class="cnt">${c} (${((c/tot)*100).toFixed(1)}%)</span>
+         <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
          <span class="evaltag" style="display:none"></span>
          <span class="branchName" style="display:none"></span>
@@ -404,6 +411,17 @@ function renderBranch(parent,games,seq,depth,flip=false){
         refreshBranchName(nameSpan, v);
       });
     };
+    const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
+    if(isManual){
+      removeManualBtn.style.display='';
+      removeManualBtn.onclick = e => {
+        e.stopPropagation();
+        rowMenu.classList.remove('show');
+        removeManualReply(seq,opp);
+        parent.innerHTML='';
+        renderBranch(parent,games,seq,depth,flip);
+      };
+    }
 
     btnEval.onclick = () => {
       const fen = fenForSeq(lineSeq);
@@ -413,6 +431,33 @@ function renderBranch(parent,games,seq,depth,flip=false){
         ()=>clearLiveEval(evalSpan));
     };
   });
+
+  appendAddMoveControl(parent,games,seq,depth,flip);
+}
+
+/* lets the user record an opponent move that hasn't appeared in any imported
+   game yet (e.g. a known theoretical try), so it shows up alongside the
+   data-driven rows with a 0 count until games actually contain it */
+function appendAddMoveControl(parent,games,seq,depth,flip){
+  const div=document.createElement('div');
+  div.className='add-move indent';
+  div.style.marginLeft=`${depth}em`;
+  div.innerHTML=`<button class="iconbtn addMoveBtn" title="Record a possible opponent reply not yet seen in any game"><i class="fa-solid fa-plus"></i> Add Opponent Response</button>`;
+  parent.appendChild(div);
+  div.querySelector('.addMoveBtn').onclick = () => {
+    openFieldModal('addMove', '', v=>{
+      addManualReply(seq,v);
+      parent.innerHTML='';
+      renderBranch(parent,games,seq,depth,flip);
+    }, v=>{
+      if(!v) return {ok:false, error:'enter a move'};
+      v = canonicalizeMoveCase(v);
+      const chess = new Chess(fenForSeq(seq));
+      const mv = chess.move(v,{sloppy:true});
+      if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+      return {ok:true, value:mv.san};
+    });
+  };
 }
 
 /* ---------- Black-line root row ----------
@@ -693,10 +738,12 @@ async function openLine(line){
   }
   triggers.forEach(mv=>{
     $('tree').insertAdjacentHTML('beforeend', `<h3 class="trigger-heading">Against 1. ${escapeHtml(mv)}</h3>`);
+    const wrap = document.createElement('div');
+    $('tree').appendChild(wrap);
     if(line.color==='black'){
-      renderBlackRoot($('tree'),GAMES,mv);
+      renderBlackRoot(wrap,GAMES,mv);
     } else {
-      renderBranch($('tree'),GAMES,[mv],0);
+      renderBranch(wrap,GAMES,[mv],0);
     }
   });
 }
@@ -1007,6 +1054,20 @@ function savePrefField(seq,field,value){
   setPref(CURRENT_LINE.id,seq,{[field]:value});
   const key = prefKey(CURRENT_LINE.id,seq);
   (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+}
+
+/* manually-recorded opponent replies for the position `seq`, kept alongside
+   that position's own prefs so a theoretical try can be added before any
+   imported game actually contains it */
+function addManualReply(seq,move){
+  const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  if(existing.includes(move)) return;
+  savePrefField(seq,'manualReplies',[...existing,move]);
+}
+
+function removeManualReply(seq,move){
+  const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
 }
 
 function uciToSan(fen, uci){
