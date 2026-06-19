@@ -1006,6 +1006,7 @@ function attachHoverPreview(icon, seq){
 
 /* ---------- engine ---------- */
 const ENGINE_PV_PLIES = 8;
+const PV_COMPLETE_SLACK = 3; // expanded PV only shown in full once it's within this many plies of its reported depth
 let expandedPvLines = new Set();
 const engine = new Engine();
 let engineRunId = 0;
@@ -1298,12 +1299,16 @@ function renderEngineLines(fen, depth, lines, multipv){
     const line = lines[i];
     if(!line) continue;
     const expanded = expandedPvLines.has(i);
+    const pvComplete = line.pv.length >= line.depth - PV_COMPLETE_SLACK;
+    const showFull = expanded && pvComplete;
     const li = document.createElement('li');
     li.innerHTML =
       `<button class="iconbtn pvToggle" title="${expanded ? 'Show fewer moves' : 'Show full line'}">` +
         `<i class="fa-solid fa-caret-${expanded ? 'down' : 'right'}"></i>` +
       `</button>` +
-      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${escapeHtml(pvToSan(fen,line.pv,expanded ? Infinity : ENGINE_PV_PLIES))}</span>`;
+      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${escapeHtml(pvToSan(fen,line.pv,showFull ? Infinity : ENGINE_PV_PLIES))}` +
+      (expanded && !pvComplete ? ' <i>(still calculating…)</i>' : '') +
+      `</span>`;
     li.querySelector('.pvToggle').onclick = () => {
       if(expanded) expandedPvLines.delete(i); else expandedPvLines.add(i);
       renderEngineLines(fen, depth, lines, multipv);
