@@ -407,7 +407,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
     btnEval.onclick = () => {
       const fen = fenForSeq(lineSeq);
-      showPosition(fen, (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen));
+      markLiveEval(evalSpan);
+      showPosition(fen,
+        (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
+        ()=>clearLiveEval(evalSpan));
     };
   });
 }
@@ -593,7 +596,10 @@ function renderBlackRoot(parent,games,trigger){
 
   btnEval.onclick = () => {
     const fen = fenForSeq(lineSeq);
-    showPosition(fen, (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen));
+    markLiveEval(evalSpan);
+    showPosition(fen,
+      (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
+      ()=>clearLiveEval(evalSpan));
   };
 }
 
@@ -879,6 +885,10 @@ const engine = new Engine();
 let engineRunId = 0;
 let currentEngineFen = null;
 
+/* the one evaltag span (if any) currently tracking a live engine search, so its
+   styling/tooltip can be reset once another row takes over or the search ends */
+let liveEvalSpan = null;
+
 const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
 const engineMaxDepth  = () => parseInt($('engineMaxDepthSelect').value, 10);
 
@@ -950,7 +960,32 @@ function refreshEvalSpan(evalSpan, evalObj){
   if(!evalObj){ evalSpan.style.display='none'; return; }
   evalSpan.textContent = formatEvalTag(evalObj);
   evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
+  evalSpan.dataset.depth = evalObj.depth;
+  if(evalSpan === liveEvalSpan){
+    evalSpan.classList.add('evaltag-live');
+    evalSpan.title = 'Live analysis in progress…';
+  } else {
+    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click 📈 to refresh`;
+  }
   evalSpan.style.display='';
+}
+
+/* marks `evalSpan` as tracking the in-progress live search (only one row at a
+   time, since the engine is a single shared worker), clearing the previous
+   row's marker so a cached tag never looks like it's still updating live */
+function markLiveEval(evalSpan){
+  if(liveEvalSpan && liveEvalSpan !== evalSpan) clearLiveEval(liveEvalSpan);
+  liveEvalSpan = evalSpan;
+  evalSpan.classList.add('evaltag-live');
+  evalSpan.title = 'Live analysis in progress…';
+}
+
+function clearLiveEval(evalSpan){
+  if(liveEvalSpan !== evalSpan) return;
+  liveEvalSpan = null;
+  evalSpan.classList.remove('evaltag-live');
+  const depth = evalSpan.dataset.depth;
+  evalSpan.title = depth ? `Saved eval, depth ${depth} — click 📈 to refresh` : '';
 }
 
 function refreshBranchName(nameSpan, name){
@@ -1071,7 +1106,7 @@ function pvToSan(fen, uciMoves, maxPlies){
 }
 
 function renderEngineLines(fen, depth, lines, multipv){
-  $('engineDepth').textContent = `Depth ${depth}`;
+  $('engineDepth').textContent = `Live — Depth ${depth}`;
   const turn = fen.split(' ')[1];
   const ol = $('engineLines');
   ol.innerHTML = '';
@@ -1084,14 +1119,14 @@ function renderEngineLines(fen, depth, lines, multipv){
   }
 }
 
-async function runEngine(fen, onEvalUpdate){
+async function runEngine(fen, onEvalUpdate, onComplete){
   currentEngineFen = fen;
   const runId = ++engineRunId;
   console.debug(`[runEngine] runId=${runId} fen=${fen}`);
   if(!engine.ready) await engine.init().catch(()=>{});
   if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} superseded before engine ready, dropping`); return; }
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
-  $('engineDepth').textContent = 'Thinking…';
+  $('engineDepth').textContent = 'Live — Thinking…';
   $('engineLines').innerHTML = '';
   const multipv = engineMultiPV();
   const depth = engineMaxDepth();
@@ -1107,13 +1142,14 @@ async function runEngine(fen, onEvalUpdate){
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
+    if(runId === engineRunId) onComplete?.();
   }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
-function showPosition(fen, onEvalUpdate){
+function showPosition(fen, onEvalUpdate, onComplete){
   console.debug(`[showPosition] fen=${fen}`);
   board.setPosition(fen);
-  runEngine(fen, onEvalUpdate);
+  runEngine(fen, onEvalUpdate, onComplete);
 }
 
 showPosition(new Chess().fen());
