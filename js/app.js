@@ -29,7 +29,7 @@ let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_
 
 /* ---------- fetch games from Lichess ---------- */
 async function fetchLatest(user,max,onProgress){
-  const url=`https://lichess.org/api/games/user/${encodeURIComponent(user)}?max=${max}&moves=true&tags=false&opening=false`;
+  const url=`https://lichess.org/api/games/user/${encodeURIComponent(user)}?max=${max}&moves=true&opening=true`;
   console.log(`[fetchLatest] requesting ${url}`);
   const resp = await fetch(url,{headers:{Accept:'application/x-ndjson'}});
   if(!resp.ok) throw new Error(`lichess returned ${resp.status}`);
