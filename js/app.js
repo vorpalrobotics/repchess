@@ -270,7 +270,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
        </td>
        <td class="eval-col">
-         <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
+         <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
          <span class="evaltag" style="display:none"></span>
        </td>
        <td class="name-col">
@@ -520,7 +520,7 @@ function renderBlackRoot(parent,games,trigger){
      </td>
      <td class="cnt-col"></td>
      <td class="eval-col">
-       <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
+       <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
        <span class="evaltag" style="display:none"></span>
      </td>
      <td class="name-col">
@@ -1455,6 +1455,8 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
   activeChildAnalysisIcon = icon;
   icon.style.display = '';
   icon.onclick = e => { e.stopPropagation(); engine.stop(); };
+  const depthSpan = icon.querySelector('.analyzingDepth');
+  depthSpan.textContent = '';
 
   try {
     await engine.analyze(fen, {
@@ -1462,6 +1464,11 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
       depth: targetDepth,
       searchmoves: entries.map(e => e.uci),
       onInfo: (d, lines) => {
+        // the slowest-deepening rank is the bottleneck for finishing the whole
+        // batch, so surface its depth (not the deepest, and not just `d`,
+        // which is only whichever rank most recently reported in)
+        const minDepth = Math.min(...Object.values(lines).map(l => l.depth));
+        depthSpan.textContent = ` ${minDepth}/${targetDepth}`;
         for(const line of Object.values(lines)){
           const uci = line.pv[0];
           if(!uci) continue;
@@ -1481,6 +1488,7 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
     if(activeChildAnalysisIcon === icon) activeChildAnalysisIcon = null;
     icon.style.display = 'none';
     icon.onclick = null;
+    depthSpan.textContent = '';
   }
 }
 
