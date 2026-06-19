@@ -97,11 +97,13 @@ function fenForSeq(seq){
 /* ---------- toggle helper ---------- */
 function makeToggle(btn, branchRow){
   btn.style.visibility='visible';
-  btn.textContent='⊖';                          // newly (re-)expanded, so shown
+  btn.innerHTML='<i class="fa-solid fa-caret-down"></i>';   // newly (re-)expanded, so shown
   btn.onclick=()=>{                              // rewired each call to target the current branchRow
     const shown = branchRow.style.display !== 'none';
     branchRow.style.display = shown ? 'none' : '';
-    btn.textContent         = shown ? '⊕'   : '⊖';
+    btn.innerHTML = shown
+      ? '<i class="fa-solid fa-caret-right"></i>'
+      : '<i class="fa-solid fa-caret-down"></i>';
   };
 }
 
@@ -260,7 +262,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          </div>
        </td>
        <td class="move" style="padding-left:${depth}em">
-         <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
+         <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
          ${moveHtml}
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
@@ -498,7 +500,7 @@ function renderBlackRoot(parent,games,trigger){
        </div>
      </td>
      <td class="move">
-       <button class="iconbtn toggle" style="visibility:hidden">⊖</button>
+       <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
        1. ${trigger} <span class="ourReply">...</span>
        <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i></span>
        <span class="evaltag" style="display:none"></span>
