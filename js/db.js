@@ -181,7 +181,10 @@ async function setPref(lineId, seq, patch){
 }
 
 /* ---------- mnemonics (memory-palace words, per destination square per piece) ---------- */
-const BLANK_MNEMONIC_SQUARE = {pawn:'',knight:'',bishop:'',rook:'',queen:'',king:''};
+const BLANK_MNEMONIC_SQUARE = {
+  pawn:'', pawnDesc:'', knight:'', knightDesc:'', bishop:'', bishopDesc:'',
+  rook:'', rookDesc:'', queen:'', queenDesc:'', king:'', kingDesc:''
+};
 
 async function getAllMnemonics(){
   const db = await openDB();

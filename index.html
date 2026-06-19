@@ -125,10 +125,13 @@
   .mnem-coord-file{left:2px;bottom:1px}
   .mnem-coord-rank{left:2px;top:1px}
 
-  #mnemonicsEditorOverlay .modal{min-width:24em}
-  .mnem-editor-grid{display:grid;grid-template-columns:repeat(3,auto);gap:.5rem .9rem;margin:.6rem 0}
-  .mnem-editor-grid label{display:flex;flex-direction:column;font-size:.8rem;gap:.2rem}
-  .mnem-editor-grid input{width:9ch}
+  #mnemonicsEditorOverlay .modal{min-width:34em}
+  .mnem-editor-table{border-collapse:collapse;margin:.6rem 0;width:100%}
+  .mnem-editor-table th{font-size:.8rem;font-weight:600;text-align:left;color:#555;padding:0 .5rem .3rem}
+  .mnem-editor-table td{padding:.2rem .5rem;vertical-align:middle}
+  .mnem-editor-table td:first-child{text-align:center;color:#888;width:1.6em}
+  .mnem-editor-table input{width:9ch}
+  .mnem-editor-table td:last-child input{width:100%;min-width:28ch}
 </style>
 </head>
 <body>
@@ -306,14 +309,17 @@
 <div id="mnemonicsEditorOverlay" class="overlay">
   <div class="modal">
     <h2 id="mnemonicsEditorTitle">Edit Square</h2>
-    <div class="mnem-editor-grid">
-      <label>Pawn<input id="mnemPawnInput" maxlength="40"></label>
-      <label>Knight<input id="mnemKnightInput" maxlength="40"></label>
-      <label>Bishop<input id="mnemBishopInput" maxlength="40"></label>
-      <label>Rook<input id="mnemRookInput" maxlength="40"></label>
-      <label>Queen<input id="mnemQueenInput" maxlength="40"></label>
-      <label>King<input id="mnemKingInput" maxlength="40"></label>
-    </div>
+    <table class="mnem-editor-table">
+      <thead><tr><th></th><th>Word</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><i class="fa-solid fa-chess-pawn"></i></td>  <td><input id="mnemPawnInput" maxlength="40"></td>  <td><input id="mnemPawnDescInput" maxlength="70"></td></tr>
+        <tr><td><i class="fa-solid fa-chess-knight"></i></td><td><input id="mnemKnightInput" maxlength="40"></td><td><input id="mnemKnightDescInput" maxlength="70"></td></tr>
+        <tr><td><i class="fa-solid fa-chess-bishop"></i></td><td><input id="mnemBishopInput" maxlength="40"></td><td><input id="mnemBishopDescInput" maxlength="70"></td></tr>
+        <tr><td><i class="fa-solid fa-chess-rook"></i></td>  <td><input id="mnemRookInput" maxlength="40"></td>  <td><input id="mnemRookDescInput" maxlength="70"></td></tr>
+        <tr><td><i class="fa-solid fa-chess-queen"></i></td> <td><input id="mnemQueenInput" maxlength="40"></td> <td><input id="mnemQueenDescInput" maxlength="70"></td></tr>
+        <tr><td><i class="fa-solid fa-chess-king"></i></td>  <td><input id="mnemKingInput" maxlength="40"></td>  <td><input id="mnemKingDescInput" maxlength="70"></td></tr>
+      </tbody>
+    </table>
     <div class="modal-actions">
       <button id="mnemonicsEditorCancelBtn">Cancel</button>
       <button id="mnemonicsEditorSaveBtn">SAVE</button>

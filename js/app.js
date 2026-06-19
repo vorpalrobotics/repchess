@@ -983,16 +983,18 @@ async function renderMnemonicsGrid(){
   }
 }
 
+const mnemCap = p => p[0].toUpperCase() + p.slice(1);
+const mnemWordInput = p => $(`mnem${mnemCap(p)}Input`);
+const mnemDescInput = p => $(`mnem${mnemCap(p)}DescInput`);
+
 function openMnemonicsEditor(sq){
   MNEM_EDIT_SQUARE = sq;
   const entry = MNEMONICS[sq] || {};
   $('mnemonicsEditorTitle').textContent = `Edit Square ${sq}`;
-  $('mnemPawnInput').value   = entry.pawn   || '';
-  $('mnemKnightInput').value = entry.knight || '';
-  $('mnemBishopInput').value = entry.bishop || '';
-  $('mnemRookInput').value   = entry.rook   || '';
-  $('mnemQueenInput').value  = entry.queen  || '';
-  $('mnemKingInput').value   = entry.king   || '';
+  for(const p of MNEM_PIECES){
+    mnemWordInput(p).value = entry[p] || '';
+    mnemDescInput(p).value = entry[p+'Desc'] || '';
+  }
   $('mnemonicsEditorOverlay').style.display='flex';
 }
 
@@ -1005,14 +1007,12 @@ $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none
 
 $('mnemonicsEditorCancelBtn').onclick = ()=>{ $('mnemonicsEditorOverlay').style.display='none'; };
 $('mnemonicsEditorSaveBtn').onclick = async ()=>{
-  await setMnemonicSquare(MNEM_EDIT_SQUARE, {
-    pawn:   $('mnemPawnInput').value.trim(),
-    knight: $('mnemKnightInput').value.trim(),
-    bishop: $('mnemBishopInput').value.trim(),
-    rook:   $('mnemRookInput').value.trim(),
-    queen:  $('mnemQueenInput').value.trim(),
-    king:   $('mnemKingInput').value.trim(),
-  });
+  const patch = {};
+  for(const p of MNEM_PIECES){
+    patch[p] = mnemWordInput(p).value.trim();
+    patch[p+'Desc'] = mnemDescInput(p).value.trim();
+  }
+  await setMnemonicSquare(MNEM_EDIT_SQUARE, patch);
   $('mnemonicsEditorOverlay').style.display='none';
   await renderMnemonicsGrid();
 };
