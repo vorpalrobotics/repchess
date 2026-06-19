@@ -1,10 +1,21 @@
-// Stockfish 10 pure-JS wrapper (same build used by ChessSight)
-// Fetched via CDN and run in a blob Worker to avoid cross-origin restrictions.
-const STOCKFISH_URLS = [
-  'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js',
-  'https://cdn.jsdelivr.net/npm/stockfish@10/stockfish.js',
-  'https://cdn.jsdelivr.net/npm/stockfish@9/stockfish.js',
-  'https://cdn.jsdelivr.net/npm/stockfish/stockfish.js',
+// Stockfish 18 "lite, single-threaded" WASM build (no SharedArrayBuffer / COOP+COEP
+// headers required, so it runs as-is on GitHub Pages). Falls back through a couple
+// of mirrors, then to the old pure-JS (asm.js) Stockfish 10 build as a last resort.
+//
+// The .js loader and .wasm binary are fetched as a *pair*: we still fetch+blob the
+// (small, ~20KB) .js loader to dodge cross-origin Worker-script restrictions, same
+// as before, but we don't fetch/blob the much larger (~7MB) .wasm binary ourselves —
+// this build resolves its wasm file from the worker's own URL hash fragment, so we
+// just point that hash at the wasm's absolute CDN URL and let the worker fetch it
+// directly (jsdelivr serves it with CORS headers, so a cross-origin fetch from
+// inside the worker works fine).
+const STOCKFISH_BUILDS = [
+  { js: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.js',
+    wasm: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.wasm' },
+  { js: 'https://cdn.jsdelivr.net/npm/stockfish@18/bin/stockfish-18-lite-single.js',
+    wasm: 'https://cdn.jsdelivr.net/npm/stockfish@18/bin/stockfish-18-lite-single.wasm' },
+  { js: 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js' },
+  { js: 'https://cdn.jsdelivr.net/npm/stockfish@10/stockfish.js' },
 ];
 
 export class Engine {
@@ -15,18 +26,19 @@ export class Engine {
   }
 
   async init() {
-    let blob = null;
-    for (const url of STOCKFISH_URLS) {
+    let blob = null, wasmUrl = null;
+    for (const build of STOCKFISH_BUILDS) {
       try {
-        const res = await fetch(url);
-        if (res.ok) { blob = await res.blob(); break; }
-        console.warn(`Stockfish fetch failed (${res.status}): ${url}`);
+        const res = await fetch(build.js);
+        if (res.ok) { blob = await res.blob(); wasmUrl = build.wasm || null; break; }
+        console.warn(`Stockfish fetch failed (${res.status}): ${build.js}`);
       } catch (err) {
-        console.warn(`Stockfish fetch error: ${url}`, err);
+        console.warn(`Stockfish fetch error: ${build.js}`, err);
       }
     }
     if (!blob) throw new Error('Could not load Stockfish from any CDN source');
-    const blobUrl = URL.createObjectURL(blob);
+    let blobUrl = URL.createObjectURL(blob);
+    if (wasmUrl) blobUrl += `#${encodeURIComponent(wasmUrl)}`;
 
     this._worker = new Worker(blobUrl);
     this._worker.onmessage = ({ data }) => this._listener?.(data);
