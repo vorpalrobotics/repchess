@@ -115,12 +115,12 @@
   .mnem-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
   .mnem-header h2{margin:0}
   #mnemonicsGrid{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);flex:1 1 auto;min-height:0;aspect-ratio:1/1;margin:0 auto;border:2px solid #333}
-  .mnem-square{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:center;overflow:hidden;padding:2px}
+  .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 4px}
   .mnem-square.light{background:#f0d9b5}
   .mnem-square.dark{background:#b58863}
   .mnem-square:hover{outline:2px solid #1565c0;outline-offset:-2px}
-  .mnem-square .mnem-word{font-weight:600;color:#222}
-  .mnem-square .mnem-word.mnem-empty{color:transparent}
+  .mnem-square .mnem-word{font-weight:600;color:#222;white-space:nowrap}
+  .mnem-square .mnem-word i{width:1.1em;text-align:center;margin-right:.25em;color:#0009}
   .mnem-coord-file,.mnem-coord-rank{position:absolute;font-size:.65rem;font-weight:700;color:#0006}
   .mnem-coord-file{left:2px;bottom:1px}
   .mnem-coord-rank{left:2px;top:1px}

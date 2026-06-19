@@ -951,7 +951,7 @@ $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
 
 /* ---------- manage mnemonics ---------- */
 const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
-const MNEM_PIECE_LABEL = {pawn:'P',knight:'N',bishop:'B',rook:'R',queen:'Q',king:'K'};
+const MNEM_PIECE_ICON = {pawn:'fa-chess-pawn',knight:'fa-chess-knight',bishop:'fa-chess-bishop',rook:'fa-chess-rook',queen:'fa-chess-queen',king:'fa-chess-king'};
 let MNEMONICS = {};
 let MNEM_EDIT_SQUARE = null;
 
@@ -968,7 +968,7 @@ async function renderMnemonicsGrid(){
       const entry = MNEMONICS[sq] || {};
       const words = MNEM_PIECES
         .filter(p=>entry[p])
-        .map(p=>`<div class="mnem-word">${MNEM_PIECE_LABEL[p]}:${escapeHtml(entry[p])}</div>`)
+        .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}</div>`)
         .join('');
       const div = document.createElement('div');
       div.className = `mnem-square ${isLight?'light':'dark'}`;
