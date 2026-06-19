@@ -440,7 +440,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
     btnEval.onclick = () => {
       const fen = fenForSeq(lineSeq);
-      markLiveEval(evalSpan);
+      markLiveEval(evalSpan, btnEval);
       showPosition(fen,
         (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
         ()=>clearLiveEval(evalSpan));
@@ -671,7 +671,7 @@ function renderBlackRoot(parent,games,trigger){
 
   btnEval.onclick = () => {
     const fen = fenForSeq(lineSeq);
-    markLiveEval(evalSpan);
+    markLiveEval(evalSpan, btnEval);
     showPosition(fen,
       (d,score)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen),
       ()=>clearLiveEval(evalSpan));
@@ -964,8 +964,10 @@ let engineRunId = 0;
 let currentEngineFen = null;
 
 /* the one evaltag span (if any) currently tracking a live engine search, so its
-   styling/tooltip can be reset once another row takes over or the search ends */
-let liveEvalSpan = null;
+   styling/tooltip can be reset once another row takes over or the search ends.
+   liveEvalBtn is that row's analyse button, highlighted to show which move's
+   position is the one currently loaded on the board. */
+let liveEvalSpan = null, liveEvalBtn = null;
 
 const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
 const engineMaxDepth  = () => parseInt($('engineMaxDepthSelect').value, 10);
@@ -1051,11 +1053,13 @@ function refreshEvalSpan(evalSpan, evalObj){
 /* marks `evalSpan` as tracking the in-progress live search (only one row at a
    time, since the engine is a single shared worker), clearing the previous
    row's marker so a cached tag never looks like it's still updating live */
-function markLiveEval(evalSpan){
+function markLiveEval(evalSpan, btn){
   if(liveEvalSpan && liveEvalSpan !== evalSpan) clearLiveEval(liveEvalSpan);
   liveEvalSpan = evalSpan;
+  liveEvalBtn = btn;
   evalSpan.classList.add('evaltag-live');
   evalSpan.title = 'Live analysis in progress…';
+  btn.classList.add('btnEval-onBoard');
 }
 
 function clearLiveEval(evalSpan){
@@ -1064,6 +1068,8 @@ function clearLiveEval(evalSpan){
   evalSpan.classList.remove('evaltag-live');
   const depth = evalSpan.dataset.depth;
   evalSpan.title = depth ? `Saved eval, depth ${depth} — click 📈 to refresh` : '';
+  liveEvalBtn?.classList.remove('btnEval-onBoard');
+  liveEvalBtn = null;
 }
 
 function refreshBranchName(nameSpan, name){
