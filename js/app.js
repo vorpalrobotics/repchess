@@ -125,11 +125,14 @@ let fieldModalSave = null, fieldModalValidate = null;
 // is what gets passed to onSave, letting the caller normalize the input), or
 // {ok:false, error} to reject and keep the modal open with the error shown.
 function openFieldModal(field, currentValue, onSave, validate){
+  const has = !!currentValue;
   $('fieldModalTitle').textContent =
-    field==='note' ? 'Add Note' : field==='mnemonic' ? 'Add Mnemonic' :
-    field==='lineName' ? 'Rename Line' : field==='branchName' ? 'Name this Branch' :
+    field==='note' ? (has ? 'Edit Note' : 'Add Note') :
+    field==='mnemonic' ? (has ? 'Edit Mnemonic' : 'Add Mnemonic') :
+    field==='lineName' ? 'Rename Line' :
+    field==='branchName' ? (has ? 'Edit Branch Name' : 'Add Branch Name') :
     field==='addMove' ? 'Add Opponent Response' :
-    'Set Standard Response';
+    (has ? 'Edit Standard Response' : 'Set Standard Response');
   $('fieldModalInput').value = currentValue || '';
   $('fieldModalError').textContent = '';
   fieldModalSave = onSave;
@@ -244,13 +247,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
+             <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
-             <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
-             <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Name this Branch</button>
+             <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
              <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
            </div>
          </div>
@@ -301,11 +304,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     }
     refreshMeta();
+    refreshRowMenuLabels(rowMenu, currentSaved());
 
     function saveField(field,value){
       savePrefField(lineSeq,field,value);
       refreshMeta();
       refreshHidden();
+      refreshRowMenuLabels(rowMenu, currentSaved());
     }
 
     /* group of rows belonging to this entry: the data row, its meta row,
@@ -345,6 +350,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const replySpan = tr.querySelector('.ourReply');
       if(replySpan) replySpan.textContent = reply;
       expandWith(reply);
+      refreshRowMenuLabels(rowMenu, currentSaved());
       analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
     }
 
@@ -479,13 +485,13 @@ function renderBlackRoot(parent,games,trigger){
        <div class="row-menu-wrap">
          <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
          <div class="row-menu">
+           <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
-           <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
-           <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Name this Branch</button>
+           <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
          </div>
        </div>
      </td>
@@ -533,11 +539,13 @@ function renderBlackRoot(parent,games,trigger){
     if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
   }
   refreshMeta();
+  refreshRowMenuLabels(rowMenu, currentSaved());
 
   function saveField(field,value){
     savePrefField(lineSeq,field,value);
     refreshMeta();
     refreshHidden();
+    refreshRowMenuLabels(rowMenu, currentSaved());
   }
 
   function getGroupRows(){
@@ -574,6 +582,7 @@ function renderBlackRoot(parent,games,trigger){
     const replySpan = tr.querySelector('.ourReply');
     if(replySpan) replySpan.textContent = reply;
     expandWith(reply);
+    refreshRowMenuLabels(rowMenu, currentSaved());
     analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
   }
 
@@ -1039,6 +1048,19 @@ function refreshBranchName(nameSpan, name){
   if(!name){ nameSpan.style.display='none'; return; }
   nameSpan.textContent = name;
   nameSpan.style.display='';
+}
+
+/* toggles row-menu item labels between their "Add"/"Set" and "Edit" wording
+   depending on whether that field already has a saved value */
+function refreshRowMenuLabels(rowMenu, saved){
+  const responseBtn = rowMenu.querySelector('[data-act="response"]');
+  if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
+  const noteBtn = rowMenu.querySelector('[data-act="note"]');
+  if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
+  const mnemonicBtn = rowMenu.querySelector('[data-act="mnemonic"]');
+  if(mnemonicBtn) mnemonicBtn.lastChild.textContent = saved?.mnemonic ? 'Edit Mnemonic' : 'Add Mnemonic';
+  const branchNameBtn = rowMenu.querySelector('[data-act="branchName"]');
+  if(branchNameBtn) branchNameBtn.lastChild.textContent = saved?.name ? 'Edit Branch Name' : 'Add Branch Name';
 }
 
 /* only overwrite a saved eval if the engine has now searched deeper than before */
