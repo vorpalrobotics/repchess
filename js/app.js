@@ -462,6 +462,7 @@ function appendAddMoveControl(tb,parent,games,seq,depth,flip){
   tr.innerHTML=
     `<td class="resp"></td>
      <td class="move" colspan="4" style="padding-left:${depth}em">
+       <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
        <button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>
      </td>`;
   tb.appendChild(tr);
