@@ -971,10 +971,15 @@ const hoverPreviewBoard = new Chessboard($('hoverPreviewBoard'), {
   }
 });
 let hoverPreviewTimer = null;
+let hoverPreviewIcon = null;
 function hideHoverPreview(){
   clearTimeout(hoverPreviewTimer);
   hoverPreviewTimer = null;
   $('hoverPreview').style.display = 'none';
+  if(hoverPreviewIcon){
+    hoverPreviewIcon.title = hoverPreviewIcon.dataset.savedTitle ?? '';
+    hoverPreviewIcon = null;
+  }
 }
 function attachHoverPreview(icon, seq){
   icon.addEventListener('mouseenter', () => {
@@ -991,7 +996,10 @@ function attachHoverPreview(icon, seq){
       const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
       preview.style.left = `${Math.round(Math.max(8,left))}px`;
       preview.style.top = `${Math.round(Math.max(8,top))}px`;
-    }, 2000);
+      icon.dataset.savedTitle = icon.title;
+      icon.title = '';
+      hoverPreviewIcon = icon;
+    }, 1500);
   });
   icon.addEventListener('mouseleave', hideHoverPreview);
 }
