@@ -107,6 +107,13 @@
   #engine-controls{display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;font-family:Arial,sans-serif;font-size:.8rem}
   #engineDepth{font-weight:700}
   #engine-options{display:flex;gap:.8rem}
+
+  @media (max-width:700px){
+    .main-layout{flex-direction:column}
+    #board-col{width:100%;max-width:420px;margin:0 auto}
+    #board{width:100%;height:auto;aspect-ratio:1/1}
+    #engine-panel{width:100%}
+  }
   #engine-options label{display:inline-flex;align-items:center;gap:.3rem}
   #engine-options select{font-size:.8rem;padding:.1rem .3rem}
   #engineLines{margin:0;padding-left:0;list-style:none}
