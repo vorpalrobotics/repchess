@@ -132,7 +132,7 @@ function openFieldModal(field, currentValue, onSave, validate){
   $('fieldModalTitle').textContent =
     field==='note' ? (has ? 'Edit Note' : 'Add Note') :
     field==='mnemonic' ? (has ? 'Edit Mnemonic' : 'Add Mnemonic') :
-    field==='lineName' ? 'Rename Line' :
+    field==='lineName' ? 'Rename Opening System' :
     field==='branchName' ? (has ? 'Edit Branch Name' : 'Add Branch Name') :
     field==='addMove' ? 'Add Opponent Response' :
     (has ? 'Edit Standard Response' : 'Set Standard Response');
@@ -705,13 +705,13 @@ async function renderHome(){
   const list = $('linesList');
   list.innerHTML='';
   if(!CURRENT_USER){
-    list.innerHTML = '<p>Set your Lichess ID via the menu &rarr; Download Games, then create a line.</p>';
+    list.innerHTML = '<p>Set your Lichess ID via the menu &rarr; Download Games, then create an opening system.</p>';
     return;
   }
 
   const lines = await getLines(CURRENT_USER);
   if(!lines.length){
-    list.innerHTML = '<p>No lines yet &mdash; click + to create one.</p>';
+    list.innerHTML = '<p>No opening systems yet &mdash; click + to create one.</p>';
     return;
   }
 
@@ -731,7 +731,7 @@ async function renderHome(){
     };
     row.querySelector('.line-delete').onclick = async e => {
       e.stopPropagation();
-      if(!confirm(`Delete line "${line.name}"?`)) return;
+      if(!confirm(`Delete opening system "${line.name}"?`)) return;
       await deleteLine(line.id);
       renderHome();
     };
@@ -767,7 +767,7 @@ async function openLine(line){
 
   const triggers = line.openingMoves || [];
   if(!triggers.length){
-    $('tree').innerHTML = '<p>This line has no opening move configured yet.</p>';
+    $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
     return;
   }
   triggers.forEach(mv=>{
@@ -840,7 +840,7 @@ async function importParsedLine(moves){
 }
 
 async function importLine(text){
-  if(!CURRENT_LINE){ $('importLineError').textContent = 'open a line first'; return; }
+  if(!CURRENT_LINE){ $('importLineError').textContent = 'open an opening system first'; return; }
   const rawLines = text.split('\n').map(l=>l.trim()).filter(Boolean);
   if(!rawLines.length){ $('importLineError').textContent = 'paste at least one line to import'; return; }
 
@@ -870,7 +870,7 @@ async function importLine(text){
 
 $('menuImportLine').onclick = ()=>{
   $('menuList').style.display='none';
-  if(!CURRENT_LINE){ log('open a line first (from the home screen) to import into it',true); return; }
+  if(!CURRENT_LINE){ log('open an opening system first (from the home screen) to import into it',true); return; }
   $('importLineInput').value='';
   $('importLineError').textContent='';
   $('importLineOverlay').style.display='flex';
@@ -1019,7 +1019,7 @@ async function exportBackup(){
   a.download = `repchess-backup-${CURRENT_USER}-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  log(`exported ${lines.length} line(s), ${games.length} game(s)`);
+  log(`exported ${lines.length} opening system(s), ${games.length} game(s)`);
 }
 
 /* full restore: wipes every local store first, so the result matches the
@@ -1055,7 +1055,7 @@ async function importBackup(data){
     await setMnemonicSquare(entry.square, patch);
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
-  log(`restored ${data.lines.length} line(s), ${(data.games||[]).length} game(s)`);
+  log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
 }
 
@@ -1074,7 +1074,7 @@ $('backupImport').addEventListener('change', async e=>{
   if(!confirm(
     'RESTORE FULL BACKUP?\n\n' +
     'This will permanently DELETE everything currently stored in this browser — ' +
-    'all repertoire lines, notes, mnemonics (including images), and downloaded games — ' +
+    'all opening systems, notes, mnemonics (including images), and downloaded games — ' +
     'and replace it with the contents of this backup file.\n\n' +
     'Any changes made since this backup was taken WILL BE LOST. This cannot be undone.\n\n' +
     'Continue?'

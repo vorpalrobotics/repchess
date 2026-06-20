@@ -193,15 +193,15 @@
 
 <div id="homeScreen">
   <div class="home-header">
-    <h2>Your Lines</h2>
-    <button id="newLineBtn" title="New Line"><i class="fa-solid fa-circle-plus"></i></button>
+    <h2>Your Opening Systems</h2>
+    <button id="newLineBtn" title="New Opening System"><i class="fa-solid fa-circle-plus"></i></button>
   </div>
   <div id="linesList"></div>
 </div>
 
 <div id="lineScreen" style="display:none">
   <div class="line-header">
-    <button id="backBtn" title="Back to lines">&larr; Lines</button>
+    <button id="backBtn" title="Back to opening systems">&larr; Opening Systems</button>
     <h2 id="lineTitle"></h2>
   </div>
 
@@ -288,7 +288,7 @@
     <h2>Import Line</h2>
     <p style="font-size:.85em;color:#555;margin-top:0">
       Paste one or more lines in algebraic notation, one per line, e.g. <code>1. e4 e5 2. Nf3 Nc6 3. Bb5 a6</code>.
-      Sets each of your moves as the standard response along each path in the currently open line.
+      Sets each of your moves as the standard response along each path in the currently open opening system.
     </p>
     <textarea id="importLineInput" rows="8" style="width:100%;box-sizing:border-box;font-family:inherit"></textarea>
     <div id="importLineError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
@@ -302,7 +302,7 @@
 <!-- new line modal -->
 <div id="lineOverlay" class="overlay">
   <div class="modal">
-    <h2>New Line</h2>
+    <h2>New Opening System</h2>
     <div class="field">
       <label>Name:</label><input id="lineNameInput" style="width:14em">
     </div>
