@@ -992,13 +992,16 @@ async function exportBackup(){
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);
   const data = {
-    version: 3,
+    version: 4,
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
     games,
     lines: await Promise.all(lines.map(async line=>({
       name: line.name, color: line.color, openingMoves: line.openingMoves,
-      prefs: Object.values(await getAllPrefs(line.id)).map(p=>({seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic}))
+      prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
+        seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
+        hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name
+      }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
       const out = {square: entry.square};
@@ -1041,7 +1044,11 @@ async function importBackup(data){
   for(const lineData of data.lines){
     const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
     for(const pref of (lineData.prefs||[])){
-      await setPref(line.id, pref.seq, {reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||''});
+      await setPref(line.id, pref.seq, {
+        reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
+        hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
+        eval:pref.eval||null, name:pref.name||''
+      });
     }
   }
   for(const entry of (data.mnemonics||[])){
