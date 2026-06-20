@@ -80,6 +80,37 @@ function replies(games,seq){
   return {counts,tot};
 }
 
+/* ---------- node statistics ----------
+   A "node" is one move pair: an opponent move plus our chosen reply to it.
+   Counts every node in the subtree rooted at `seq` (our move, the same kind
+   of sequence renderBranch takes), and the largest branch factor (number of
+   opponent move options) seen at any node in that subtree. Only nodes with
+   an actual saved reply are counted/descended into — undecided branches
+   don't contribute nodes of their own. */
+function computeNodeStats(games,seq){
+  const counts = replies(games,seq).counts;
+  const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+
+  const branchFactor = Object.keys(counts).length;
+  let nodeCount = 0, maxBranchFactor = branchFactor;
+  for(const opp of Object.keys(counts)){
+    const lineSeq = [...seq,opp];
+    const reply = PREFS[prefKey(CURRENT_LINE.id,lineSeq)]?.reply;
+    if(!reply) continue;
+    nodeCount++;
+    const sub = computeNodeStats(games,[...lineSeq,reply]);
+    nodeCount += sub.nodeCount;
+    maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
+  }
+  return {nodeCount, maxBranchFactor};
+}
+
+function showNodeStats(games,seq){
+  const {nodeCount,maxBranchFactor} = computeNodeStats(games,seq);
+  alert(`Nodes below this point: ${nodeCount}\nMax branch factor: ${maxBranchFactor}`);
+}
+
 /* ---------- FEN for a move sequence ---------- */
 function fenForSeq(seq){
   const chess = new Chess();
@@ -230,7 +261,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
   const tb=tbl.appendChild(document.createElement('tbody'));
 
   if(!Object.keys(counts).length){
-    appendAddMoveControl(tb,parent,games,seq,depth,flip);
+    /* nested tables get an "Add Opponent Move" item in their owning row's
+       three-dot menu instead (wired in that row's expandWith closure); only
+       the absolute root table (depth 0, no owning row) needs this fallback */
+    if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
     return;
   }
 
@@ -252,6 +286,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
@@ -418,6 +454,28 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
     };
+    rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      if(childrenSeq) showNodeStats(games,childrenSeq);
+    };
+    rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      if(!branchDiv) return;
+      openFieldModal('addMove', '', v=>{
+        addManualReply(childrenSeq,v);
+        branchDiv.innerHTML='';
+        renderBranch(branchDiv,games,childrenSeq,depth+1,flip);
+      }, v=>{
+        if(!v) return {ok:false, error:'enter a move'};
+        v = canonicalizeMoveCase(v);
+        const chess = new Chess(fenForSeq(childrenSeq));
+        const mv = chess.move(v,{sloppy:true});
+        if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+        return {ok:true, value:mv.san};
+      });
+    };
     rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -447,7 +505,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     };
   });
 
-  appendAddMoveControl(tb,parent,games,seq,depth,flip);
+  if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
 }
 
 /* lets the user record an opponent move that hasn't appeared in any imported
@@ -505,6 +563,8 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-magnifying-glass-chart"></i>Analyze Child Nodes</button>
+           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
@@ -661,6 +721,28 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
+  };
+  rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    if(childrenSeq) showNodeStats(games,childrenSeq);
+  };
+  rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    if(!branchDiv) return;
+    openFieldModal('addMove', '', v=>{
+      addManualReply(childrenSeq,v);
+      branchDiv.innerHTML='';
+      renderBranch(branchDiv,games,childrenSeq,1,true);
+    }, v=>{
+      if(!v) return {ok:false, error:'enter a move'};
+      v = canonicalizeMoveCase(v);
+      const chess = new Chess(fenForSeq(childrenSeq));
+      const mv = chess.move(v,{sloppy:true});
+      if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+      return {ok:true, value:mv.san};
+    });
   };
   rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
     e.stopPropagation();
