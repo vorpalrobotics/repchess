@@ -785,13 +785,13 @@ async function openLine(line){
 
 $('backBtn').onclick = renderHome;
 
-/* ---------- import line: bulk-set standard responses from a pasted line ----------
-   Parses a full line of algebraic notation (move numbers, "...", comments,
+/* ---------- import variations: bulk-set standard responses from pasted variations ----------
+   Parses a full variation of algebraic notation (move numbers, "...", comments,
    result codes, and !/? annotations are all tolerated) and walks it down the
-   currently-open line's tree, setting each of "our" moves as the standard
-   response exactly as if it had been picked manually node by node. Opponent
-   moves along the path are also recorded as manual replies so their branch
-   row appears (at 0 games / 0%) even where no downloaded game matches. */
+   currently-open opening system's tree, setting each of "our" moves as the
+   standard response exactly as if it had been picked manually node by node.
+   Opponent moves along the path are also recorded as manual replies so their
+   branch row appears (at 0 games / 0%) even where no downloaded game matches. */
 function parseAlgebraicMoveList(text){
   const cleaned = text
     .replace(/\{[^}]*\}/g, ' ')
@@ -809,13 +809,14 @@ function parseAlgebraicMoveList(text){
   return moves;
 }
 
-/* imports one already-parsed move list (one line of the textarea) into the
-   currently open line's tree, returning the number of "our" moves set. */
+/* imports one already-parsed move list (one variation, i.e. one line of the
+   textarea) into the currently open opening system's tree, returning the
+   number of "our" moves set. */
 async function importParsedLine(moves){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
-    throw new Error(`this line is for 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`);
+    throw new Error(`this variation is for 1. ${triggers.join(' / ')}, but the pasted variation starts with 1. ${moves[0]}`);
   }
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
@@ -842,7 +843,7 @@ async function importParsedLine(moves){
 async function importLine(text){
   if(!CURRENT_LINE){ $('importLineError').textContent = 'open an opening system first'; return; }
   const rawLines = text.split('\n').map(l=>l.trim()).filter(Boolean);
-  if(!rawLines.length){ $('importLineError').textContent = 'paste at least one line to import'; return; }
+  if(!rawLines.length){ $('importLineError').textContent = 'paste at least one variation to import'; return; }
 
   const errors = [];
   let totalCount = 0, importedLines = 0;
@@ -853,15 +854,15 @@ async function importLine(text){
       totalCount += await importParsedLine(moves);
       importedLines++;
     }catch(err){
-      errors.push(rawLines.length>1 ? `line ${i+1}: ${err.message}` : err.message);
+      errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
     }
   }
 
   if(importedLines){
     $('importLineOverlay').style.display='none';
-    log(`imported ${totalCount} move(s) from ${importedLines} line(s) into "${CURRENT_LINE.name}"`
-      + (errors.length ? ` (${errors.length} line(s) skipped, see console)` : ''));
-    if(errors.length) console.warn('[importLine] skipped lines:\n' + errors.join('\n'));
+    log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
+      + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
+    if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
     await openLine(CURRENT_LINE);
   } else {
     $('importLineError').textContent = errors.join('\n');
