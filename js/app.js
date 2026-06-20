@@ -230,8 +230,6 @@ function renderBranch(parent,games,seq,depth,flip=false){
   const tb=tbl.appendChild(document.createElement('tbody'));
 
   if(!Object.keys(counts).length){
-    tb.insertAdjacentHTML('beforeend',
-      `<tr><td class="resp"></td><td class="move" colspan="4" style="padding-left:${depth}em">(no further games)</td></tr>`);
     appendAddMoveControl(tb,parent,games,seq,depth,flip);
     return;
   }
