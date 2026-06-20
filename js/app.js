@@ -246,7 +246,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       : `${depth+1}. ${seq.at(-1)} ${opp}`;
     tr.innerHTML=
       `<td class="resp">
-         <button class="iconbtn" title="Analyse">📈</button>
+         <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
@@ -499,7 +499,7 @@ function renderBlackRoot(parent,games,trigger){
   tr.className='data-row';
   tr.innerHTML=
     `<td class="resp">
-       <button class="iconbtn" title="Analyse">📈</button>
+       <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
        <div class="row-menu-wrap">
          <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
          <div class="row-menu">
@@ -1515,7 +1515,7 @@ function refreshEvalSpan(evalSpan, evalObj){
     evalSpan.classList.add('evaltag-live');
     evalSpan.title = 'Live analysis in progress…' + pvSuffix;
   } else {
-    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click 📈 to refresh${pvSuffix}`;
+    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click Analyse to refresh${pvSuffix}`;
   }
   evalSpan.style.display='';
 }
@@ -1538,7 +1538,7 @@ function clearLiveEval(evalSpan){
   evalSpan.classList.remove('evaltag-live');
   const depth = evalSpan.dataset.depth;
   const pvSuffix = evalSpan.dataset.pv ? `\nBest line: ${evalSpan.dataset.pv}` : '';
-  evalSpan.title = depth ? `Saved eval, depth ${depth} — click 📈 to refresh${pvSuffix}` : '';
+  evalSpan.title = depth ? `Saved eval, depth ${depth} — click Analyse to refresh${pvSuffix}` : '';
   liveEvalBtn?.classList.remove('btnEval-onBoard');
   liveEvalBtn = null;
 }
