@@ -1542,10 +1542,20 @@ function renderEngineLines(fen, depth, lines, multipv){
   }
 }
 
+const STARTING_FEN = new Chess().fen();
+
 async function runEngine(fen, onEvalUpdate, onComplete){
   currentEngineFen = fen;
   const runId = ++engineRunId;
   console.debug(`[runEngine] runId=${runId} fen=${fen}`);
+  if(fen === STARTING_FEN){
+    console.debug(`[runEngine] runId=${runId} starting position, skipping analysis to save cycles`);
+    engine.stop();
+    $('engineDepth').textContent = 'Starting position — analysis skipped';
+    $('engineLines').innerHTML = '';
+    onComplete?.();
+    return;
+  }
   if(!engine.ready) await engine.init().catch(()=>{});
   if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} superseded before engine ready, dropping`); return; }
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
