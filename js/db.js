@@ -185,8 +185,9 @@ async function setPref(lineId, seq, patch){
 
 /* ---------- mnemonics (memory-palace words, per destination square per piece) ---------- */
 const BLANK_MNEMONIC_SQUARE = {
-  pawn:'', pawnDesc:'', knight:'', knightDesc:'', bishop:'', bishopDesc:'',
-  rook:'', rookDesc:'', queen:'', queenDesc:'', king:'', kingDesc:''
+  pawn:'', pawnDesc:'', pawnImg:'', knight:'', knightDesc:'', knightImg:'',
+  bishop:'', bishopDesc:'', bishopImg:'', rook:'', rookDesc:'', rookImg:'',
+  queen:'', queenDesc:'', queenImg:'', king:'', kingDesc:'', kingImg:''
 };
 
 async function getAllMnemonics(){

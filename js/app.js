@@ -891,14 +891,25 @@ $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'
 async function exportBackup(){
   if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
   const lines = await getLines(CURRENT_USER);
+  const mnemonicsBySquare = await getAllMnemonics();
   const data = {
-    version: 1,
+    version: 2,
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
     lines: await Promise.all(lines.map(async line=>({
       name: line.name, color: line.color, openingMoves: line.openingMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic}))
-    })))
+    }))),
+    mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
+      const out = {square: entry.square};
+      for(const p of MNEM_PIECES){
+        out[p] = entry[p] || '';
+        out[p+'Desc'] = entry[p+'Desc'] || '';
+        out[p+'Img'] = entry[p+'Img'] || '';
+      }
+      return out;
+    }),
+    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY)
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -919,6 +930,16 @@ async function importBackup(data){
       await setPref(line.id, pref.seq, {reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||''});
     }
   }
+  for(const entry of (data.mnemonics||[])){
+    const patch = {};
+    for(const p of MNEM_PIECES){
+      patch[p] = entry[p] || '';
+      patch[p+'Desc'] = entry[p+'Desc'] || '';
+      patch[p+'Img'] = entry[p+'Img'] || '';
+    }
+    await setMnemonicSquare(entry.square, patch);
+  }
+  if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
   log(`imported ${data.lines.length} line(s)`);
   await renderHome();
 }
@@ -988,6 +1009,83 @@ async function renderMnemonicsGrid(){
 const mnemCap = p => p[0].toUpperCase() + p.slice(1);
 const mnemWordInput = p => $(`mnem${mnemCap(p)}Input`);
 const mnemDescInput = p => $(`mnem${mnemCap(p)}DescInput`);
+const mnemImgDrop = p => $(`mnem${mnemCap(p)}ImgDrop`);
+const mnemImgPreview = p => $(`mnem${mnemCap(p)}ImgPreview`);
+const mnemImgFile = p => $(`mnem${mnemCap(p)}ImgFile`);
+
+/* images are staged in memory while the editor is open, committed on Save */
+const MNEM_EDIT_IMAGES = {};
+const MNEM_IMG_MAX_DIM = 250;       // stored image is downscaled to fit within this box
+const MNEM_IMG_MAX_FILE_BYTES = 8 * 1024 * 1024; // reject absurdly large source files outright
+
+function renderMnemImgDrop(p){
+  const drop = mnemImgDrop(p);
+  const preview = mnemImgPreview(p);
+  const dataUrl = MNEM_EDIT_IMAGES[p];
+  if(dataUrl){
+    preview.src = dataUrl;
+    preview.style.display = '';
+    drop.classList.add('has-img');
+  } else {
+    preview.src = '';
+    preview.style.display = 'none';
+    drop.classList.remove('has-img');
+  }
+}
+
+/* downscale to fit within MNEM_IMG_MAX_DIM x MNEM_IMG_MAX_DIM (no cropping) and re-encode as JPEG to keep stored size small */
+function resizeImageFile(file){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, MNEM_IMG_MAX_DIM / img.width, MNEM_IMG_MAX_DIM / img.height);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not decode image')); };
+    img.src = url;
+  });
+}
+
+async function handleMnemImageFile(p, file){
+  if(!file) return;
+  if(!file.type.startsWith('image/')){ log('that file is not an image',true); return; }
+  if(file.size > MNEM_IMG_MAX_FILE_BYTES){ log(`image too large (max ${MNEM_IMG_MAX_FILE_BYTES/1024/1024}MB)`,true); return; }
+  try{
+    MNEM_EDIT_IMAGES[p] = await resizeImageFile(file);
+    renderMnemImgDrop(p);
+  }catch(err){
+    console.error('[mnemonics] image resize failed',err);
+    log('could not read that image',true);
+  }
+}
+
+for(const p of MNEM_PIECES){
+  const drop = mnemImgDrop(p);
+  drop.addEventListener('click', ()=> mnemImgFile(p).click());
+  mnemImgFile(p).addEventListener('change', e=>{
+    handleMnemImageFile(p, e.target.files[0]);
+    e.target.value = '';
+  });
+  drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('dragover'); });
+  drop.addEventListener('dragleave', ()=> drop.classList.remove('dragover'));
+  drop.addEventListener('drop', e=>{
+    e.preventDefault();
+    drop.classList.remove('dragover');
+    handleMnemImageFile(p, e.dataTransfer.files[0]);
+  });
+  drop.querySelector('.mnem-img-clear').addEventListener('click', e=>{
+    e.stopPropagation();
+    MNEM_EDIT_IMAGES[p] = '';
+    renderMnemImgDrop(p);
+  });
+}
 
 function openMnemonicsEditor(sq){
   MNEM_EDIT_SQUARE = sq;
@@ -996,6 +1094,8 @@ function openMnemonicsEditor(sq){
   for(const p of MNEM_PIECES){
     mnemWordInput(p).value = entry[p] || '';
     mnemDescInput(p).value = entry[p+'Desc'] || '';
+    MNEM_EDIT_IMAGES[p] = entry[p+'Img'] || '';
+    renderMnemImgDrop(p);
   }
   $('mnemonicsEditorOverlay').style.display='flex';
 }
@@ -1036,6 +1136,7 @@ $('mnemonicsEditorSaveBtn').onclick = async ()=>{
   for(const p of MNEM_PIECES){
     patch[p] = mnemWordInput(p).value.trim();
     patch[p+'Desc'] = mnemDescInput(p).value.trim();
+    patch[p+'Img'] = MNEM_EDIT_IMAGES[p] || '';
   }
   await setMnemonicSquare(MNEM_EDIT_SQUARE, patch);
   $('mnemonicsEditorOverlay').style.display='none';
