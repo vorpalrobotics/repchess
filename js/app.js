@@ -809,26 +809,14 @@ function parseAlgebraicMoveList(text){
   return moves;
 }
 
-async function importLine(text){
-  if(!CURRENT_LINE){ $('importLineError').textContent = 'open a line first'; return; }
-  let moves;
-  try{
-    moves = parseAlgebraicMoveList(text);
-  }catch(err){
-    $('importLineError').textContent = err.message;
-    return;
-  }
-  if(!moves.length){ $('importLineError').textContent = 'paste a line to import'; return; }
-
+/* imports one already-parsed move list (one line of the textarea) into the
+   currently open line's tree, returning the number of "our" moves set. */
+async function importParsedLine(moves){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
-    $('importLineError').textContent =
-      `this line is for 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`;
-    return;
+    throw new Error(`this line is for 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`);
   }
-
-  $('importLineOverlay').style.display='none';
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
      at odd indices (0=our trigger, 1=their reply, 2=our reply, ...); for a
@@ -848,8 +836,36 @@ async function importLine(text){
       count++;
     }
   }
-  log(`imported ${count} move(s) into "${CURRENT_LINE.name}"`);
-  await openLine(CURRENT_LINE);
+  return count;
+}
+
+async function importLine(text){
+  if(!CURRENT_LINE){ $('importLineError').textContent = 'open a line first'; return; }
+  const rawLines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+  if(!rawLines.length){ $('importLineError').textContent = 'paste at least one line to import'; return; }
+
+  const errors = [];
+  let totalCount = 0, importedLines = 0;
+  for(let i=0;i<rawLines.length;i++){
+    try{
+      const moves = parseAlgebraicMoveList(rawLines[i]);
+      if(!moves.length) continue;
+      totalCount += await importParsedLine(moves);
+      importedLines++;
+    }catch(err){
+      errors.push(rawLines.length>1 ? `line ${i+1}: ${err.message}` : err.message);
+    }
+  }
+
+  if(importedLines){
+    $('importLineOverlay').style.display='none';
+    log(`imported ${totalCount} move(s) from ${importedLines} line(s) into "${CURRENT_LINE.name}"`
+      + (errors.length ? ` (${errors.length} line(s) skipped, see console)` : ''));
+    if(errors.length) console.warn('[importLine] skipped lines:\n' + errors.join('\n'));
+    await openLine(CURRENT_LINE);
+  } else {
+    $('importLineError').textContent = errors.join('\n');
+  }
 }
 
 $('menuImportLine').onclick = ()=>{
