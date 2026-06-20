@@ -118,6 +118,42 @@ function formatNodeStats({nodeCount,maxBranchFactor}){
   return `${nodeCount} node${nodeCount===1?'':'s'}, max branch ${maxBranchFactor}`;
 }
 
+/* whole-opening-system totals: sums computeNodeStats() across every root
+   trigger (each "1. e4" / "1. d4" / etc heading), excluding hidden ones.
+   For black lines the root row itself (the trigger) can be hidden and is
+   itself a node (trigger + our reply), unlike white roots which start
+   counting from the opponent's first reply to our trigger move. */
+function computeSystemStats(games,line){
+  const triggers = line.openingMoves || [];
+  let nodeCount = 0, maxBranchFactor = 0;
+  if(line.color==='black'){
+    const visibleTriggers = triggers.filter(t=>!PREFS[prefKey(line.id,[t])]?.hidden);
+    maxBranchFactor = visibleTriggers.length;
+    for(const trigger of visibleTriggers){
+      const reply = PREFS[prefKey(line.id,[trigger])]?.reply;
+      if(!reply) continue;
+      nodeCount++;
+      const sub = computeNodeStats(games,[trigger,reply]);
+      nodeCount += sub.nodeCount;
+      maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
+    }
+  } else {
+    for(const trigger of triggers){
+      const sub = computeNodeStats(games,[trigger]);
+      nodeCount += sub.nodeCount;
+      maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
+    }
+  }
+  return {nodeCount, maxBranchFactor};
+}
+
+function refreshSystemStats(){
+  const span = $('systemStats');
+  if(!span) return;
+  if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
+  span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
+}
+
 /* ---------- FEN for a move sequence ---------- */
 function fenForSeq(seq){
   const chess = new Chess();
@@ -406,6 +442,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       expandWith(reply);
       refreshRowMenuLabels(rowMenu, currentSaved());
       refreshBranchStats(statsSpan, games, childrenSeq);
+      refreshSystemStats();
       analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
     }
 
@@ -437,6 +474,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       saveField('hidden', !currentSaved()?.hidden);
+      refreshSystemStats();
     };
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
       e.stopPropagation();
@@ -680,6 +718,7 @@ function renderBlackRoot(parent,games,trigger){
     expandWith(reply);
     refreshRowMenuLabels(rowMenu, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
+    refreshSystemStats();
     analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
   }
 
@@ -709,6 +748,7 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     saveField('hidden', !currentSaved()?.hidden);
+    refreshSystemStats();
   };
   rowMenu.querySelector('[data-act="response"]').onclick = e => {
     e.stopPropagation();
@@ -876,6 +916,7 @@ async function openLine(line){
       renderBranch(wrap,GAMES,[mv],0);
     }
   });
+  refreshSystemStats();
 }
 
 $('backBtn').onclick = renderHome;

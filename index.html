@@ -29,6 +29,7 @@
   .cnt    {font-style:italic;font-size:.85em;color:#666}
   .branchName{font-weight:600;font-style:italic;color:#444}
   .branchStats{font-size:.85em;color:#888}
+  .systemStats{font-size:.85em;color:#666;margin-left:.6em}
   .analyzingIcon{margin-right:.4em;cursor:pointer;color:#1565c0}
   .analyzingIcon:hover{color:#0d47a1}
   .analyzingDepth{font-size:.8em;font-weight:700;font-family:'Courier New',monospace}
@@ -210,6 +211,7 @@
     <div id="tree-col">
       <button id="unfocusBtn" style="display:none;margin-bottom:.5rem">Unfocus</button>
       <button id="visibilityToggleBtn" title="Toggle hidden branches" style="margin-bottom:.5rem"><i class="fa-solid fa-eye"></i></button>
+      <span id="systemStats" class="systemStats"></span>
       <div id="tree"></div>
     </div>
     <div id="board-col">
