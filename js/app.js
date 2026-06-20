@@ -887,15 +887,22 @@ $('menuDownload').onclick = ()=>{
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
 
-/* ---------- export / import backup ---------- */
+/* ---------- export / import backup ----------
+   This is a *total* backup: everything stored locally (downloaded games,
+   repertoire lines/prefs, mnemonics + images, mnemonics notes, and the
+   Lichess user id) so that importing it into a brand-new browser/profile
+   reproduces the exact prior state with no other setup required.
+*/
 async function exportBackup(){
   if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
   const lines = await getLines(CURRENT_USER);
   const mnemonicsBySquare = await getAllMnemonics();
+  const games = await getGames(CURRENT_USER);
   const data = {
-    version: 2,
+    version: 3,
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
+    games,
     lines: await Promise.all(lines.map(async line=>({
       name: line.name, color: line.color, openingMoves: line.openingMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic}))
@@ -918,12 +925,26 @@ async function exportBackup(){
   a.download = `repchess-backup-${CURRENT_USER}-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  log(`exported ${lines.length} line(s)`);
+  log(`exported ${lines.length} line(s), ${games.length} game(s)`);
 }
 
+/* full restore: wipes every local store first, so the result matches the
+   backup exactly rather than merging with (and possibly duplicating)
+   whatever is already there. Caller is responsible for confirming with
+   the user before calling this, since it is destructive. */
 async function importBackup(data){
-  if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
   if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
+  if(!data.user) throw new Error('backup file has no user id');
+
+  await clearAllData();
+
+  CURRENT_USER = data.user;
+  localStorage.setItem(LS_ID, CURRENT_USER);
+  $('userId').value = CURRENT_USER;
+
+  if(Array.isArray(data.games) && data.games.length) await putGames(CURRENT_USER, data.games);
+  GAMES = data.games || [];
+
   for(const lineData of data.lines){
     const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
     for(const pref of (lineData.prefs||[])){
@@ -940,7 +961,7 @@ async function importBackup(data){
     await setMnemonicSquare(entry.square, patch);
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
-  log(`imported ${data.lines.length} line(s)`);
+  log(`restored ${data.lines.length} line(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
 }
 
@@ -956,6 +977,14 @@ $('backupImport').addEventListener('change', async e=>{
   const f = e.target.files[0];
   e.target.value = '';
   if(!f) return;
+  if(!confirm(
+    'RESTORE FULL BACKUP?\n\n' +
+    'This will permanently DELETE everything currently stored in this browser — ' +
+    'all repertoire lines, notes, mnemonics (including images), and downloaded games — ' +
+    'and replace it with the contents of this backup file.\n\n' +
+    'Any changes made since this backup was taken WILL BE LOST. This cannot be undone.\n\n' +
+    'Continue?'
+  )) return;
   try{
     const data = JSON.parse(await f.text());
     await importBackup(data);

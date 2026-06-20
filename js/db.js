@@ -238,3 +238,15 @@ async function setMeta(key, value){
     txn.onerror    = () => reject(txn.error);
   });
 }
+
+/* ---------- full wipe, used before restoring a complete backup ---------- */
+async function clearAllData(){
+  const db = await openDB();
+  const stores = ['games','lines','prefs','mnemonics','meta'];
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction(stores,'readwrite');
+    for(const s of stores) txn.objectStore(s).clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
