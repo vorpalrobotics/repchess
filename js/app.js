@@ -195,7 +195,9 @@ function buildTranspositionGraph(line, games){
     if(!n){ n = {id:'n'+(counter++), fen}; nodes.set(key,n); }
     return n;
   }
-  function addEdge(from,to,label){
+  function addEdge(from,to,move,ply){
+    const moveNumber = Math.ceil(ply/2);
+    const label = ply%2===1 ? `${moveNumber}. ${move}` : `${moveNumber}... ${move}`;
     const key = `${from.id}>${to.id}>${label}`;
     if(!edges.has(key)) edges.set(key,{source:from.id,target:to.id,label});
   }
@@ -209,11 +211,11 @@ function buildTranspositionGraph(line, games){
     for(const opp of visibleOpps){
       const lineSeq = [...seq,opp];
       const oppNode = getNode(lineSeq);
-      addEdge(seqNode,oppNode,opp);
+      addEdge(seqNode,oppNode,opp,seq.length+1);
       const reply = PREFS[prefKey(line.id,lineSeq)]?.reply;
       if(!reply) continue;
       const replyNode = getNode([...lineSeq,reply]);
-      addEdge(oppNode,replyNode,reply);
+      addEdge(oppNode,replyNode,reply,seq.length+2);
       walk([...lineSeq,reply], replyNode);
     }
   }
@@ -224,17 +226,17 @@ function buildTranspositionGraph(line, games){
     for(const trigger of triggers){
       if(PREFS[prefKey(line.id,[trigger])]?.hidden) continue;
       const afterTrigger = getNode([trigger]);
-      addEdge(rootNode,afterTrigger,trigger);
+      addEdge(rootNode,afterTrigger,trigger,1);
       const reply = PREFS[prefKey(line.id,[trigger])]?.reply;
       if(!reply) continue;
       const afterReply = getNode([trigger,reply]);
-      addEdge(afterTrigger,afterReply,reply);
+      addEdge(afterTrigger,afterReply,reply,2);
       walk([trigger,reply], afterReply);
     }
   } else {
     for(const trigger of triggers){
       const afterTrigger = getNode([trigger]);
-      addEdge(rootNode,afterTrigger,trigger);
+      addEdge(rootNode,afterTrigger,trigger,1);
       walk([trigger], afterTrigger);
     }
   }
