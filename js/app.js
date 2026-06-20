@@ -785,6 +785,84 @@ async function openLine(line){
 
 $('backBtn').onclick = renderHome;
 
+/* ---------- import line: bulk-set standard responses from a pasted line ----------
+   Parses a full line of algebraic notation (move numbers, "...", comments,
+   result codes, and !/? annotations are all tolerated) and walks it down the
+   currently-open line's tree, setting each of "our" moves as the standard
+   response exactly as if it had been picked manually node by node. Opponent
+   moves along the path are also recorded as manual replies so their branch
+   row appears (at 0 games / 0%) even where no downloaded game matches. */
+function parseAlgebraicMoveList(text){
+  const cleaned = text
+    .replace(/\{[^}]*\}/g, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b\d+\.(\.\.)?/g, ' ')
+    .replace(/\b(1-0|0-1|1\/2-1\/2|\*)\b/g, ' ');
+  const tokens = cleaned.split(/\s+/).map(t=>t.replace(/[!?]+$/,'')).filter(Boolean);
+  const chess = new Chess();
+  const moves = [];
+  for(const tok of tokens){
+    const mv = chess.move(canonicalizeMoveCase(tok), {sloppy:true});
+    if(!mv) throw new Error(`"${tok}" is not a legal move after ${moves.join(' ')||'the starting position'}`);
+    moves.push(mv.san);
+  }
+  return moves;
+}
+
+async function importLine(text){
+  if(!CURRENT_LINE){ $('importLineError').textContent = 'open a line first'; return; }
+  let moves;
+  try{
+    moves = parseAlgebraicMoveList(text);
+  }catch(err){
+    $('importLineError').textContent = err.message;
+    return;
+  }
+  if(!moves.length){ $('importLineError').textContent = 'paste a line to import'; return; }
+
+  const color = CURRENT_LINE.color;
+  const triggers = CURRENT_LINE.openingMoves || [];
+  if(!triggers.includes(moves[0])){
+    $('importLineError').textContent =
+      `this line is for 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`;
+    return;
+  }
+
+  $('importLineOverlay').style.display='none';
+
+  /* for a White line we enumerate the opponent's reply, so opponent moves sit
+     at odd indices (0=our trigger, 1=their reply, 2=our reply, ...); for a
+     Black line White moves first, so opponent moves sit at even indices. */
+  const oppParity = color==='black' ? 0 : 1;
+  let count=0;
+  for(let k=oppParity; k<moves.length; k+=2){
+    const seq = moves.slice(0,k);
+    const opp = moves[k];
+    /* k===0 for a Black line is the line's own fixed trigger row, which isn't
+       data-enumerated (no counts/manualReplies lookup happens there) */
+    if(!(color==='black' && k===0)) await addManualReply(seq,opp);
+    if(k+1 < moves.length){
+      const lineSeq = [...seq,opp];
+      const reply = moves[k+1];
+      await savePrefField(lineSeq,'reply',reply);
+      count++;
+    }
+  }
+  log(`imported ${count} move(s) into "${CURRENT_LINE.name}"`);
+  await openLine(CURRENT_LINE);
+}
+
+$('menuImportLine').onclick = ()=>{
+  $('menuList').style.display='none';
+  if(!CURRENT_LINE){ log('open a line first (from the home screen) to import into it',true); return; }
+  $('importLineInput').value='';
+  $('importLineError').textContent='';
+  $('importLineOverlay').style.display='flex';
+  $('importLineInput').focus();
+};
+$('importLineCancelBtn').onclick = ()=>{ $('importLineOverlay').style.display='none'; };
+$('importLineSaveBtn').onclick = ()=> importLine($('importLineInput').value);
+
 /* ---------- new-line modal ---------- */
 /* every legal White first move: 16 pawn pushes + 4 knight moves */
 const ALL_FIRST_MOVES = ['a3','a4','b3','b4','c3','c4','d3','d4','e3','e4','f3','f4','g3','g4','h3','h4','Na3','Nc3','Nf3','Nh3'];
@@ -1496,9 +1574,9 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
 }
 
 function savePrefField(seq,field,value){
-  setPref(CURRENT_LINE.id,seq,{[field]:value});
   const key = prefKey(CURRENT_LINE.id,seq);
   (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+  return setPref(CURRENT_LINE.id,seq,{[field]:value});
 }
 
 /* manually-recorded opponent replies for the position `seq`, kept alongside
@@ -1506,13 +1584,13 @@ function savePrefField(seq,field,value){
    imported game actually contains it */
 function addManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
-  if(existing.includes(move)) return;
-  savePrefField(seq,'manualReplies',[...existing,move]);
+  if(existing.includes(move)) return Promise.resolve();
+  return savePrefField(seq,'manualReplies',[...existing,move]);
 }
 
 function removeManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
-  savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
+  return savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
 }
 
 function sanToUci(fen, san){

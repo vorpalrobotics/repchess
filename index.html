@@ -179,6 +179,8 @@
       <button id="menuMnemonics">Manage Mnemonics</button>
       <button id="menuQuiz">Quiz Mnemonics</button>
       <hr class="row-menu-sep">
+      <button id="menuImportLine">Import Line</button>
+      <hr class="row-menu-sep">
       <button id="menuExport">Export Backup</button>
       <button id="menuImport">Import Backup</button>
       <hr class="row-menu-sep">
@@ -276,6 +278,23 @@
     <div class="modal-actions">
       <button id="fieldModalCancelBtn">Cancel</button>
       <button id="fieldModalSaveBtn">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<!-- import line modal -->
+<div id="importLineOverlay" class="overlay">
+  <div class="modal" style="min-width:28em">
+    <h2>Import Line</h2>
+    <p style="font-size:.85em;color:#555;margin-top:0">
+      Paste a line in algebraic notation, e.g. <code>1. e4 e5 2. Nf3 Nc6 3. Bb5 a6</code>.
+      Sets each of your moves as the standard response along this path in the currently open line.
+    </p>
+    <textarea id="importLineInput" rows="4" style="width:100%;box-sizing:border-box;font-family:inherit"></textarea>
+    <div id="importLineError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
+    <div class="modal-actions">
+      <button id="importLineCancelBtn">Cancel</button>
+      <button id="importLineSaveBtn">IMPORT</button>
     </div>
   </div>
 </div>
