@@ -1,5 +1,8 @@
 import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
 import { Engine } from './engine.js';
+import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
+import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
+cytoscape.use(cytoscapeDagre);
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
    Displayed in the visitor's local timezone so it matches their wall clock. */
@@ -168,6 +171,118 @@ function fenForSeq(seq){
   }
   return chess.fen();
 }
+
+/* ---------- transposition graph ----------
+   Walks the currently open opening system the same way computeNodeStats does
+   (same hidden-branch filtering, same manualReplies merge), but instead of
+   counting nodes, builds a digraph keyed by position rather than by move
+   sequence: each distinct (board, turn, castling, en-passant) reached along
+   the way is one graph node, so two different move orders that transpose
+   into the same position collapse into a single node with multiple
+   incoming edges — exactly the merge a memory-castle "room" should map to. */
+function positionKey(fen){
+  return fen.split(' ').slice(0,4).join(' ');
+}
+
+function buildTranspositionGraph(line, games){
+  const nodes = new Map(); // posKey -> {id, fen}
+  const edges = new Map(); // "source>target>label" -> {source,target,label}
+  let counter = 0;
+  function getNode(seq){
+    const fen = fenForSeq(seq);
+    const key = positionKey(fen);
+    let n = nodes.get(key);
+    if(!n){ n = {id:'n'+(counter++), fen}; nodes.set(key,n); }
+    return n;
+  }
+  function addEdge(from,to,label){
+    const key = `${from.id}>${to.id}>${label}`;
+    if(!edges.has(key)) edges.set(key,{source:from.id,target:to.id,label});
+  }
+  /* seq ends in OUR move; enumerate visible opponent replies and recurse */
+  function walk(seq, seqNode){
+    const {counts} = replies(games,seq);
+    const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
+    manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    const visibleOpps = Object.keys(counts).filter(opp=>
+      !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
+    for(const opp of visibleOpps){
+      const lineSeq = [...seq,opp];
+      const oppNode = getNode(lineSeq);
+      addEdge(seqNode,oppNode,opp);
+      const reply = PREFS[prefKey(line.id,lineSeq)]?.reply;
+      if(!reply) continue;
+      const replyNode = getNode([...lineSeq,reply]);
+      addEdge(oppNode,replyNode,reply);
+      walk([...lineSeq,reply], replyNode);
+    }
+  }
+
+  const rootNode = getNode([]);
+  const triggers = line.openingMoves || [];
+  if(line.color==='black'){
+    for(const trigger of triggers){
+      if(PREFS[prefKey(line.id,[trigger])]?.hidden) continue;
+      const afterTrigger = getNode([trigger]);
+      addEdge(rootNode,afterTrigger,trigger);
+      const reply = PREFS[prefKey(line.id,[trigger])]?.reply;
+      if(!reply) continue;
+      const afterReply = getNode([trigger,reply]);
+      addEdge(afterTrigger,afterReply,reply);
+      walk([trigger,reply], afterReply);
+    }
+  } else {
+    for(const trigger of triggers){
+      const afterTrigger = getNode([trigger]);
+      addEdge(rootNode,afterTrigger,trigger);
+      walk([trigger], afterTrigger);
+    }
+  }
+
+  return {nodes:[...nodes.values()], edges:[...edges.values()], rootId:rootNode.id};
+}
+
+function showTranspositionGraph(){
+  if(!CURRENT_LINE || !GAMES){ return; }
+  $('graphOverlay').style.display='flex';
+  $('graphContainer').innerHTML='';
+  const {nodes, edges, rootId} = buildTranspositionGraph(CURRENT_LINE, GAMES);
+
+  const indegree = new Map();
+  edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
+  const mergeCount = [...indegree.values()].filter(c=>c>1).length;
+  $('graphStatus').textContent =
+    `${nodes.length} position(s), ${edges.length} move(s), ${mergeCount} transposition merge point(s)`;
+
+  const elements = [
+    ...nodes.map(n=>({
+      data:{id:n.id},
+      classes: n.id===rootId ? 'root' : (indegree.get(n.id)>1 ? 'transposition' : '')
+    })),
+    ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
+  ];
+
+  cytoscape({
+    container: $('graphContainer'),
+    elements,
+    layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
+    style: [
+      { selector:'node', style:{
+        'width':14, 'height':14, 'background-color':'#1565c0', 'border-width':0
+      }},
+      { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
+      { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
+      { selector:'edge', style:{
+        'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
+        'target-arrow-shape':'triangle', 'curve-style':'bezier',
+        'label':'data(label)', 'font-size':9, 'color':'#333',
+        'text-background-color':'#fff', 'text-background-opacity':0.8
+      }}
+    ]
+  });
+}
+$('buildGraphBtn').onclick = showTranspositionGraph;
+$('graphCloseBtn').onclick = () => { $('graphOverlay').style.display='none'; };
 
 /* ---------- toggle helper ---------- */
 function makeToggle(btn, branchRow){

@@ -209,6 +209,7 @@
     <div id="tree-col">
       <button id="unfocusBtn" style="display:none;margin-bottom:.5rem">Unfocus</button>
       <button id="visibilityToggleBtn" title="Toggle hidden branches" style="margin-bottom:.5rem"><i class="fa-solid fa-eye"></i></button>
+      <button id="buildGraphBtn" title="Build Graph" style="margin-bottom:.5rem"><i class="fa-solid fa-circle-nodes"></i></button>
       <span id="systemStats" class="systemStats"></span>
       <div id="tree"></div>
     </div>
@@ -296,6 +297,18 @@
     <div class="modal-actions">
       <button id="importLineCancelBtn">Cancel</button>
       <button id="importLineSaveBtn">IMPORT</button>
+    </div>
+  </div>
+</div>
+
+<!-- transposition graph modal -->
+<div id="graphOverlay" class="overlay">
+  <div class="modal" style="width:85vw;height:80vh;display:flex;flex-direction:column">
+    <h2 style="margin-bottom:.4rem">Transposition Graph</h2>
+    <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em"></div>
+    <div id="graphContainer" style="flex:1;border:1px solid #ccc;border-radius:4px"></div>
+    <div class="modal-actions">
+      <button id="graphCloseBtn">Close</button>
     </div>
   </div>
 </div>
