@@ -153,10 +153,10 @@
   .mnem-coord-file{left:2px;bottom:1px}
   .mnem-coord-rank{left:2px;top:1px}
 
-  #mnemonicsEditorOverlay .modal{min-width:54em}
-  .mnem-editor-table{border-collapse:collapse;margin:.6rem 0;width:100%}
+  #mnemonicsEditorOverlay .modal{width:min(68em, 92vw)}
+  .mnem-editor-table{border-collapse:collapse;margin:.6rem 0;width:100%;table-layout:fixed}
   .mnem-editor-table th{font-size:.8rem;font-weight:600;text-align:left;color:#555;padding:0 .5rem .3rem}
-  .mnem-editor-table td{padding:.2rem .5rem;vertical-align:middle}
+  .mnem-editor-table td{padding:.2rem .5rem;vertical-align:middle;overflow:hidden}
   .mnem-img-drop{position:relative;width:44px;height:44px;border:2px dashed #aaa;border-radius:6px;
     display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;background:#f7f7f7;color:#999}
   .mnem-img-drop:hover{border-color:#1565c0}
@@ -165,9 +165,8 @@
   .mnem-img-drop .mnem-img-clear{position:absolute;top:-1px;right:-1px;width:16px;height:16px;line-height:16px;
     text-align:center;font-size:.7rem;background:#c62828;color:#fff;border-radius:0 0 0 4px;display:none}
   .mnem-img-drop.has-img .mnem-img-clear{display:block}
-  .mnem-editor-table td:first-child{text-align:center;color:#888;width:1.6em}
-  .mnem-editor-table input{width:9ch}
-  .mnem-editor-table td:nth-child(3) input{width:100%;min-width:50ch}
+  .mnem-editor-table td:first-child{text-align:center;color:#888}
+  .mnem-editor-table input{width:100%}
 </style>
 </head>
 <body>
@@ -388,6 +387,12 @@
   <div class="modal">
     <h2 id="mnemonicsEditorTitle">Edit Square</h2>
     <table class="mnem-editor-table">
+      <colgroup>
+        <col style="width:1.8em">
+        <col style="width:11ch">
+        <col>
+        <col style="width:4em">
+      </colgroup>
       <thead><tr><th></th><th>Word</th><th>Description</th><th>Image</th></tr></thead>
       <tbody>
         <tr><td><i class="fa-solid fa-chess-pawn"></i></td>  <td><input id="mnemPawnInput" maxlength="40"></td>  <td><input id="mnemPawnDescInput" maxlength="70"></td>  <td><div class="mnem-img-drop" id="mnemPawnImgDrop"><span class="mnem-img-clear">&times;</span><i class="fa-solid fa-image"></i><img id="mnemPawnImgPreview" style="display:none"><input id="mnemPawnImgFile" type="file" accept="image/*" style="display:none"></div></td></tr>
