@@ -86,15 +86,18 @@ function replies(games,seq){
    of sequence renderBranch takes), and the largest branch factor (number of
    opponent move options) seen at any node in that subtree. Only nodes with
    an actual saved reply are counted/descended into — undecided branches
-   don't contribute nodes of their own. */
+   don't contribute nodes of their own. Hidden branches (and everything
+   nested under them) are excluded entirely, same as the eye-toggle filter. */
 function computeNodeStats(games,seq){
   const counts = replies(games,seq).counts;
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
 
-  const branchFactor = Object.keys(counts).length;
-  let nodeCount = 0, maxBranchFactor = branchFactor;
-  for(const opp of Object.keys(counts)){
+  const visibleOpps = Object.keys(counts).filter(opp=>
+    !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
+
+  let nodeCount = 0, maxBranchFactor = visibleOpps.length;
+  for(const opp of visibleOpps){
     const lineSeq = [...seq,opp];
     const reply = PREFS[prefKey(CURRENT_LINE.id,lineSeq)]?.reply;
     if(!reply) continue;
@@ -109,6 +112,10 @@ function computeNodeStats(games,seq){
 function showNodeStats(games,seq){
   const {nodeCount,maxBranchFactor} = computeNodeStats(games,seq);
   alert(`Nodes below this point: ${nodeCount}\nMax branch factor: ${maxBranchFactor}`);
+}
+
+function formatNodeStats({nodeCount,maxBranchFactor}){
+  return `${nodeCount} node${nodeCount===1?'':'s'}, max branch ${maxBranchFactor}`;
 }
 
 /* ---------- FEN for a move sequence ---------- */
@@ -309,6 +316,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        </td>
        <td class="name-col">
          <span class="branchName" style="display:none"></span>
+         <span class="branchStats" style="display:none"></span>
        </td>`;
     tb.appendChild(tr);
 
@@ -327,6 +335,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
     const evalSpan   = tr.querySelector('.evaltag');
     const nameSpan   = tr.querySelector('.branchName');
+    const statsSpan  = tr.querySelector('.branchStats');
     const analyzingIcon = tr.querySelector('.analyzingIcon');
 
     const lineSeq = [...seq,opp];
@@ -396,6 +405,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(replySpan) replySpan.textContent = reply;
       expandWith(reply);
       refreshRowMenuLabels(rowMenu, currentSaved());
+      refreshBranchStats(statsSpan, games, childrenSeq);
       analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
     }
 
@@ -409,6 +419,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     refreshHidden();
     refreshEvalSpan(evalSpan, currentSaved()?.eval);
     refreshBranchName(nameSpan, currentSaved()?.name);
+    refreshBranchStats(statsSpan, games, childrenSeq);
 
     /* "more" menu: set standard response / add note / add mnemonic */
     rowMenuBtn.onclick = e => {
@@ -583,6 +594,7 @@ function renderBlackRoot(parent,games,trigger){
      </td>
      <td class="name-col">
        <span class="branchName" style="display:none"></span>
+       <span class="branchStats" style="display:none"></span>
      </td>`;
   tb.appendChild(tr);
 
@@ -600,6 +612,7 @@ function renderBlackRoot(parent,games,trigger){
   const hideBtn    = rowMenu.querySelector('[data-act="hide"]');
   const evalSpan   = tr.querySelector('.evaltag');
   const nameSpan   = tr.querySelector('.branchName');
+  const statsSpan  = tr.querySelector('.branchStats');
   const analyzingIcon = tr.querySelector('.analyzingIcon');
 
   const lineSeq = [trigger];
@@ -666,6 +679,7 @@ function renderBlackRoot(parent,games,trigger){
     if(replySpan) replySpan.textContent = reply;
     expandWith(reply);
     refreshRowMenuLabels(rowMenu, currentSaved());
+    refreshBranchStats(statsSpan, games, childrenSeq);
     analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
   }
 
@@ -678,6 +692,7 @@ function renderBlackRoot(parent,games,trigger){
   refreshHidden();
   refreshEvalSpan(evalSpan, currentSaved()?.eval);
   refreshBranchName(nameSpan, currentSaved()?.name);
+  refreshBranchStats(statsSpan, games, childrenSeq);
 
   rowMenuBtn.onclick = e => {
     e.stopPropagation();
@@ -1651,6 +1666,12 @@ function refreshBranchName(nameSpan, name){
   if(!name){ nameSpan.style.display='none'; return; }
   nameSpan.textContent = name;
   nameSpan.style.display='';
+}
+
+function refreshBranchStats(statsSpan, games, childrenSeq){
+  if(!childrenSeq){ statsSpan.style.display='none'; return; }
+  statsSpan.textContent = ' (' + formatNodeStats(computeNodeStats(games,childrenSeq)) + ')';
+  statsSpan.style.display='';
 }
 
 /* toggles row-menu item labels between their "Add"/"Set" and "Edit" wording
