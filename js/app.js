@@ -197,7 +197,7 @@ function buildTranspositionGraph(line, games){
   }
   function addEdge(from,to,move,ply){
     const moveNumber = Math.ceil(ply/2);
-    const label = ply%2===1 ? `${moveNumber}. ${move}` : `${moveNumber}... ${move}`;
+    const label = ply%2===1 ? `${moveNumber}. ${move}` : move;
     const key = `${from.id}>${to.id}>${label}`;
     if(!edges.has(key)) edges.set(key,{source:from.id,target:to.id,label});
   }
