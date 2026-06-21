@@ -31,6 +31,12 @@ $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 /* ---------- globals ---------- */
 let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_LINE=null;
 
+/* perf escape hatch: node/branch stats recompute the whole subtree on every
+   render, which gets expensive on large systems. Flip to false to skip them
+   entirely (both the per-row count and the whole-system total) while
+   diagnosing slow renders, without touching the rest of the rendering code. */
+let ENABLE_NODE_STATS = false;
+
 /* ---------- fetch games from Lichess ---------- */
 async function fetchLatest(user,max,onProgress){
   const url=`https://lichess.org/api/games/user/${encodeURIComponent(user)}?max=${max}&moves=true&opening=true`;
@@ -153,6 +159,7 @@ function computeSystemStats(games,line){
 function refreshSystemStats(){
   const span = $('systemStats');
   if(!span) return;
+  if(!ENABLE_NODE_STATS){ span.textContent = ''; return; }
   if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
   span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
 }
@@ -489,6 +496,13 @@ $('visibilityToggleBtn').onclick = () => {
   showAllBranches = !showAllBranches;
   localStorage.setItem(LS_SHOW_ALL_BRANCHES, showAllBranches);
   applyVisibilityMode();
+};
+
+/* ---------- collapse all expanded branches ---------- */
+$('collapseAllBtn').onclick = () => {
+  $('tree').querySelectorAll('.toggle').forEach(btn=>{
+    if(btn.querySelector('i')?.classList.contains('fa-caret-down')) btn.click();
+  });
 };
 
 /* ---------- recursive branch renderer ----------
@@ -1938,7 +1952,7 @@ function refreshBranchName(nameSpan, name){
 }
 
 function refreshBranchStats(statsSpan, games, childrenSeq){
-  if(!childrenSeq){ statsSpan.style.display='none'; return; }
+  if(!ENABLE_NODE_STATS || !childrenSeq){ statsSpan.style.display='none'; return; }
   statsSpan.textContent = ' (' + formatNodeStats(computeNodeStats(games,childrenSeq)) + ')';
   statsSpan.style.display='';
 }
