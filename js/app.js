@@ -435,7 +435,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     tr.dataset.opp = opp;
     const moveHtml = flip
       ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
-      : `${depth+1}. ${seq.at(-1)}<br>${depth+1}... ${opp}`;
+      : `${depth+1}. ${seq.at(-1)}<br><span class="blackMove">${depth+1}... ${opp}</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
