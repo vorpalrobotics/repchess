@@ -428,6 +428,18 @@ function renderBranch(parent,games,seq,depth,flip=false){
     return;
   }
 
+  if(!flip){
+    const ctxTr = document.createElement('tr');
+    ctxTr.className = 'context-row';
+    ctxTr.innerHTML =
+      `<td class="resp"></td>
+       <td class="move" style="padding-left:${depth}em">${depth+1}. ${seq.at(-1)}</td>
+       <td class="cnt-col"></td>
+       <td class="eval-col"></td>
+       <td class="name-col"></td>`;
+    tb.appendChild(ctxTr);
+  }
+
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const isManual = c===0 && manualReplies.includes(opp);
     const tr=document.createElement('tr');
@@ -435,7 +447,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     tr.dataset.opp = opp;
     const moveHtml = flip
       ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
-      : `${depth+1}. ${seq.at(-1)}<br><span class="blackMove">${depth+1}... ${opp}</span>`;
+      : `<span class="blackMove">${depth+1}... ${opp}</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
