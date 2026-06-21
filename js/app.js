@@ -244,6 +244,93 @@ function buildTranspositionGraph(line, games){
   return {nodes:[...nodes.values()], edges:[...edges.values()], rootId:rootNode.id};
 }
 
+/* ---------- memory castle (stage 0: data model only, no rendering) ----------
+   A "castle" is a subtree of the move tree, scoped to a single chosen row
+   (rootSeq, which always ends in OUR move — same convention as childrenSeq
+   throughout renderBranch/renderBlackRoot). A "room" is a distinct board
+   position reached right after one of our moves, keyed by position (not by
+   move sequence) so two move orders that transpose into the same position
+   share one room — exactly the merge behaviour buildTranspositionGraph
+   already gives us, reused here via positionKey/fenForSeq.
+
+   An "exit" is one opponent reply option out of a room, keyed by the
+   position right after that opponent move (before our reply). Exits are
+   intentionally kept distinct from rooms: an exit's identity survives even
+   if the standard response chosen for it changes later, so its eventual
+   decoration (door/staircase/window/elevator/teleporter, added in a later
+   stage) stays attached to "this specific opponent try" rather than to
+   wherever it currently leads. An exit with no configured reply is "locked"
+   (toRoomId stays null) — a dead end until the user picks a response. */
+function buildCastle(line, games, rootSeq){
+  const rooms = new Map(); // posKey -> room
+  const exits = [];
+  let roomCounter = 0, exitCounter = 0;
+
+  function getRoom(seq, isEntry){
+    const fen = fenForSeq(seq);
+    const key = positionKey(fen);
+    let room = rooms.get(key);
+    if(!room){
+      room = {
+        id: 'room'+(roomCounter++), posKey: key, fen, seq: seq.slice(),
+        mnemonic: PREFS[prefKey(line.id,seq)]?.mnemonic || '',
+        isEntry: !!isEntry, transpositionCount: 0, exits: []
+      };
+      rooms.set(key, room);
+    }
+    return room;
+  }
+
+  function walk(seq, room){
+    const {counts} = replies(games,seq);
+    const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
+    manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    const visibleOpps = Object.keys(counts).filter(opp=>
+      !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
+
+    for(const opp of visibleOpps){
+      const exitSeq = [...seq,opp];
+      const exitFen = fenForSeq(exitSeq);
+      const reply = PREFS[prefKey(line.id,exitSeq)]?.reply;
+      const exit = {
+        id: 'exit'+(exitCounter++), posKey: positionKey(exitFen), fen: exitFen,
+        oppMove: opp, fromRoomId: room.id, reply: reply||null,
+        locked: !reply, toRoomId: null
+      };
+      room.exits.push(exit);
+      exits.push(exit);
+      if(!reply) continue;
+
+      const destSeq = [...exitSeq,reply];
+      const destKey = positionKey(fenForSeq(destSeq));
+      const alreadyExisted = rooms.has(destKey);
+      const destRoom = getRoom(destSeq,false);
+      exit.toRoomId = destRoom.id;
+      if(alreadyExisted) destRoom.transpositionCount++;
+      else walk(destSeq, destRoom);
+    }
+  }
+
+  const entryRoom = getRoom(rootSeq, true);
+  walk(rootSeq, entryRoom);
+
+  return {rootSeq, entryRoomId: entryRoom.id, rooms:[...rooms.values()], exits};
+}
+
+function showCastleSummary(games, seq){
+  if(!CURRENT_LINE) return;
+  const castle = buildCastle(CURRENT_LINE, games, seq);
+  const lockedExits = castle.exits.filter(e=>e.locked).length;
+  const transpositionRooms = castle.rooms.filter(r=>r.transpositionCount>0).length;
+  console.log('[castle]', castle);
+  alert(
+    `Castle preview (full data logged to console)\n\n` +
+    `Rooms: ${castle.rooms.length}\n` +
+    `Exits: ${castle.exits.length} (${lockedExits} locked)\n` +
+    `Transposition rooms: ${transpositionRooms}`
+  );
+}
+
 function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
@@ -461,6 +548,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
@@ -639,6 +727,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(childrenSeq) showNodeStats(games,childrenSeq);
     };
+    rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      if(childrenSeq) showCastleSummary(games,childrenSeq);
+    };
     rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -744,6 +837,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
@@ -912,6 +1006,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(childrenSeq) showNodeStats(games,childrenSeq);
+  };
+  rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    if(childrenSeq) showCastleSummary(games,childrenSeq);
   };
   rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
     e.stopPropagation();
