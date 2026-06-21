@@ -428,7 +428,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     return;
   }
 
-  if(!flip){
+  if(!flip && depth===0){
     const ctxTr = document.createElement('tr');
     ctxTr.className = 'context-row';
     ctxTr.innerHTML =
@@ -440,6 +440,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
     tb.appendChild(ctxTr);
   }
 
+  const indentLevel = flip ? depth : depth+1;
+
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const isManual = c===0 && manualReplies.includes(opp);
     const tr=document.createElement('tr');
@@ -447,7 +449,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     tr.dataset.opp = opp;
     const moveHtml = flip
       ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
-      : `<span class="blackMove">${depth+1}... ${opp}</span>`;
+      : `${opp} ${depth+2}. <span class="ourReply">...</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
@@ -468,11 +470,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
            </div>
          </div>
        </td>
-       <td class="move" style="padding-left:${depth}em">
+       <td class="move" style="padding-left:${indentLevel}em">
          <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
          ${moveHtml}
        </td>
-       <td class="cnt-col" style="padding-left:${depth}em">
+       <td class="cnt-col" style="padding-left:${indentLevel}em">
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
        </td>
        <td class="eval-col">
