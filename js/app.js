@@ -279,6 +279,23 @@ function plyLabel(seq){
   const move = seq.at(-1);
   return ply%2===1 ? `${Math.ceil(ply/2)}. ${move}` : move;
 }
+/* the move-to-square memory-palace mnemonic word (set up in the Mnemonics
+   screen) for the move that ends `seq` — looked up by destination square
+   and piece type, same data used by the quiz. Disambiguation between two
+   pieces of the same type that could reach the same square is ignored for
+   now (rare in practice, e.g. doubled rooks/knights). */
+const MNEM_WORD_FOR_PIECE = {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
+function lastMoveInfo(seq){
+  const chess = new Chess();
+  let info = null;
+  for(const mv of seq) info = chess.move(mv,{sloppy:true});
+  return info;
+}
+function mnemonicWordForSeq(seq, mnemonicsBySquare){
+  const info = lastMoveInfo(seq);
+  if(!info) return '';
+  return mnemonicsBySquare[info.to]?.[MNEM_WORD_FOR_PIECE[info.piece]] || '';
+}
 function buildCastleGraph(line, games, rootSeq=null){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
@@ -289,7 +306,7 @@ function buildCastleGraph(line, games, rootSeq=null){
     const fen = fenForSeq(seq);
     const key = positionKey(fen);
     let r = rooms.get(key);
-    if(!r){ r = {id:'room'+(roomCounter++), fen, label:plyLabel(seq)}; rooms.set(key,r); }
+    if(!r){ r = {id:'room'+(roomCounter++), fen, label:plyLabel(seq), seq:seq.slice()}; rooms.set(key,r); }
     return r;
   }
   function getLeaf(seq){
@@ -300,7 +317,7 @@ function buildCastleGraph(line, games, rootSeq=null){
     return l;
   }
   function addEdge(fromId,toId,exitSeq){
-    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq)});
+    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq),seq:exitSeq.slice()});
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
@@ -503,11 +520,11 @@ async function showTranspositionGraph(){
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       ...rooms.map(r=>({
-        data:{id:r.id, label:r.label, fen:r.fen},
+        data:{id:r.id, label:r.label, fen:r.fen, seq:r.seq},
         classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
       })),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
-      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label,fen:e.fen}}))
+      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label,fen:e.fen,seq:e.seq}}))
     ];
 
     const cy = cytoscape({
@@ -538,6 +555,7 @@ async function showTranspositionGraph(){
       ]
     });
     attachGraphHoverPreview(cy);
+    attachGraphClickHandler(cy);
   } finally {
     hideSpinner(spinner);
   }
@@ -592,6 +610,40 @@ function attachGraphHoverPreview(cy){
   });
   cy.on('mouseout', 'node, edge', hideGraphHoverPreview);
 }
+
+/* ---------- opening graph room info panel ----------
+   Clicking a room node shows the move that leads into it, plus every
+   reply ("exit") out of it, each annotated with its memory-palace word
+   (looked up by destination square + piece type) when one is set. The
+   virtual 'start' node and locked '?' leaves aren't rooms, so they're
+   not clickable. */
+function attachGraphClickHandler(cy){
+  cy.on('tap', 'node', evt => {
+    const el = evt.target;
+    if(el.hasClass('start') || el.hasClass('locked')) return;
+    showRoomInfoPanel(el);
+  });
+}
+async function showRoomInfoPanel(roomEl){
+  const seq = roomEl.data('seq');
+  const mnemonicsBySquare = await getAllMnemonics();
+  const whiteWord = mnemonicWordForSeq(seq, mnemonicsBySquare);
+
+  $('roomInfoTitle').innerHTML =
+    `<i class="fa-solid fa-door-open"></i> ${escapeHtml(roomEl.data('label'))}` +
+    (whiteWord ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(whiteWord)}</span>` : '');
+
+  const rows = roomEl.outgoers('edge').map(edge => {
+    const word = mnemonicWordForSeq(edge.data('seq'), mnemonicsBySquare);
+    return `<div class="room-info-exit">${escapeHtml(edge.data('label'))}` +
+      (word ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(word)}</span>` : '') +
+      `</div>`;
+  });
+  $('roomInfoExits').innerHTML = rows.length ? rows.join('') :
+    '<div class="room-info-exit room-info-empty">No replies yet</div>';
+  $('roomInfoOverlay').style.display = 'flex';
+}
+$('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
 
 /* ---------- toggle helper ----------
    `seq`, when given, is this row's own pref seq (ends in the opponent's
