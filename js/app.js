@@ -462,14 +462,14 @@ async function showTranspositionGraph(){
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       ...rooms.map(r=>({
-        data:{id:r.id, label:r.label},
+        data:{id:r.id, label:r.label, fen:r.fen},
         classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
       })),
-      ...leaves.map(l=>({ data:{id:l.id, label:'?'}, classes:'locked' })),
+      ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
       ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
     ];
 
-    cytoscape({
+    const cy = cytoscape({
       container: $('graphContainer'),
       elements,
       layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
@@ -496,12 +496,51 @@ async function showTranspositionGraph(){
         }}
       ]
     });
+    attachGraphHoverPreview(cy);
   } finally {
     hideSpinner(spinner);
   }
 }
 $('buildGraphBtn').onclick = showTranspositionGraph;
-$('graphCloseBtn').onclick = () => { $('graphOverlay').style.display='none'; };
+$('graphCloseBtn').onclick = () => {
+  $('graphOverlay').style.display='none';
+  hideGraphHoverPreview();
+};
+
+/* ---------- opening graph hover preview ----------
+   Reuses the mini chessboard / #hoverPreview div defined later in this
+   file (shared with attachHoverPreview's icon tooltips) to show the
+   board position for whichever node the mouse is currently over. The
+   virtual 'start' node has no fen and is skipped. */
+let graphHoverTimer = null;
+function hideGraphHoverPreview(){
+  clearTimeout(graphHoverTimer);
+  graphHoverTimer = null;
+  $('hoverPreview').style.display = 'none';
+}
+function attachGraphHoverPreview(cy){
+  cy.on('mouseover', 'node', evt => {
+    const fen = evt.target.data('fen');
+    if(!fen) return;
+    clearTimeout(graphHoverTimer);
+    graphHoverTimer = setTimeout(() => {
+      hoverPreviewBoard.setPosition(fen);
+      hoverPreviewBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+      const containerRect = $('graphContainer').getBoundingClientRect();
+      const pos = evt.target.renderedPosition();
+      const cx = containerRect.left + pos.x;
+      const cyy = containerRect.top + pos.y;
+      const preview = $('hoverPreview');
+      preview.style.display = 'block';
+      const size = 252; // preview box incl. border/padding (240 board + padding/border)
+      const left = Math.min(Math.max(8, cx - size/2), window.innerWidth - size - 8);
+      const top = cyy + size + 20 <= window.innerHeight ? cyy + 20 : cyy - size - 20;
+      preview.style.left = `${Math.round(left)}px`;
+      preview.style.top = `${Math.round(Math.max(8,top))}px`;
+    }, 300);
+  });
+  cy.on('mouseout', 'node', hideGraphHoverPreview);
+}
 
 /* ---------- toggle helper ----------
    `seq`, when given, is this row's own pref seq (ends in the opponent's
