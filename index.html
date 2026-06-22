@@ -314,15 +314,15 @@
   </div>
 </div>
 
-<!-- transposition graph modal -->
+<!-- opening graph modal -->
 <div id="graphOverlay" class="overlay">
-  <div class="modal" style="position:fixed;inset:0;margin:0;max-width:none;border-radius:0;display:flex;flex-direction:column;box-sizing:border-box">
-    <h2 style="margin-bottom:.4rem">Transposition Graph</h2>
-    <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em"></div>
-    <div id="graphContainer" style="flex:1;border:1px solid #ccc;border-radius:4px"></div>
-    <div class="modal-actions">
-      <button id="graphCloseBtn">Close</button>
+  <div class="modal" style="position:fixed;inset:0;margin:0;max-width:none;border-radius:0;display:flex;flex-direction:column;box-sizing:border-box;overflow:auto">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
+      <button id="graphCloseBtn" style="flex:0 0 auto">Close</button>
+      <h2 style="margin:0">Opening Graph</h2>
     </div>
+    <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em"></div>
+    <div id="graphContainer" style="flex:1;border:1px solid #ccc;border-radius:4px;overflow:auto"></div>
   </div>
 </div>
 
