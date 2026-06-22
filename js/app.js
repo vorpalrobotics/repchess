@@ -191,64 +191,92 @@ function positionKey(fen){
   return fen.split(' ').slice(0,4).join(' ');
 }
 
-function buildTranspositionGraph(line, games){
-  const nodes = new Map(); // posKey -> {id, fen}
-  const edges = new Map(); // "source>target>label" -> {source,target,label}
-  let counter = 0;
-  function getNode(seq){
+/* Graph nodes are "rooms" (the position right after OUR move — same
+   identity buildCastle uses), and graph edges are "exits" (the opponent's
+   move out of a room). An opponent move with no configured Standard
+   Response yet doesn't lead to a room: it dead-ends at a small red "?"
+   leaf node, flagging that part of the tree as not yet built out. Leaf
+   nodes are also merged by position so the same unbuilt opponent try
+   reached via different transposing paths shows as one leaf. */
+function buildCastleGraph(line, games){
+  const rooms = new Map();  // posKey -> {id, fen, label}
+  const leaves = new Map(); // posKey -> {id, fen}
+  const edges = [];
+  let roomCounter = 0, leafCounter = 0;
+
+  function getRoom(seq){
     const fen = fenForSeq(seq);
     const key = positionKey(fen);
-    let n = nodes.get(key);
-    if(!n){ n = {id:'n'+(counter++), fen}; nodes.set(key,n); }
-    return n;
+    let r = rooms.get(key);
+    if(!r){ r = {id:'room'+(roomCounter++), fen, label:seq.at(-1)}; rooms.set(key,r); }
+    return r;
   }
-  function addEdge(from,to,move,ply){
+  function getLeaf(seq){
+    const fen = fenForSeq(seq);
+    const key = positionKey(fen);
+    let l = leaves.get(key);
+    if(!l){ l = {id:'leaf'+(leafCounter++), fen}; leaves.set(key,l); }
+    return l;
+  }
+  function addEdge(fromId,toId,move,ply){
     const moveNumber = Math.ceil(ply/2);
     const label = ply%2===1 ? `${moveNumber}. ${move}` : move;
-    const key = `${from.id}>${to.id}>${label}`;
-    if(!edges.has(key)) edges.set(key,{source:from.id,target:to.id,label});
+    edges.push({source:fromId,target:toId,label});
+  }
+  /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
+     OUR move, or is the empty pre-game position at the very top of a black
+     line); resolves to either an existing/new room, or a locked leaf. */
+  function processExit(fromRoomId, seq, opp, ply){
+    const exitSeq = [...seq,opp];
+    const reply = PREFS[prefKey(line.id,exitSeq)]?.reply;
+    if(!reply){
+      const leaf = getLeaf(exitSeq);
+      addEdge(fromRoomId,leaf.id,opp,ply);
+      return;
+    }
+    const destSeq = [...exitSeq,reply];
+    const destKey = positionKey(fenForSeq(destSeq));
+    const alreadyExisted = rooms.has(destKey);
+    const destRoom = getRoom(destSeq);
+    addEdge(fromRoomId,destRoom.id,opp,ply);
+    if(!alreadyExisted) walk(destSeq,destRoom.id,ply+1);
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
-  function walk(seq, seqNode){
+  function walk(seq, roomId, ply){
     const {counts} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
-    for(const opp of visibleOpps){
-      const lineSeq = [...seq,opp];
-      const oppNode = getNode(lineSeq);
-      addEdge(seqNode,oppNode,opp,seq.length+1);
-      const reply = PREFS[prefKey(line.id,lineSeq)]?.reply;
-      if(!reply) continue;
-      const replyNode = getNode([...lineSeq,reply]);
-      addEdge(oppNode,replyNode,reply,seq.length+2);
-      walk([...lineSeq,reply], replyNode);
-    }
+    for(const opp of visibleOpps) processExit(roomId,seq,opp,ply);
   }
 
-  const rootNode = getNode([]);
   const triggers = line.openingMoves || [];
+  const entryRoomIds = [];
   if(line.color==='black'){
+    /* the opponent moves first, so the very first ply is itself an "exit"
+       out of a virtual pre-game 'start' room rather than a room of ours */
     for(const trigger of triggers){
       if(PREFS[prefKey(line.id,[trigger])]?.hidden) continue;
-      const afterTrigger = getNode([trigger]);
-      addEdge(rootNode,afterTrigger,trigger,1);
-      const reply = PREFS[prefKey(line.id,[trigger])]?.reply;
-      if(!reply) continue;
-      const afterReply = getNode([trigger,reply]);
-      addEdge(afterTrigger,afterReply,reply,2);
-      walk([trigger,reply], afterReply);
+      processExit('start',[],trigger,1);
     }
   } else {
     for(const trigger of triggers){
-      const afterTrigger = getNode([trigger]);
-      addEdge(rootNode,afterTrigger,trigger,1);
-      walk([trigger], afterTrigger);
+      const entryRoom = getRoom([trigger]);
+      entryRoomIds.push(entryRoom.id);
+      walk([trigger],entryRoom.id,1);
     }
   }
 
-  return {nodes:[...nodes.values()], edges:[...edges.values()], rootId:rootNode.id};
+  if(line.color==='black'){
+    edges.filter(e=>e.source==='start' && e.target.startsWith('room'))
+      .forEach(e=>entryRoomIds.push(e.target));
+  }
+
+  return {
+    rooms:[...rooms.values()], leaves:[...leaves.values()], edges,
+    entryRoomIds, needsStartNode: line.color==='black'
+  };
 }
 
 /* ---------- memory castle (stage 0: data model only, no rendering) ----------
@@ -257,7 +285,7 @@ function buildTranspositionGraph(line, games){
    throughout renderBranch/renderBlackRoot). A "room" is a distinct board
    position reached right after one of our moves, keyed by position (not by
    move sequence) so two move orders that transpose into the same position
-   share one room — exactly the merge behaviour buildTranspositionGraph
+   share one room — exactly the merge behaviour buildCastleGraph
    already gives us, reused here via positionKey/fenForSeq.
 
    An "exit" is one opponent reply option out of a room, keyed by the
@@ -342,19 +370,21 @@ function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
   $('graphContainer').innerHTML='';
-  const {nodes, edges, rootId} = buildTranspositionGraph(CURRENT_LINE, GAMES);
+  const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES);
 
   const indegree = new Map();
   edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
   const mergeCount = [...indegree.values()].filter(c=>c>1).length;
   $('graphStatus').textContent =
-    `${nodes.length} position(s), ${edges.length} move(s), ${mergeCount} transposition merge point(s)`;
+    `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)`;
 
   const elements = [
-    ...nodes.map(n=>({
-      data:{id:n.id},
-      classes: n.id===rootId ? 'root' : (indegree.get(n.id)>1 ? 'transposition' : '')
+    ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
+    ...rooms.map(r=>({
+      data:{id:r.id, label:r.label},
+      classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
     })),
+    ...leaves.map(l=>({ data:{id:l.id, label:'?'}, classes:'locked' })),
     ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
   ];
 
@@ -364,10 +394,16 @@ function showTranspositionGraph(){
     layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
     style: [
       { selector:'node', style:{
-        'width':14, 'height':14, 'background-color':'#1565c0', 'border-width':0
+        'width':28, 'height':28, 'background-color':'#1565c0', 'border-width':0,
+        'label':'data(label)', 'color':'#fff', 'font-size':9, 'text-valign':'center',
+        'text-halign':'center'
       }},
+      { selector:'node.start', style:{ 'width':10, 'height':10, 'background-color':'#555' } },
       { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
       { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
+      { selector:'node.locked', style:{
+        'background-color':'#c62828', 'width':20, 'height':20, 'font-size':11
+      }},
       { selector:'edge', style:{
         'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
         'target-arrow-shape':'triangle', 'curve-style':'bezier',
