@@ -300,7 +300,7 @@ function buildCastleGraph(line, games, rootSeq=null){
     return l;
   }
   function addEdge(fromId,toId,exitSeq){
-    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq)});
+    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq)});
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
@@ -507,7 +507,7 @@ async function showTranspositionGraph(){
         classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
       })),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
-      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
+      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label,fen:e.fen}}))
     ];
 
     const cy = cytoscape({
@@ -551,8 +551,8 @@ $('graphCloseBtn').onclick = () => {
 /* ---------- opening graph hover preview ----------
    Reuses the mini chessboard / #hoverPreview div defined later in this
    file (shared with attachHoverPreview's icon tooltips) to show the
-   board position for whichever node the mouse is currently over. The
-   virtual 'start' node has no fen and is skipped. */
+   board position for whichever node or edge the mouse is currently over.
+   The virtual 'start' node has no fen and is skipped. */
 let graphHoverTimer = null;
 function hideGraphHoverPreview(){
   clearTimeout(graphHoverTimer);
@@ -560,15 +560,25 @@ function hideGraphHoverPreview(){
   $('hoverPreview').style.display = 'none';
 }
 function attachGraphHoverPreview(cy){
-  cy.on('mouseover', 'node', evt => {
-    const fen = evt.target.data('fen');
+  cy.on('mouseover', 'node, edge', evt => {
+    const el = evt.target;
+    const fen = el.data('fen');
     if(!fen) return;
     clearTimeout(graphHoverTimer);
     graphHoverTimer = setTimeout(() => {
       hoverPreviewBoard.setPosition(fen);
       hoverPreviewBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
       const containerRect = $('graphContainer').getBoundingClientRect();
-      const pos = evt.target.renderedPosition();
+      let pos;
+      if(el.isEdge()){
+        // edges have no renderedPosition() of their own — project their
+        // model-space midpoint through the current pan/zoom by hand
+        const mid = el.midpoint();
+        const pan = cy.pan(), zoom = cy.zoom();
+        pos = { x: mid.x*zoom + pan.x, y: mid.y*zoom + pan.y };
+      } else {
+        pos = el.renderedPosition();
+      }
       const cx = containerRect.left + pos.x;
       const cyy = containerRect.top + pos.y;
       const preview = $('hoverPreview');
@@ -580,7 +590,7 @@ function attachGraphHoverPreview(cy){
       preview.style.top = `${Math.round(Math.max(8,top))}px`;
     }, 300);
   });
-  cy.on('mouseout', 'node', hideGraphHoverPreview);
+  cy.on('mouseout', 'node, edge', hideGraphHoverPreview);
 }
 
 /* ---------- toggle helper ----------
