@@ -964,7 +964,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
 
     btnEval.onclick = () => {
-      const fen = fenForSeq(lineSeq);
+      /* for white systems, the row's text shows the opponent's move plus our
+         configured reply (e.g. "Nc6 3. Nf3"), so the board should reflect
+         our reply too whenever one's been chosen, not stop one ply short.
+         Black systems show the row the other way round (our reply already
+         the next row's own move), so leave those keyed on lineSeq alone. */
+      const fen = fenForSeq(!flip && childrenSeq ? childrenSeq : lineSeq);
       markLiveEval(evalSpan, btnEval);
       showPosition(fen,
         (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
