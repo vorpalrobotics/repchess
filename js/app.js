@@ -1706,28 +1706,36 @@ $('lineSaveBtn').onclick = async () => {
 /* ---------- UI actions ---------- */
 $('dlBtn').onclick = async ()=>{
   const source = $('importSourceInput').value;
-  CURRENT_USER=$('userId').value.trim().toLowerCase();
-  if(!CURRENT_USER){ logDl('enter a username',true); return; }
-  localStorage.setItem(LS_ID,CURRENT_USER);
+  const fetchUser = $('userId').value.trim().toLowerCase();
+  if(!fetchUser){ logDl('enter a username',true); return; }
+  // CURRENT_USER is the stable identity that owns your lines/games in this
+  // browser; only bootstrap it from the typed username the first time ever
+  // (no identity yet). On later imports — even from a different platform
+  // with a different handle — keep the existing identity so games get
+  // ADDED to your existing repertoire instead of switching to a new,
+  // empty-looking bucket of lines.
+  if(!CURRENT_USER) CURRENT_USER = fetchUser;
   localStorage.setItem(LS_SOURCE,source);
-  localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, CURRENT_USER);
+  localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, fetchUser);
 
   try{
+    let fetched;
     if(source==='chesscom'){
       const months=+$('monthsBack').value||12;
       localStorage.setItem(LS_MONTHS,months);
       logDl('fetching…');
-      GAMES = await fetchChessCom(CURRENT_USER,months,
+      fetched = await fetchChessCom(fetchUser,months,
         (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
     } else {
       const max=+$('maxGames').value||300;
       localStorage.setItem(LS_MAX,max);
       logDl('fetching…');
-      GAMES = await fetchLatest(CURRENT_USER,max,n=>logDl(`fetching… got ${n}`));
+      fetched = await fetchLatest(fetchUser,max,n=>logDl(`fetching… got ${n}`));
     }
-    logDl(`fetched ${GAMES.length}, writing to database…`);
-    await putGames(CURRENT_USER,GAMES);
-    logDl(`imported ${GAMES.length}`);
+    logDl(`fetched ${fetched.length}, writing to database…`);
+    await putGames(CURRENT_USER,fetched);
+    GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
+    logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     if(CURRENT_LINE) await openLine(CURRENT_LINE);
     else await renderHome();
