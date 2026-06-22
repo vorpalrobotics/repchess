@@ -11,6 +11,7 @@ const ROOMS = {
     color: 0x6f8fb0,
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'south', text: '1' },
+    furniture: { type: 'table', x: -3.2, z: 3.2, yaw: 0 },
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
       { wall: 'east',  offset: 0, target: 'roomC' }
@@ -20,6 +21,7 @@ const ROOMS = {
     color: 0xb07070,
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'north', text: '2' },
+    furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
     exits: [
       { wall: 'south', offset: 0, target: 'start' }
     ]
@@ -28,6 +30,7 @@ const ROOMS = {
     color: 0x70b078,
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'east', text: '3' },
+    furniture: { type: 'chest', x: 3.2, z: 3.2, yaw: Math.PI/4 },
     exits: [
       { wall: 'west', offset: 0, target: 'start' }
     ]
@@ -76,6 +79,120 @@ function clampToRoom(room, x, z){
   return { x, z };
 }
 
+/* ---------- procedural textures & furniture ----------
+   No build step and no reachable CDN for real CC0 texture/furniture
+   assets in this environment, so wall/floor surface detail and the
+   one piece of furniture per room are generated at runtime: textures
+   via offscreen <canvas> (same technique as the wall number labels),
+   furniture as small groups of primitive geometry.
+*/
+function makeCanvasTexture(draw, size){
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  draw(canvas.getContext('2d'), size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeBrickTexture(tintHex){
+  return makeCanvasTexture((ctx, size) => {
+    const tint = new THREE.Color(tintHex);
+    ctx.fillStyle = `rgb(${tint.r*255},${tint.g*255},${tint.b*255})`;
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 3;
+    const rows = 6, brickH = size/rows, cols = 4, brickW = size/cols;
+    for(let r=0; r<rows; r++){
+      const y = r*brickH;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
+      const offset = (r%2===0) ? 0 : brickW/2;
+      for(let x=-offset; x<size; x+=brickW){
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y+brickH); ctx.stroke();
+      }
+    }
+  }, 256);
+}
+
+function makeFloorTexture(){
+  return makeCanvasTexture((ctx, size) => {
+    const planks = 8, plankW = size/planks;
+    for(let i=0; i<planks; i++){
+      const shade = (i*37) % 30;
+      ctx.fillStyle = `rgb(${118+shade},${84+shade*0.6},${50+shade*0.4})`;
+      ctx.fillRect(i*plankW, 0, plankW-2, size);
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 2;
+    for(let i=0; i<=planks; i++){
+      ctx.beginPath(); ctx.moveTo(i*plankW, 0); ctx.lineTo(i*plankW, size); ctx.stroke();
+    }
+  }, 256);
+}
+
+function makeTable(){
+  const group = new THREE.Group();
+  const topMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x5e3a1a });
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.8), topMat);
+  top.position.y = 0.72;
+  group.add(top);
+  const legGeo = new THREE.BoxGeometry(0.08, 0.7, 0.08);
+  for(const [x, z] of [[-0.6,-0.32],[0.6,-0.32],[-0.6,0.32],[0.6,0.32]]){
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(x, 0.35, z);
+    group.add(leg);
+  }
+  return group;
+}
+
+function makeChair(){
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0x5b3a22 });
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.5), mat);
+  seat.position.y = 0.45;
+  group.add(seat);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.55, 0.06), mat);
+  back.position.set(0, 0.72, -0.22);
+  group.add(back);
+  const legGeo = new THREE.BoxGeometry(0.06, 0.45, 0.06);
+  for(const [x, z] of [[-0.2,-0.2],[0.2,-0.2],[-0.2,0.2],[0.2,0.2]]){
+    const leg = new THREE.Mesh(legGeo, mat);
+    leg.position.set(x, 0.225, z);
+    group.add(leg);
+  }
+  return group;
+}
+
+function makeChest(){
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.55, 0.55), bodyMat);
+  body.position.y = 0.275;
+  group.add(body);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.1, 0.57), bodyMat);
+  lid.position.y = 0.58;
+  group.add(lid);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.08, 0.59), bandMat);
+  band.position.y = 0.275;
+  group.add(band);
+  return group;
+}
+
+const FURNITURE_BUILDERS = { table: makeTable, chair: makeChair, chest: makeChest };
+
+function placeFurniture(room){
+  if(!room.furniture) return null;
+  const builder = FURNITURE_BUILDERS[room.furniture.type];
+  if(!builder) return null;
+  const mesh = builder();
+  mesh.position.set(room.furniture.x, 0, room.furniture.z);
+  mesh.rotation.y = room.furniture.yaw || 0;
+  return mesh;
+}
+
 function wallSpan(room, wall){
   // returns the wall's run axis ('x' or 'z'), fixed coordinate, and half-length
   const {w,d} = room.size;
@@ -87,11 +204,14 @@ function wallSpan(room, wall){
   }
 }
 
-function buildWallGroup(room, wall, hasDoor, doorOffset, color){
+function buildWallGroup(room, wall, hasDoor, doorOffset, wallTexture){
   const group = new THREE.Group();
   const { axis, fixed, half } = wallSpan(room, wall);
   const h = room.size.h;
-  const mat = new THREE.MeshStandardMaterial({ color });
+  const tex = wallTexture.clone();
+  tex.needsUpdate = true;
+  tex.repeat.set(Math.max(1, Math.round(half*2/2.5)), Math.max(1, Math.round(h/2)));
+  const mat = new THREE.MeshStandardMaterial({ map: tex });
 
   function segment(start, end){
     const len = end - start;
@@ -197,9 +317,11 @@ function buildRoom(roomKey){
   scene.add(sun);
 
   const { w, d, h } = room.size;
+  const floorTex = makeFloorTexture();
+  floorTex.repeat.set(w/2, d/2);
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(w, d),
-    new THREE.MeshStandardMaterial({ color: 0x444444 })
+    new THREE.MeshStandardMaterial({ map: floorTex })
   );
   floor.rotation.x = -Math.PI/2;
   scene.add(floor);
@@ -215,15 +337,19 @@ function buildRoom(roomKey){
   currentExitsByWall = {};
   for(const ex of room.exits) currentExitsByWall[ex.wall] = ex;
 
+  const wallTex = makeBrickTexture(room.color);
   exitMeta = [];
   for(const wall of ['north','south','east','west']){
     const ex = currentExitsByWall[wall];
-    const group = buildWallGroup(room, wall, !!ex, ex ? ex.offset : 0, room.color);
+    const group = buildWallGroup(room, wall, !!ex, ex ? ex.offset : 0, wallTex);
     scene.add(group);
     if(ex) exitMeta.push({ box: doorTriggerBox(room, wall, ex.offset), target: ex.target });
   }
 
   if(room.label) scene.add(placeLabelOnWall(room, room.label.wall, room.label.text));
+
+  const furniture = placeFurniture(room);
+  if(furniture) scene.add(furniture);
 
   currentRoomKey = roomKey;
 }
