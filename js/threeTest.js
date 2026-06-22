@@ -10,6 +10,7 @@ const ROOMS = {
   start: {
     color: 0x6f8fb0,
     size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'south', text: '1' },
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
       { wall: 'east',  offset: 0, target: 'roomC' }
@@ -18,6 +19,7 @@ const ROOMS = {
   roomB: {
     color: 0xb07070,
     size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'north', text: '2' },
     exits: [
       { wall: 'south', offset: 0, target: 'start' }
     ]
@@ -25,6 +27,7 @@ const ROOMS = {
   roomC: {
     color: 0x70b078,
     size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'east', text: '3' },
     exits: [
       { wall: 'west', offset: 0, target: 'start' }
     ]
@@ -130,6 +133,32 @@ function buildWallGroup(room, wall, hasDoor, doorOffset, color){
   return group;
 }
 
+function makeLabelMesh(text){
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 180px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 138);
+  const texture = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+  return new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), mat);
+}
+
+function placeLabelOnWall(room, wall, text){
+  const { fixed } = wallSpan(room, wall);
+  const mesh = makeLabelMesh(text);
+  const clearance = WALL_THICK/2 + 0.02;
+  const y = room.size.h/2;
+  if(wall === 'north'){ mesh.position.set(0, y, fixed + clearance); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(0, y, fixed - clearance); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, 0); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, 0); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+
 function doorTriggerBox(room, wall, offset){
   const { axis, fixed, half } = wallSpan(room, wall);
   const dHalf = DOOR_W/2;
@@ -147,13 +176,15 @@ function doorTriggerBox(room, wall, offset){
 }
 
 function spawnPointFor(room, wall, offset){
-  // step a couple meters in from the doorway, facing into the room
+  // step a couple meters in from the doorway, facing *into* the room (away
+  // from the wall just entered through) — yaw values use this camera's
+  // forward vector of (-sin(yaw), -cos(yaw)).
   const { fixed } = wallSpan(room, wall);
   const inset = 2.5;
-  if(wall === 'north') return { x: offset, z: fixed + inset, yaw: 0 };
-  if(wall === 'south') return { x: offset, z: fixed - inset, yaw: Math.PI };
-  if(wall === 'west')  return { x: fixed + inset, z: offset, yaw: Math.PI/2 };
-  return { x: fixed - inset, z: offset, yaw: -Math.PI/2 }; // east
+  if(wall === 'north') return { x: offset, z: fixed + inset, yaw: Math.PI };
+  if(wall === 'south') return { x: offset, z: fixed - inset, yaw: 0 };
+  if(wall === 'west')  return { x: fixed + inset, z: offset, yaw: -Math.PI/2 };
+  return { x: fixed - inset, z: offset, yaw: Math.PI/2 }; // east
 }
 
 function buildRoom(roomKey){
@@ -192,6 +223,8 @@ function buildRoom(roomKey){
     if(ex) exitMeta.push({ box: doorTriggerBox(room, wall, ex.offset), target: ex.target });
   }
 
+  if(room.label) scene.add(placeLabelOnWall(room, room.label.wall, room.label.text));
+
   currentRoomKey = roomKey;
 }
 
@@ -212,8 +245,9 @@ function tick(){
   if(keys['ArrowUp']   || keys['w'] || keys['W']) move += 1;
   if(keys['ArrowDown'] || keys['s'] || keys['S']) move -= 1;
   if(move !== 0){
-    pos.x += Math.sin(yaw) * move * MOVE_SPEED * dt;
-    pos.z += Math.cos(yaw) * move * MOVE_SPEED * dt;
+    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
+    pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
+    pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
     const clamped = clampToRoom(ROOMS[currentRoomKey], pos.x, pos.z);
     pos.x = clamped.x; pos.z = clamped.z;
   }
