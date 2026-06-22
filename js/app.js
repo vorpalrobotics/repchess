@@ -21,6 +21,31 @@ const log = (m,e=false)=>{ $('progress').textContent=m; $('progress').classList.
 const clr = ()=>{ $('progress').textContent='';$('progress').classList.remove('error'); };
 const logDl = (m,e=false)=>{ $('downloadProgress').textContent=m; $('downloadProgress').classList.toggle('error',e); };
 
+/* ---------- general-purpose spinner ----------
+   showSpinner(label) shows the overlay and returns a handle; hideSpinner(handle)
+   removes that handle and only hides the overlay once every handle issued so far
+   has been cleared, so two unrelated long operations that overlap in time don't
+   hide each other's spinner early. Each handle is a unique object (not reused),
+   so calling hideSpinner with a stale/duplicate handle is a harmless no-op. */
+const activeSpinners = new Set();
+function showSpinner(label=''){
+  const handle = {};
+  activeSpinners.add(handle);
+  $('spinnerLabel').textContent = label;
+  $('spinnerLabel').style.display = label ? '' : 'none';
+  $('spinnerOverlay').style.display = 'flex';
+  return handle;
+}
+function hideSpinner(handle){
+  activeSpinners.delete(handle);
+  if(activeSpinners.size===0) $('spinnerOverlay').style.display='none';
+}
+/* lets the browser paint the just-shown spinner before a synchronous,
+   CPU-heavy operation blocks the main thread */
+function nextPaint(){
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
@@ -352,9 +377,16 @@ function buildCastle(line, games, rootSeq){
   return {rootSeq, entryRoomId: entryRoom.id, rooms:[...rooms.values()], exits};
 }
 
-function showCastleSummary(games, seq){
+async function showCastleSummary(games, seq){
   if(!CURRENT_LINE) return;
-  const castle = buildCastle(CURRENT_LINE, games, seq);
+  const spinner = showSpinner('Generating castle…');
+  await nextPaint();
+  let castle;
+  try {
+    castle = buildCastle(CURRENT_LINE, games, seq);
+  } finally {
+    hideSpinner(spinner);
+  }
   const lockedExits = castle.exits.filter(e=>e.locked).length;
   const transpositionRooms = castle.rooms.filter(r=>r.transpositionCount>0).length;
   console.log('[castle]', castle);
