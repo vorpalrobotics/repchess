@@ -291,12 +291,35 @@ function buildCastleGraph(line, games, rootSeq=null){
 
   const entryRoomIds = [];
   if(rootSeq){
-    /* scoped to a single focused room — skip the whole-line triggers loop
-       and the virtual 'start' node, which only make sense for whole-line views */
-    const entryRoom = getRoom(rootSeq);
-    entryRoomIds.push(entryRoom.id);
-    walk(rootSeq,entryRoom.id);
-    return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode:false };
+    /* scoped to a focused room, but still show the chain of ancestor rooms
+       (and the single move connecting each) leading down to it, so the
+       focused branch's context is visible — just without the sibling
+       branches that the whole-line view would otherwise include at each
+       ancestor level. */
+    const needsStartNode = line.color==='black';
+    const step = 2;
+    const start = needsStartNode ? 2 : 1;
+    const chain = [];
+    for(let l=start; l<=rootSeq.length; l+=step) chain.push(rootSeq.slice(0,l));
+
+    let fromRoomId = needsStartNode ? 'start' : null;
+    let fromSeq = [];
+    let finalRoomId = null;
+    chain.forEach((roomSeq,i)=>{
+      const room = getRoom(roomSeq);
+      if(i===0 && !needsStartNode){
+        entryRoomIds.push(room.id);
+      } else {
+        const opp = roomSeq[fromSeq.length];
+        addEdge(fromRoomId, room.id, [...fromSeq,opp]);
+        if(i===0) entryRoomIds.push(room.id);
+      }
+      fromRoomId = room.id;
+      fromSeq = roomSeq;
+      finalRoomId = room.id;
+    });
+    walk(rootSeq,finalRoomId);
+    return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode };
   }
 
   const triggers = line.openingMoves || [];
