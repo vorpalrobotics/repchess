@@ -2274,7 +2274,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(fen === STARTING_FEN){
     console.debug(`[runEngine] runId=${runId} starting position, skipping analysis to save cycles`);
     engine.stop();
-    $('engineDepth').textContent = 'Starting position — analysis skipped';
+    $('engineDepth').textContent = '';
     $('engineLines').innerHTML = '';
     onComplete?.();
     return;
