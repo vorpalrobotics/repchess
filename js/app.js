@@ -475,15 +475,18 @@ async function showTranspositionGraph(){
       layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
       style: [
         { selector:'node', style:{
-          'width':28, 'height':28, 'background-color':'#1565c0', 'border-width':0,
+          'shape':'round-rectangle', 'width':'label', 'height':'label', 'padding':'6px',
+          'background-color':'#1565c0', 'border-width':0,
           'label':'data(label)', 'color':'#fff', 'font-size':9, 'text-valign':'center',
           'text-halign':'center'
         }},
-        { selector:'node.start', style:{ 'width':10, 'height':10, 'background-color':'#555' } },
+        { selector:'node.start', style:{
+          'shape':'ellipse', 'width':10, 'height':10, 'padding':0, 'background-color':'#555'
+        }},
         { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
         { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
         { selector:'node.locked', style:{
-          'background-color':'#c62828', 'width':20, 'height':20, 'font-size':11
+          'background-color':'#c62828', 'padding':'8px', 'font-size':11
         }},
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
