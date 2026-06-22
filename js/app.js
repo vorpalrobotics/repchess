@@ -748,6 +748,55 @@ $('fieldModalSaveBtn').onclick = () => {
   fieldModalSave = null; fieldModalValidate = null;
 };
 
+/* ---------- node attributes modal ("Set Attributes" on a row) ----------
+   Sketch of the room/castle decoration attributes from CastleDataModel.md:
+   the opponent's reply (lineSeq, top half) gets feature-vs-exit
+   classification/exit-type/blunder flag, the room we end up in after our
+   own reply (bottom half) gets a name and optional castle-root naming.
+   Everything is stored as plain pref fields for now (no real asset
+   catalog exists yet) — the "..." asset-browse buttons are placeholders. */
+let attributesModalSave = null;
+function openAttributesModal(oppMove, saved, onSave){
+  $('attrOppMoveLabel').textContent = oppMove ? `(${oppMove})` : '';
+  $('attrRoomMoveLabel').textContent = saved?.reply ? `(after ...${saved.reply})` : '(no standard response set yet)';
+  $('attrClassification').value = saved?.classification || 'auto';
+  $('attrExitType').value = saved?.exitType || 'door';
+  $('attrBlunder').checked = !!saved?.blunderTrap;
+  $('attrRoomName').value = saved?.name || '';
+  $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
+  $('attrCastleName').value = saved?.castleName || '';
+  refreshAttrFieldVisibility();
+  attributesModalSave = onSave;
+  $('attributesOverlay').style.display='flex';
+}
+function refreshAttrFieldVisibility(){
+  $('attrExitTypeField').style.display = $('attrClassification').value==='exit' ? '' : 'none';
+  $('attrCastleNameField').style.display = $('attrIsCastleRoot').checked ? '' : 'none';
+}
+$('attrClassification').addEventListener('change', refreshAttrFieldVisibility);
+$('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
+document.querySelectorAll('#attributesOverlay .asset-browse-btn[data-asset-target]').forEach(btn=>{
+  btn.onclick = () => log('asset catalog coming soon');
+});
+$('attrAddFeatureBtn').onclick = () => log('asset catalog coming soon');
+$('attributesCancelBtn').onclick = () => {
+  $('attributesOverlay').style.display='none';
+  attributesModalSave = null;
+};
+$('attributesSaveBtn').onclick = () => {
+  const v = {
+    classification: $('attrClassification').value,
+    exitType: $('attrExitType').value,
+    blunderTrap: $('attrBlunder').checked,
+    roomName: $('attrRoomName').value.trim(),
+    isCastleRoot: $('attrIsCastleRoot').checked,
+    castleName: $('attrCastleName').value.trim()
+  };
+  $('attributesOverlay').style.display='none';
+  if(attributesModalSave) attributesModalSave(v);
+  attributesModalSave = null;
+};
+
 /* ---------- focus on a single line, hiding sibling branches above it ----------
    Walks from the clicked row up through each ancestor table, hiding every
    other reply group at that depth; everything at or below the focused row
@@ -880,7 +929,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <hr class="row-menu-sep">
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
-             <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
+             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
            </div>
          </div>
@@ -1076,12 +1125,17 @@ function renderBranch(parent,games,seq,depth,flip=false){
         return {ok:true, value:mv.san};
       });
     };
-    rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
+    rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      openFieldModal('branchName', currentSaved()?.name, v=>{
-        saveField('name', v);
-        refreshBranchName(nameSpan, v);
+      openAttributesModal(opp, currentSaved(), v=>{
+        saveField('classification', v.classification);
+        saveField('exitType', v.exitType);
+        saveField('blunderTrap', v.blunderTrap);
+        saveField('isCastleRoot', v.isCastleRoot);
+        saveField('castleName', v.castleName);
+        saveField('name', v.roomName);
+        refreshBranchName(nameSpan, v.roomName);
       });
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
@@ -1174,7 +1228,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
-           <button type="button" data-act="branchName"><i class="fa-solid fa-tag"></i>Add Branch Name</button>
+           <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
          </div>
        </div>
      </td>
@@ -1361,12 +1415,17 @@ function renderBlackRoot(parent,games,trigger){
       return {ok:true, value:mv.san};
     });
   };
-  rowMenu.querySelector('[data-act="branchName"]').onclick = e => {
+  rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    openFieldModal('branchName', currentSaved()?.name, v=>{
-      saveField('name', v);
-      refreshBranchName(nameSpan, v);
+    openAttributesModal(trigger, currentSaved(), v=>{
+      saveField('classification', v.classification);
+      saveField('exitType', v.exitType);
+      saveField('blunderTrap', v.blunderTrap);
+      saveField('isCastleRoot', v.isCastleRoot);
+      saveField('castleName', v.castleName);
+      saveField('name', v.roomName);
+      refreshBranchName(nameSpan, v.roomName);
     });
   };
 
@@ -2317,8 +2376,6 @@ function refreshRowMenuLabels(rowMenu, saved){
   if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
   const mnemonicBtn = rowMenu.querySelector('[data-act="mnemonic"]');
   if(mnemonicBtn) mnemonicBtn.lastChild.textContent = saved?.mnemonic ? 'Edit Mnemonic' : 'Add Mnemonic';
-  const branchNameBtn = rowMenu.querySelector('[data-act="branchName"]');
-  if(branchNameBtn) branchNameBtn.lastChild.textContent = saved?.name ? 'Edit Branch Name' : 'Add Branch Name';
 }
 
 /* only overwrite a saved eval if the engine has now searched deeper than before */
