@@ -296,6 +296,11 @@ function mnemonicWordForSeq(seq, mnemonicsBySquare){
   if(!info) return '';
   return mnemonicsBySquare[info.to]?.[MNEM_WORD_FOR_PIECE[info.piece]] || '';
 }
+function mnemonicImgForSeq(seq, mnemonicsBySquare){
+  const info = lastMoveInfo(seq);
+  if(!info) return '';
+  return mnemonicsBySquare[info.to]?.[MNEM_WORD_FOR_PIECE[info.piece]+'Img'] || '';
+}
 function buildCastleGraph(line, games, rootSeq=null){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
@@ -597,10 +602,14 @@ function attachGraphHoverPreview(cy){
       } else {
         pos = el.renderedPosition();
       }
-      const cx = containerRect.left + pos.x;
-      const cyy = containerRect.top + pos.y;
       const preview = $('hoverPreview');
       preview.style.display = 'block';
+      if($('roomInfoOverlay').style.display === 'flex'){
+        positionHoverPreviewBesideRoomModal();
+        return;
+      }
+      const cx = containerRect.left + pos.x;
+      const cyy = containerRect.top + pos.y;
       const size = 252; // preview box incl. border/padding (240 board + padding/border)
       const left = Math.min(Math.max(8, cx - size/2), window.innerWidth - size - 8);
       const top = cyy + size + 20 <= window.innerHeight ? cyy + 20 : cyy - size - 20;
@@ -609,6 +618,21 @@ function attachGraphHoverPreview(cy){
     }, 300);
   });
   cy.on('mouseout', 'node, edge', hideGraphHoverPreview);
+}
+/* keeps the hover-preview board from covering the room info modal: parks it
+   just outside the modal's right edge (or left, if there's no room on the
+   right) instead of next to the cursor */
+function positionHoverPreviewBesideRoomModal(){
+  const preview = $('hoverPreview');
+  const modalRect = document.querySelector('#roomInfoOverlay .modal').getBoundingClientRect();
+  const size = 252;
+  const gap = 12;
+  const left = modalRect.right + gap + size <= window.innerWidth
+    ? modalRect.right + gap
+    : Math.max(8, modalRect.left - gap - size);
+  const top = Math.min(Math.max(8, modalRect.top), window.innerHeight - size - 8);
+  preview.style.left = `${Math.round(left)}px`;
+  preview.style.top = `${Math.round(top)}px`;
 }
 
 /* ---------- opening graph room info panel ----------
@@ -624,24 +648,30 @@ function attachGraphClickHandler(cy){
     showRoomInfoPanel(el);
   });
 }
+const mnemThumbHtml = img => img ? `<img class="room-info-img" src="${img}">` : '';
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
   const mnemonicsBySquare = await getAllMnemonics();
   const whiteWord = mnemonicWordForSeq(seq, mnemonicsBySquare);
+  const whiteImg = mnemonicImgForSeq(seq, mnemonicsBySquare);
 
   $('roomInfoTitle').innerHTML =
     `<i class="fa-solid fa-door-open"></i> ${escapeHtml(roomEl.data('label'))}` +
-    (whiteWord ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(whiteWord)}</span>` : '');
+    (whiteWord ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(whiteWord)}</span>` : '') +
+    mnemThumbHtml(whiteImg);
 
   const rows = roomEl.outgoers('edge').map(edge => {
     const word = mnemonicWordForSeq(edge.data('seq'), mnemonicsBySquare);
+    const img = mnemonicImgForSeq(edge.data('seq'), mnemonicsBySquare);
     return `<div class="room-info-exit">${escapeHtml(edge.data('label'))}` +
       (word ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(word)}</span>` : '') +
+      mnemThumbHtml(img) +
       `</div>`;
   });
   $('roomInfoExits').innerHTML = rows.length ? rows.join('') :
     '<div class="room-info-exit room-info-empty">No replies yet</div>';
   $('roomInfoOverlay').style.display = 'flex';
+  if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
 
