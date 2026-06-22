@@ -1851,7 +1851,7 @@ async function renderMnemonicsGrid(){
       const entry = MNEMONICS[sq] || {};
       const words = MNEM_PIECES
         .filter(p=>entry[p])
-        .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}</div>`)
+        .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`)
         .join('');
       const div = document.createElement('div');
       div.className = `mnem-square ${isLight?'light':'dark'}`;
