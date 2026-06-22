@@ -48,6 +48,8 @@ function nextPaint(){
 
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
+const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
+const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
@@ -98,6 +100,45 @@ async function fetchLatest(user,max,onProgress){
   if(tail){ try{ games.push(JSON.parse(tail)); }catch{ /* skip malformed line */ } }
 
   console.log(`[fetchLatest] received ${games.length} games`);
+  return games;
+}
+
+/* ---------- fetch games from Chess.com ----------
+   The chess.com PubAPI is month-based: one archive per calendar month a
+   player has games in, oldest first. There's no "give me the last N
+   games" endpoint, so `months` picks how many of the most recent monthly
+   archives to pull, each requested one at a time (chess.com only
+   guarantees no rate-limiting for serial, non-parallel requests). Each
+   game's PGN is parsed down to a bare space-separated SAN move list so
+   the resulting objects have the same shape (`{moves}`) as Lichess's. */
+async function ccFetch(url){
+  let resp;
+  try{ resp = await fetch(url); }
+  catch(e){ throw new Error(`chess.com request failed, possibly blocked by CORS (${e.message})`); }
+  if(!resp.ok) throw new Error(`chess.com returned ${resp.status} for ${url}`);
+  return resp.json();
+}
+async function fetchChessCom(user,months,onProgress){
+  const archivesUrl = `https://api.chess.com/pub/player/${encodeURIComponent(user)}/games/archives`;
+  console.log(`[fetchChessCom] requesting ${archivesUrl}`);
+  const {archives} = await ccFetch(archivesUrl);
+  if(!archives?.length) throw new Error('no archives found for this chess.com username');
+
+  const chosen = archives.slice(-months);
+  const games = [];
+  for(let i=0;i<chosen.length;i++){
+    const {games: monthGames} = await ccFetch(chosen[i]);
+    for(const g of monthGames){
+      if(!g.pgn) continue;
+      const chess = new Chess();
+      if(!chess.load_pgn(g.pgn)) continue;
+      const moves = chess.history().join(' ');
+      if(moves) games.push({moves});
+    }
+    onProgress?.(games.length, i+1, chosen.length);
+  }
+
+  console.log(`[fetchChessCom] received ${games.length} games`);
   return games;
 }
 
@@ -1269,7 +1310,7 @@ async function renderHome(){
   const list = $('linesList');
   list.innerHTML='';
   if(!CURRENT_USER){
-    list.innerHTML = '<p>Set your Lichess ID via the menu &rarr; Download Games, then create an opening system.</p>';
+    list.innerHTML = '<p>Import games via the menu &rarr; Import Games, then create an opening system.</p>';
     return;
   }
 
@@ -1484,7 +1525,7 @@ $('lineSaveBtn').onclick = async () => {
   const name = $('lineNameInput').value.trim();
   const color = $('lineColorInput').value;
   if(!name){ $('lineModalError').textContent='enter a name'; return; }
-  if(!CURRENT_USER){ $('lineModalError').textContent='set your Lichess ID first (menu → Download Games)'; return; }
+  if(!CURRENT_USER){ $('lineModalError').textContent='import games first (menu → Import Games)'; return; }
 
   let openingMoves = [];
   if(color==='white'){
@@ -1513,23 +1554,33 @@ $('lineSaveBtn').onclick = async () => {
 
 /* ---------- UI actions ---------- */
 $('dlBtn').onclick = async ()=>{
+  const source = $('importSourceInput').value;
   CURRENT_USER=$('userId').value.trim().toLowerCase();
-  if(!CURRENT_USER){ logDl('enter id',true); return; }
+  if(!CURRENT_USER){ logDl('enter a username',true); return; }
   localStorage.setItem(LS_ID,CURRENT_USER);
-
-  const max=+$('maxGames').value||300;
-  localStorage.setItem(LS_MAX,max);
+  localStorage.setItem(LS_SOURCE,source);
+  localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, CURRENT_USER);
 
   try{
-    logDl('fetching…');
-    GAMES = await fetchLatest(CURRENT_USER,max,n=>logDl(`fetching… got ${n}`));
+    if(source==='chesscom'){
+      const months=+$('monthsBack').value||12;
+      localStorage.setItem(LS_MONTHS,months);
+      logDl('fetching…');
+      GAMES = await fetchChessCom(CURRENT_USER,months,
+        (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
+    } else {
+      const max=+$('maxGames').value||300;
+      localStorage.setItem(LS_MAX,max);
+      logDl('fetching…');
+      GAMES = await fetchLatest(CURRENT_USER,max,n=>logDl(`fetching… got ${n}`));
+    }
     logDl(`fetched ${GAMES.length}, writing to database…`);
     await putGames(CURRENT_USER,GAMES);
-    logDl(`downloaded ${GAMES.length}`);
+    logDl(`imported ${GAMES.length}`);
     $('downloadOverlay').style.display='none';
     if(CURRENT_LINE) await openLine(CURRENT_LINE);
     else await renderHome();
-  }catch(e){ console.error('[dlBtn] download failed',e); logDl(e.message,true); }
+  }catch(e){ console.error('[dlBtn] import failed',e); logDl(e.message,true); }
 };
 
 renderHome();
@@ -1543,10 +1594,26 @@ document.addEventListener('click', e=>{
   if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
 });
 
-/* ---------- download modal ---------- */
+/* ---------- import games modal ---------- */
+function updateImportFieldsVisibility(){
+  const isChesscom = $('importSourceInput').value==='chesscom';
+  $('maxGamesField').style.display = isChesscom ? 'none' : 'inline-flex';
+  $('monthsBackField').style.display = isChesscom ? 'inline-flex' : 'none';
+}
+$('importSourceInput').onchange = ()=>{
+  const source = $('importSourceInput').value;
+  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  updateImportFieldsVisibility();
+};
 $('menuDownload').onclick = ()=>{
   $('menuList').style.display='none';
   logDl('');
+  const source = localStorage.getItem(LS_SOURCE) || 'lichess';
+  $('importSourceInput').value = source;
+  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  $('maxGames').value = localStorage.getItem(LS_MAX) || 300;
+  $('monthsBack').value = localStorage.getItem(LS_MONTHS) || 12;
+  updateImportFieldsVisibility();
   $('downloadOverlay').style.display='flex';
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
@@ -1558,7 +1625,7 @@ $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'
    reproduces the exact prior state with no other setup required.
 */
 async function exportBackup(){
-  if(!CURRENT_USER){ log('set your Lichess ID first (menu → Download Games)',true); return; }
+  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
   const lines = await getLines(CURRENT_USER);
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);

@@ -187,7 +187,7 @@
   <div style="position:relative">
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
-      <button id="menuDownload">Download Games</button>
+      <button id="menuDownload">Import Games</button>
       <button id="menuMnemonics">Manage Mnemonics</button>
       <button id="menuQuiz">Quiz Mnemonics</button>
       <hr class="row-menu-sep">
@@ -252,20 +252,30 @@
   </div>
 </div>
 
-<!-- download games modal -->
+<!-- import games modal -->
 <div id="downloadOverlay" class="overlay">
   <div class="modal">
-    <h2>Download Games</h2>
+    <h2>Import Games</h2>
     <div class="field">
-      <label>Lichess ID:</label><input id="userId">
+      <label>Import source:</label>
+      <select id="importSourceInput">
+        <option value="lichess">lichess.org</option>
+        <option value="chesscom">chess.com</option>
+      </select>
     </div>
     <div class="field">
-      <label>Max:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
+      <label>Username:</label><input id="userId">
+    </div>
+    <div class="field" id="maxGamesField">
+      <label>Max games:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
+    </div>
+    <div class="field" id="monthsBackField" style="display:none">
+      <label>Months back:</label><input id="monthsBack" type="number" min="1" value="12" style="width:90px">
     </div>
     <div id="downloadProgress"></div>
     <div class="modal-actions">
       <button id="downloadCancelBtn">Cancel</button>
-      <button id="dlBtn">DOWNLOAD</button>
+      <button id="dlBtn">IMPORT NOW</button>
     </div>
   </div>
 </div>
