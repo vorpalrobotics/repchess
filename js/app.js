@@ -416,8 +416,12 @@ function showTranspositionGraph(){
 $('buildGraphBtn').onclick = showTranspositionGraph;
 $('graphCloseBtn').onclick = () => { $('graphOverlay').style.display='none'; };
 
-/* ---------- toggle helper ---------- */
-function makeToggle(btn, branchRow, startExpanded=true){
+/* ---------- toggle helper ----------
+   `seq`, when given, is this row's own pref seq (ends in the opponent's
+   move) — every manual expand/collapse click persists collapsed there too,
+   so a single row's expand/collapse choice sticks across reloads the same
+   way Collapse All's does, instead of only the bulk action being sticky. */
+function makeToggle(btn, branchRow, startExpanded=true, seq=null){
   btn.style.visibility='visible';
   if(!startExpanded) branchRow.style.display='none';
   btn.innerHTML = startExpanded            // reflects branchRow's actual initial state
@@ -429,6 +433,7 @@ function makeToggle(btn, branchRow, startExpanded=true){
     btn.innerHTML = shown
       ? '<i class="fa-solid fa-caret-right"></i>'
       : '<i class="fa-solid fa-caret-down"></i>';
+    if(seq) savePrefField(seq,'collapsed',shown);
   };
 }
 
@@ -537,7 +542,10 @@ $('visibilityToggleBtn').onclick = () => {
   applyVisibilityMode();
 };
 
-/* ---------- collapse all expanded branches ---------- */
+/* ---------- collapse all expanded branches ----------
+   Each click below runs through makeToggle's onclick, which already
+   persists collapsed:true for that row, so the collapse sticks across a
+   page refresh instead of just being a one-off visual toggle. */
 $('collapseAllBtn').onclick = () => {
   $('tree').querySelectorAll('.toggle').forEach(btn=>{
     if(btn.querySelector('i')?.classList.contains('fa-caret-down')) btn.click();
@@ -703,7 +711,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
       renderBranch(div,games,childrenSeq,depth+1,flip);
-      makeToggle(toggleBtn,tr1,startExpanded);
+      makeToggle(toggleBtn,tr1,startExpanded,lineSeq);
     }
 
     function setStandardResponse(reply){
