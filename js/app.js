@@ -1216,34 +1216,40 @@ async function openLine(line){
   applyVisibilityMode();
   $('tree').innerHTML='';
 
-  if(!GAMES && CURRENT_USER){
-    GAMES = await getGames(CURRENT_USER);
-    if(!GAMES.length) GAMES=null;
-  }
-  if(!GAMES){
-    $('fileImport').click();
-    return;
-  }
-
-  PREFS = await getAllPrefs(line.id);
-
-  board.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
-
-  const triggers = line.openingMoves || [];
-  if(!triggers.length){
-    $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
-    return;
-  }
-  triggers.forEach(mv=>{
-    const wrap = document.createElement('div');
-    $('tree').appendChild(wrap);
-    if(line.color==='black'){
-      renderBlackRoot(wrap,GAMES,mv);
-    } else {
-      renderBranch(wrap,GAMES,[mv],0);
+  const spinner = showSpinner('Loading opening system…');
+  await nextPaint();
+  try {
+    if(!GAMES && CURRENT_USER){
+      GAMES = await getGames(CURRENT_USER);
+      if(!GAMES.length) GAMES=null;
     }
-  });
-  refreshSystemStats();
+    if(!GAMES){
+      $('fileImport').click();
+      return;
+    }
+
+    PREFS = await getAllPrefs(line.id);
+
+    board.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
+
+    const triggers = line.openingMoves || [];
+    if(!triggers.length){
+      $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
+      return;
+    }
+    triggers.forEach(mv=>{
+      const wrap = document.createElement('div');
+      $('tree').appendChild(wrap);
+      if(line.color==='black'){
+        renderBlackRoot(wrap,GAMES,mv);
+      } else {
+        renderBranch(wrap,GAMES,[mv],0);
+      }
+    });
+    refreshSystemStats();
+  } finally {
+    hideSpinner(spinner);
+  }
 }
 
 $('backBtn').onclick = renderHome;
