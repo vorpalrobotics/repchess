@@ -381,9 +381,12 @@ $('buildGraphBtn').onclick = showTranspositionGraph;
 $('graphCloseBtn').onclick = () => { $('graphOverlay').style.display='none'; };
 
 /* ---------- toggle helper ---------- */
-function makeToggle(btn, branchRow){
+function makeToggle(btn, branchRow, startExpanded=true){
   btn.style.visibility='visible';
-  btn.innerHTML='<i class="fa-solid fa-caret-down"></i>';   // newly (re-)expanded, so shown
+  if(!startExpanded) branchRow.style.display='none';
+  btn.innerHTML = startExpanded            // reflects branchRow's actual initial state
+    ? '<i class="fa-solid fa-caret-down"></i>'
+    : '<i class="fa-solid fa-caret-right"></i>';
   btn.onclick=()=>{                              // rewired each call to target the current branchRow
     const shown = branchRow.style.display !== 'none';
     branchRow.style.display = shown ? 'none' : '';
@@ -654,7 +657,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
     /* expand the branch table under the chosen standard response */
     let childrenSeq = null, branchDiv = null;
-    function expandWith(reply){
+    function expandWith(reply, startExpanded=true){
       const old = metaTr.nextSibling;
       if(old?.querySelector?.('.branch')) old.remove();
 
@@ -664,7 +667,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
       renderBranch(div,games,childrenSeq,depth+1,flip);
-      makeToggle(toggleBtn,tr1);
+      makeToggle(toggleBtn,tr1,startExpanded);
     }
 
     function setStandardResponse(reply){
@@ -684,7 +687,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     if(savedRep){
       const replySpan = tr.querySelector('.ourReply');
       if(replySpan) replySpan.textContent = savedRep;
-      expandWith(savedRep);
+      expandWith(savedRep, !currentSaved()?.collapsed);
     }
     refreshHidden();
     refreshEvalSpan(evalSpan, currentSaved()?.eval);
@@ -936,7 +939,7 @@ function renderBlackRoot(parent,games,trigger){
   }
 
   let childrenSeq = null, branchDiv = null;
-  function expandWith(reply){
+  function expandWith(reply, startExpanded=true){
     const old = metaTr.nextSibling;
     if(old?.querySelector?.('.branch')) old.remove();
 
@@ -946,7 +949,7 @@ function renderBlackRoot(parent,games,trigger){
     childrenSeq = [...lineSeq,reply];
     branchDiv = div;
     renderBranch(div,games,childrenSeq,1,true);
-    makeToggle(toggleBtn,tr1);
+    makeToggle(toggleBtn,tr1,startExpanded);
   }
 
   function setStandardResponse(reply){
@@ -965,7 +968,7 @@ function renderBlackRoot(parent,games,trigger){
   if(savedRep){
     const replySpan = tr.querySelector('.ourReply');
     if(replySpan) replySpan.textContent = savedRep;
-    expandWith(savedRep);
+    expandWith(savedRep, !currentSaved()?.collapsed);
   }
   refreshHidden();
   refreshEvalSpan(evalSpan, currentSaved()?.eval);
@@ -1212,6 +1215,7 @@ async function importParsedLine(moves){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
       await savePrefField(lineSeq,'reply',reply);
+      await savePrefField(lineSeq,'collapsed',true);
       count++;
     }
   }
@@ -1380,7 +1384,8 @@ async function exportBackup(){
       name: line.name, color: line.color, openingMoves: line.openingMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
-        hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name
+        hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
+        collapsed:p.collapsed
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -1427,7 +1432,7 @@ async function importBackup(data){
       await setPref(line.id, pref.seq, {
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
-        eval:pref.eval||null, name:pref.name||''
+        eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false
       });
     }
   }
