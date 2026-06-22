@@ -223,6 +223,14 @@ function positionKey(fen){
    leaf node, flagging that part of the tree as not yet built out. Leaf
    nodes are also merged by position so the same unbuilt opponent try
    reached via different transposing paths shows as one leaf. */
+/* White moves are always numbered ("1. d4"), black moves never are — this
+   matches standard notation and keeps the diagram uncluttered, regardless
+   of which color is "ours" in this line. Ply 1 is White's first move. */
+function plyLabel(seq){
+  const ply = seq.length;
+  const move = seq.at(-1);
+  return ply%2===1 ? `${Math.ceil(ply/2)}. ${move}` : move;
+}
 function buildCastleGraph(line, games){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
@@ -233,7 +241,7 @@ function buildCastleGraph(line, games){
     const fen = fenForSeq(seq);
     const key = positionKey(fen);
     let r = rooms.get(key);
-    if(!r){ r = {id:'room'+(roomCounter++), fen, label:seq.at(-1)}; rooms.set(key,r); }
+    if(!r){ r = {id:'room'+(roomCounter++), fen, label:plyLabel(seq)}; rooms.set(key,r); }
     return r;
   }
   function getLeaf(seq){
@@ -243,37 +251,35 @@ function buildCastleGraph(line, games){
     if(!l){ l = {id:'leaf'+(leafCounter++), fen}; leaves.set(key,l); }
     return l;
   }
-  function addEdge(fromId,toId,move,ply){
-    const moveNumber = Math.ceil(ply/2);
-    const label = ply%2===1 ? `${moveNumber}. ${move}` : move;
-    edges.push({source:fromId,target:toId,label});
+  function addEdge(fromId,toId,exitSeq){
+    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq)});
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
      line); resolves to either an existing/new room, or a locked leaf. */
-  function processExit(fromRoomId, seq, opp, ply){
+  function processExit(fromRoomId, seq, opp){
     const exitSeq = [...seq,opp];
     const reply = PREFS[prefKey(line.id,exitSeq)]?.reply;
     if(!reply){
       const leaf = getLeaf(exitSeq);
-      addEdge(fromRoomId,leaf.id,opp,ply);
+      addEdge(fromRoomId,leaf.id,exitSeq);
       return;
     }
     const destSeq = [...exitSeq,reply];
     const destKey = positionKey(fenForSeq(destSeq));
     const alreadyExisted = rooms.has(destKey);
     const destRoom = getRoom(destSeq);
-    addEdge(fromRoomId,destRoom.id,opp,ply);
-    if(!alreadyExisted) walk(destSeq,destRoom.id,ply+1);
+    addEdge(fromRoomId,destRoom.id,exitSeq);
+    if(!alreadyExisted) walk(destSeq,destRoom.id);
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
-  function walk(seq, roomId, ply){
+  function walk(seq, roomId){
     const {counts} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
-    for(const opp of visibleOpps) processExit(roomId,seq,opp,ply);
+    for(const opp of visibleOpps) processExit(roomId,seq,opp);
   }
 
   const triggers = line.openingMoves || [];
@@ -283,13 +289,13 @@ function buildCastleGraph(line, games){
        out of a virtual pre-game 'start' room rather than a room of ours */
     for(const trigger of triggers){
       if(PREFS[prefKey(line.id,[trigger])]?.hidden) continue;
-      processExit('start',[],trigger,1);
+      processExit('start',[],trigger);
     }
   } else {
     for(const trigger of triggers){
       const entryRoom = getRoom([trigger]);
       entryRoomIds.push(entryRoom.id);
-      walk([trigger],entryRoom.id,1);
+      walk([trigger],entryRoom.id);
     }
   }
 
