@@ -143,9 +143,16 @@ function computeNodeStats(games,seq){
   return {nodeCount, maxBranchFactor};
 }
 
-function showNodeStats(games,seq){
-  const {nodeCount,maxBranchFactor} = computeNodeStats(games,seq);
-  alert(`Nodes below this point: ${nodeCount}\nMax branch factor: ${maxBranchFactor}`);
+async function showNodeStats(games,seq){
+  const spinner = showSpinner('Computing node statistics…');
+  await nextPaint();
+  let stats;
+  try {
+    stats = computeNodeStats(games,seq);
+  } finally {
+    hideSpinner(spinner);
+  }
+  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}`);
 }
 
 function formatNodeStats({nodeCount,maxBranchFactor}){
@@ -404,52 +411,59 @@ async function showCastleSummary(games, seq){
   );
 }
 
-function showTranspositionGraph(){
+async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
   $('graphContainer').innerHTML='';
-  const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES);
 
-  const indegree = new Map();
-  edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
-  const mergeCount = [...indegree.values()].filter(c=>c>1).length;
-  $('graphStatus').textContent =
-    `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)`;
+  const spinner = showSpinner('Building graph…');
+  await nextPaint();
+  try {
+    const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES);
 
-  const elements = [
-    ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-    ...rooms.map(r=>({
-      data:{id:r.id, label:r.label},
-      classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
-    })),
-    ...leaves.map(l=>({ data:{id:l.id, label:'?'}, classes:'locked' })),
-    ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
-  ];
+    const indegree = new Map();
+    edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
+    const mergeCount = [...indegree.values()].filter(c=>c>1).length;
+    $('graphStatus').textContent =
+      `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)`;
 
-  cytoscape({
-    container: $('graphContainer'),
-    elements,
-    layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
-    style: [
-      { selector:'node', style:{
-        'width':28, 'height':28, 'background-color':'#1565c0', 'border-width':0,
-        'label':'data(label)', 'color':'#fff', 'font-size':9, 'text-valign':'center',
-        'text-halign':'center'
-      }},
-      { selector:'node.start', style:{ 'width':10, 'height':10, 'background-color':'#555' } },
-      { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
-      { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
-      { selector:'node.locked', style:{
-        'background-color':'#c62828', 'width':20, 'height':20, 'font-size':11
-      }},
-      { selector:'edge', style:{
-        'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
-        'target-arrow-shape':'triangle', 'curve-style':'bezier',
-        'label':'data(label)', 'font-size':9, 'color':'#333',
-        'text-background-color':'#fff', 'text-background-opacity':0.8
-      }}
-    ]
-  });
+    const elements = [
+      ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
+      ...rooms.map(r=>({
+        data:{id:r.id, label:r.label},
+        classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
+      })),
+      ...leaves.map(l=>({ data:{id:l.id, label:'?'}, classes:'locked' })),
+      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label}}))
+    ];
+
+    cytoscape({
+      container: $('graphContainer'),
+      elements,
+      layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
+      style: [
+        { selector:'node', style:{
+          'width':28, 'height':28, 'background-color':'#1565c0', 'border-width':0,
+          'label':'data(label)', 'color':'#fff', 'font-size':9, 'text-valign':'center',
+          'text-halign':'center'
+        }},
+        { selector:'node.start', style:{ 'width':10, 'height':10, 'background-color':'#555' } },
+        { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
+        { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
+        { selector:'node.locked', style:{
+          'background-color':'#c62828', 'width':20, 'height':20, 'font-size':11
+        }},
+        { selector:'edge', style:{
+          'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
+          'target-arrow-shape':'triangle', 'curve-style':'bezier',
+          'label':'data(label)', 'font-size':9, 'color':'#333',
+          'text-background-color':'#fff', 'text-background-opacity':0.8
+        }}
+      ]
+    });
+  } finally {
+    hideSpinner(spinner);
+  }
 }
 $('buildGraphBtn').onclick = showTranspositionGraph;
 $('graphCloseBtn').onclick = () => { $('graphOverlay').style.display='none'; };
