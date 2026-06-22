@@ -238,7 +238,7 @@ function plyLabel(seq){
   const move = seq.at(-1);
   return ply%2===1 ? `${Math.ceil(ply/2)}. ${move}` : move;
 }
-function buildCastleGraph(line, games){
+function buildCastleGraph(line, games, rootSeq=null){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
   const edges = [];
@@ -289,8 +289,17 @@ function buildCastleGraph(line, games){
     for(const opp of visibleOpps) processExit(roomId,seq,opp);
   }
 
-  const triggers = line.openingMoves || [];
   const entryRoomIds = [];
+  if(rootSeq){
+    /* scoped to a single focused room — skip the whole-line triggers loop
+       and the virtual 'start' node, which only make sense for whole-line views */
+    const entryRoom = getRoom(rootSeq);
+    entryRoomIds.push(entryRoom.id);
+    walk(rootSeq,entryRoom.id);
+    return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode:false };
+  }
+
+  const triggers = line.openingMoves || [];
   if(line.color==='black'){
     /* the opponent moves first, so the very first ply is itself an "exit"
        out of a virtual pre-game 'start' room rather than a room of ours */
@@ -419,7 +428,7 @@ async function showTranspositionGraph(){
   const spinner = showSpinner('Building graph…');
   await nextPaint();
   try {
-    const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES);
+    const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES, FOCUSED_SEQ);
 
     const indegree = new Map();
     edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
@@ -546,9 +555,14 @@ $('fieldModalSaveBtn').onclick = () => {
    other reply group at that depth; everything at or below the focused row
    is left exactly as rendered (untouched). */
 let focusHidden = [];
+/* the our-move seq (same convention as Generate Castle's childrenSeq) at
+   the focused row, if its standard response is configured — lets Build
+   Graph scope itself to just the focused subtree instead of the whole line */
+let FOCUSED_SEQ = null;
 function clearFocus(){
   focusHidden.forEach(el=>el.classList.remove('focus-hidden'));
   focusHidden = [];
+  FOCUSED_SEQ = null;
   $('unfocusBtn').style.display='none';
 }
 function rowGroup(tbody, dataRow){
@@ -560,13 +574,15 @@ function rowGroup(tbody, dataRow){
   }
   return group;
 }
-function focusOnLine(dataRow){
+function focusOnLine(dataRow, seq=null){
   clearFocus();
+  FOCUSED_SEQ = seq;
   let node = dataRow;
   while(node){
     const tbody = node.parentElement;
     const keep = new Set(rowGroup(tbody, node));
     Array.from(tbody.children).forEach(row=>{
+      if(row.classList.contains('context-row')) return; // "1. d4" header — always part of the lead-in, never a sibling option to hide
       if(!keep.has(row)){ row.classList.add('focus-hidden'); focusHidden.push(row); }
     });
     const branchRow = tbody.parentElement.closest('tr.branch-row');
@@ -800,7 +816,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="focus"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      focusOnLine(tr);
+      focusOnLine(tr, childrenSeq);
     };
     hideBtn.onclick = e => {
       e.stopPropagation();
@@ -1225,8 +1241,7 @@ async function openLine(line){
   $('lineTitle').textContent = `${line.name} (${line.color})`;
 
   clr();
-  focusHidden = [];
-  $('unfocusBtn').style.display='none';
+  clearFocus();
   applyVisibilityMode();
   $('tree').innerHTML='';
 
