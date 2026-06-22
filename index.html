@@ -148,6 +148,13 @@
   #engineLines .pvToggle{font-size:.9em;padding:0 .3em;flex:0 0 auto}
   #engineLines .pvText{flex:1 1 auto}
 
+  #threeTestOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
+  .three-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
+  .three-header h2{margin:0}
+  #threeTestCanvasWrap{flex:1 1 auto;min-height:0;position:relative;background:#222;border-radius:4px;overflow:hidden}
+  #threeTestCanvasWrap canvas{display:block;width:100%;height:100%}
+  .three-hint{margin:.4rem 0 0;font-size:.8rem;color:#666;text-align:center}
+
   #mnemonicsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
   .mnem-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
   .mnem-header h2{margin:0}
@@ -217,6 +224,8 @@
       <hr class="row-menu-sep">
       <button id="menuExport">Export Backup</button>
       <button id="menuImport">Import Backup</button>
+      <hr class="row-menu-sep">
+      <button id="menuThreeTest">Three.js Test</button>
       <hr class="row-menu-sep">
       <button id="menuAbout">About</button>
     </div>
@@ -299,6 +308,18 @@
       <button id="downloadCancelBtn">Cancel</button>
       <button id="dlBtn">IMPORT NOW</button>
     </div>
+  </div>
+</div>
+
+<!-- three.js prototype modal -->
+<div id="threeTestOverlay" class="overlay">
+  <div class="modal">
+    <div class="three-header">
+      <h2>Three.js Test</h2>
+      <button id="threeTestCloseBtn">Close</button>
+    </div>
+    <div id="threeTestCanvasWrap"></div>
+    <p class="three-hint">Arrows or W/A/S/D to walk, walk through a doorway to enter the next room.</p>
   </div>
 </div>
 

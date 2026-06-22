@@ -2,6 +2,7 @@ import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
+import { openThreeTest, closeThreeTest } from './threeTest.js';
 cytoscape.use(cytoscapeDagre);
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
@@ -1891,6 +1892,17 @@ $('backupImport').addEventListener('change', async e=>{
     log('import failed: '+err.message,true);
   }
 });
+
+/* ---------- three.js prototype ---------- */
+$('menuThreeTest').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('threeTestOverlay').style.display='flex';
+  openThreeTest($('threeTestCanvasWrap'));
+};
+$('threeTestCloseBtn').onclick = ()=>{
+  $('threeTestOverlay').style.display='none';
+  closeThreeTest();
+};
 
 /* ---------- about modal ---------- */
 $('menuAbout').onclick = ()=>{
