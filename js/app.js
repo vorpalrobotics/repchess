@@ -878,11 +878,17 @@ function applyCompactModeButton(){
     : 'Toggle compact mode (hoist forced sequences into one row)';
 }
 applyCompactModeButton();
-$('compactModeBtn').onclick = () => {
+$('compactModeBtn').onclick = async () => {
   compactMode = !compactMode;
   localStorage.setItem(LS_COMPACT_MODE, compactMode);
   applyCompactModeButton();
-  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
+  if(!CURRENT_LINE) return;
+  // rebuilding the tree is CPU-heavy on large systems (~1500 nodes) and blocks
+  // the main thread, so show a spinner and let it paint before we start.
+  const spinner = showSpinner(compactMode ? 'Compacting tree…' : 'Expanding tree…');
+  await nextPaint();
+  try { renderTreeBody(CURRENT_LINE); }
+  finally { hideSpinner(spinner); }
 };
 
 /* ---------- collapse all expanded branches ----------
@@ -1584,34 +1590,40 @@ async function renderHome(){
     return;
   }
 
-  const lines = await getLines(CURRENT_USER);
-  if(!lines.length){
-    list.innerHTML = '<p>No opening systems yet &mdash; click + to create one.</p>';
-    return;
-  }
+  const spinner = showSpinner('Loading opening systems…');
+  await nextPaint();
+  try {
+    const lines = await getLines(CURRENT_USER);
+    if(!lines.length){
+      list.innerHTML = '<p>No opening systems yet &mdash; click + to create one.</p>';
+      return;
+    }
 
-  lines.sort((a,b)=>a.name.localeCompare(b.name)).forEach(line=>{
-    const row = document.createElement('div');
-    row.className = 'line-row';
-    row.innerHTML =
-      `<span class="line-name">${escapeHtml(line.name)}</span>
-       <span class="line-color">${escapeHtml(line.color)}</span>
-       <span class="line-opening">${escapeHtml(summarizeMoves(line.openingMoves))}</span>
-       <button class="iconbtn line-edit" title="Rename"><i class="fa-solid fa-pen"></i></button>
-       <button class="iconbtn line-delete" title="Delete"><i class="fa-solid fa-trash"></i></button>`;
-    row.onclick = () => openLine(line);
-    row.querySelector('.line-edit').onclick = e => {
-      e.stopPropagation();
-      openFieldModal('lineName', line.name, async v=>{ await updateLine(line.id,{name:v}); renderHome(); });
-    };
-    row.querySelector('.line-delete').onclick = async e => {
-      e.stopPropagation();
-      if(!confirm(`Delete opening system "${line.name}"?`)) return;
-      await deleteLine(line.id);
-      renderHome();
-    };
-    list.appendChild(row);
-  });
+    lines.sort((a,b)=>a.name.localeCompare(b.name)).forEach(line=>{
+      const row = document.createElement('div');
+      row.className = 'line-row';
+      row.innerHTML =
+        `<span class="line-name">${escapeHtml(line.name)}</span>
+         <span class="line-color">${escapeHtml(line.color)}</span>
+         <span class="line-opening">${escapeHtml(summarizeMoves(line.openingMoves))}</span>
+         <button class="iconbtn line-edit" title="Rename"><i class="fa-solid fa-pen"></i></button>
+         <button class="iconbtn line-delete" title="Delete"><i class="fa-solid fa-trash"></i></button>`;
+      row.onclick = () => openLine(line);
+      row.querySelector('.line-edit').onclick = e => {
+        e.stopPropagation();
+        openFieldModal('lineName', line.name, async v=>{ await updateLine(line.id,{name:v}); renderHome(); });
+      };
+      row.querySelector('.line-delete').onclick = async e => {
+        e.stopPropagation();
+        if(!confirm(`Delete opening system "${line.name}"?`)) return;
+        await deleteLine(line.id);
+        renderHome();
+      };
+      list.appendChild(row);
+    });
+  } finally {
+    hideSpinner(spinner);
+  }
 }
 
 /* ---------- line screen: tree + engine for one line ---------- */
