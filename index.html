@@ -57,6 +57,9 @@
   .iconbtn.btnEval-onBoard{border:2px solid #000;border-radius:4px}
   .toggle {font-size:1.15em;vertical-align:middle}
 
+  #compactModeBtn.active{background:#1565c0;color:#fff;border-radius:4px}
+  tr.compact-run td.move{font-style:italic}
+
   #hoverPreview{position:fixed;display:none;z-index:50;background:#fff;border:2px solid #333;border-radius:4px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.3)}
   #hoverPreview #hoverPreviewBoard{width:240px;height:240px}
 
@@ -252,6 +255,7 @@
     <div id="tree-col">
       <button id="unfocusBtn" style="display:none;margin-bottom:.5rem">Unfocus</button>
       <button id="visibilityToggleBtn" title="Toggle hidden branches" style="margin-bottom:.5rem"><i class="fa-solid fa-eye"></i></button>
+      <button id="compactModeBtn" title="Toggle compact mode (hoist forced sequences into one row)" style="margin-bottom:.5rem"><i class="fa-solid fa-bars"></i></button>
       <button id="buildGraphBtn" title="Build Graph" style="margin-bottom:.5rem"><i class="fa-solid fa-circle-nodes"></i></button>
       <button id="collapseAllBtn" title="Collapse all branches" style="margin-bottom:.5rem"><i class="fa-solid fa-compress"></i></button>
       <span id="systemStats" class="systemStats"></span>

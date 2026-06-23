@@ -53,6 +53,7 @@ const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
+const LS_COMPACT_MODE='repchess_compactMode';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
@@ -856,6 +857,31 @@ $('visibilityToggleBtn').onclick = () => {
   showAllBranches = !showAllBranches;
   localStorage.setItem(LS_SHOW_ALL_BRANCHES, showAllBranches);
   applyVisibilityMode();
+  /* which opponent replies count as "visible" changes which rooms qualify
+     as forced (single-reply) for compact-mode hoisting, so a full re-render
+     (not just the CSS class toggle above) is needed whenever a line is open */
+  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
+};
+
+/* ---------- compact mode ----------
+   Hoists forced (single visible reply) move sequences into one row instead
+   of one row per ply-pair — see Documents/CastleBuildingNotes.md's
+   "hallways vs. doors" note for the design rationale. A run breaks at any
+   move that has been annotated (note/mnemonic/name/classification/etc) so
+   those stay on their own interactive row even in compact mode. */
+let compactMode = localStorage.getItem(LS_COMPACT_MODE) === 'true';
+function applyCompactModeButton(){
+  $('compactModeBtn').classList.toggle('active', compactMode);
+  $('compactModeBtn').title = compactMode
+    ? 'Compact mode on — click for full mode'
+    : 'Toggle compact mode (hoist forced sequences into one row)';
+}
+applyCompactModeButton();
+$('compactModeBtn').onclick = () => {
+  compactMode = !compactMode;
+  localStorage.setItem(LS_COMPACT_MODE, compactMode);
+  applyCompactModeButton();
+  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
 };
 
 /* ---------- collapse all expanded branches ----------
@@ -867,6 +893,88 @@ $('collapseAllBtn').onclick = () => {
     if(btn.querySelector('i')?.classList.contains('fa-caret-down')) btn.click();
   });
 };
+
+/* ---------- compact mode helpers ----------
+   See Documents/CastleBuildingNotes.md's "hallways vs. doors" note: a forced
+   (single-reply) sequence should read as one hallway, not a room per ply.
+   `seq` always ends in OUR move here, same convention as renderBranch. */
+function visibleOppsAt(games,seq){
+  const {counts} = replies(games,seq);
+  const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  let keys = Object.keys(counts);
+  if(!showAllBranches){
+    keys = keys.filter(opp=>!PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
+  }
+  return keys;
+}
+
+/* walks forward from `seq` while every position along the way has exactly
+   one visible opponent reply *and* an already-chosen standard response with
+   no annotations of its own — annotated moves (note/mnemonic/name/etc) keep
+   their own full row even in compact mode, since a hoisted row has nowhere
+   to show that detail. Stops (and returns null) below 2 hoisted moves, since
+   a single forced pair isn't worth collapsing into a different row shape. */
+const COMPACT_RUN_CAP = 80;
+function computeCompactRun(games,seq,depth,flip){
+  const runMoves = [];
+  let curSeq = seq, curDepth = depth;
+  while(runMoves.length < COMPACT_RUN_CAP){
+    const opps = visibleOppsAt(games,curSeq);
+    if(opps.length !== 1) break;
+    const opp = opps[0];
+    const lineSeq = [...curSeq,opp];
+    const saved = PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
+    const reply = saved?.reply;
+    if(!reply) break;
+    const annotated = !!(saved.note || saved.mnemonic || saved.name || saved.classification ||
+                          saved.exitType || saved.blunderTrap || saved.isCastleRoot || saved.castleName);
+    if(annotated) break;
+    runMoves.push({opp,reply,lineSeq,depth:curDepth});
+    curSeq = [...lineSeq,reply];
+    curDepth += 1;
+  }
+  if(runMoves.length < 2) return null;
+  return {runMoves, endSeq:curSeq, endDepth:curDepth};
+}
+
+function compactRunLabel(runMoves,flip){
+  return runMoves.map(({opp,reply,depth})=>
+    flip ? `${depth+1}. ${opp} ${reply}` : `${opp} ${depth+2}. ${reply}`
+  ).join(' ');
+}
+
+/* single row standing in for a whole hoisted run: one Analyse button (no
+   per-move menu — switch to Full mode for per-move editing/notes), the
+   collapsed move text, and a branch-row that resumes normal rendering from
+   wherever the run ended. Always expanded — there's nothing to collapse,
+   since the run itself is already the collapsed form. */
+function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
+  const {runMoves,endSeq,endDepth} = run;
+  const tr = document.createElement('tr');
+  tr.className = 'data-row compact-run';
+  tr.innerHTML =
+    `<td class="resp">
+       <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
+     </td>
+     <td class="move" style="padding-left:${indentLevel}em">
+       <button class="iconbtn toggle" style="visibility:hidden"><i class="fa-solid fa-caret-right"></i></button>
+       ${compactRunLabel(runMoves,flip)}
+     </td>
+     <td class="cnt-col"></td>
+     <td class="eval-col"></td>
+     <td class="name-col"></td>`;
+  tb.appendChild(tr);
+
+  const btnEval = tr.querySelector('td.resp > button.iconbtn');
+  attachHoverPreview(btnEval, endSeq);
+  btnEval.onclick = () => showPosition(fenForSeq(endSeq), ()=>{}, ()=>{});
+
+  const tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
+  const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
+  const div = document.createElement('div'); div.className='branch'; td1.appendChild(div);
+  renderBranch(div,games,endSeq,endDepth,flip);
+}
 
 /* ---------- recursive branch renderer ----------
    flip=true is used for Black lines from move-pair 2 onward: the enumerated
@@ -905,6 +1013,15 @@ function renderBranch(parent,games,seq,depth,flip=false){
   }
 
   const indentLevel = flip ? depth : depth+1;
+
+  if(compactMode){
+    const run = computeCompactRun(games,seq,depth,flip);
+    if(run){
+      renderCompactRunRow(tb,games,depth,flip,run,indentLevel);
+      if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
+      return;
+    }
+  }
 
   Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([opp,c])=>{
     const isManual = c===0 && manualReplies.includes(opp);
@@ -1524,24 +1641,33 @@ async function openLine(line){
 
     board.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
 
-    const triggers = line.openingMoves || [];
-    if(!triggers.length){
-      $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
-      return;
-    }
-    triggers.forEach(mv=>{
-      const wrap = document.createElement('div');
-      $('tree').appendChild(wrap);
-      if(line.color==='black'){
-        renderBlackRoot(wrap,GAMES,mv);
-      } else {
-        renderBranch(wrap,GAMES,[mv],0);
-      }
-    });
-    refreshSystemStats();
+    renderTreeBody(line);
   } finally {
     hideSpinner(spinner);
   }
+}
+
+/* (re)builds the move tree for `line` from the already-loaded GAMES/PREFS,
+   without re-fetching either — used by openLine on first load, and again
+   whenever a toggle (visibility, compact mode) changes which rows the tree
+   should show, since GAMES/PREFS are already in memory at that point. */
+function renderTreeBody(line){
+  $('tree').innerHTML='';
+  const triggers = line.openingMoves || [];
+  if(!triggers.length){
+    $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
+    return;
+  }
+  triggers.forEach(mv=>{
+    const wrap = document.createElement('div');
+    $('tree').appendChild(wrap);
+    if(line.color==='black'){
+      renderBlackRoot(wrap,GAMES,mv);
+    } else {
+      renderBranch(wrap,GAMES,[mv],0);
+    }
+  });
+  refreshSystemStats();
 }
 
 $('backBtn').onclick = renderHome;
