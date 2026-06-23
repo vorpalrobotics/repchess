@@ -14,7 +14,7 @@ const ROOMS = {
     exits: [],
     buildings: [
       { target: 'start', sign: 'Chigoren Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
-        color: 0x6f8fb0, size: { w: 10, d: 10, h: 4 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
+        color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
     ]
   },
   start: {
