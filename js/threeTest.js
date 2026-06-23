@@ -33,6 +33,7 @@ const ROOMS = {
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'north', text: '2' },
     furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
+    stairs: { fromZ: 2.0, toZ: -1.0, rise: 1.3 },
     exits: [
       { wall: 'south', offset: 0, target: 'start' }
     ]
@@ -90,6 +91,21 @@ function clampToRoom(size, x, z){
     if(!(ex && z > ex.offset-dHalf && z < ex.offset+dHalf)) x = halfW;
   }
   return { x, z };
+}
+
+// Maps a z-position inside a room to the local floor height there.
+// Rooms with no `stairs` config are flat (height 0 everywhere). A room
+// with stairs ramps from 0 at/after fromZ down to `rise` at/before toZ
+// (toward the back wall), giving a raised platform reached by a staircase
+// without requiring a second story (the room's walls/ceiling/door are
+// unchanged -- only the floor height under the player's feet varies).
+function floorHeightAt(room, z){
+  if(!room.stairs) return 0;
+  const { fromZ, toZ, rise } = room.stairs;
+  if(z >= fromZ) return 0;
+  if(z <= toZ) return rise;
+  const t = (fromZ - z) / (fromZ - toZ);
+  return rise * t;
 }
 
 /* ---------- procedural textures & furniture ----------
@@ -215,7 +231,8 @@ function placeFurniture(room){
   const builder = FURNITURE_BUILDERS[room.furniture.type];
   if(!builder) return null;
   const mesh = builder();
-  mesh.position.set(room.furniture.x, 0, room.furniture.z);
+  const floorY = floorHeightAt(room, room.furniture.z);
+  mesh.position.set(room.furniture.x, floorY, room.furniture.z);
   mesh.rotation.y = room.furniture.yaw || 0;
   return mesh;
 }
@@ -302,12 +319,12 @@ function makeLabelMesh(text){
   return new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), mat);
 }
 
-function placeLabelOnWall(size, wall, text, origin){
+function placeLabelOnWall(size, wall, text, origin, yOverride){
   origin = origin || { x:0, z:0 };
   const { fixed } = wallSpan(size, wall);
   const mesh = makeLabelMesh(text);
   const clearance = WALL_THICK/2 + 0.02;
-  const y = size.h/2;
+  const y = yOverride != null ? yOverride : size.h/2;
   if(wall === 'north'){ mesh.position.set(origin.x, y, fixed + clearance + origin.z); mesh.rotation.y = 0; }
   if(wall === 'south'){ mesh.position.set(origin.x, y, fixed - clearance + origin.z); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + clearance + origin.x, y, origin.z); mesh.rotation.y = Math.PI/2; }
@@ -351,6 +368,49 @@ function mountOutward(size, wall, offset, origin, mesh, y, clearance){
   if(wall === 'west') mesh.rotation.y = -Math.PI/2;
   if(wall === 'east') mesh.rotation.y = Math.PI/2;
   return mesh;
+}
+
+// Builds a raised platform (reached by a staircase) within a room's
+// existing walls/ceiling -- the platform spans from `toZ` back to the
+// room's far wall, and the steps climb the gap between `fromZ` and `toZ`.
+function buildStairs(room){
+  const { fromZ, toZ, rise } = room.stairs;
+  const { w, d } = room.size;
+
+  const group = new THREE.Group();
+
+  const platformDepth = toZ - (-d/2);
+  const platformZ = (toZ + (-d/2)) / 2;
+  const platform = new THREE.Mesh(
+    new THREE.BoxGeometry(w, rise, platformDepth),
+    new THREE.MeshStandardMaterial({ color: 0x7a7a7a })
+  );
+  platform.position.set(0, rise/2, platformZ);
+  group.add(platform);
+
+  const topTex = makeFloorTexture();
+  topTex.repeat.set(w/2, platformDepth/2);
+  const platformTop = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, platformDepth),
+    new THREE.MeshStandardMaterial({ map: topTex })
+  );
+  platformTop.rotation.x = -Math.PI/2;
+  platformTop.position.set(0, rise + 0.001, platformZ);
+  group.add(platformTop);
+
+  const steps = 8;
+  const stepRun = (fromZ - toZ) / steps;
+  const stepRise = rise / steps;
+  const stepMat = new THREE.MeshStandardMaterial({ color: 0x8a8a8a });
+  for(let i=0; i<steps; i++){
+    const stepH = stepRise * (i+1);
+    const zCenter = fromZ - stepRun*i - stepRun/2;
+    const step = new THREE.Mesh(new THREE.BoxGeometry(w, stepH, stepRun), stepMat);
+    step.position.set(0, stepH/2, zCenter);
+    group.add(step);
+  }
+
+  return group;
 }
 
 function doorTriggerBox(size, wall, offset, origin){
@@ -448,7 +508,16 @@ function buildRoom(roomKey){
         exitMeta.push({ box: doorTriggerBox(room.size, wall, ex.offset), target: ex.target, spawn });
       }
     }
-    if(room.label) scene.add(placeLabelOnWall(room.size, room.label.wall, room.label.text));
+    if(room.stairs) scene.add(buildStairs(room));
+    if(room.label){
+      let labelY;
+      if(room.stairs){
+        const { fixed } = wallSpan(room.size, room.label.wall);
+        const floorY = floorHeightAt(room, fixed);
+        labelY = floorY + (room.size.h - floorY) / 2;
+      }
+      scene.add(placeLabelOnWall(room.size, room.label.wall, room.label.text, null, labelY));
+    }
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
   } else {
@@ -529,9 +598,10 @@ function tick(){
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
-  camera.position.set(pos.x, EYE_HEIGHT, pos.z);
+  const eyeY = EYE_HEIGHT + floorHeightAt(ROOMS[currentRoomKey], pos.z);
+  camera.position.set(pos.x, eyeY, pos.z);
   camera.rotation.set(0, yaw, 0);
-  window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, yaw };
+  window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw };
 
   if(clock.getElapsedTime() > teleportLockUntil){
     for(const m of exitMeta){
