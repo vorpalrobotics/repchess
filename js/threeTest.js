@@ -413,6 +413,26 @@ function buildStairs(room){
   return group;
 }
 
+// A freestanding ground-level sign on two posts, like a museum or
+// apartment-complex sign out on the lawn -- not mounted on the building
+// wall. Faces +z (south, toward the street) by default, same orientation
+// convention as mountOutward's south case.
+function buildGroundSign(text){
+  const group = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
+  const postH = 1.1;
+  const postGeo = new THREE.BoxGeometry(0.15, postH, 0.15);
+  for(const dx of [-0.9, 0.9]){
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(dx, postH/2, 0);
+    group.add(post);
+  }
+  const panel = makeSignMesh(text);
+  panel.position.y = postH + 0.85/2;
+  group.add(panel);
+  return group;
+}
+
 function doorTriggerBox(size, wall, offset, origin){
   origin = origin || { x:0, z:0 };
   const { axis, fixed, half } = wallSpan(size, wall);
@@ -537,9 +557,12 @@ function buildRoom(roomKey){
       }
       scene.add(buildRoof(b.size, b.origin, 0x3a3a3a));
       if(b.sign){
-        const signMesh = makeSignMesh(b.sign);
-        const signY = b.size.h - 0.6;
-        scene.add(mountOutward(b.size, b.doorWall, b.doorOffset, b.origin, signMesh, signY, WALL_THICK/2 + 0.09));
+        // Out on the lawn to the right of the front door (as seen walking
+        // up to it), like a museum or apartment-complex entrance sign --
+        // not mounted on the facade itself.
+        const signGroup = buildGroundSign(b.sign);
+        signGroup.position.set(b.origin.x + 6, 0, b.origin.z + b.size.d/2 + 2.5);
+        scene.add(signGroup);
       }
       if(b.frontTexture && textureLoader){
         // Movie-set facade: once the image loads, lay it flat over the whole
