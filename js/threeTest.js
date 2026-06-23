@@ -5,7 +5,12 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
+import { openAssetPicker } from './assets.js';
+
 let THREE = null;
+
+/* asset types that can sit in a slot (props, not surfaces) */
+const PROP_TYPES = ['box', 'billboard-cylindrical', 'billboard-sprite'];
 
 const ROOMS = {
   mainStreet: {
@@ -33,6 +38,14 @@ const ROOMS = {
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'west', text: '1' },
     furniture: { type: 'table', x: -3.2, z: 3.2, yaw: 0 },
+    // standard placement slots for the in-world layout editor (press E):
+    // three floor corners (the fourth holds the table above) + one wall.
+    slots: [
+      { id: 'fl-ne', kind: 'floor', x: 3.2,  z: -3.2 },
+      { id: 'fl-nw', kind: 'floor', x: -3.2, z: -3.2 },
+      { id: 'fl-se', kind: 'floor', x: 3.2,  z: 3.2  },
+      { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
+    ],
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
       { wall: 'east',  offset: 0, target: 'roomC' },
@@ -45,6 +58,13 @@ const ROOMS = {
     label: { wall: 'north', text: '2' },
     furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
     stairs: { fromZ: 2.0, toZ: -1.0, rise: 1.3 },
+    // floor slots kept in the flat front half (z>fromZ); two doorless walls
+    slots: [
+      { id: 'fl-sw', kind: 'floor', x: -3.2, z: 3.2 },
+      { id: 'fl-se', kind: 'floor', x: 3.2,  z: 3.2 },
+      { id: 'w-east', kind: 'wall', wall: 'east', offset: 0, y: 1.6 },
+      { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
+    ],
     exits: [
       { wall: 'south', offset: 0, target: 'start' }
     ]
@@ -54,6 +74,12 @@ const ROOMS = {
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'east', text: '3' },
     furniture: { type: 'chest', x: 3.2, z: 3.2, yaw: Math.PI/4 },
+    slots: [
+      { id: 'fl-nw', kind: 'floor', x: -3.2, z: -3.2 },
+      { id: 'fl-ne', kind: 'floor', x: 3.2,  z: -3.2 },
+      { id: 'fl-sw', kind: 'floor', x: -3.2, z: 3.2  },
+      { id: 'w-north', kind: 'wall', wall: 'north', offset: 0, y: 1.6 }
+    ],
     exits: [
       { wall: 'west', offset: 0, target: 'start' }
     ]
@@ -79,6 +105,87 @@ let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
 let textureLoader = null;
 let buildGeneration = 0;
+
+/* ---------- in-world layout editor state ----------
+   editMode is toggled with the E key. LAYOUT holds per-room overrides
+   (floor/wall surfaces and per-slot accessories) keyed by asset id; it's
+   persisted to the IndexedDB 'meta' store under LAYOUT_KEY and merged onto
+   the static ROOMS config at build time, so the demo always has a working
+   fallback. ASSET_BY_ID is a cache of all asset records (from the 'assets'
+   store) so buildRoom can turn an id into geometry without an async lookup.
+*/
+const LAYOUT_KEY = 'threeLayout';
+let editMode = false;
+let inputLocked = false;       // true while a picker is open (suppresses movement)
+let LAYOUT = {};
+let ASSET_BY_ID = {};
+let raycaster = null;
+let pointer = null;
+let billboards = [];           // cylindrical billboards needing per-frame facing
+let editHud = null;
+
+function floorAssetFor(roomKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].floor;
+  return id ? ASSET_BY_ID[id] : null;
+}
+function wallAssetFor(roomKey, wall){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].walls && LAYOUT[roomKey].walls[wall];
+  return id ? ASSET_BY_ID[id] : null;
+}
+function slotAssetFor(roomKey, slotId){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slotId];
+  return id ? ASSET_BY_ID[id] : null;
+}
+function slotById(room, slotId){
+  return (room.slots || []).find(s => s.id === slotId) || null;
+}
+
+async function refreshAssetMap(){
+  ASSET_BY_ID = {};
+  for(const a of await getAllAssets()) ASSET_BY_ID[a.id] = a;
+}
+async function loadLayout(){
+  const raw = await getMeta(LAYOUT_KEY);
+  try { LAYOUT = raw ? JSON.parse(raw) : {}; }
+  catch { LAYOUT = {}; }
+}
+function persistLayout(){ setMeta(LAYOUT_KEY, JSON.stringify(LAYOUT)); }
+
+function ensureRoomLayout(roomKey){
+  if(!LAYOUT[roomKey]) LAYOUT[roomKey] = {};
+  const r = LAYOUT[roomKey];
+  if(!r.walls) r.walls = {};
+  if(!r.slots) r.slots = {};
+  return r;
+}
+
+/* apply an edit (mutate LAYOUT), persist, refresh assets, and rebuild the
+   current room in place (keeps the player's position/orientation). */
+async function applyEdit(mutator){
+  mutator();
+  persistLayout();
+  await refreshAssetMap();
+  buildRoom(currentRoomKey);
+}
+
+function setFloorOverride(roomKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.floor = assetId; else delete r.floor;
+  });
+}
+function setWallOverride(roomKey, wall, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.walls[wall] = assetId; else delete r.walls[wall];
+  });
+}
+function setSlotOverride(roomKey, slotId, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
+  });
+}
 
 function clampToRoom(size, x, z){
   const { w, d } = size;
@@ -257,6 +364,157 @@ function placeFurniture(room){
   return mesh;
 }
 
+/* ---------- asset → geometry (in-world layout editor) ----------
+   Turns an asset record from the 'assets' store into three.js geometry:
+   surfaces become tiled MeshStandardMaterials, props become boxes,
+   billboards or sprites per Documents/three-assets.md. Textures load from
+   the asset's base64 data-URL (TextureLoader handles data URLs fine), with
+   the same buildGeneration guard the facade loader uses so a texture that
+   finishes loading after a room change is discarded.
+*/
+function assetSurfaceMaterial(asset, repeatX, repeatY){
+  const mat = new THREE.MeshStandardMaterial({
+    color: asset.tint ? new THREE.Color(asset.tint) : 0xffffff,
+    roughness: asset.roughness ?? 0.85,
+    metalness: asset.metalness ?? 0
+  });
+  const myGen = buildGeneration;
+  textureLoader.load(asset.image, (tex) => {
+    if(buildGeneration !== myGen) return;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.repeat.set(Math.max(0.01, repeatX), Math.max(0.01, repeatY));
+    if(asset.rotation){ tex.center.set(0.5, 0.5); tex.rotation = asset.rotation * Math.PI/180; }
+    mat.map = tex;
+    mat.needsUpdate = true;
+  });
+  return mat;
+}
+
+// box face material order is [+x,-x,+y,-y,+z,-z]; an asset's "front" faces
+// local -z (index 5), matching the furniture yaw convention.
+function buildBoxAsset(asset){
+  const { w, h, d } = asset.size;
+  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(asset.sideColor || '#888888') });
+  const skin = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  const myGen = buildGeneration;
+  textureLoader.load(asset.image, (tex) => {
+    if(buildGeneration !== myGen) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    skin.map = tex; skin.needsUpdate = true;
+  });
+  const skinned = new Set(['front']);
+  if(asset.skinFace === 'front+top') skinned.add('top');
+  const mats = [
+    side, side,                                  // +x, -x
+    skinned.has('top') ? skin : side, side,      // +y, -y
+    side,                                        // +z
+    skin                                         // -z (front)
+  ];
+  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
+}
+
+function buildBillboardAsset(asset){
+  const { w, h } = asset.size;
+  if(asset.type === 'billboard-sprite'){
+    const mat = new THREE.SpriteMaterial({ color: 0xffffff });
+    const myGen = buildGeneration;
+    textureLoader.load(asset.image, (tex) => {
+      if(buildGeneration !== myGen) return;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      mat.map = tex; mat.needsUpdate = true;
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(w, h, 1);
+    return sprite;
+  }
+  const mat = new THREE.MeshStandardMaterial({ transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+  const myGen = buildGeneration;
+  textureLoader.load(asset.image, (tex) => {
+    if(buildGeneration !== myGen) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat.map = tex; mat.needsUpdate = true;
+  });
+  return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+}
+
+function buildPropAsset(asset){
+  if(asset.type === 'box') return buildBoxAsset(asset);
+  return buildBillboardAsset(asset); // cylindrical or sprite
+}
+
+// rotation.y so a prop's front (local -z) points into the room off a wall
+const WALL_INWARD_YAW = { north: Math.PI, south: 0, west: -Math.PI/2, east: Math.PI/2 };
+
+// places a built prop into a slot (floor or wall), tags it for the editor,
+// and registers cylindrical billboards for per-frame facing.
+function placeSlotAccessory(room, slot, asset){
+  const obj = buildPropAsset(asset);
+  if(slot.kind === 'wall'){
+    const { axis, fixed } = wallSpan(room.size, slot.wall);
+    const depth = asset.type === 'box' ? (asset.size.d || 0.3) : 0.05;
+    const clearance = WALL_THICK/2 + depth/2 + 0.02;
+    let x, z;
+    if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
+    else { z = slot.offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; }
+    obj.position.set(x, slot.y, z);
+    if(!(asset.type === 'billboard-cylindrical' || asset.type === 'billboard-sprite')){
+      obj.rotation.y = WALL_INWARD_YAW[slot.wall] || 0;
+    }
+  } else {
+    // box / plane / sprite are all centred on their geometry, so sitting one
+    // on the floor means raising it by half its height
+    const floorY = floorHeightAt(room, slot.z);
+    const h = (asset.size && asset.size.h) || 1;
+    obj.position.set(slot.x, floorY + h/2, slot.z);
+    if(asset.type === 'box') obj.rotation.y = slot.yaw || 0;
+  }
+  obj.userData = { kind: 'accessory', slotId: slot.id };
+  if(asset.type === 'billboard-cylindrical') billboards.push(obj);
+  return obj;
+}
+
+/* faint editor-only marker shown at an empty slot. Floor slots get a flat
+   disc on the ground; wall slots get a small square flush to the wall. */
+let slotMarkerMat = null;
+function slotMarkerMaterial(){
+  if(!slotMarkerMat){
+    slotMarkerMat = new THREE.MeshBasicMaterial({ color: 0x21d4d4, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+  }
+  return slotMarkerMat;
+}
+function buildSlotMarker(room, slot){
+  let mesh;
+  if(slot.kind === 'wall'){
+    mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), slotMarkerMaterial());
+    const { axis, fixed } = wallSpan(room.size, slot.wall);
+    const clearance = WALL_THICK/2 + 0.03;
+    let x, z;
+    if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; mesh.rotation.y = slot.wall === 'north' ? 0 : Math.PI; }
+    else { z = slot.offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; mesh.rotation.y = slot.wall === 'west' ? Math.PI/2 : -Math.PI/2; }
+    mesh.position.set(x, slot.y, z);
+  } else {
+    mesh = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), slotMarkerMaterial());
+    mesh.rotation.x = -Math.PI/2;
+    mesh.position.set(slot.x, floorHeightAt(room, slot.z) + 0.02, slot.z);
+  }
+  mesh.userData = { kind: 'slot', slotId: slot.id, allow: slot.allow || PROP_TYPES };
+  return mesh;
+}
+
+// renders every slot in a room: placed accessory if one is assigned, else a
+// marker (only in edit mode, so normal walking is unchanged).
+function buildSlots(room, roomKey){
+  for(const slot of room.slots || []){
+    const asset = slotAssetFor(roomKey, slot.id);
+    if(asset){
+      scene.add(placeSlotAccessory(room, slot, asset));
+    } else if(editMode){
+      scene.add(buildSlotMarker(room, slot));
+    }
+  }
+}
+
 function wallSpan(size, wall){
   // returns the wall's run axis ('x' or 'z'), fixed coordinate, and half-length
   const {w,d} = size;
@@ -268,15 +526,24 @@ function wallSpan(size, wall){
   }
 }
 
-function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin){
+function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, opts){
   origin = origin || { x:0, z:0 };
+  opts = opts || {};
   const group = new THREE.Group();
   const { axis, fixed, half } = wallSpan(size, wall);
   const h = size.h;
-  const tex = wallTexture.clone();
-  tex.needsUpdate = true;
-  tex.repeat.set(Math.max(1, Math.round(half*2/2.5)), Math.max(1, Math.round(h/2)));
-  const mat = new THREE.MeshStandardMaterial({ map: tex });
+  let mat;
+  if(opts.surfaceAsset){
+    // surface override from the layout editor: repeat density driven by the
+    // asset's repeatPerMeter across this wall's real dimensions
+    const rpm = opts.surfaceAsset.repeatPerMeter || 0.5;
+    mat = assetSurfaceMaterial(opts.surfaceAsset, half*2 * rpm, h * rpm);
+  } else {
+    const tex = wallTexture.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(Math.max(1, Math.round(half*2/2.5)), Math.max(1, Math.round(h/2)));
+    mat = new THREE.MeshStandardMaterial({ map: tex });
+  }
 
   function segment(start, end){
     const len = end - start;
@@ -292,6 +559,7 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin){
     }
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, h/2, z);
+    if(opts.editable) mesh.userData = { kind: 'wall', wall };
     group.add(mesh);
   }
 
@@ -313,6 +581,7 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin){
     }
     const lintel = new THREE.Mesh(geo, mat);
     lintel.position.set(x, DOOR_H + lintelH/2, z);
+    if(opts.editable) lintel.userData = { kind: 'wall', wall };
     group.add(lintel);
   }
   return group;
@@ -504,6 +773,7 @@ function buildRoom(roomKey){
   buildGeneration++;
   const myGeneration = buildGeneration;
   scene.clear();
+  billboards = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
   const sun = new THREE.DirectionalLight(0xffffff, room.outdoor ? 0.9 : 0.7);
@@ -516,13 +786,19 @@ function buildRoom(roomKey){
   if(room.outdoor){
     scene.add(buildOutdoorGround(room));
   } else {
-    const groundTex = makeFloorTexture();
-    groundTex.repeat.set(w/2, d/2);
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(w, d),
-      new THREE.MeshStandardMaterial({ map: groundTex })
-    );
+    let floorMat;
+    const floorAsset = floorAssetFor(roomKey);
+    if(floorAsset){
+      const rpm = floorAsset.repeatPerMeter || 0.5;
+      floorMat = assetSurfaceMaterial(floorAsset, w * rpm, d * rpm);
+    } else {
+      const groundTex = makeFloorTexture();
+      groundTex.repeat.set(w/2, d/2);
+      floorMat = new THREE.MeshStandardMaterial({ map: groundTex });
+    }
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), floorMat);
     floor.rotation.x = -Math.PI/2;
+    floor.userData = { kind: 'floor' };
     scene.add(floor);
   }
 
@@ -545,7 +821,8 @@ function buildRoom(roomKey){
     const wallTex = makeBrickTexture(room.color);
     for(const wall of ['north','south','east','west']){
       const ex = currentExitsByWall[wall];
-      const group = buildWallGroup(room.size, wall, !!ex, ex ? ex.offset : 0, wallTex);
+      const group = buildWallGroup(room.size, wall, !!ex, ex ? ex.offset : 0, wallTex, null,
+        { editable: true, surfaceAsset: wallAssetFor(roomKey, wall) });
       scene.add(group);
       if(ex){
         const spawn = computeSpawnForExit(roomKey, room, ex);
@@ -564,6 +841,7 @@ function buildRoom(roomKey){
     }
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
+    buildSlots(room, roomKey);
   } else {
     // surrounding courtyard wall (no doors of its own — exploring further
     // up/down the street is a later step, this just bounds the area)
@@ -642,7 +920,7 @@ function tick(){
   let move = 0;
   if(keys['ArrowUp']   || keys['w'] || keys['W']) move += 1;
   if(keys['ArrowDown'] || keys['s'] || keys['S']) move -= 1;
-  if(move !== 0){
+  if(move !== 0 && !inputLocked){
     // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
     pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
     pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
@@ -653,9 +931,16 @@ function tick(){
   const eyeY = EYE_HEIGHT + floorHeightAt(ROOMS[currentRoomKey], pos.z);
   camera.position.set(pos.x, eyeY, pos.z);
   camera.rotation.set(0, yaw, 0);
-  window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw };
+  window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw, editMode };
 
-  if(clock.getElapsedTime() > teleportLockUntil){
+  // cylindrical billboards: rotate to face the camera horizontally each frame
+  for(const b of billboards){
+    b.rotation.y = Math.atan2(camera.position.x - b.position.x, camera.position.z - b.position.z);
+  }
+
+  // door teleports are suppressed in edit mode so you can stand in a doorway
+  // and edit the wall beside it without being yanked into the next room
+  if(!editMode && clock.getElapsedTime() > teleportLockUntil){
     for(const m of exitMeta){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
         enterRoom(m.target, m.spawn);
@@ -667,6 +952,68 @@ function tick(){
   renderer.render(scene, camera);
 }
 
+/* ---------- in-world layout editor: click handling ---------- */
+function findInteractive(obj){
+  while(obj){
+    if(obj.userData && obj.userData.kind) return obj.userData;
+    obj = obj.parent;
+  }
+  return null;
+}
+
+function onCanvasClick(e){
+  if(!editMode || inputLocked || !raycaster) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(scene.children, true);
+  for(const hit of hits){
+    const ud = findInteractive(hit.object);
+    if(ud){ handleEditTarget(ud); return; }
+  }
+}
+
+function handleEditTarget(ud){
+  const roomKey = currentRoomKey;
+  inputLocked = true;
+  const onClose = () => { inputLocked = false; };
+  if(ud.kind === 'floor'){
+    openAssetPicker({
+      allow: ['surface'], allowRemove: !!floorAssetFor(roomKey), onClose,
+      onPick: id => setFloorOverride(roomKey, id),
+      onRemove: () => setFloorOverride(roomKey, null)
+    });
+  } else if(ud.kind === 'wall'){
+    openAssetPicker({
+      allow: ['surface'], allowRemove: !!wallAssetFor(roomKey, ud.wall), onClose,
+      onPick: id => setWallOverride(roomKey, ud.wall, id),
+      onRemove: () => setWallOverride(roomKey, ud.wall, null)
+    });
+  } else if(ud.kind === 'slot'){
+    openAssetPicker({
+      allow: ud.allow, onClose,
+      onPick: id => setSlotOverride(roomKey, ud.slotId, id)
+    });
+  } else if(ud.kind === 'accessory'){
+    const slot = slotById(ROOMS[roomKey], ud.slotId);
+    openAssetPicker({
+      allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true, onClose,
+      onPick: id => setSlotOverride(roomKey, ud.slotId, id),
+      onRemove: () => setSlotOverride(roomKey, ud.slotId, null)
+    });
+  }
+}
+
+function setEditMode(on){
+  // editing is interior-only (floors/walls/slots) — ignore E out on the street
+  if(on && (!ROOMS[currentRoomKey] || ROOMS[currentRoomKey].outdoor)) return;
+  editMode = on;
+  if(renderer) renderer.domElement.style.cursor = on ? 'crosshair' : 'default';
+  if(editHud) editHud.style.display = on ? 'block' : 'none';
+  buildRoom(currentRoomKey);
+}
+
 function onResize(){
   if(!container || !renderer || !camera) return;
   const w = container.clientWidth, h = container.clientHeight;
@@ -676,7 +1023,11 @@ function onResize(){
   camera.updateProjectionMatrix();
 }
 
-function onKeyDown(e){ keys[e.key] = true; }
+function onKeyDown(e){
+  if(e.key === 'e' || e.key === 'E'){ setEditMode(!editMode); return; }
+  if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
+  keys[e.key] = true;
+}
 function onKeyUp(e){ keys[e.key] = false; }
 
 export async function openThreeTest(containerEl){
@@ -684,9 +1035,24 @@ export async function openThreeTest(containerEl){
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
 
+  editMode = false;
+  inputLocked = false;
+  raycaster = new THREE.Raycaster();
+  pointer = new THREE.Vector2();
+  await loadLayout();
+  await refreshAssetMap();
+
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
   container.appendChild(renderer.domElement);
+
+  // editor HUD overlay (hidden until edit mode is on)
+  editHud = document.createElement('div');
+  editHud.style.cssText = 'position:absolute;top:8px;left:8px;padding:.35rem .6rem;'
+    + 'background:rgba(21,101,192,.85);color:#fff;font:600 .8rem sans-serif;'
+    + 'border-radius:4px;pointer-events:none;display:none;z-index:2';
+  editHud.textContent = 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
+  container.appendChild(editHud);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
@@ -699,9 +1065,22 @@ export async function openThreeTest(containerEl){
   resizeObs.observe(container);
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
+  renderer.domElement.addEventListener('click', onCanvasClick);
 
   enterRoom('mainStreet', { x:0, z:18, yaw:0 });
   tick();
+
+  // test-only hook (off unless the debug flag is set) so the layout editor can
+  // be driven deterministically without scripting the walk into a room
+  if(localStorage.getItem('threeTestDebug')){
+    window.__threeTestEdit = {
+      enter: (k) => enterRoom(k, { x:0, z:0, yaw:0 }),
+      toggle: () => setEditMode(!editMode),
+      target: (ud) => handleEditTarget(ud),
+      room: () => currentRoomKey,
+      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall }); }); return out; }
+    };
+  }
 }
 
 export function closeThreeTest(){
@@ -712,9 +1091,14 @@ export function closeThreeTest(){
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
   if(renderer){
+    renderer.domElement.removeEventListener('click', onCanvasClick);
     renderer.dispose();
     renderer = null;
   }
   if(container){ container.innerHTML = ''; }
+  editMode = false;
+  inputLocked = false;
+  billboards = [];
+  editHud = null;
   scene = null; camera = null; clock = null; container = null;
 }

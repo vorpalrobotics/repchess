@@ -323,3 +323,118 @@ async function exportAllAsFiles(){
     downloadBlob(new Blob([JSON.stringify(assetToJson(a), null, 2)], {type:'application/json'}), `${a.id}.json`);
   }
 }
+
+/* ---------- asset picker ----------
+   A lightweight modal for choosing an existing asset (filtered to a set of
+   types) from somewhere other than the full manager — e.g. the in-world
+   layout editor in threeTest.js. Builds its own overlay on document.body
+   (above whatever is open) so it has no static-markup dependency.
+
+   opts = {
+     allow:       array of asset types to show (null = all),
+     allowRemove: show a "Remove" button (e.g. to clear a surface/slot),
+     onPick:      fn(assetId)  — chosen an asset,
+     onRemove:    fn()         — clicked Remove,
+     onClose:     fn()         — always called once the picker closes
+   }
+*/
+let pickerOpts = null;
+let pickerUploadType = 'box';
+
+export function openAssetPicker(opts){
+  pickerOpts = opts || {};
+  pickerUploadType = (pickerOpts.allow && pickerOpts.allow[0]) || 'box';
+  let ov = document.getElementById('assetPickerOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'assetPickerOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '60';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  renderPicker(ov);
+}
+
+function closePicker(){
+  const ov = document.getElementById('assetPickerOverlay');
+  if(ov) ov.style.display = 'none';
+  const cb = pickerOpts && pickerOpts.onClose;
+  pickerOpts = null;
+  if(cb) cb();
+}
+
+async function renderPicker(ov){
+  const all = await getAllAssets();
+  const allow = pickerOpts.allow;
+  const list = allow ? all.filter(a => allow.includes(a.type)) : all;
+  list.sort((a,b) => a.id.localeCompare(b.id));
+  const typeLabel = allow ? allow.map(t => (ASSET_TYPES[t]||{}).label || t).join(' / ') : 'any';
+  ov.innerHTML = `
+    <div class="modal" style="width:min(52em,92vw);max-height:88vh;display:flex;flex-direction:column">
+      <div class="assets-header">
+        <h2>Choose Asset</h2>
+        <button id="pickerCloseBtn">Cancel</button>
+      </div>
+      <p style="margin:.2rem 0 .6rem;font-size:.8rem;color:#666">Showing: ${esc(typeLabel)}</p>
+      <div class="assets-body" style="overflow:auto">
+        <div class="assets-grid" id="pickerGrid"></div>
+      </div>
+      <div class="assets-editor-actions">
+        <div class="left">
+          <button id="pickerUploadBtn"><i class="fa-solid fa-upload"></i> Upload new…</button>
+          <input type="file" id="pickerUploadFile" accept="image/*" style="display:none">
+        </div>
+        ${pickerOpts.allowRemove ? '<button id="pickerRemoveBtn" style="background:#c62828;color:#fff">Remove</button>' : ''}
+      </div>
+    </div>
+  `;
+  const grid = ov.querySelector('#pickerGrid');
+  if(!list.length){
+    grid.innerHTML = '<p class="assets-empty">No matching assets yet. Use "Upload new…" or add some via menu → Manage Assets.</p>';
+  } else {
+    for(const a of list){
+      const card = document.createElement('div');
+      card.className = 'asset-card';
+      card.innerHTML = `
+        <div class="asset-thumb">${a.image ? `<img src="${a.image}" alt="">` : ''}</div>
+        <div class="asset-id">${esc(a.id)}</div>
+        <div class="asset-type">${esc((ASSET_TYPES[a.type]||{}).label || a.type)}</div>
+      `;
+      card.onclick = () => { const cb = pickerOpts.onPick; closePicker(); if(cb) cb(a.id); };
+      grid.appendChild(card);
+    }
+  }
+  ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
+  ov.querySelector('#pickerUploadBtn').onclick = () => ov.querySelector('#pickerUploadFile').click();
+  ov.querySelector('#pickerUploadFile').onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    await pickerUpload(file, ov);
+  };
+  if(pickerOpts.allowRemove){
+    ov.querySelector('#pickerRemoveBtn').onclick = () => { const cb = pickerOpts.onRemove; closePicker(); if(cb) cb(); };
+  }
+}
+
+/* upload straight from the picker: derive an id from the filename, encode the
+   image, and stage it with default metadata for the first allowed type, then
+   re-render so it shows up in the grid for the user to place. */
+async function pickerUpload(file, ov){
+  if(!file) return;
+  if(!file.type.startsWith('image/')){ alert('that file is not an image'); return; }
+  if(file.size > IMG_MAX_FILE_BYTES){ alert(`image too large (max ${IMG_MAX_FILE_BYTES/1024/1024}MB)`); return; }
+  let base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if(!ID_RE.test(base)) base = 'asset';
+  const existing = await getAllAssets();
+  let id = base, n = 2;
+  while(existing.some(a => a.id === id)){ id = `${base}-${n++}`; }
+  try{
+    const image = await resizeImageFile(file);
+    await setAsset(id, { type: pickerUploadType, image });
+    await renderPicker(ov);
+  }catch(err){
+    console.error('[assets] picker upload failed', err);
+    alert('could not read that image');
+  }
+}
