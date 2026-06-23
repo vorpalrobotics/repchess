@@ -1,20 +1,30 @@
 /* ---------- Three.js integration prototype ----------
-   Minimal "feel test" for walking between rooms in a 3D castle: a box
-   room with two doorways, each leading to its own plain box room. No
-   decorations/furniture/textures — just walls, floor, ceiling, and the
-   doorway-crossing transition mechanism this is meant to prove out.
+   "Feel test" for a loci-style memory layout: an outdoor street/courtyard
+   containing one building you can walk up to and enter. The building's
+   interior is the same two-doorway, three-room layout from the earlier
+   iteration of this prototype, now reached by walking through its front
+   door instead of just spawning inside it.
 */
 let THREE = null;
 
 const ROOMS = {
+  street: {
+    outdoor: true,
+    size: { w: 30, d: 18, h: 7 },
+    exits: [],
+    buildings: [
+      { target: 'start', label: '1', color: 0x6f8fb0, size: { w: 10, d: 10, h: 4 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
+    ]
+  },
   start: {
     color: 0x6f8fb0,
     size: { w: 10, d: 10, h: 4 },
-    label: { wall: 'south', text: '1' },
+    label: { wall: 'west', text: '1' },
     furniture: { type: 'table', x: -3.2, z: 3.2, yaw: 0 },
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
-      { wall: 'east',  offset: 0, target: 'roomC' }
+      { wall: 'east',  offset: 0, target: 'roomC' },
+      { wall: 'south', offset: 0, target: 'street' }
     ]
   },
   roomB: {
@@ -50,13 +60,13 @@ let keys = {};
 let yaw = 0;
 let pos = { x:0, z:0 };
 let currentRoomKey = 'start';
-let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target}]
+let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
 let currentExitsByWall = {};
 let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
 
-function clampToRoom(room, x, z){
-  const { w, d } = room.size;
+function clampToRoom(size, x, z){
+  const { w, d } = size;
   const halfW = w/2 - PLAYER_RADIUS, halfD = d/2 - PLAYER_RADIUS;
   const dHalf = DOOR_W/2;
 
@@ -131,6 +141,20 @@ function makeFloorTexture(){
   }, 256);
 }
 
+function makeGroundTexture(){
+  return makeCanvasTexture((ctx, size) => {
+    ctx.fillStyle = '#7d8a78';
+    ctx.fillRect(0, 0, size, size);
+    const cols = 5, tile = size/cols;
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 3;
+    for(let i=0; i<=cols; i++){
+      ctx.beginPath(); ctx.moveTo(i*tile, 0); ctx.lineTo(i*tile, size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, i*tile); ctx.lineTo(size, i*tile); ctx.stroke();
+    }
+  }, 256);
+}
+
 function makeTable(){
   const group = new THREE.Group();
   const topMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
@@ -193,9 +217,9 @@ function placeFurniture(room){
   return mesh;
 }
 
-function wallSpan(room, wall){
+function wallSpan(size, wall){
   // returns the wall's run axis ('x' or 'z'), fixed coordinate, and half-length
-  const {w,d} = room.size;
+  const {w,d} = size;
   switch(wall){
     case 'north': return { axis:'x', fixed:-d/2, half:w/2 };
     case 'south': return { axis:'x', fixed: d/2, half:w/2 };
@@ -204,10 +228,11 @@ function wallSpan(room, wall){
   }
 }
 
-function buildWallGroup(room, wall, hasDoor, doorOffset, wallTexture){
+function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin){
+  origin = origin || { x:0, z:0 };
   const group = new THREE.Group();
-  const { axis, fixed, half } = wallSpan(room, wall);
-  const h = room.size.h;
+  const { axis, fixed, half } = wallSpan(size, wall);
+  const h = size.h;
   const tex = wallTexture.clone();
   tex.needsUpdate = true;
   tex.repeat.set(Math.max(1, Math.round(half*2/2.5)), Math.max(1, Math.round(h/2)));
@@ -220,10 +245,10 @@ function buildWallGroup(room, wall, hasDoor, doorOffset, wallTexture){
     let geo, x, z;
     if(axis === 'x'){
       geo = new THREE.BoxGeometry(len, h, WALL_THICK);
-      x = mid; z = fixed;
+      x = mid + origin.x; z = fixed + origin.z;
     } else {
       geo = new THREE.BoxGeometry(WALL_THICK, h, len);
-      x = fixed; z = mid;
+      x = fixed + origin.x; z = mid + origin.z;
     }
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, h/2, z);
@@ -241,16 +266,23 @@ function buildWallGroup(room, wall, hasDoor, doorOffset, wallTexture){
     const lintelH = h - DOOR_H;
     if(axis === 'x'){
       geo = new THREE.BoxGeometry(DOOR_W, lintelH, WALL_THICK);
-      x = doorOffset; z = fixed;
+      x = doorOffset + origin.x; z = fixed + origin.z;
     } else {
       geo = new THREE.BoxGeometry(WALL_THICK, lintelH, DOOR_W);
-      x = fixed; z = doorOffset;
+      x = fixed + origin.x; z = doorOffset + origin.z;
     }
     const lintel = new THREE.Mesh(geo, mat);
     lintel.position.set(x, DOOR_H + lintelH/2, z);
     group.add(lintel);
   }
   return group;
+}
+
+function buildRoof(size, origin, color){
+  const mat = new THREE.MeshStandardMaterial({ color });
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(size.w + 0.6, 0.3, size.d + 0.6), mat);
+  roof.position.set(origin.x, size.h + 0.15, origin.z);
+  return roof;
 }
 
 function makeLabelMesh(text){
@@ -267,89 +299,141 @@ function makeLabelMesh(text){
   return new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), mat);
 }
 
-function placeLabelOnWall(room, wall, text){
-  const { fixed } = wallSpan(room, wall);
+function placeLabelOnWall(size, wall, text, origin){
+  origin = origin || { x:0, z:0 };
+  const { fixed } = wallSpan(size, wall);
   const mesh = makeLabelMesh(text);
   const clearance = WALL_THICK/2 + 0.02;
-  const y = room.size.h/2;
-  if(wall === 'north'){ mesh.position.set(0, y, fixed + clearance); mesh.rotation.y = 0; }
-  if(wall === 'south'){ mesh.position.set(0, y, fixed - clearance); mesh.rotation.y = Math.PI; }
-  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, 0); mesh.rotation.y = Math.PI/2; }
-  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, 0); mesh.rotation.y = -Math.PI/2; }
+  const y = size.h/2;
+  if(wall === 'north'){ mesh.position.set(origin.x, y, fixed + clearance + origin.z); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(origin.x, y, fixed - clearance + origin.z); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + clearance + origin.x, y, origin.z); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - clearance + origin.x, y, origin.z); mesh.rotation.y = -Math.PI/2; }
   return mesh;
 }
 
-function doorTriggerBox(room, wall, offset){
-  const { axis, fixed, half } = wallSpan(room, wall);
+function doorTriggerBox(size, wall, offset, origin){
+  origin = origin || { x:0, z:0 };
+  const { axis, fixed, half } = wallSpan(size, wall);
   const dHalf = DOOR_W/2;
   const pad = 1.0; // how far into/past the doorway the trigger reaches
+  let box;
   if(axis === 'x'){
-    return {
-      minX: offset - dHalf, maxX: offset + dHalf,
-      minZ: fixed - pad,    maxZ: fixed + pad
-    };
+    box = { minX: offset-dHalf, maxX: offset+dHalf, minZ: fixed-pad, maxZ: fixed+pad };
+  } else {
+    box = { minX: fixed-pad, maxX: fixed+pad, minZ: offset-dHalf, maxZ: offset+dHalf };
   }
   return {
-    minX: fixed - pad,    maxX: fixed + pad,
-    minZ: offset - dHalf, maxZ: offset + dHalf
+    minX: box.minX + origin.x, maxX: box.maxX + origin.x,
+    minZ: box.minZ + origin.z, maxZ: box.maxZ + origin.z
   };
 }
 
-function spawnPointFor(room, wall, offset){
-  // step a couple meters in from the doorway, facing *into* the room (away
-  // from the wall just entered through) — yaw values use this camera's
-  // forward vector of (-sin(yaw), -cos(yaw)).
-  const { fixed } = wallSpan(room, wall);
+function doorSpawn(size, wall, offset, origin, inside){
+  // "inside" spawns a couple meters in from the doorway, facing further
+  // into the room; the mirrored "outside" spawn faces away from the
+  // doorway instead — both use this camera's forward vector convention
+  // of (-sin(yaw), -cos(yaw)).
+  origin = origin || { x:0, z:0 };
+  const { fixed } = wallSpan(size, wall);
   const inset = 2.5;
-  if(wall === 'north') return { x: offset, z: fixed + inset, yaw: Math.PI };
-  if(wall === 'south') return { x: offset, z: fixed - inset, yaw: 0 };
-  if(wall === 'west')  return { x: fixed + inset, z: offset, yaw: -Math.PI/2 };
-  return { x: fixed - inset, z: offset, yaw: Math.PI/2 }; // east
+  let x, z, yaw;
+  if(wall === 'north'){ x = offset; z = inside ? fixed+inset : fixed-inset; yaw = inside ? Math.PI : 0; }
+  if(wall === 'south'){ x = offset; z = inside ? fixed-inset : fixed+inset; yaw = inside ? 0 : Math.PI; }
+  if(wall === 'west'){  z = offset; x = inside ? fixed+inset : fixed-inset; yaw = inside ? -Math.PI/2 : Math.PI/2; }
+  if(wall === 'east'){  z = offset; x = inside ? fixed-inset : fixed+inset; yaw = inside ? Math.PI/2 : -Math.PI/2; }
+  return { x: x + origin.x, z: z + origin.z, yaw };
+}
+
+function computeSpawnForExit(fromKey, room, ex){
+  const targetRoom = ROOMS[ex.target];
+  if(targetRoom.outdoor){
+    // walking out of a building's front door onto the street
+    const building = targetRoom.buildings.find(b => b.target === fromKey);
+    return doorSpawn(room.size, ex.wall, ex.offset, building.origin, false);
+  }
+  // ordinary interior-to-interior transition: spawn just inside whichever
+  // of the target room's own exits leads back to the room we're leaving
+  const returning = targetRoom.exits.find(e => e.target === fromKey) || targetRoom.exits[0];
+  return doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true);
 }
 
 function buildRoom(roomKey){
   const room = ROOMS[roomKey];
   scene.clear();
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+  scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, room.outdoor ? 0.9 : 0.7);
   sun.position.set(4, 8, 3);
   scene.add(sun);
 
+  scene.background = new THREE.Color(room.outdoor ? 0x8fb8d8 : 0x111317);
+
   const { w, d, h } = room.size;
-  const floorTex = makeFloorTexture();
-  floorTex.repeat.set(w/2, d/2);
+  const groundTex = room.outdoor ? makeGroundTexture() : makeFloorTexture();
+  groundTex.repeat.set(w/2, d/2);
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(w, d),
-    new THREE.MeshStandardMaterial({ map: floorTex })
+    new THREE.MeshStandardMaterial({ map: groundTex })
   );
   floor.rotation.x = -Math.PI/2;
   scene.add(floor);
 
-  const ceiling = new THREE.Mesh(
-    new THREE.PlaneGeometry(w, d),
-    new THREE.MeshStandardMaterial({ color: 0x888888 })
-  );
-  ceiling.rotation.x = Math.PI/2;
-  ceiling.position.y = h;
-  scene.add(ceiling);
+  if(!room.outdoor){
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, d),
+      new THREE.MeshStandardMaterial({ color: 0x888888 })
+    );
+    ceiling.rotation.x = Math.PI/2;
+    ceiling.position.y = h;
+    scene.add(ceiling);
+  }
 
   currentExitsByWall = {};
   for(const ex of room.exits) currentExitsByWall[ex.wall] = ex;
 
-  const wallTex = makeBrickTexture(room.color);
   exitMeta = [];
-  for(const wall of ['north','south','east','west']){
-    const ex = currentExitsByWall[wall];
-    const group = buildWallGroup(room, wall, !!ex, ex ? ex.offset : 0, wallTex);
-    scene.add(group);
-    if(ex) exitMeta.push({ box: doorTriggerBox(room, wall, ex.offset), target: ex.target });
+
+  if(!room.outdoor){
+    const wallTex = makeBrickTexture(room.color);
+    for(const wall of ['north','south','east','west']){
+      const ex = currentExitsByWall[wall];
+      const group = buildWallGroup(room.size, wall, !!ex, ex ? ex.offset : 0, wallTex);
+      scene.add(group);
+      if(ex){
+        const spawn = computeSpawnForExit(roomKey, room, ex);
+        exitMeta.push({ box: doorTriggerBox(room.size, wall, ex.offset), target: ex.target, spawn });
+      }
+    }
+    if(room.label) scene.add(placeLabelOnWall(room.size, room.label.wall, room.label.text));
+    const furniture = placeFurniture(room);
+    if(furniture) scene.add(furniture);
+  } else {
+    // surrounding courtyard wall (no doors of its own — exploring further
+    // up/down the street is a later step, this just bounds the area)
+    const courtyardTex = makeBrickTexture(0x9aa0a6);
+    for(const wall of ['north','south','east','west']){
+      scene.add(buildWallGroup(room.size, wall, false, 0, courtyardTex));
+    }
+    // every building on this street gets its own exterior, door and sign
+    for(const b of room.buildings){
+      const targetRoom = ROOMS[b.target];
+      const buildingTex = makeBrickTexture(b.color);
+      for(const wall of ['north','south','east','west']){
+        const hasDoor = wall === b.doorWall;
+        scene.add(buildWallGroup(b.size, wall, hasDoor, hasDoor ? b.doorOffset : 0, buildingTex, b.origin));
+      }
+      scene.add(buildRoof(b.size, b.origin, 0x3a3a3a));
+      if(b.label) scene.add(placeLabelOnWall(b.size, b.doorWall, b.label, b.origin));
+
+      const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
+      exitMeta.push({
+        box: doorTriggerBox(b.size, b.doorWall, b.doorOffset, b.origin),
+        target: b.target,
+        spawn
+      });
+    }
   }
-
-  if(room.label) scene.add(placeLabelOnWall(room, room.label.wall, room.label.text));
-
-  const furniture = placeFurniture(room);
-  if(furniture) scene.add(furniture);
 
   currentRoomKey = roomKey;
 }
@@ -374,21 +458,18 @@ function tick(){
     // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
     pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
     pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
-    const clamped = clampToRoom(ROOMS[currentRoomKey], pos.x, pos.z);
+    const clamped = clampToRoom(ROOMS[currentRoomKey].size, pos.x, pos.z);
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
   camera.position.set(pos.x, EYE_HEIGHT, pos.z);
   camera.rotation.set(0, yaw, 0);
+  window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, yaw };
 
   if(clock.getElapsedTime() > teleportLockUntil){
     for(const m of exitMeta){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
-        const targetRoom = ROOMS[m.target];
-        // spawn at the wall in the target room whose exit leads back to the
-        // room we're leaving, facing into the new room
-        const returning = targetRoom.exits.find(e => e.target === currentRoomKey) || targetRoom.exits[0];
-        enterRoom(m.target, spawnPointFor(targetRoom, returning.wall, returning.offset));
+        enterRoom(m.target, m.spawn);
         break;
       }
     }
@@ -429,7 +510,7 @@ export async function openThreeTest(containerEl){
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
 
-  enterRoom('start', { x:0, z:2, yaw:0 });
+  enterRoom('street', { x:0, z:8, yaw:0 });
   tick();
 }
 
