@@ -15,16 +15,50 @@ const ASSET_TYPES = {
   'billboard-cylindrical': { label: 'Prop: Billboard (cylindrical)',  kind: 'prop' },
   'billboard-sprite':      { label: 'Prop: Billboard (sprite)',       kind: 'prop' },
   'surface':               { label: 'Surface (floor / wall texture)', kind: 'surface' },
+  'facade':                { label: 'Surface: Facade (large, non-tiled)', kind: 'facade' },
 };
 
-const IMG_MAX_DIM = 1024;               // staged image is downscaled to fit within this box
+/* ---------- import resolution ----------
+   Uploaded PNGs are down-converted on import so we never carry more pixels
+   than a room-scale (~10m) demo can show. The user picks a tier (Low/Normal/
+   High); the tier + the asset's category pick the actual long-edge pixel cap.
+   Aspect ratio is always preserved (fit within a maxDim box, never cropped or
+   squashed), so a 2.5:1 facade at the 2048 cap becomes 2048x819. 4096 is the
+   hard ceiling — the WebGL2 max-texture-size guaranteed safe on ~all hardware.
+
+   Categories:
+     tiled  — surfaces repeat across a wall, so detail-per-tile is enough → least
+     object — props/billboards, viewed at object scale (1-3m) in the room
+     large  — facades: one-shot texture spanning a whole building, up to ~50m
+*/
+const RESOLUTION_TIERS = ['low', 'normal', 'high'];
+const RESOLUTION_DEFAULT = 'normal';
+const RESOLUTION_CAPS = {
+  tiled:  { low: 256,  normal: 512,  high: 1024 },
+  object: { low: 256,  normal: 512,  high: 1024 },
+  large:  { low: 1024, normal: 2048, high: 4096 },
+};
+function resolutionCategory(type){
+  if(type === 'facade')  return 'large';
+  if(type === 'surface') return 'tiled';
+  return 'object';                       // box, billboard-cylindrical, billboard-sprite
+}
+function resolutionCap(type, tier){
+  const cat = RESOLUTION_CAPS[resolutionCategory(type)] || RESOLUTION_CAPS.object;
+  return cat[tier] || cat[RESOLUTION_DEFAULT];
+}
+
 const IMG_MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 let containerEl = null;
 let ASSETS = [];          // cached array of all asset records
 let EDIT_ID = null;       // id of the asset currently open in the editor, or null = creating new
-let EDIT_IMAGE = '';      // staged data-URL for the editor (kept separate so Cancel discards it)
+let EDIT_IMAGE = '';      // staged (down-converted) data-URL for the editor — this is what gets saved
+let EDIT_IMAGE_ORIG = ''; // full-res data-URL of a fresh upload, kept in memory only so changing the
+                          // tier/type re-derives EDIT_IMAGE without re-reading the file. '' when editing
+                          // an existing asset (we can't recover pixels already discarded on import).
+let EDIT_RESOLUTION = RESOLUTION_DEFAULT;
 let FILTER_TYPE = 'all';
 
 function $(id){ return containerEl.querySelector(`#${id}`); }
@@ -104,6 +138,8 @@ function openEditor(id){
   EDIT_ID = id;
   const a = id ? ASSETS.find(x => x.id === id) : null;
   EDIT_IMAGE = (a && a.image) || '';
+  EDIT_IMAGE_ORIG = '';                 // no original until a fresh upload this session
+  EDIT_RESOLUTION = (a && a.resolution) || RESOLUTION_DEFAULT;
   renderEditor(a);
   $('assetsGrid').style.display = 'none';
   $('assetsEditor').style.display = '';
@@ -124,6 +160,13 @@ function renderEditor(a){
       </select>
     </div>
     <div class="field">
+      <label>Resolution (down-converted on import)</label>
+      <select id="assetResolution">
+        ${RESOLUTION_TIERS.map(t => `<option value="${t}" ${t===EDIT_RESOLUTION?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}
+      </select>
+      <span class="assets-res-hint" id="assetResHint"></span>
+    </div>
+    <div class="field">
       <label>Image (PNG, transparent background for props)</label>
       <div class="asset-img-drop" id="assetImgDrop">
         ${EDIT_IMAGE ? `<img id="assetImgPreview" src="${EDIT_IMAGE}">` : '<i class="fa-solid fa-image"></i>'}
@@ -141,8 +184,18 @@ function renderEditor(a){
     </div>
   `;
   renderTypeFields(type, a);
+  updateResHint();
 
-  $('assetTypeInput').onchange = e => renderTypeFields(e.target.value, a);
+  $('assetTypeInput').onchange = async e => {
+    renderTypeFields(e.target.value, a);
+    updateResHint();
+    await rederiveImage();              // category may change → re-down-convert the staged upload
+  };
+  $('assetResolution').onchange = async e => {
+    EDIT_RESOLUTION = e.target.value;
+    updateResHint();
+    await rederiveImage();
+  };
 
   const drop = $('assetImgDrop');
   drop.onclick = () => $('assetImgFile').click();
@@ -187,6 +240,14 @@ function renderTypeFields(type, a){
         <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 1}"></div>
       </div>
     `;
+  } else if(kind === 'facade'){
+    // one-shot texture stretched over a whole building front (non-tiled); no
+    // repeat/rotation. Exported and wired into a room's building config by hand.
+    box.innerHTML = `
+      <div class="field"><label>Tint (hex, optional)</label><input type="text" id="assetTint" value="${esc((a && a.tint) || '')}"></div>
+      <div class="field"><label>Roughness</label><input type="number" step="0.01" min="0" max="1" id="assetRoughness" value="${(a && a.roughness) ?? 0.9}"></div>
+      <div class="field"><label>Metalness</label><input type="number" step="0.01" min="0" max="1" id="assetMetalness" value="${(a && a.metalness) ?? 0}"></div>
+    `;
   } else {
     box.innerHTML = `
       <div class="field"><label>Repeat per meter</label><input type="number" step="0.01" id="assetRepeatPerMeter" value="${(a && a.repeatPerMeter) ?? 0.5}"></div>
@@ -204,20 +265,16 @@ function renderTypeFields(type, a){
   }
 }
 
-/* downscale to fit within IMG_MAX_DIM x IMG_MAX_DIM (no cropping); PNG keeps
-   alpha so billboard/sprite cutouts and box transparency survive. */
-function resizeImageFile(file){
+/* read a file to a full-resolution PNG data-URL (no scaling) */
+function fileToDataUrl(file){
   return new Promise((resolve,reject)=>{
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const scale = Math.min(1, IMG_MAX_DIM / img.width, IMG_MAX_DIM / img.height);
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
       const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.width = img.width; canvas.height = img.height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
       resolve(canvas.toDataURL('image/png'));
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not decode image')); };
@@ -225,17 +282,69 @@ function resizeImageFile(file){
   });
 }
 
+/* down-convert a data-URL to fit within maxDim x maxDim (aspect preserved, no
+   cropping); PNG keeps alpha so billboard/sprite cutouts and box transparency
+   survive. Returns the source unchanged when it already fits. */
+function downscaleDataUrl(dataUrl, maxDim){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / img.width, maxDim / img.height);
+      if(scale >= 1){ resolve(dataUrl); return; }   // already within the cap — keep as-is
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.src = dataUrl;
+  });
+}
+
+/* convenience for the picker's quick upload: file -> down-converted data-URL
+   for the given (type, tier) in one step. */
+async function importImageFile(file, type, tier){
+  const full = await fileToDataUrl(file);
+  return downscaleDataUrl(full, resolutionCap(type, tier));
+}
+
+const editorType = () => { const el = $('assetTypeInput'); return el ? el.value : 'box'; };
+
+/* recompute the displayed pixel cap for the current type + tier */
+function updateResHint(){
+  const hint = $('assetResHint');
+  if(!hint) return;
+  hint.textContent = `→ ${resolutionCap(editorType(), EDIT_RESOLUTION)}px long edge`;
+}
+
+/* re-derive the staged (saved) image from the kept original after the user
+   changes type or tier. No original (editing an existing asset, or no upload
+   yet) → nothing to do; we never upscale already-discarded pixels. */
+async function rederiveImage(){
+  if(!EDIT_IMAGE_ORIG) return;
+  try{
+    EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
+    const drop = $('assetImgDrop');
+    if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+  }catch(err){
+    console.error('[assets] re-derive failed', err);
+  }
+}
+
 async function handleImageFile(file){
   if(!file) return;
   if(!file.type.startsWith('image/')){ setError('that file is not an image'); return; }
   if(file.size > IMG_MAX_FILE_BYTES){ setError(`image too large (max ${IMG_MAX_FILE_BYTES/1024/1024}MB)`); return; }
   try{
-    EDIT_IMAGE = await resizeImageFile(file);
+    EDIT_IMAGE_ORIG = await fileToDataUrl(file);
+    EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
     setError('');
     const drop = $('assetImgDrop');
     drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
   }catch(err){
-    console.error('[assets] image resize failed', err);
+    console.error('[assets] image import failed', err);
     setError('could not read that image');
   }
 }
@@ -253,6 +362,13 @@ function readTypeFields(type){
   if(type === 'billboard-cylindrical' || type === 'billboard-sprite'){
     return { size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 } };
   }
+  if(type === 'facade'){
+    return {
+      tint: $('assetTint').value.trim() || null,
+      roughness: Number($('assetRoughness').value),
+      metalness: Number($('assetMetalness').value),
+    };
+  }
   return {
     repeatPerMeter: Number($('assetRepeatPerMeter').value)||0,
     rotation: Number($('assetRotation').value)||0,
@@ -268,7 +384,7 @@ async function saveEditor(){
   if(!EDIT_ID && ASSETS.some(a => a.id === id)){ setError('an asset with that id already exists'); return; }
   if(!EDIT_IMAGE){ setError('please choose an image'); return; }
   const type = $('assetTypeInput').value;
-  const patch = { type, image: EDIT_IMAGE, ...readTypeFields(type) };
+  const patch = { type, image: EDIT_IMAGE, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
   await setAsset(id, patch);
   await refreshGrid();
   showList();
@@ -309,6 +425,8 @@ function assetToJson(a){
     Object.assign(json, { size: a.size, skinFace: a.skinFace, sideColor: a.sideColor });
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
     Object.assign(json, { size: a.size });
+  } else if(a.type === 'facade'){
+    Object.assign(json, { tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   } else {
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   }
@@ -340,10 +458,12 @@ async function exportAllAsFiles(){
 */
 let pickerOpts = null;
 let pickerUploadType = 'box';
+let pickerResolution = RESOLUTION_DEFAULT;
 
 export function openAssetPicker(opts){
   pickerOpts = opts || {};
   pickerUploadType = (pickerOpts.allow && pickerOpts.allow[0]) || 'box';
+  pickerResolution = RESOLUTION_DEFAULT;
   let ov = document.getElementById('assetPickerOverlay');
   if(!ov){
     ov = document.createElement('div');
@@ -383,6 +503,9 @@ async function renderPicker(ov){
       <div class="assets-editor-actions">
         <div class="left">
           <button id="pickerUploadBtn"><i class="fa-solid fa-upload"></i> Upload new…</button>
+          <select id="pickerResolution" title="Import resolution">
+            ${RESOLUTION_TIERS.map(t => `<option value="${t}" ${t===pickerResolution?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}
+          </select>
           <input type="file" id="pickerUploadFile" accept="image/*" style="display:none">
         </div>
         ${pickerOpts.allowRemove ? '<button id="pickerRemoveBtn" style="background:#c62828;color:#fff">Remove</button>' : ''}
@@ -406,6 +529,7 @@ async function renderPicker(ov){
     }
   }
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
+  ov.querySelector('#pickerResolution').onchange = e => { pickerResolution = e.target.value; };
   ov.querySelector('#pickerUploadBtn').onclick = () => ov.querySelector('#pickerUploadFile').click();
   ov.querySelector('#pickerUploadFile').onchange = async e => {
     const file = e.target.files[0];
@@ -430,8 +554,8 @@ async function pickerUpload(file, ov){
   let id = base, n = 2;
   while(existing.some(a => a.id === id)){ id = `${base}-${n++}`; }
   try{
-    const image = await resizeImageFile(file);
-    await setAsset(id, { type: pickerUploadType, image });
+    const image = await importImageFile(file, pickerUploadType, pickerResolution);
+    await setAsset(id, { type: pickerUploadType, image, resolution: pickerResolution });
     await renderPicker(ov);
   }catch(err){
     console.error('[assets] picker upload failed', err);

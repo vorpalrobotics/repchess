@@ -161,6 +161,50 @@ builder. Replaces the current procedural canvas textures
   `buildWallGroup()` already builds (segments split around the doorway
   gap) — it has no opinion about doors, which stay a geometry concern.
 
+### `facade`
+
+A one-shot (non-tiling) texture stretched across a whole building front,
+the way `b.frontTexture` already works in `buildRoom()`. Unlike `surface`
+it has no `repeatPerMeter` — the image maps once over the entire facade, so
+it carries the building's actual proportions (e.g. a ~2.5:1 image for a
+50m-wide, 20m-tall front).
+
+```json
+{
+  "id": "townhouse-front-1",
+  "type": "facade",
+  "texture": "townhouse-front-1.png",
+  "tint": null,
+  "roughness": 0.9,
+  "metalness": 0.0
+}
+```
+
+Facade assets are authored and **exported** in the Asset Manager but are not
+slot-placeable in the in-world editor — they're wired into a room's building
+config by hand (same as the existing `frontTexture`), because a facade's
+placement is the building, not a furniture slot.
+
+## Import resolution
+
+The Asset Manager down-converts every uploaded PNG on import (it never
+stores more pixels than a ~10m room can show). The author picks a tier
+(**Low / Normal / High**, default Normal); the tier plus the asset's
+category set the **long-edge** pixel cap. Aspect ratio is always preserved
+(fit-within-box, never cropped or squashed), and `4096` is the hard ceiling
+(the WebGL2 max-texture-size safe on essentially all hardware).
+
+| Category | Types | Low | **Normal** | High |
+|---|---|---|---|---|
+| tiled  | `surface` (repeats across a wall — least needed)        | 256  | **512**  | 1024 |
+| object | `box`, `billboard-*` (viewed at object scale, 1–3m)    | 256  | **512**  | 1024 |
+| large  | `facade` (one-shot, spans a whole ~50m building front) | 1024 | **2048** | 4096 |
+
+The chosen tier is stored on the asset record (`resolution`) so a soft-looking
+asset can be re-imported at a higher tier later without guessing. Only the
+down-converted image is persisted — the original full-res upload is discarded
+once import completes.
+
 ## How rooms reference assets
 
 Instance placement (where a prop sits, what surface a room uses) stays in
