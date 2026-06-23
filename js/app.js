@@ -809,10 +809,15 @@ let focusHidden = [];
    the focused row, if its standard response is configured — lets Build
    Graph scope itself to just the focused subtree instead of the whole line */
 let FOCUSED_SEQ = null;
+/* stable identity (the focused row's data-seq) of the currently focused row, so
+   focus can be re-applied after a full tree rebuild (compact/visibility toggle)
+   instead of being silently orphaned when innerHTML is wiped. */
+let FOCUSED_ROW_KEY = null;
 function clearFocus(){
   focusHidden.forEach(el=>el.classList.remove('focus-hidden'));
   focusHidden = [];
   FOCUSED_SEQ = null;
+  FOCUSED_ROW_KEY = null;
   $('unfocusBtn').style.display='none';
 }
 function rowGroup(tbody, dataRow){
@@ -827,6 +832,7 @@ function rowGroup(tbody, dataRow){
 function focusOnLine(dataRow, seq=null){
   clearFocus();
   FOCUSED_SEQ = seq;
+  FOCUSED_ROW_KEY = dataRow.dataset.seq || null;
   let node = dataRow;
   while(node){
     const tbody = node.parentElement;
@@ -1095,6 +1101,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const analyzingIcon = tr.querySelector('.analyzingIcon');
 
     const lineSeq = [...seq,opp];
+    tr.dataset.seq = lineSeq.join(',');     // stable row identity for focus re-application across rebuilds
     attachHoverPreview(btnEval, lineSeq);
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
@@ -1390,6 +1397,7 @@ function renderBlackRoot(parent,games,trigger){
   const analyzingIcon = tr.querySelector('.analyzingIcon');
 
   const lineSeq = [trigger];
+  tr.dataset.seq = lineSeq.join(',');       // stable row identity for focus re-application across rebuilds
   attachHoverPreview(btnEval, lineSeq);
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
@@ -1665,6 +1673,12 @@ async function openLine(line){
    whenever a toggle (visibility, compact mode) changes which rows the tree
    should show, since GAMES/PREFS are already in memory at that point. */
 function renderTreeBody(line){
+  // wiping the tree orphans the focus DOM, so remember which row was focused and
+  // re-apply it to the freshly-built row afterwards (keeps the focused view and
+  // the Unfocus button in sync across compact/visibility rebuilds).
+  const keepFocusKey = FOCUSED_ROW_KEY, keepFocusSeq = FOCUSED_SEQ;
+  clearFocus();
+
   $('tree').innerHTML='';
   const triggers = line.openingMoves || [];
   if(!triggers.length){
@@ -1681,6 +1695,17 @@ function renderTreeBody(line){
     }
   });
   refreshSystemStats();
+
+  if(keepFocusKey) reapplyFocus(keepFocusKey, keepFocusSeq);
+}
+
+/* find the rebuilt row matching a saved focus identity and re-focus it. If the
+   row no longer exists as a standalone data-row (e.g. it was hoisted into a
+   compact run), stay cleanly unfocused — the Unfocus button is already hidden. */
+function reapplyFocus(key, seq){
+  const row = Array.from($('tree').querySelectorAll('.data-row'))
+    .find(r => r.dataset.seq === key);
+  if(row) focusOnLine(row, seq);
 }
 
 $('backBtn').onclick = renderHome;
