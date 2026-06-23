@@ -13,7 +13,8 @@ const ROOMS = {
     size: { w: 30, d: 18, h: 7 },
     exits: [],
     buildings: [
-      { target: 'start', label: '1', color: 0x6f8fb0, size: { w: 10, d: 10, h: 4 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
+      { target: 'start', sign: 'Chigoren Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
+        color: 0x6f8fb0, size: { w: 10, d: 10, h: 4 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
     ]
   },
   start: {
@@ -64,6 +65,8 @@ let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}
 let currentExitsByWall = {};
 let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
+let textureLoader = null;
+let buildGeneration = 0;
 
 function clampToRoom(size, x, z){
   const { w, d } = size;
@@ -312,6 +315,44 @@ function placeLabelOnWall(size, wall, text, origin){
   return mesh;
 }
 
+function makeSignMesh(text){
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#caa46a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#4a3320';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
+  ctx.fillStyle = '#2b1d10';
+  ctx.font = 'bold 54px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width/2, canvas.height/2 + 4);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  return new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), mat);
+}
+
+// Mounts a mesh flush against a wall facing *outward* (away from the
+// room/building it belongs to) -- the mirror image of placeLabelOnWall,
+// which faces inward. Used for exterior signage on building facades.
+function mountOutward(size, wall, offset, origin, mesh, y, clearance){
+  origin = origin || { x:0, z:0 };
+  const { axis, fixed } = wallSpan(size, wall);
+  clearance = (clearance == null ? WALL_THICK/2 + 0.06 : clearance);
+  let x, z;
+  if(axis === 'x'){ x = offset; z = (wall === 'north') ? fixed - clearance : fixed + clearance; }
+  else { z = offset; x = (wall === 'west') ? fixed - clearance : fixed + clearance; }
+  mesh.position.set(x + origin.x, y, z + origin.z);
+  if(wall === 'north') mesh.rotation.y = Math.PI;
+  if(wall === 'south') mesh.rotation.y = 0;
+  if(wall === 'west') mesh.rotation.y = -Math.PI/2;
+  if(wall === 'east') mesh.rotation.y = Math.PI/2;
+  return mesh;
+}
+
 function doorTriggerBox(size, wall, offset, origin){
   origin = origin || { x:0, z:0 };
   const { axis, fixed, half } = wallSpan(size, wall);
@@ -360,6 +401,8 @@ function computeSpawnForExit(fromKey, room, ex){
 
 function buildRoom(roomKey){
   const room = ROOMS[roomKey];
+  buildGeneration++;
+  const myGeneration = buildGeneration;
   scene.clear();
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
@@ -424,7 +467,31 @@ function buildRoom(roomKey){
         scene.add(buildWallGroup(b.size, wall, hasDoor, hasDoor ? b.doorOffset : 0, buildingTex, b.origin));
       }
       scene.add(buildRoof(b.size, b.origin, 0x3a3a3a));
-      if(b.label) scene.add(placeLabelOnWall(b.size, b.doorWall, b.label, b.origin));
+      if(b.sign){
+        const signMesh = makeSignMesh(b.sign);
+        const signY = b.size.h - 0.6;
+        scene.add(mountOutward(b.size, b.doorWall, b.doorOffset, b.origin, signMesh, signY, WALL_THICK/2 + 0.09));
+      }
+      if(b.frontTexture && textureLoader){
+        // Movie-set facade: once the image loads, lay it flat over the whole
+        // face (a single un-tiled plane, no door-shaped cutout) so the front
+        // reads as one painted board -- the actual walk-through trigger
+        // below is independent of this geometry either way. Until/unless the
+        // file exists, the procedural brick-with-doorway wall built above is
+        // what's visible -- no broken texture, just the existing fallback.
+        const { axis, fixed } = wallSpan(b.size, b.doorWall);
+        const facadeWidth = axis === 'x' ? b.size.w : b.size.d;
+        const doorWall = b.doorWall, origin = b.origin, h = b.size.h;
+        textureLoader.load(b.frontTexture, (tex) => {
+          if(buildGeneration !== myGeneration || !scene) return;
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+          const mat = new THREE.MeshStandardMaterial({ map: tex });
+          const facade = new THREE.Mesh(new THREE.PlaneGeometry(facadeWidth, h), mat);
+          mountOutward(b.size, doorWall, 0, origin, facade, h/2, WALL_THICK/2 + 0.05);
+          scene.add(facade);
+        }, undefined, () => { /* file not supplied yet -- keep the procedural brick fallback */ });
+      }
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       exitMeta.push({
@@ -493,6 +560,7 @@ function onKeyUp(e){ keys[e.key] = false; }
 export async function openThreeTest(containerEl){
   container = containerEl;
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
+  if(!textureLoader) textureLoader = new THREE.TextureLoader();
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
