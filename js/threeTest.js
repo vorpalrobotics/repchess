@@ -8,13 +8,24 @@
 let THREE = null;
 
 const ROOMS = {
-  street: {
+  mainStreet: {
     outdoor: true,
-    size: { w: 30, d: 18, h: 7 },
+    size: { w: 90, d: 50, h: 7 },
     exits: [],
+    // flat-color asphalt strips over the grass base -- Main St runs the
+    // full depth of the room, London Avenue branches off it to the east
+    roads: [
+      { x: 0, z: 0, sx: 8, sz: 50 },
+      { x: 21, z: -5, sx: 34, sz: 8 }
+    ],
+    streetSigns: [
+      { text: 'London Avenue', x: 6, z: -6 }
+    ],
     buildings: [
+      // sits just north of London Avenue, so walking up the avenue and
+      // turning to face north brings you right up to its front door
       { target: 'start', sign: 'Chigoren Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
-        color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 0, z: -4 }, doorWall: 'south', doorOffset: 0 }
+        color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 20, z: -14 }, doorWall: 'south', doorOffset: 0 }
     ]
   },
   start: {
@@ -25,7 +36,7 @@ const ROOMS = {
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
       { wall: 'east',  offset: 0, target: 'roomC' },
-      { wall: 'south', offset: 0, target: 'street' }
+      { wall: 'south', offset: 0, target: 'mainStreet' }
     ]
   },
   roomB: {
@@ -160,18 +171,27 @@ function makeFloorTexture(){
   }, 256);
 }
 
-function makeGroundTexture(){
-  return makeCanvasTexture((ctx, size) => {
-    ctx.fillStyle = '#7d8a78';
-    ctx.fillRect(0, 0, size, size);
-    const cols = 5, tile = size/cols;
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    ctx.lineWidth = 3;
-    for(let i=0; i<=cols; i++){
-      ctx.beginPath(); ctx.moveTo(i*tile, 0); ctx.lineTo(i*tile, size); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, i*tile); ctx.lineTo(size, i*tile); ctx.stroke();
-    }
-  }, 256);
+// Flat-color grass base for the whole outdoor room, with one flat-color
+// asphalt plane laid over it per `room.roads` entry (slightly raised to
+// avoid z-fighting with the grass).
+function buildOutdoorGround(room){
+  const group = new THREE.Group();
+  const { w, d } = room.size;
+  const grass = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, d),
+    new THREE.MeshStandardMaterial({ color: 0x4a8f4a })
+  );
+  grass.rotation.x = -Math.PI/2;
+  group.add(grass);
+
+  const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a });
+  for(const r of room.roads || []){
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(r.sx, r.sz), asphaltMat);
+    road.rotation.x = -Math.PI/2;
+    road.position.set(r.x, 0.01, r.z);
+    group.add(road);
+  }
+  return group;
 }
 
 function makeTable(){
@@ -493,14 +513,18 @@ function buildRoom(roomKey){
   scene.background = new THREE.Color(room.outdoor ? 0x8fb8d8 : 0x111317);
 
   const { w, d, h } = room.size;
-  const groundTex = room.outdoor ? makeGroundTexture() : makeFloorTexture();
-  groundTex.repeat.set(w/2, d/2);
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(w, d),
-    new THREE.MeshStandardMaterial({ map: groundTex })
-  );
-  floor.rotation.x = -Math.PI/2;
-  scene.add(floor);
+  if(room.outdoor){
+    scene.add(buildOutdoorGround(room));
+  } else {
+    const groundTex = makeFloorTexture();
+    groundTex.repeat.set(w/2, d/2);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, d),
+      new THREE.MeshStandardMaterial({ map: groundTex })
+    );
+    floor.rotation.x = -Math.PI/2;
+    scene.add(floor);
+  }
 
   if(!room.outdoor){
     const ceiling = new THREE.Mesh(
@@ -546,6 +570,11 @@ function buildRoom(roomKey){
     const courtyardTex = makeBrickTexture(0x9aa0a6);
     for(const wall of ['north','south','east','west']){
       scene.add(buildWallGroup(room.size, wall, false, 0, courtyardTex));
+    }
+    for(const s of room.streetSigns || []){
+      const signGroup = buildGroundSign(s.text);
+      signGroup.position.set(s.x, 0, s.z);
+      scene.add(signGroup);
     }
     // every building on this street gets its own exterior, door and sign
     for(const b of room.buildings){
@@ -671,7 +700,7 @@ export async function openThreeTest(containerEl){
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
 
-  enterRoom('street', { x:0, z:8, yaw:0 });
+  enterRoom('mainStreet', { x:0, z:18, yaw:0 });
   tick();
 }
 
