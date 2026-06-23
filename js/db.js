@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -58,6 +58,9 @@ function openDB(){
       }
       if(!db.objectStoreNames.contains('meta')){
         db.createObjectStore('meta', {keyPath:'key'});
+      }
+      if(!db.objectStoreNames.contains('assets')){
+        db.createObjectStore('assets', {keyPath:'id'});
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -219,6 +222,53 @@ async function setMnemonicSquare(square, patch){
   });
 }
 
+/* ---------- assets (three.js prop/surface staging registry) ----------
+   Mirrors the PNG+JSON file-pair schema in Documents/three-assets.md; the
+   `image` field holds a base64 PNG data-URL while an asset lives only in
+   IndexedDB, before being exported to real files under assets/three/.
+*/
+const BLANK_ASSET = {
+  id:'', type:'box', image:'',
+  size:{w:0.5,h:1,d:0.5}, skinFace:'front', sideColor:'#888888',
+  repeatPerMeter:0.5, rotation:0, tint:null, roughness:0.85, metalness:0,
+  createdAt:0, updatedAt:0
+};
+
+async function getAllAssets(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('assets','readonly').objectStore('assets').getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function setAsset(id, patch){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('assets','readwrite');
+    const store = txn.objectStore('assets');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const now = Date.now();
+      const existing = getReq.result || {...BLANK_ASSET, id, createdAt:now};
+      store.put({...existing, ...patch, id, updatedAt:now});
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+async function deleteAsset(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('assets','readwrite');
+    txn.objectStore('assets').delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- meta (small flat key/value settings, e.g. mnemonics notes) ---------- */
 async function getMeta(key){
   const db = await openDB();
@@ -242,7 +292,7 @@ async function setMeta(key, value){
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();
-  const stores = ['games','lines','prefs','mnemonics','meta'];
+  const stores = ['games','lines','prefs','mnemonics','meta','assets'];
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();

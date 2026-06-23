@@ -158,6 +158,40 @@
   #threeTestCanvasWrap canvas{display:block;width:100%;height:100%}
   .three-hint{margin:.4rem 0 0;font-size:.8rem;color:#666;text-align:center}
 
+  #assetsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
+  .assets-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
+  .assets-header h2{margin:0}
+  #assetsBodyWrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  .assets-toolbar{display:flex;align-items:center;gap:.8rem;margin-bottom:.6rem}
+  .assets-toolbar select{font-size:.85rem;padding:.2rem .4rem}
+  .assets-count{font-size:.8rem;color:#666}
+  .assets-spacer{flex:1 1 auto}
+  .assets-body{flex:1 1 auto;min-height:0;overflow:auto}
+  .assets-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.8rem}
+  .asset-card{border:1px solid #ccc;border-radius:6px;padding:.5rem;cursor:pointer;background:#fafafa;display:flex;flex-direction:column;gap:.3rem}
+  .asset-card:hover{border-color:#1565c0}
+  .asset-card .asset-thumb{width:100%;height:90px;background:#eee repeating-conic-gradient(#e0e0e0 0% 25%,#fafafa 0% 50%) 50%/16px 16px;border-radius:4px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .asset-card .asset-thumb img{max-width:100%;max-height:100%;object-fit:contain}
+  .asset-card .asset-id{font-size:.8rem;font-weight:600;word-break:break-all}
+  .asset-card .asset-type{font-size:.7rem;color:#666}
+  .assets-empty{color:#666;font-size:.9rem;padding:1rem}
+  .assets-editor{max-width:34em;margin:0 auto;width:100%}
+  .assets-editor .field{margin-bottom:.7rem}
+  .assets-editor label{display:block;font-weight:600;font-size:.85rem;margin-bottom:.2rem}
+  .assets-editor input[type=text],.assets-editor select,.assets-editor input[type=number]{width:100%;padding:.3rem .4rem;font-size:.9rem}
+  .assets-size-row{display:flex;gap:.6rem}
+  .assets-size-row .field{flex:1 1 0;margin-bottom:0}
+  .asset-img-drop{position:relative;width:140px;height:140px;border:2px dashed #aaa;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;
+    background:#eee repeating-conic-gradient(#e0e0e0 0% 25%,#fafafa 0% 50%) 50%/16px 16px;color:#999}
+  .asset-img-drop:hover{border-color:#1565c0}
+  .asset-img-drop.dragover{border-color:#1565c0}
+  .asset-img-drop img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+  .assets-editor-actions{display:flex;justify-content:space-between;gap:.6rem;margin-top:1rem}
+  .assets-editor-actions .left{display:flex;gap:.6rem}
+  #assetsDeleteBtn{background:#c62828;color:#fff}
+  .assets-error{color:#c62828;font-size:.85em;min-height:1.2em}
+
   #mnemonicsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
   .mnem-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
   .mnem-header h2{margin:0}
@@ -229,6 +263,7 @@
       <button id="menuImport">Import Backup</button>
       <hr class="row-menu-sep">
       <button id="menuThreeTest">Three.js Test</button>
+      <button id="menuAssets">Manage Assets</button>
       <hr class="row-menu-sep">
       <button id="menuAbout">About</button>
     </div>
@@ -324,6 +359,17 @@
     </div>
     <div id="threeTestCanvasWrap"></div>
     <p class="three-hint">Arrows or W/A/S/D to walk, walk through a doorway to enter the next room.</p>
+  </div>
+</div>
+
+<!-- asset manager modal -->
+<div id="assetsOverlay" class="overlay">
+  <div class="modal">
+    <div class="assets-header">
+      <h2>Manage Assets</h2>
+      <button id="assetsCloseBtn">Close</button>
+    </div>
+    <div id="assetsBodyWrap"></div>
   </div>
 </div>
 

@@ -3,6 +3,7 @@ import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest } from './threeTest.js';
+import { openAssetManager, closeAssetManager } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
@@ -1937,7 +1938,8 @@ async function exportBackup(){
       }
       return out;
     }),
-    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY)
+    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
+    assets: await getAllAssets()
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -1986,6 +1988,7 @@ async function importBackup(data){
     await setMnemonicSquare(entry.square, patch);
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+  for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
 }
@@ -2028,6 +2031,17 @@ $('menuThreeTest').onclick = ()=>{
 $('threeTestCloseBtn').onclick = ()=>{
   $('threeTestOverlay').style.display='none';
   closeThreeTest();
+};
+
+/* ---------- asset manager ---------- */
+$('menuAssets').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('assetsOverlay').style.display='flex';
+  openAssetManager($('assetsBodyWrap'));
+};
+$('assetsCloseBtn').onclick = ()=>{
+  $('assetsOverlay').style.display='none';
+  closeAssetManager();
 };
 
 /* ---------- about modal ---------- */
