@@ -267,7 +267,11 @@ function renderTypeFields(type, a){
       </div>
       <div class="field">
         <label>Side color (blank = auto from the picture's edge)</label>
-        <input type="text" id="assetSideColor" placeholder="auto" value="${esc((a && a.sideColor && a.sideColor !== 'auto') ? a.sideColor : '')}">
+        <div class="side-color-row">
+          <input type="text" id="assetSideColor" placeholder="auto" value="${esc((a && a.sideColor && a.sideColor !== 'auto') ? a.sideColor : '')}">
+          <div class="side-color-swatch" id="assetSideColorSwatch"></div>
+          <button type="button" class="eyedropper-btn" id="assetEyedropperBtn" title="Pick side color from the image"><i class="fa-solid fa-eye-dropper"></i></button>
+        </div>
       </div>
     `;
   } else if(kind === 'prop'){
@@ -308,6 +312,85 @@ function renderTypeFields(type, a){
     `;
   }
   wireSizeLock();
+  wireSideColorPicker();
+}
+
+/* ---------- side-color eyedropper ----------
+   Only present on the 'extruded' type's fields. The swatch mirrors whatever's
+   in the text input (so a hand-typed hex shows up too); the eyedropper opens a
+   full-viewport picker over the staged image and writes the sampled hex back
+   into the same input. */
+function wireSideColorPicker(){
+  const input = $('assetSideColor'), swatch = $('assetSideColorSwatch'), btn = $('assetEyedropperBtn');
+  if(!input || !swatch || !btn) return; // not the extruded type's fields
+  const paintSwatch = () => { swatch.style.background = input.value.trim() || ''; };
+  paintSwatch();
+  input.oninput = paintSwatch;
+  btn.onclick = () => openColorPicker(EDIT_IMAGE, input.value.trim(), (hex) => {
+    input.value = hex;
+    paintSwatch();
+  });
+}
+
+/* full-viewport "click the image to sample a color" modal. Builds its own
+   overlay on document.body (same pattern as the asset picker), so it works
+   regardless of which editor/container is open underneath it. */
+function openColorPicker(imageDataUrl, initialColor, onSave){
+  let ov = document.getElementById('colorPickerOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'colorPickerOverlay';
+    ov.className = 'overlay';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  let picked = initialColor || null;
+  ov.innerHTML = `
+    <div class="modal">
+      <div class="cp-header">
+        <h2>Pick side color — click anywhere on the image</h2>
+        <div class="cp-current">
+          <span>Selected:</span>
+          <div class="side-color-swatch" id="cpSwatch"></div>
+          <span id="cpHex"></span>
+        </div>
+      </div>
+      <div class="cp-stage"><img id="cpImg" src="${imageDataUrl}" alt=""></div>
+      <div class="cp-actions">
+        <button id="cpCancelBtn">Cancel</button>
+        <button id="cpSaveBtn">SAVE</button>
+      </div>
+    </div>
+  `;
+  const cpSwatch = ov.querySelector('#cpSwatch');
+  const cpHex = ov.querySelector('#cpHex');
+  const cpSave = ov.querySelector('#cpSaveBtn');
+  const paint = () => {
+    cpSwatch.style.background = picked || '';
+    cpHex.textContent = picked || 'none yet';
+    cpSave.disabled = !picked;
+  };
+  paint();
+
+  const img = ov.querySelector('#cpImg');
+  const sampleCanvas = document.createElement('canvas');
+  img.onload = () => {
+    sampleCanvas.width = img.naturalWidth;
+    sampleCanvas.height = img.naturalHeight;
+    sampleCanvas.getContext('2d').drawImage(img, 0, 0);
+  };
+  img.onclick = (e) => {
+    const rect = img.getBoundingClientRect();
+    const px = Math.min(sampleCanvas.width - 1, Math.max(0, Math.floor((e.clientX - rect.left) / rect.width * sampleCanvas.width)));
+    const py = Math.min(sampleCanvas.height - 1, Math.max(0, Math.floor((e.clientY - rect.top) / rect.height * sampleCanvas.height)));
+    const [r, g, b, a] = sampleCanvas.getContext('2d').getImageData(px, py, 1, 1).data;
+    if(a < 10) return; // clicked a transparent pixel -- nothing there to sample
+    picked = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+    paint();
+  };
+  const close = () => { ov.style.display = 'none'; };
+  ov.querySelector('#cpCancelBtn').onclick = close;
+  cpSave.onclick = () => { if(picked){ onSave(picked); close(); } };
 }
 
 /* ---------- size lock ----------
