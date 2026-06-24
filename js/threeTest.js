@@ -136,6 +136,10 @@ function slotAssetFor(roomKey, slotId){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slotId];
   return id ? ASSET_BY_ID[id] : null;
 }
+function buildingFacadeFor(roomKey, buildingKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
+  return id ? ASSET_BY_ID[id] : null;
+}
 function slotById(room, slotId){
   return (room.slots || []).find(s => s.id === slotId) || null;
 }
@@ -156,6 +160,7 @@ function ensureRoomLayout(roomKey){
   const r = LAYOUT[roomKey];
   if(!r.walls) r.walls = {};
   if(!r.slots) r.slots = {};
+  if(!r.buildings) r.buildings = {};
   return r;
 }
 
@@ -184,6 +189,12 @@ function setSlotOverride(roomKey, slotId, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
+  });
+}
+function setBuildingFacadeOverride(roomKey, buildingKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.buildings[buildingKey] = assetId; else delete r.buildings[buildingKey];
   });
 }
 
@@ -500,6 +511,27 @@ function buildSlotMarker(room, slot){
   }
   mesh.userData = { kind: 'slot', slotId: slot.id, allow: slot.allow || PROP_TYPES };
   return mesh;
+}
+
+/* editor-only hotspot covering a building's front (door) face. Tinted distinct
+   from the cyan slot markers so it reads as a different kind of target; clicking
+   it opens the facade picker. Carries the face's current dimensions so tests (and
+   future HUD readouts) can see what size the face is. */
+let facadeMarkerMat = null;
+function facadeMarkerMaterial(){
+  if(!facadeMarkerMat){
+    facadeMarkerMat = new THREE.MeshBasicMaterial({ color: 0xff9800, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+  }
+  return facadeMarkerMat;
+}
+function buildFacadeMarker(size, b, roomKey, buildingKey){
+  const { axis } = wallSpan(size, b.doorWall);
+  const faceWidth = axis === 'x' ? size.w : size.d;
+  const h = size.h;
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(faceWidth * 0.96, h * 0.96), facadeMarkerMaterial());
+  mountOutward(size, b.doorWall, 0, b.origin, panel, h/2, WALL_THICK/2 + 0.10);
+  panel.userData = { kind: 'facade', roomKey, buildingKey, w: faceWidth, h };
+  return panel;
 }
 
 // renders every slot in a room: placed accessory if one is assigned, else a
@@ -857,44 +889,66 @@ function buildRoom(roomKey){
     // every building on this street gets its own exterior, door and sign
     for(const b of room.buildings){
       const targetRoom = ROOMS[b.target];
+      const buildingKey = b.target;
+      const facadeAsset = buildingFacadeFor(roomKey, buildingKey);
+
+      // A placed facade asset carries its own real-world size in meters: its
+      // width drives the front face's width and its height drives the building
+      // height (depth is left as configured). With no override we fall back to
+      // the static config size. Min clamps keep the doorway from being squeezed
+      // out (door is DOOR_W wide, DOOR_H tall).
+      let size = b.size;
+      if(facadeAsset && facadeAsset.size){
+        const fw = Math.max(facadeAsset.size.w || 0, DOOR_W + 0.4);
+        const fh = Math.max(facadeAsset.size.h || 0, DOOR_H + 0.4);
+        const { axis } = wallSpan(b.size, b.doorWall);
+        size = axis === 'x' ? { w: fw, d: b.size.d, h: fh } : { w: b.size.w, d: fw, h: fh };
+      }
+
       const buildingTex = makeBrickTexture(b.color);
       for(const wall of ['north','south','east','west']){
         const hasDoor = wall === b.doorWall;
-        scene.add(buildWallGroup(b.size, wall, hasDoor, hasDoor ? b.doorOffset : 0, buildingTex, b.origin));
+        scene.add(buildWallGroup(size, wall, hasDoor, hasDoor ? b.doorOffset : 0, buildingTex, b.origin));
       }
-      scene.add(buildRoof(b.size, b.origin, 0x3a3a3a));
+      scene.add(buildRoof(size, b.origin, 0x3a3a3a));
       if(b.sign){
         // Out on the lawn to the right of the front door (as seen walking
         // up to it), like a museum or apartment-complex entrance sign --
         // not mounted on the facade itself.
         const signGroup = buildGroundSign(b.sign);
-        signGroup.position.set(b.origin.x + 6, 0, b.origin.z + b.size.d/2 + 2.5);
+        signGroup.position.set(b.origin.x + 6, 0, b.origin.z + size.d/2 + 2.5);
         scene.add(signGroup);
       }
-      if(b.frontTexture && textureLoader){
-        // Movie-set facade: once the image loads, lay it flat over the whole
-        // face (a single un-tiled plane, no door-shaped cutout) so the front
-        // reads as one painted board -- the actual walk-through trigger
-        // below is independent of this geometry either way. Until/unless the
-        // file exists, the procedural brick-with-doorway wall built above is
-        // what's visible -- no broken texture, just the existing fallback.
-        const { axis, fixed } = wallSpan(b.size, b.doorWall);
-        const facadeWidth = axis === 'x' ? b.size.w : b.size.d;
-        const doorWall = b.doorWall, origin = b.origin, h = b.size.h;
-        textureLoader.load(b.frontTexture, (tex) => {
+
+      // Movie-set facade: lay the image flat over the whole face (a single
+      // un-tiled plane, no door-shaped cutout) so the front reads as one painted
+      // board. Source is the placed facade asset's image, else the static
+      // frontTexture file; until either resolves the procedural brick-with-
+      // doorway wall above stays visible (no broken texture, just the fallback).
+      const facadeSrc = facadeAsset ? facadeAsset.image : (b.frontTexture || null);
+      if(facadeSrc && textureLoader){
+        const { axis } = wallSpan(size, b.doorWall);
+        const facadeWidth = axis === 'x' ? size.w : size.d;
+        const doorWall = b.doorWall, origin = b.origin, h = size.h;
+        const sizeForMount = size;
+        textureLoader.load(facadeSrc, (tex) => {
           if(buildGeneration !== myGeneration || !scene) return;
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
           const mat = new THREE.MeshStandardMaterial({ map: tex });
           const facade = new THREE.Mesh(new THREE.PlaneGeometry(facadeWidth, h), mat);
-          mountOutward(b.size, doorWall, 0, origin, facade, h/2, WALL_THICK/2 + 0.05);
+          mountOutward(sizeForMount, doorWall, 0, origin, facade, h/2, WALL_THICK/2 + 0.05);
+          facade.userData = { kind: 'facade', roomKey, buildingKey };
           scene.add(facade);
-        }, undefined, () => { /* file not supplied yet -- keep the procedural brick fallback */ });
+        }, undefined, () => { /* source not available yet -- keep the procedural brick fallback */ });
       }
+
+      // edit-mode hotspot: click the front face to set / replace / remove its facade
+      if(editMode) scene.add(buildFacadeMarker(size, b, roomKey, buildingKey));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       exitMeta.push({
-        box: doorTriggerBox(b.size, b.doorWall, b.doorOffset, b.origin),
+        box: doorTriggerBox(size, b.doorWall, b.doorOffset, b.origin),
         target: b.target,
         spawn
       });
@@ -1002,15 +1056,27 @@ function handleEditTarget(ud){
       onPick: id => setSlotOverride(roomKey, ud.slotId, id),
       onRemove: () => setSlotOverride(roomKey, ud.slotId, null)
     });
+  } else if(ud.kind === 'facade'){
+    const current = buildingFacadeFor(ud.roomKey, ud.buildingKey);
+    openAssetPicker({
+      allow: ['facade'], allowRemove: !!current, onClose,
+      onPick: id => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, id),
+      onRemove: () => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, null)
+    });
   }
 }
 
 function setEditMode(on){
-  // editing is interior-only (floors/walls/slots) — ignore E out on the street
-  if(on && (!ROOMS[currentRoomKey] || ROOMS[currentRoomKey].outdoor)) return;
   editMode = on;
   if(renderer) renderer.domElement.style.cursor = on ? 'crosshair' : 'default';
-  if(editHud) editHud.style.display = on ? 'block' : 'none';
+  if(editHud){
+    // outdoors you edit building facades; indoors floors/walls/slots
+    const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
+    editHud.textContent = outdoor
+      ? 'EDIT MODE — click a building’s front face to set its facade; [E] or [Esc] to exit'
+      : 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
+    editHud.style.display = on ? 'block' : 'none';
+  }
   buildRoom(currentRoomKey);
 }
 
@@ -1078,7 +1144,7 @@ export async function openThreeTest(containerEl){
       toggle: () => setEditMode(!editMode),
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
-      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall }); }); return out; }
+      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; }
     };
   }
 }
