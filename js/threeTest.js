@@ -135,6 +135,10 @@ function slotAssetFor(roomKey, slotId){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slotId];
   return id ? ASSET_BY_ID[id] : null;
 }
+function ceilingAssetFor(roomKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].ceiling;
+  return id ? ASSET_BY_ID[id] : null;
+}
 function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
@@ -192,6 +196,25 @@ function doorFlankSlots(room){
   return slots;
 }
 
+// floor spots directly under each eye-level door-flank wall spot, a short step
+// in from the wall -- for a piece that pairs with whatever hangs above it.
+const DOOR_FLANK_FLOOR_INSET = 0.8;
+function doorFlankFloorSlots(room){
+  const slots = [];
+  for(const ex of room.exits || []){
+    const { axis, fixed } = wallSpan(room.size, ex.wall);
+    const inSign = fixed > 0 ? -1 : 1;            // step inward, away from the wall
+    for(const side of [-1, 1]){
+      const along = ex.offset + side * DOOR_FLANK_OFFSET;
+      const x = axis === 'x' ? along : fixed + inSign * DOOR_FLANK_FLOOR_INSET;
+      const z = axis === 'x' ? fixed + inSign * DOOR_FLANK_FLOOR_INSET : along;
+      if(room.furniture && Math.abs(room.furniture.x - x) < 0.6 && Math.abs(room.furniture.z - z) < 0.6) continue;
+      slots.push({ id: `wf-${ex.wall}-${side < 0 ? 'l' : 'r'}`, kind: 'floor', x, z });
+    }
+  }
+  return slots;
+}
+
 // "low" wall spot centred on each wall at ground level, for floor-standing
 // against-the-wall pieces (fireplace, columns, a suit of armor) -- the
 // counterpart to the eye-level door-flank spots. Skipped on a wall whose door
@@ -224,6 +247,7 @@ function roomSlots(room){
   return [
     ...floorGridSlots(room),
     ...doorFlankSlots(room),
+    ...doorFlankFloorSlots(room),
     ...lowWallSlots(room),
     ...ceilingSlots(room),
     ...(room.slots || [])
@@ -272,6 +296,12 @@ function setWallOverride(roomKey, wall, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.walls[wall] = assetId; else delete r.walls[wall];
+  });
+}
+function setCeilingOverride(roomKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.ceiling = assetId; else delete r.ceiling;
   });
 }
 function setSlotOverride(roomKey, slotId, assetId){
@@ -1162,12 +1192,18 @@ function buildRoom(roomKey){
   }
 
   if(!room.outdoor){
-    const ceiling = new THREE.Mesh(
-      new THREE.PlaneGeometry(w, d),
-      new THREE.MeshStandardMaterial({ color: 0x888888 })
-    );
+    let ceilMat;
+    const ceilingAsset = ceilingAssetFor(roomKey);
+    if(ceilingAsset){
+      const rpm = ceilingAsset.repeatPerMeter || 0.5;
+      ceilMat = assetSurfaceMaterial(ceilingAsset, w * rpm, d * rpm);
+    } else {
+      ceilMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    }
+    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(w, d), ceilMat);
     ceiling.rotation.x = Math.PI/2;
     ceiling.position.y = h;
+    ceiling.userData = { kind: 'ceiling-surface' };
     scene.add(ceiling);
   }
 
@@ -1404,6 +1440,12 @@ function handleEditTarget(ud){
       allow: ['surface'], allowRemove: !!wallAssetFor(roomKey, ud.wall), onClose,
       onPick: id => setWallOverride(roomKey, ud.wall, id),
       onRemove: () => setWallOverride(roomKey, ud.wall, null)
+    });
+  } else if(ud.kind === 'ceiling-surface'){
+    openAssetPicker({
+      allow: ['surface'], allowRemove: !!ceilingAssetFor(roomKey), onClose,
+      onPick: id => setCeilingOverride(roomKey, id),
+      onRemove: () => setCeilingOverride(roomKey, null)
     });
   } else if(ud.kind === 'slot'){
     openAssetPicker({
