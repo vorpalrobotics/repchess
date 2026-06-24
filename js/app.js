@@ -159,15 +159,47 @@ async function fetchChessCom(user,months,onProgress){
 }
 
 /* ---------- compute reply frequencies ---------- */
-function replies(games,seq){
-  const counts={}, n=seq.length; let tot=0;
+/* ---------- games prefix index (perf) ----------
+   replies() is the hot path of the whole tree: it runs once per rendered node,
+   again for every step of compact-run detection, and again across the node-stats
+   walk. The old implementation re-scanned every game and re-split its move string
+   on each call -- O(nodes x games x depth) -- which is what made a 750+ move
+   repertoire take ~30s to render (and worse as it grows). Instead we index the
+   games once into a prefix trie keyed by lower-cased SAN: each node stores how
+   many games pass through it plus the canonical (original-case) move, so
+   replies(seq) becomes a depth-length walk that reads the children directly.
+
+   The trie is cached against the GAMES array identity. Every place that loads or
+   replaces the game set assigns a brand-new array, so a changed identity rebuilds
+   the index automatically; nothing mutates a game's moves in place. */
+let _gamesTrie = { games: null, root: null };
+function buildGamesTrie(games){
+  const root = { pass: 0, label: null, kids: new Map() };
   for(const g of games){
-    const mv=g.moves.split(' ');
-    if(mv.length<=n || !seq.every((m,i)=>mv[i].toLowerCase()===m.toLowerCase())) continue;
-    const r=mv[n] || '(no reply)';
-    counts[r]=(counts[r]||0)+1;
-    tot++;
+    let node = root;
+    for(const m of g.moves.split(' ')){
+      const key = m.toLowerCase();
+      let child = node.kids.get(key);
+      if(!child){ child = { pass: 0, label: m, kids: new Map() }; node.kids.set(key, child); }
+      child.pass++;
+      node = child;
+    }
   }
+  return root;
+}
+function gamesTrieRoot(games){
+  if(_gamesTrie.games !== games) _gamesTrie = { games, root: buildGamesTrie(games) };
+  return _gamesTrie.root;
+}
+
+function replies(games,seq){
+  let node = gamesTrieRoot(games);
+  for(const m of seq){
+    node = node.kids.get(m.toLowerCase());
+    if(!node) return {counts:{}, tot:0};
+  }
+  const counts={}; let tot=0;
+  for(const child of node.kids.values()){ counts[child.label]=child.pass; tot+=child.pass; }
   return {counts,tot};
 }
 
