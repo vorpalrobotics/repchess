@@ -621,8 +621,12 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, op
 }
 
 function buildRoof(size, origin, color){
+  // a flat cap flush with the walls -- no overhang. The old version oversized
+  // the cap (w+0.6, d+0.6) to read as an eaved roof, but behind a movie-set
+  // facade that lip just bled out past the facade's edges, so we keep it
+  // flush to the box footprint.
   const mat = new THREE.MeshStandardMaterial({ color });
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(size.w + 0.6, 0.3, size.d + 0.6), mat);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(size.w, 0.3, size.d), mat);
   roof.position.set(origin.x, size.h + 0.15, origin.z);
   return roof;
 }
@@ -1156,6 +1160,7 @@ export async function openThreeTest(containerEl){
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
+      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, kind:o.userData&&o.userData.kind }); } }); return out; },
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; }
     };
   }
