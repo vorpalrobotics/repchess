@@ -551,7 +551,12 @@ function buildBoxAsset(asset){
 function buildBillboardAsset(asset){
   const { w, h } = asset.size;
   if(asset.type === 'billboard-sprite'){
-    const mat = new THREE.SpriteMaterial({ color: 0xffffff });
+    // alphaTest cutout so the PNG's transparent background is discarded instead
+    // of rendering opaque (a SpriteMaterial defaults to transparent:false, which
+    // ignores the alpha channel and shows the background's baked RGB -- white,
+    // in the reported case). Same hard-cutout the cylindrical billboard uses, so
+    // it also avoids the dark/halo fringe that alpha *blending* would give.
+    const mat = new THREE.SpriteMaterial({ color: 0xffffff, alphaTest: 0.5 });
     const myGen = buildGeneration;
     textureLoader.load(asset.image, (tex) => {
       if(buildGeneration !== myGen) return;
