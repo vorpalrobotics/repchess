@@ -283,14 +283,25 @@ function renderTypeFields(type, a){
       </div>
     `;
   } else if(kind === 'facade'){
-    // one-shot texture stretched over a whole building front (non-tiled); no
-    // repeat/rotation. Carries its real-world face size in meters so the in-world
-    // editor can snap a building's front face straight to it. Flat board → no depth.
+    // one-shot texture stretched over a whole building front. Carries its
+    // real-world face size in meters so the in-world editor can snap a building's
+    // front face straight to it. With a Depth > 0 the facade is extruded from its
+    // silhouette into a slab (side walls take the Side color); the walkable box
+    // behind it is buried inside that depth. Depth 0 = the old flat board.
     box.innerHTML = `
       <div class="assets-size-row">
         <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 8}"></div>
         <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
         <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 10}"></div>
+        <div class="field"><label>Depth (m)</label><input type="number" step="0.01" id="assetSizeD" value="${size.d ?? 2}"></div>
+      </div>
+      <div class="field">
+        <label>Side color</label>
+        <div class="side-color-row">
+          <input type="text" id="assetSideColor" placeholder="auto" value="${esc((a && a.sideColor && a.sideColor !== 'auto') ? a.sideColor : '')}">
+          <div class="side-color-swatch" id="assetSideColorSwatch"></div>
+          <button type="button" class="eyedropper-btn" id="assetEyedropperBtn" title="Pick side color from the image"><i class="fa-solid fa-eye-dropper"></i></button>
+        </div>
       </div>
       <div class="field"><label>Tint (hex, optional)</label><input type="text" id="assetTint" value="${esc((a && a.tint) || '')}"></div>
       <div class="field"><label>Roughness</label><input type="number" step="0.01" min="0" max="1" id="assetRoughness" value="${(a && a.roughness) ?? 0.9}"></div>
@@ -628,7 +639,8 @@ function readTypeFields(type){
   }
   if(type === 'facade'){
     return {
-      size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 },
+      size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0, d: Number($('assetSizeD').value)||0 },
+      sideColor: $('assetSideColor').value.trim() || 'auto',
       tint: $('assetTint').value.trim() || null,
       roughness: Number($('assetRoughness').value),
       metalness: Number($('assetMetalness').value),
@@ -693,7 +705,7 @@ function assetToJson(a){
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'facade'){
-    Object.assign(json, { size: a.size, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
+    Object.assign(json, { size: a.size, sideColor: a.sideColor, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   } else {
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   }

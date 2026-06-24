@@ -957,6 +957,22 @@ function mountOutward(size, wall, offset, origin, mesh, y, clearance){
   return mesh;
 }
 
+// Positions an extruded facade slab (built by buildExtrudedAsset, front = local
+// -z, centred on its own geometry) on a building's door wall: front cap sits
+// `frontClear` proud of the wall facing the street, and the slab runs backward
+// over the (smaller) brick box. Rotation turns local -z to point outward.
+function mountFacadeExtrusion(group, size, wall, origin, depth, height, frontClear){
+  origin = origin || { x:0, z:0 };
+  const FRONT_OUTWARD_YAW = { north: 0, south: Math.PI, west: Math.PI/2, east: -Math.PI/2 };
+  const { axis, fixed } = wallSpan(size, wall);
+  const outSign = (wall === 'south' || wall === 'east') ? 1 : -1;
+  const along = fixed + outSign * (frontClear - depth / 2);   // slab centre, depth/2 behind the front cap
+  if(axis === 'x'){ group.position.set(origin.x, height / 2, origin.z + along); }
+  else { group.position.set(origin.x + along, height / 2, origin.z); }
+  group.rotation.y = FRONT_OUTWARD_YAW[wall];
+  return group;
+}
+
 // Builds a raised platform (reached by a staircase) within a room's
 // existing walls/ceiling -- the platform spans from `toZ` back to the
 // room's far wall, and the steps climb the gap between `fromZ` and `toZ`.
@@ -1172,12 +1188,19 @@ function buildRoom(roomKey){
       let size = b.size;
       let facadeWidth = doorAxis === 'x' ? b.size.w : b.size.d;
       let facadeHeight = b.size.h;
+      let facadeDepth = 0;
       if(facadeAsset && facadeAsset.size){
         const fw = Math.max(facadeAsset.size.w || 0, DOOR_W + 0.4);
         const fh = Math.max(facadeAsset.size.h || 0, DOOR_H + 0.4);
-        const boxW = Math.max(fw * 0.9, DOOR_W + 0.4);
+        facadeDepth = facadeAsset.size.d || 0;
+        // The walkable box (brick walls + door) is half the facade in every
+        // dimension and buried inside the extruded slab -- it exists only to host
+        // the door/trigger, not to be seen. Depth falls back to the static config
+        // for a legacy flat facade (no extrusion depth authored).
+        const boxW = Math.max(fw * 0.5, DOOR_W + 0.4);
         const boxH = Math.max(fh * 0.5, DOOR_H + 0.4);
-        size = doorAxis === 'x' ? { w: boxW, d: b.size.d, h: boxH } : { w: b.size.w, d: boxW, h: boxH };
+        const boxD = Math.max((facadeDepth || b.size.d) * 0.5, 0.8);
+        size = doorAxis === 'x' ? { w: boxW, d: boxD, h: boxH } : { w: boxD, d: boxW, h: boxH };
         facadeWidth = fw;
         facadeHeight = fh;
       }
@@ -1206,17 +1229,32 @@ function buildRoom(roomKey){
       if(facadeSrc && textureLoader){
         const doorWall = b.doorWall, origin = b.origin;
         const sizeForMount = size, mountW = facadeWidth, mountH = facadeHeight;
-        const hasTransparency = !!(facadeAsset && facadeAsset.size);
-        textureLoader.load(facadeSrc, (tex) => {
-          if(buildGeneration !== myGeneration || !scene) return;
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-          const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: hasTransparency });
-          const facade = new THREE.Mesh(new THREE.PlaneGeometry(mountW, mountH), mat);
-          mountOutward(sizeForMount, doorWall, 0, origin, facade, mountH/2, WALL_THICK/2 + 0.12);
-          facade.userData = { kind: 'facade', roomKey, buildingKey };
-          scene.add(facade);
-        }, undefined, () => { /* source not available yet -- keep the procedural brick fallback */ });
+        if(facadeDepth > 0){
+          // Extruded facade: the image's silhouette extruded into a slab, front
+          // cap facing the street, side walls a flat sampled/picked color. The
+          // brick box above is half-size and hidden inside this slab's depth.
+          const group = buildExtrudedAsset({
+            image: facadeSrc,
+            size: { w: mountW, h: mountH, d: facadeDepth },
+            sideColor: facadeAsset.sideColor
+          });
+          mountFacadeExtrusion(group, sizeForMount, doorWall, origin, facadeDepth, mountH, WALL_THICK/2 + 0.12);
+          group.userData = { kind: 'facade', roomKey, buildingKey };
+          scene.add(group);
+        } else {
+          // Legacy flat facade: a single un-tiled board over the whole face.
+          const hasTransparency = !!(facadeAsset && facadeAsset.size);
+          textureLoader.load(facadeSrc, (tex) => {
+            if(buildGeneration !== myGeneration || !scene) return;
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+            const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: hasTransparency });
+            const facade = new THREE.Mesh(new THREE.PlaneGeometry(mountW, mountH), mat);
+            mountOutward(sizeForMount, doorWall, 0, origin, facade, mountH/2, WALL_THICK/2 + 0.12);
+            facade.userData = { kind: 'facade', roomKey, buildingKey };
+            scene.add(facade);
+          }, undefined, () => { /* source not available yet -- keep the procedural brick fallback */ });
+        }
       }
 
       // edit-mode hotspot: click the front face to set / replace / remove its facade
