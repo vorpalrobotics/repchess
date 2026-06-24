@@ -103,6 +103,10 @@ let keys = {};
 let yaw = 0;
 let pos = { x:0, z:0 };
 let currentRoomKey = 'start';
+// where the player last walked in (spawn point just inside the entry door).
+// Floor-standing box props are turned to face this so their image side greets
+// you as you enter -- the only viewpoint that matters for a memory walk.
+let entryPoint = null;
 let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
 let currentExitsByWall = {};
 let teleportLockUntil = 0;
@@ -461,6 +465,14 @@ function buildPropAsset(asset){
 // rotation.y so a prop's front (local -z) points into the room off a wall
 const WALL_INWARD_YAW = { north: Math.PI, south: 0, west: -Math.PI/2, east: Math.PI/2 };
 
+// rotation.y that aims a prop's front (local -z) at world point `target` from
+// (x,z). Derived so the wall cases above fall out exactly (e.g. a prop south of
+// a target gets yaw 0). With no target, default to facing -z (north).
+function yawFacing(x, z, target){
+  if(!target) return 0;
+  return Math.atan2(x - target.x, z - target.z);
+}
+
 // places a built prop into a slot (floor or wall), tags it for the editor,
 // and registers cylindrical billboards for per-frame facing.
 function placeSlotAccessory(room, slot, asset){
@@ -482,7 +494,13 @@ function placeSlotAccessory(room, slot, asset){
     const floorY = floorHeightAt(room, slot.z);
     const h = (asset.size && asset.size.h) || 1;
     obj.position.set(slot.x, floorY + h/2, slot.z);
-    if(asset.type === 'box') obj.rotation.y = slot.yaw || 0;
+    // Box props turn to face the door you walked in through (its image side is
+    // local -z). An explicit slot.yaw still wins if one is authored; otherwise
+    // aim the front at the entry point. Billboards always face the camera, so
+    // they're left alone.
+    if(asset.type === 'box'){
+      obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(slot.x, slot.z, entryPoint);
+    }
   }
   obj.userData = { kind: 'accessory', slotId: slot.id };
   if(asset.type === 'billboard-cylindrical') billboards.push(obj);
@@ -973,6 +991,8 @@ function buildRoom(roomKey){
 }
 
 function enterRoom(roomKey, spawn){
+  // remember where we came in *before* building, so floor props can face it
+  entryPoint = { x: spawn.x, z: spawn.z };
   buildRoom(roomKey);
   pos.x = spawn.x; pos.z = spawn.z; yaw = spawn.yaw;
   teleportLockUntil = clock.getElapsedTime() + 0.6;
@@ -1160,7 +1180,8 @@ export async function openThreeTest(containerEl){
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
-      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, kind:o.userData&&o.userData.kind }); } }); return out; },
+      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId }); } }); return out; },
+      entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; }
     };
   }
