@@ -93,6 +93,10 @@ const EYE_HEIGHT = 1.6;
 const MOVE_SPEED = 4.2;   // m/s
 const TURN_SPEED = 1.8;   // rad/s
 
+// where you start, and where pressing R returns you
+const START_ROOM = 'mainStreet';
+const START_SPAWN = { x:0, z:18, yaw:0 };
+
 let renderer=null, scene=null, camera=null, clock=null;
 let container=null, animHandle=null, resizeObs=null;
 let keys = {};
@@ -872,12 +876,9 @@ function buildRoom(roomKey){
     if(furniture) scene.add(furniture);
     buildSlots(room, roomKey);
   } else {
-    // surrounding courtyard wall (no doors of its own — exploring further
-    // up/down the street is a later step, this just bounds the area)
-    const courtyardTex = makeBrickTexture(0x9aa0a6);
-    for(const wall of ['north','south','east','west']){
-      scene.add(buildWallGroup(room.size, wall, false, 0, courtyardTex));
-    }
+    // No surrounding wall: the outdoor area is open so multiple buildings can
+    // sit on the street without a brick box hemming them in. Movement is still
+    // bounded by clampToRoom (an invisible limit at the room's edges).
     for(const s of room.streetSigns || []){
       const signGroup = buildGroundSign(s.text);
       signGroup.position.set(s.x, 0, s.z);
@@ -1098,6 +1099,7 @@ function onResize(){
 function onKeyDown(e){
   if(e.key === 'e' || e.key === 'E'){ setEditMode(!editMode); return; }
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
+  if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
   keys[e.key] = true;
 }
 function onKeyUp(e){ keys[e.key] = false; }
@@ -1139,7 +1141,7 @@ export async function openThreeTest(containerEl){
   window.addEventListener('keyup', onKeyUp);
   renderer.domElement.addEventListener('click', onCanvasClick);
 
-  enterRoom('mainStreet', { x:0, z:18, yaw:0 });
+  enterRoom(START_ROOM, START_SPAWN);
   tick();
 
   // test-only hook (off unless the debug flag is set) so the layout editor can
