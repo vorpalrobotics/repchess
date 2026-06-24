@@ -524,13 +524,10 @@ function facadeMarkerMaterial(){
   }
   return facadeMarkerMat;
 }
-function buildFacadeMarker(size, b, roomKey, buildingKey){
-  const { axis } = wallSpan(size, b.doorWall);
-  const faceWidth = axis === 'x' ? size.w : size.d;
-  const h = size.h;
-  const panel = new THREE.Mesh(new THREE.PlaneGeometry(faceWidth * 0.96, h * 0.96), facadeMarkerMaterial());
-  mountOutward(size, b.doorWall, 0, b.origin, panel, h/2, WALL_THICK/2 + 0.10);
-  panel.userData = { kind: 'facade', roomKey, buildingKey, w: faceWidth, h };
+function buildFacadeMarker(size, b, roomKey, buildingKey, faceWidth, faceHeight){
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(faceWidth * 0.96, faceHeight * 0.96), facadeMarkerMaterial());
+  mountOutward(size, b.doorWall, 0, b.origin, panel, faceHeight/2, WALL_THICK/2 + 0.10);
+  panel.userData = { kind: 'facade', roomKey, buildingKey, w: faceWidth, h: faceHeight };
   return panel;
 }
 
@@ -893,16 +890,26 @@ function buildRoom(roomKey){
       const facadeAsset = buildingFacadeFor(roomKey, buildingKey);
 
       // A placed facade asset carries its own real-world size in meters: its
-      // width drives the front face's width and its height drives the building
-      // height (depth is left as configured). With no override we fall back to
-      // the static config size. Min clamps keep the doorway from being squeezed
-      // out (door is DOOR_W wide, DOOR_H tall).
+      // width drives the front face's width (and so the block's width, to
+      // keep the doorway centered under it); its height drives only the
+      // *facade plane's* height, not the block's. The block (brick walls +
+      // overhanging roof) stays at its static config height -- shorter than
+      // a tall facade -- so the facade stands like a freestanding billboard
+      // in front of it: any transparent area near the top of the facade
+      // image (above the block's roofline) shows open sky behind it instead
+      // of the block's roof silhouette. With no override, width and height
+      // both fall back to the static config size. Min clamps keep the
+      // doorway from being squeezed out (door is DOOR_W wide, DOOR_H tall).
+      const { axis: doorAxis } = wallSpan(b.size, b.doorWall);
       let size = b.size;
+      let facadeWidth = doorAxis === 'x' ? b.size.w : b.size.d;
+      let facadeHeight = b.size.h;
       if(facadeAsset && facadeAsset.size){
         const fw = Math.max(facadeAsset.size.w || 0, DOOR_W + 0.4);
         const fh = Math.max(facadeAsset.size.h || 0, DOOR_H + 0.4);
-        const { axis } = wallSpan(b.size, b.doorWall);
-        size = axis === 'x' ? { w: fw, d: b.size.d, h: fh } : { w: b.size.w, d: fw, h: fh };
+        size = doorAxis === 'x' ? { w: fw, d: b.size.d, h: b.size.h } : { w: b.size.w, d: fw, h: b.size.h };
+        facadeWidth = fw;
+        facadeHeight = fh;
       }
 
       const buildingTex = makeBrickTexture(b.color);
@@ -927,24 +934,23 @@ function buildRoom(roomKey){
       // doorway wall above stays visible (no broken texture, just the fallback).
       const facadeSrc = facadeAsset ? facadeAsset.image : (b.frontTexture || null);
       if(facadeSrc && textureLoader){
-        const { axis } = wallSpan(size, b.doorWall);
-        const facadeWidth = axis === 'x' ? size.w : size.d;
-        const doorWall = b.doorWall, origin = b.origin, h = size.h;
-        const sizeForMount = size;
+        const doorWall = b.doorWall, origin = b.origin;
+        const sizeForMount = size, mountW = facadeWidth, mountH = facadeHeight;
+        const hasTransparency = !!(facadeAsset && facadeAsset.size);
         textureLoader.load(facadeSrc, (tex) => {
           if(buildGeneration !== myGeneration || !scene) return;
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-          const mat = new THREE.MeshStandardMaterial({ map: tex });
-          const facade = new THREE.Mesh(new THREE.PlaneGeometry(facadeWidth, h), mat);
-          mountOutward(sizeForMount, doorWall, 0, origin, facade, h/2, WALL_THICK/2 + 0.05);
+          const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: hasTransparency });
+          const facade = new THREE.Mesh(new THREE.PlaneGeometry(mountW, mountH), mat);
+          mountOutward(sizeForMount, doorWall, 0, origin, facade, mountH/2, WALL_THICK/2 + 0.12);
           facade.userData = { kind: 'facade', roomKey, buildingKey };
           scene.add(facade);
         }, undefined, () => { /* source not available yet -- keep the procedural brick fallback */ });
       }
 
       // edit-mode hotspot: click the front face to set / replace / remove its facade
-      if(editMode) scene.add(buildFacadeMarker(size, b, roomKey, buildingKey));
+      if(editMode) scene.add(buildFacadeMarker(size, b, roomKey, buildingKey, facadeWidth, facadeHeight));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       exitMeta.push({
@@ -1144,7 +1150,8 @@ export async function openThreeTest(containerEl){
       toggle: () => setEditMode(!editMode),
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
-      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; }
+      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
+      teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; }
     };
   }
 }
