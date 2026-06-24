@@ -38,18 +38,15 @@ const ROOMS = {
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'west', text: '1' },
     furniture: { type: 'table', x: -3.2, z: 3.2, yaw: 0 },
-    // standard placement slots for the in-world layout editor (press E):
-    // three floor corners (the fourth holds the table above) + one wall.
+    // extra hand-placed wall mount, beyond the procedural floor grid and
+    // door-flanking wall slots (see roomSlots()) -- a spot with no door nearby.
     slots: [
-      { id: 'fl-ne', kind: 'floor', x: 3.2,  z: -3.2 },
-      { id: 'fl-nw', kind: 'floor', x: -3.2, z: -3.2 },
-      { id: 'fl-se', kind: 'floor', x: 3.2,  z: 3.2  },
       { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
     ],
     exits: [
       { wall: 'north', offset: 0, target: 'roomB' },
       { wall: 'east',  offset: 0, target: 'roomC' },
-      { wall: 'south', offset: 0, target: 'mainStreet' }
+      { wall: 'south', offset: 0, target: 'mainStreet', back: true }
     ]
   },
   roomB: {
@@ -58,15 +55,12 @@ const ROOMS = {
     label: { wall: 'north', text: '2' },
     furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
     stairs: { fromZ: 2.0, toZ: -1.0, rise: 1.3 },
-    // floor slots kept in the flat front half (z>fromZ); two doorless walls
     slots: [
-      { id: 'fl-sw', kind: 'floor', x: -3.2, z: 3.2 },
-      { id: 'fl-se', kind: 'floor', x: 3.2,  z: 3.2 },
       { id: 'w-east', kind: 'wall', wall: 'east', offset: 0, y: 1.6 },
       { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
     ],
     exits: [
-      { wall: 'south', offset: 0, target: 'start' }
+      { wall: 'south', offset: 0, target: 'start', back: true }
     ]
   },
   roomC: {
@@ -75,13 +69,10 @@ const ROOMS = {
     label: { wall: 'east', text: '3' },
     furniture: { type: 'chest', x: 3.2, z: 3.2, yaw: Math.PI/4 },
     slots: [
-      { id: 'fl-nw', kind: 'floor', x: -3.2, z: -3.2 },
-      { id: 'fl-ne', kind: 'floor', x: 3.2,  z: -3.2 },
-      { id: 'fl-sw', kind: 'floor', x: -3.2, z: 3.2  },
       { id: 'w-north', kind: 'wall', wall: 'north', offset: 0, y: 1.6 }
     ],
     exits: [
-      { wall: 'west', offset: 0, target: 'start' }
+      { wall: 'west', offset: 0, target: 'start', back: true }
     ]
   }
 };
@@ -148,8 +139,67 @@ function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+// 3x3 grid of floor-standing spots, equally spaced, using the same compass
+// ids the four hand-placed corners already used (so existing layout
+// overrides for fl-nw/fl-ne/fl-sw/fl-se keep working). A cell is dropped if
+// the room's single static furniture piece sits there, or if it falls right
+// in the doorway of one of the room's exits.
+const FLOOR_GRID_OFFSET = 3.2;
+const FLOOR_GRID_IDS = [
+  ['nw', 'n', 'ne'],
+  ['w',  'c', 'e'],
+  ['sw', 's', 'se']
+];
+function floorGridSlots(room){
+  const slots = [];
+  const coords = [-FLOOR_GRID_OFFSET, 0, FLOOR_GRID_OFFSET];
+  for(let r = 0; r < 3; r++){
+    for(let c = 0; c < 3; c++){
+      const x = coords[c], z = coords[r];
+      if(room.furniture && Math.abs(room.furniture.x - x) < 0.1 && Math.abs(room.furniture.z - z) < 0.1) continue;
+      if(blocksDoorway(room, x, z)) continue;
+      slots.push({ id: 'fl-' + FLOOR_GRID_IDS[r][c], kind: 'floor', x, z });
+    }
+  }
+  return slots;
+}
+function blocksDoorway(room, x, z){
+  for(const ex of room.exits || []){
+    const { axis, fixed } = wallSpan(room.size, ex.wall);
+    const nearEdge = fixed > 0 ? FLOOR_GRID_OFFSET : -FLOOR_GRID_OFFSET;
+    if(axis === 'x'){
+      if(Math.abs(z - nearEdge) < 0.1 && Math.abs(x - ex.offset) < DOOR_W/2 + 0.4) return true;
+    } else {
+      if(Math.abs(x - nearEdge) < 0.1 && Math.abs(z - ex.offset) < DOOR_W/2 + 0.4) return true;
+    }
+  }
+  return false;
+}
+
+// wall-hanging spots flanking each door (for framed pictures, sconces,
+// shelves) -- two per exit, clear of the doorway itself.
+const DOOR_FLANK_OFFSET = DOOR_W/2 + 0.9;
+function doorFlankSlots(room){
+  const slots = [];
+  for(const ex of room.exits || []){
+    for(const side of [-1, 1]){
+      slots.push({
+        id: `wh-${ex.wall}-${side < 0 ? 'l' : 'r'}`,
+        kind: 'wall', wall: ex.wall, offset: ex.offset + side * DOOR_FLANK_OFFSET, y: 1.7
+      });
+    }
+  }
+  return slots;
+}
+
+// full set of placement slots for a room: the procedural floor grid and
+// door-flanking wall spots, plus any one-off hand-authored slots in ROOMS
+// (e.g. a wall mount with no door nearby).
+function roomSlots(room){
+  return [...floorGridSlots(room), ...doorFlankSlots(room), ...(room.slots || [])];
+}
 function slotById(room, slotId){
-  return (room.slots || []).find(s => s.id === slotId) || null;
+  return roomSlots(room).find(s => s.id === slotId) || null;
 }
 
 async function refreshAssetMap(){
@@ -564,7 +614,7 @@ function buildFacadeMarker(size, b, roomKey, buildingKey, faceWidth, faceHeight)
 // renders every slot in a room: placed accessory if one is assigned, else a
 // marker (only in edit mode, so normal walking is unchanged).
 function buildSlots(room, roomKey){
-  for(const slot of room.slots || []){
+  for(const slot of roomSlots(room)){
     const asset = slotAssetFor(roomKey, slot.id);
     if(asset){
       scene.add(placeSlotAccessory(room, slot, asset));
@@ -681,6 +731,41 @@ function placeLabelOnWall(size, wall, text, origin, yOverride){
   if(wall === 'south'){ mesh.position.set(origin.x, y, fixed - clearance + origin.z); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + clearance + origin.x, y, origin.z); mesh.rotation.y = Math.PI/2; }
   if(wall === 'east'){  mesh.position.set(fixed - clearance + origin.x, y, origin.z); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+
+function makeExitSignMesh(){
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 96;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#7a1414';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 5;
+  ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('EXIT', canvas.width/2, canvas.height/2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  return new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.375), mat);
+}
+
+// "EXIT" placard above a door whose exit leads back the way the player
+// came in, rather than deeper into the layout -- mounted on the lintel,
+// same inward-facing convention as placeLabelOnWall.
+function buildExitSign(size, wall, offset){
+  const mesh = makeExitSignMesh();
+  const { fixed } = wallSpan(size, wall);
+  const clearance = WALL_THICK/2 + 0.02;
+  const y = DOOR_H + 0.3;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed + clearance); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed - clearance); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, offset); mesh.rotation.y = -Math.PI/2; }
   return mesh;
 }
 
@@ -890,6 +975,7 @@ function buildRoom(roomKey){
       if(ex){
         const spawn = computeSpawnForExit(roomKey, room, ex);
         exitMeta.push({ box: doorTriggerBox(room.size, wall, ex.offset), target: ex.target, spawn });
+        if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
       }
     }
     if(room.stairs) scene.add(buildStairs(room));
@@ -1190,7 +1276,8 @@ export async function openThreeTest(containerEl){
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId }); } }); return out; },
       entry: () => entryPoint,
-      teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; }
+      teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
+      pos: () => ({ x: pos.x, z: pos.z, yaw })
     };
   }
 }
