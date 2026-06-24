@@ -2612,7 +2612,18 @@ $('engineMaxDepthSelect').onchange = () => {
   if(currentEngineFen) runEngine(currentEngineFen);
 };
 
-engine.init().catch(err => {
+/* short suffix telling the user whether multi-threading kicked in (it only does
+   on cross-origin-isolated browsers, see js/engine.js) -- shown on the live
+   engine status line so it's visible at a glance during analysis. */
+const engineModeTag = () => !engine.ready ? ''
+  : engine.multithreaded ? ` · ${engine.threads} threads` : ' · 1 thread';
+
+engine.init().then(() => {
+  // surface the engine mode as soon as it's ready, if nothing is analysing yet
+  if(!$('engineDepth').textContent){
+    $('engineDepth').textContent = `Engine ready${engineModeTag()}`;
+  }
+}).catch(err => {
   console.error('[engine] init failed', err);
   $('engineDepth').textContent = 'Engine unavailable';
 });
@@ -2881,7 +2892,7 @@ function pvToSan(fen, uciMoves, maxPlies){
 }
 
 function renderEngineLines(fen, depth, lines, multipv){
-  $('engineDepth').textContent = `Live — Depth ${depth}`;
+  $('engineDepth').textContent = `Live — Depth ${depth}${engineModeTag()}`;
   const turn = fen.split(' ')[1];
   const ol = $('engineLines');
   ol.innerHTML = '';
@@ -2924,7 +2935,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(!engine.ready) await engine.init().catch(()=>{});
   if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} superseded before engine ready, dropping`); return; }
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
-  $('engineDepth').textContent = 'Live — Thinking…';
+  $('engineDepth').textContent = `Live — Thinking…${engineModeTag()}`;
   $('engineLines').innerHTML = '';
   expandedPvLines.clear();
   const multipv = engineMultiPV();
