@@ -674,10 +674,14 @@
   </div>
 </div>
 
-<!-- general-purpose spinner, shown/hidden via showSpinner()/hideSpinner() in app.js -->
-<div id="spinnerOverlay">
+<!-- general-purpose spinner, shown/hidden via showSpinner()/hideSpinner() in app.js.
+     Starts visible (inline style overrides the CSS default of display:none) so it
+     covers the time between page paint and the app module finishing its imports
+     and running its first render — app.js claims this as "bootSpinner" and hands
+     off to its own showSpinner() calls once it starts running. -->
+<div id="spinnerOverlay" style="display:flex">
   <img src="images/REPchess-logo-200.png" alt="">
-  <span id="spinnerLabel"></span>
+  <span id="spinnerLabel">Loading…</span>
 </div>
 
 <!-- hover preview mini-board (shown on dwell over an analyse icon) -->

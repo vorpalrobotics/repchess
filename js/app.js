@@ -48,6 +48,19 @@ function nextPaint(){
   return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
+/* the overlay starts visible in the static HTML (display:flex inline style) so
+   it's on screen from the very first paint, covering the time this module spends
+   fetching/parsing its CDN imports before any of its own code can run. Claim that
+   visible state as a real spinner handle immediately so activeSpinners reflects
+   reality, then hand off to renderHome()'s own showSpinner() call on its first run. */
+const bootSpinner = showSpinner('Loading…');
+let bootSpinnerHidden = false;
+function hideBootSpinner(){
+  if(bootSpinnerHidden) return;
+  bootSpinnerHidden = true;
+  hideSpinner(bootSpinner);
+}
+
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
@@ -1587,6 +1600,7 @@ $('fileImport').addEventListener('change', async e=>{
 
 /* ---------- home screen: list of lines ---------- */
 async function renderHome(){
+  hideBootSpinner();
   $('homeScreen').style.display='';
   $('lineScreen').style.display='none';
   CURRENT_LINE = null;
