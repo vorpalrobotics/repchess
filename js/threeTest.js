@@ -192,11 +192,42 @@ function doorFlankSlots(room){
   return slots;
 }
 
-// full set of placement slots for a room: the procedural floor grid and
-// door-flanking wall spots, plus any one-off hand-authored slots in ROOMS
-// (e.g. a wall mount with no door nearby).
+// "low" wall spot centred on each wall at ground level, for floor-standing
+// against-the-wall pieces (fireplace, columns, a suit of armor) -- the
+// counterpart to the eye-level door-flank spots. Skipped on a wall whose door
+// sits near the centre (the piece would land in the doorway).
+function lowWallSlots(room){
+  const slots = [];
+  for(const wall of ['north', 'south', 'east', 'west']){
+    if(wallHasCenteredDoor(room, wall)) continue;
+    slots.push({ id: `wl-${wall}`, kind: 'wall', wall, offset: 0, y: 0, ground: true });
+  }
+  return slots;
+}
+function wallHasCenteredDoor(room, wall){
+  for(const ex of room.exits || []){
+    if(ex.wall === wall && Math.abs(ex.offset) < DOOR_W/2 + 0.6) return true;
+  }
+  return false;
+}
+
+// single hang-point in the centre of the ceiling, for a chandelier (typically a
+// billboard so it always faces the camera).
+function ceilingSlots(room){
+  return [{ id: 'ceil-c', kind: 'ceiling', x: 0, z: 0 }];
+}
+
+// full set of placement slots for a room: the procedural floor grid, door-
+// flanking and low wall spots, the ceiling hang-point, plus any one-off hand-
+// authored slots in ROOMS (e.g. a wall mount with no door nearby).
 function roomSlots(room){
-  return [...floorGridSlots(room), ...doorFlankSlots(room), ...(room.slots || [])];
+  return [
+    ...floorGridSlots(room),
+    ...doorFlankSlots(room),
+    ...lowWallSlots(room),
+    ...ceilingSlots(room),
+    ...(room.slots || [])
+  ];
 }
 function slotById(room, slotId){
   return roomSlots(room).find(s => s.id === slotId) || null;
@@ -685,14 +716,23 @@ function yawFacing(x, z, target){
 // and registers cylindrical billboards for per-frame facing.
 function placeSlotAccessory(room, slot, asset){
   const obj = buildPropAsset(asset);
-  if(slot.kind === 'wall'){
+  if(slot.kind === 'ceiling'){
+    // hangs from the ceiling centre; a billboard turns to face the camera, so
+    // only its height matters -- drop it so its top is flush with the ceiling.
+    const h = (asset.size && asset.size.h) || 1;
+    obj.position.set(slot.x, room.size.h - h/2 - 0.05, slot.z);
+  } else if(slot.kind === 'wall'){
     const { axis, fixed } = wallSpan(room.size, slot.wall);
     const depth = (asset.type === 'box' || asset.type === 'extruded') ? (asset.size.d || 0.3) : 0.05;
     const clearance = WALL_THICK/2 + depth/2 + 0.02;
     let x, z;
     if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
     else { z = slot.offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; }
-    obj.position.set(x, slot.y, z);
+    // "ground" wall slots sit a floor-standing piece against the wall (bottom on
+    // the floor); ordinary wall slots centre the piece at the slot's y.
+    let y = slot.y;
+    if(slot.ground){ const h = (asset.size && asset.size.h) || 1; y = floorHeightAt(room, z) + h/2; }
+    obj.position.set(x, y, z);
     if(!(asset.type === 'billboard-cylindrical' || asset.type === 'billboard-sprite')){
       obj.rotation.y = WALL_INWARD_YAW[slot.wall] || 0;
     }
@@ -726,14 +766,19 @@ function slotMarkerMaterial(){
 }
 function buildSlotMarker(room, slot){
   let mesh;
-  if(slot.kind === 'wall'){
+  if(slot.kind === 'ceiling'){
+    mesh = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), slotMarkerMaterial());
+    mesh.rotation.x = Math.PI/2;                  // disc on the ceiling, facing down
+    mesh.position.set(slot.x, room.size.h - 0.02, slot.z);
+  } else if(slot.kind === 'wall'){
     mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), slotMarkerMaterial());
     const { axis, fixed } = wallSpan(room.size, slot.wall);
     const clearance = WALL_THICK/2 + 0.03;
     let x, z;
     if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; mesh.rotation.y = slot.wall === 'north' ? 0 : Math.PI; }
     else { z = slot.offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; mesh.rotation.y = slot.wall === 'west' ? Math.PI/2 : -Math.PI/2; }
-    mesh.position.set(x, slot.y, z);
+    // ground markers sit at the base of the wall; eye-level ones at slot.y
+    mesh.position.set(x, slot.ground ? floorHeightAt(room, z) + 0.4 : slot.y, z);
   } else {
     mesh = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), slotMarkerMaterial());
     mesh.rotation.x = -Math.PI/2;
