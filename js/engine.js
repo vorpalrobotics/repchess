@@ -1,14 +1,24 @@
-// Stockfish 18 "lite, single-threaded" WASM build (no SharedArrayBuffer / COOP+COEP
-// headers required, so it runs as-is on GitHub Pages). Falls back through a couple
-// of mirrors, then to the old pure-JS (asm.js) Stockfish 10 build as a last resort.
+// Two ways to load Stockfish, chosen at init() by whether the page is
+// cross-origin isolated (see coi-serviceworker in index.html):
 //
-// The .js loader and .wasm binary are fetched as a *pair*: we still fetch+blob the
-// (small, ~20KB) .js loader to dodge cross-origin Worker-script restrictions, same
-// as before, but we don't fetch/blob the much larger (~7MB) .wasm binary ourselves —
-// this build resolves its wasm file from the worker's own URL hash fragment, so we
-// just point that hash at the wasm's absolute CDN URL and let the worker fetch it
-// directly (jsdelivr serves it with CORS headers, so a cross-origin fetch from
-// inside the worker works fine).
+//   * Isolated  -> the multi-threaded "lite" build, vendored same-origin under
+//     vendor/stockfish/. Multi-threading needs SharedArrayBuffer, which only
+//     exists when crossOriginIsolated is true. The build spawns pthread Web
+//     Workers that re-load this same script URL and resolve the .wasm next to
+//     it, so it must be served from a normal same-origin path (a blob URL or a
+//     cross-origin CDN breaks that self-resolution) — hence the vendored copy.
+//
+//   * Not isolated (Safari without credentialless, an old browser, or the
+//     service worker not yet active) -> the single-threaded CDN build, exactly
+//     as before. We fetch+blob the small .js loader to dodge cross-origin Worker
+//     restrictions and point its #hash at the .wasm's absolute CDN URL.
+//
+// Single-threaded is always the safe fallback, so threading is a pure upgrade
+// where the browser allows it and never a regression where it doesn't.
+const THREADED_BUILD = {
+  js:   'vendor/stockfish/stockfish-18-lite.js',
+  wasm: 'vendor/stockfish/stockfish-18-lite.wasm',
+};
 const STOCKFISH_BUILDS = [
   { js: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.js',
     wasm: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.wasm' },
@@ -23,9 +33,47 @@ export class Engine {
     this._worker = null;
     this._listener = null;
     this.ready = false;
+    this.multithreaded = false;
+    this.threads = 1;
   }
 
   async init() {
+    const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated === true
+      && typeof SharedArrayBuffer !== 'undefined';
+    if (isolated) {
+      try {
+        await this._initThreaded();
+        return;
+      } catch (err) {
+        console.warn('[engine] multi-threaded init failed, falling back to single-threaded', err);
+        this._teardownWorker();
+      }
+    }
+    await this._initSingle();
+  }
+
+  // multi-threaded, same-origin: the worker self-locates its .wasm and its
+  // pthread workers from this script's URL, so no blob indirection here.
+  async _initThreaded() {
+    const scriptUrl = new URL(THREADED_BUILD.js, document.baseURI).href;
+    const wasmUrl   = new URL(THREADED_BUILD.wasm, document.baseURI).href;
+    this._worker = new Worker(`${scriptUrl}#${encodeURIComponent(wasmUrl)}`);
+    this._worker.onmessage = ({ data }) => this._listener?.(data);
+
+    await this._command('uci', line => line === 'uciok');
+    // leave a core for the UI/main thread; the lite build scales well to a
+    // handful of threads but oversubscribing past that gives little back.
+    const cores = navigator.hardwareConcurrency || 2;
+    this.threads = Math.max(1, Math.min(cores - 1, 8));
+    this._send(`setoption name Threads value ${this.threads}`);
+    this._send('setoption name Hash value 128');
+    await this._command('isready', line => line === 'readyok');
+    this.multithreaded = true;
+    this.ready = true;
+    console.debug(`[engine] multi-threaded Stockfish ready (${this.threads} threads)`);
+  }
+
+  async _initSingle() {
     let blob = null, wasmUrl = null;
     for (const build of STOCKFISH_BUILDS) {
       try {
@@ -45,7 +93,14 @@ export class Engine {
 
     await this._command('uci', line => line === 'uciok');
     await this._command('isready', line => line === 'readyok');
+    this.multithreaded = false;
+    this.threads = 1;
     this.ready = true;
+  }
+
+  _teardownWorker() {
+    if (this._worker) { try { this._worker.terminate(); } catch {} this._worker = null; }
+    this._listener = null;
   }
 
   _send(cmd) {

@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Cross-origin isolation via a service worker (GitHub Pages can't set COOP/COEP
+     headers itself). This is what unlocks SharedArrayBuffer, and therefore the
+     multi-threaded Stockfish build in js/engine.js. Must load first, same-origin.
+     Force COEP "credentialless" so our cross-origin CDN assets (Font Awesome CSS
+     + fonts, cm-chessboard, etc.) keep loading without needing CORP headers;
+     on browsers that don't support it the page just stays non-isolated and the
+     engine falls back to the single-threaded build. -->
+<script>window.coi = { coepCredentialless: () => true };</script>
+<script src="coi-serviceworker.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/chessboard.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <style>
