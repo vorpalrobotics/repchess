@@ -65,6 +65,10 @@ let EDIT_IMAGE_ORIG = ''; // full-res data-URL of a fresh upload, kept in memory
                           // tier/type re-derives EDIT_IMAGE without re-reading the file. '' when editing
                           // an existing asset (we can't recover pixels already discarded on import).
 let EDIT_RESOLUTION = RESOLUTION_DEFAULT;
+let EDIT_IMG_W = 0;       // intrinsic px width/height of the staged image — the source of the
+let EDIT_IMG_H = 0;       // aspect ratio shown in the note and used by the size lock
+let SIZE_LOCK = true;     // when on, editing width (m) auto-sets height (m) to match the
+                          // image's pixel aspect ratio, and vice versa. Depth stays manual.
 let FILTER_TYPE = 'all';
 
 function $(id){ return containerEl.querySelector(`#${id}`); }
@@ -146,9 +150,11 @@ function openEditor(id){
   EDIT_IMAGE = (a && a.image) || '';
   EDIT_IMAGE_ORIG = '';                 // no original until a fresh upload this session
   EDIT_RESOLUTION = (a && a.resolution) || RESOLUTION_DEFAULT;
+  EDIT_IMG_W = EDIT_IMG_H = 0;
   renderEditor(a);
   $('assetsGrid').style.display = 'none';
   $('assetsEditor').style.display = '';
+  updateImgInfo();   // measure the staged image → fills the dims note (no size snap on open)
 }
 
 function renderEditor(a){
@@ -174,14 +180,19 @@ function renderEditor(a){
     </div>
     <div class="field">
       <label>Image (PNG, transparent background for props)</label>
-      <div class="asset-img-drop" id="assetImgDrop">
-        ${EDIT_IMAGE ? `<img id="assetImgPreview" src="${EDIT_IMAGE}">` : '<i class="fa-solid fa-image"></i>'}
+      <div class="asset-img-row">
+        <div class="asset-img-drop" id="assetImgDrop">
+          ${EDIT_IMAGE ? `<img id="assetImgPreview" src="${EDIT_IMAGE}">` : '<i class="fa-solid fa-image"></i>'}
+        </div>
+        <div class="asset-img-side">
+          <div class="asset-img-info" id="assetImgInfo"></div>
+          <div class="asset-img-tools">
+            <button type="button" id="assetAutoCropBtn"><i class="fa-solid fa-crop-simple"></i> Auto-crop transparent edges</button>
+            <span class="assets-res-hint" id="assetCropHint"></span>
+          </div>
+        </div>
       </div>
       <input type="file" id="assetImgFile" accept="image/*" style="display:none">
-      <div class="asset-img-tools">
-        <button type="button" id="assetAutoCropBtn"><i class="fa-solid fa-crop-simple"></i> Auto-crop transparent edges</button>
-        <span class="assets-res-hint" id="assetCropHint"></span>
-      </div>
     </div>
     <div id="assetTypeFields"></div>
     <div class="assets-error" id="assetsError"></div>
@@ -232,6 +243,7 @@ function renderTypeFields(type, a){
     box.innerHTML = `
       <div class="assets-size-row">
         <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 0.5}"></div>
+        <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
         <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 1}"></div>
         <div class="field"><label>Depth (m)</label><input type="number" step="0.01" id="assetSizeD" value="${size.d ?? 0.5}"></div>
       </div>
@@ -248,6 +260,7 @@ function renderTypeFields(type, a){
     box.innerHTML = `
       <div class="assets-size-row">
         <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 0.8}"></div>
+        <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
         <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 1}"></div>
       </div>
     `;
@@ -274,6 +287,63 @@ function renderTypeFields(type, a){
       <div class="field"><label>Metalness</label><input type="number" step="0.01" min="0" max="1" id="assetMetalness" value="${(a && a.metalness) ?? 0}"></div>
     `;
   }
+  wireSizeLock();
+}
+
+/* ---------- size lock ----------
+   Ties width:height (meters) to the image's pixel aspect ratio for box/billboard
+   props. Editing one dimension fills the other; depth is left untouched. Aspect is
+   derived from the staged image (EDIT_IMG_W/H), so it stays correct after auto-crop. */
+function aspectRatio(){ return (EDIT_IMG_W && EDIT_IMG_H) ? EDIT_IMG_W / EDIT_IMG_H : 0; }
+function trimNum(v){ return String(Math.round(v * 1000) / 1000); }
+
+/* derive height from the current width when the lock is on (used on upload/crop and
+   when the lock is switched on, so the pair snaps to the image without a manual edit) */
+function snapHeightFromWidth(){
+  const w = $('assetSizeW'), h = $('assetSizeH'), a = aspectRatio();
+  if(!w || !h || !SIZE_LOCK || !a) return;
+  const wv = Number(w.value) || 0;
+  if(wv) h.value = trimNum(wv / a);
+}
+
+function wireSizeLock(){
+  const lockBtn = $('sizeLockBtn');
+  const w = $('assetSizeW'), h = $('assetSizeH');
+  if(!lockBtn || !w || !h) return;          // surface/facade have no width/height fields
+  const paint = () => {
+    lockBtn.innerHTML = `<i class="fa-solid ${SIZE_LOCK ? 'fa-lock' : 'fa-lock-open'}"></i>`;
+    lockBtn.classList.toggle('on', SIZE_LOCK);
+    lockBtn.title = SIZE_LOCK
+      ? 'Width:height locked to the image aspect ratio — click to unlock'
+      : 'Width and height independent — click to lock to the image aspect ratio';
+  };
+  paint();
+  lockBtn.onclick = () => { SIZE_LOCK = !SIZE_LOCK; paint(); snapHeightFromWidth(); };
+  w.oninput = () => { const a = aspectRatio(); if(SIZE_LOCK && a){ const v = Number(w.value)||0; h.value = trimNum(v / a); } };
+  h.oninput = () => { const a = aspectRatio(); if(SIZE_LOCK && a){ const v = Number(h.value)||0; w.value = trimNum(v * a); } };
+}
+
+/* measure the staged image and refresh the "(width: … height: … aspect: …)" note */
+function measureDataUrl(dataUrl){
+  return new Promise(resolve => {
+    if(!dataUrl){ resolve({ w:0, h:0 }); return; }
+    const img = new Image();
+    img.onload  = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w:0, h:0 });
+    img.src = dataUrl;
+  });
+}
+function renderImgNote(){
+  const el = $('assetImgInfo');
+  if(!el) return;
+  if(!EDIT_IMG_W || !EDIT_IMG_H){ el.textContent = ''; return; }
+  const aspect = (EDIT_IMG_W / EDIT_IMG_H).toFixed(3).replace(/0+$/,'').replace(/\.$/,'.0');
+  el.textContent = `(width: ${EDIT_IMG_W}  height: ${EDIT_IMG_H}  aspect: ${aspect})`;
+}
+async function updateImgInfo(){
+  const { w, h } = await measureDataUrl(EDIT_IMAGE);
+  EDIT_IMG_W = w; EDIT_IMG_H = h;
+  renderImgNote();
 }
 
 /* read a file to a full-resolution PNG data-URL (no scaling) */
@@ -380,6 +450,7 @@ async function rederiveImage(){
     EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
     const drop = $('assetImgDrop');
     if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+    await updateImgInfo();   // aspect unchanged, but the px dims in the note do change with the tier
   }catch(err){
     console.error('[assets] re-derive failed', err);
   }
@@ -395,6 +466,8 @@ async function handleImageFile(file){
     setError('');
     const drop = $('assetImgDrop');
     drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+    await updateImgInfo();      // refresh dims/aspect note for the new image…
+    snapHeightFromWidth();      // …and pull height to match it if the lock is on
   }catch(err){
     console.error('[assets] image import failed', err);
     setError('could not read that image');
@@ -425,6 +498,8 @@ async function autoCropImage(){
     const drop = $('assetImgDrop');
     if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
     setCropHint(`cropped ${res.origW}×${res.origH} → ${res.w}×${res.h}`);
+    await updateImgInfo();      // cropping changes the aspect ratio…
+    snapHeightFromWidth();      // …so re-pull height to match it if the lock is on
   }catch(err){
     console.error('[assets] auto-crop failed', err);
     setError('could not crop that image');
