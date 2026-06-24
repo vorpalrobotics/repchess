@@ -51,6 +51,12 @@ function resolutionCap(type, tier){
 const IMG_MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+/* auto-crop: a pixel counts as "content" when its alpha is strictly above this.
+   0 means any non-fully-transparent pixel keeps its row/column — the literal
+   "smallest box with no all-transparent edges". Bump it if GPT exports leave a
+   faint near-transparent halo you also want trimmed. */
+const AUTO_CROP_ALPHA = 0;
+
 let containerEl = null;
 let ASSETS = [];          // cached array of all asset records
 let EDIT_ID = null;       // id of the asset currently open in the editor, or null = creating new
@@ -172,6 +178,10 @@ function renderEditor(a){
         ${EDIT_IMAGE ? `<img id="assetImgPreview" src="${EDIT_IMAGE}">` : '<i class="fa-solid fa-image"></i>'}
       </div>
       <input type="file" id="assetImgFile" accept="image/*" style="display:none">
+      <div class="asset-img-tools">
+        <button type="button" id="assetAutoCropBtn"><i class="fa-solid fa-crop-simple"></i> Auto-crop transparent edges</button>
+        <span class="assets-res-hint" id="assetCropHint"></span>
+      </div>
     </div>
     <div id="assetTypeFields"></div>
     <div class="assets-error" id="assetsError"></div>
@@ -208,6 +218,7 @@ function renderEditor(a){
     handleImageFile(e.dataTransfer.files[0]);
   });
 
+  $('assetAutoCropBtn').onclick = autoCropImage;
   $('assetsSaveBtn').onclick = saveEditor;
   $('assetsCancelBtn').onclick = () => { showList(); };
   if(a) $('assetsDeleteBtn').onclick = () => deleteEditor(a.id);
@@ -303,6 +314,47 @@ function downscaleDataUrl(dataUrl, maxDim){
   });
 }
 
+/* crop a data-URL down to the smallest box that still contains every pixel whose
+   alpha is above AUTO_CROP_ALPHA — i.e. trim away fully-transparent margins.
+   Resolves { cropped, dataUrl, w, h, origW, origH }: cropped=false (and no dataUrl)
+   when there's nothing to trim (already tight, or fully transparent). Reads pixels
+   via getImageData — safe here because every image is a same-origin data-URL. */
+function autoCropDataUrl(dataUrl){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    img.onload = () => {
+      const w = img.width, h = img.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      let data;
+      try{ data = ctx.getImageData(0,0,w,h).data; }
+      catch(err){ reject(err); return; }
+      let minX=w, minY=h, maxX=-1, maxY=-1;
+      for(let y=0;y<h;y++){
+        for(let x=0;x<w;x++){
+          if(data[(y*w+x)*4+3] > AUTO_CROP_ALPHA){
+            if(x<minX) minX=x;
+            if(x>maxX) maxX=x;
+            if(y<minY) minY=y;
+            if(y>maxY) maxY=y;
+          }
+        }
+      }
+      if(maxX < 0){ resolve({ cropped:false, origW:w, origH:h }); return; }            // fully transparent — leave as-is
+      if(minX===0 && minY===0 && maxX===w-1 && maxY===h-1){ resolve({ cropped:false, origW:w, origH:h }); return; }  // already tight
+      const cw = maxX-minX+1, ch = maxY-minY+1;
+      const out = document.createElement('canvas');
+      out.width = cw; out.height = ch;
+      out.getContext('2d').drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+      resolve({ cropped:true, dataUrl: out.toDataURL('image/png'), w:cw, h:ch, origW:w, origH:h });
+    };
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.src = dataUrl;
+  });
+}
+
 /* convenience for the picker's quick upload: file -> down-converted data-URL
    for the given (type, tier) in one step. */
 async function importImageFile(file, type, tier){
@@ -350,6 +402,34 @@ async function handleImageFile(file){
 }
 
 function setError(msg){ $('assetsError').textContent = msg || ''; }
+function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
+
+/* trim fully-transparent margins off the current image. Operates on the kept
+   full-res original when there is one (a fresh upload this session) so quality is
+   preserved, then re-down-converts; otherwise (editing an existing asset) it crops
+   the already-staged image in place — cropping only removes pixels, so the result
+   still fits within the resolution cap. */
+async function autoCropImage(){
+  const source = EDIT_IMAGE_ORIG || EDIT_IMAGE;
+  if(!source){ setError('upload an image first'); return; }
+  setError('');
+  try{
+    const res = await autoCropDataUrl(source);
+    if(!res.cropped){ setCropHint('nothing to trim — no transparent margin found'); return; }
+    if(EDIT_IMAGE_ORIG){
+      EDIT_IMAGE_ORIG = res.dataUrl;
+      EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
+    } else {
+      EDIT_IMAGE = res.dataUrl;
+    }
+    const drop = $('assetImgDrop');
+    if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+    setCropHint(`cropped ${res.origW}×${res.origH} → ${res.w}×${res.h}`);
+  }catch(err){
+    console.error('[assets] auto-crop failed', err);
+    setError('could not crop that image');
+  }
+}
 
 function readTypeFields(type){
   if(type === 'box'){
