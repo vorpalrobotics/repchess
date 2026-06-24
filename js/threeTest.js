@@ -10,7 +10,7 @@ import { openAssetPicker } from './assets.js';
 let THREE = null;
 
 /* asset types that can sit in a slot (props, not surfaces) */
-const PROP_TYPES = ['box', 'billboard-cylindrical', 'billboard-sprite'];
+const PROP_TYPES = ['box', 'extruded', 'billboard-cylindrical', 'billboard-sprite'];
 
 const ROOMS = {
   mainStreet: {
@@ -515,8 +515,158 @@ function buildBillboardAsset(asset){
   return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
 }
 
+/* ---------- extruded prop ----------
+   Trace the image's opaque silhouette and extrude it into a slab: the front
+   (and back) cap shows the image, the side walls get a flat color sampled from
+   the silhouette's edge pixels. Gives a box-style prop real depth that follows
+   the picture's contour instead of a rectangular block.
+
+   The silhouette trace + edge-color sample need raw pixels, which only arrive
+   once the image decodes, so this returns an empty Group up front and fills in
+   the real mesh asynchronously (guarded by buildGeneration, like the loaders). */
+function buildExtrudedAsset(asset){
+  const group = new THREE.Group();
+  const { w, h } = asset.size;
+  const depth = asset.size.d || 0.3;
+  const myGen = buildGeneration;
+  const img = new Image();
+  img.onload = () => {
+    if(buildGeneration !== myGen) return;
+    // sample the alpha mask at a capped resolution -- contour detail past a
+    // couple hundred px buys nothing once it's simplified, and keeps the trace
+    // cheap even for a 1024px source.
+    const TRACE_MAX = 220;
+    const scale = Math.min(1, TRACE_MAX / Math.max(img.width, img.height));
+    const cw = Math.max(1, Math.round(img.width * scale));
+    const ch = Math.max(1, Math.round(img.height * scale));
+    const cv = document.createElement('canvas');
+    cv.width = cw; cv.height = ch;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0, cw, ch);
+    const data = ctx.getImageData(0, 0, cw, ch).data;
+    const opaque = (x, y) => x >= 0 && y >= 0 && x < cw && y < ch && data[(y * cw + x) * 4 + 3] > 128;
+
+    let contour = traceSilhouette(opaque, cw, ch);
+    if(contour.length < 3){ return; } // nothing opaque -> leave the group empty
+    contour = simplifyPath(contour, Math.max(1, Math.min(cw, ch) * 0.012));
+    if(contour.length < 3){ return; }
+
+    // pixel coords (x right, y down) -> centred world coords spanning w x h,
+    // y flipped so the picture stands upright.
+    const shape = new THREE.Shape();
+    contour.forEach(([px, py], i) => {
+      const X = (px / cw - 0.5) * w;
+      const Y = (0.5 - py / ch) * h;
+      i === 0 ? shape.moveTo(X, Y) : shape.lineTo(X, Y);
+    });
+    shape.closePath();
+
+    const toUV = (X, Y) => new THREE.Vector2(X / w + 0.5, Y / h + 0.5);
+    const uvGen = {
+      generateTopUV(g, v, a, b, c){
+        return [ toUV(v[a*3], v[a*3+1]), toUV(v[b*3], v[b*3+1]), toUV(v[c*3], v[c*3+1]) ];
+      },
+      generateSideWallUV(){
+        return [ new THREE.Vector2(0,0), new THREE.Vector2(1,0), new THREE.Vector2(1,1), new THREE.Vector2(0,1) ];
+      }
+    };
+    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, UVGenerator: uvGen });
+    geo.translate(0, 0, -depth / 2); // centre in z so -z stays the front face
+
+    const sideColor = asset.sideColor && asset.sideColor !== 'auto'
+      ? asset.sideColor : edgeColor(data, cw, ch);
+    const sideMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(sideColor) });
+    const capMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    textureLoader.load(asset.image, (tex) => {
+      if(buildGeneration !== myGen) return;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      capMat.map = tex; capMat.needsUpdate = true;
+    });
+    // ExtrudeGeometry groups material 0 = front/back caps, 1 = side walls.
+    const mesh = new THREE.Mesh(geo, [capMat, sideMat]);
+    group.add(mesh);
+  };
+  img.src = asset.image;
+  return group;
+}
+
+// Moore-neighbour boundary trace of the largest opaque region's outer contour.
+// `opaque(x,y)` is a bounds-safe predicate. Returns pixel-space points in order.
+function traceSilhouette(opaque, W, H){
+  let sx = -1, sy = -1;
+  outer: for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ if(opaque(x, y)){ sx = x; sy = y; break outer; } }
+  if(sx < 0) return [];
+  // 8 neighbours, clockwise from east
+  const N = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+  const contour = [[sx, sy]];
+  let p = [sx, sy];
+  let back = [sx - 1, sy];           // we reached the start from the west (its left is background)
+  const maxSteps = W * H * 8;
+  for(let steps = 0; steps < maxSteps; steps++){
+    let dir = N.findIndex(d => p[0] + d[0] === back[0] && p[1] + d[1] === back[1]);
+    if(dir < 0) dir = 0;
+    let found = false;
+    for(let i = 1; i <= 8; i++){
+      const idx = (dir + i) % 8;
+      const cx = p[0] + N[idx][0], cy = p[1] + N[idx][1];
+      if(opaque(cx, cy)){
+        back = [ p[0] + N[(idx + 7) % 8][0], p[1] + N[(idx + 7) % 8][1] ];
+        p = [cx, cy];
+        contour.push(p);
+        found = true;
+        break;
+      }
+    }
+    if(!found) break;                // isolated pixel
+    if(p[0] === sx && p[1] === sy){ contour.pop(); break; } // closed the loop
+  }
+  return contour;
+}
+
+// Ramer-Douglas-Peucker: drop points that lie within `eps` of the chord.
+function simplifyPath(pts, eps){
+  if(pts.length < 3) return pts;
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const stack = [[0, pts.length - 1]];
+  while(stack.length){
+    const [a, b] = stack.pop();
+    let maxD = -1, maxI = -1;
+    const [ax, ay] = pts[a], [bx, by] = pts[b];
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    for(let i = a + 1; i < b; i++){
+      const [px, py] = pts[i];
+      const d = Math.abs((px - ax) * dy - (py - ay) * dx) / len;
+      if(d > maxD){ maxD = d; maxI = i; }
+    }
+    if(maxD > eps && maxI > 0){ keep[maxI] = true; stack.push([a, maxI], [maxI, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+// Average colour of opaque pixels that border a transparent one -- the colours
+// that "wrap around" the silhouette edge, so the extruded sides read as a
+// natural continuation of the picture rather than a clashing flat slab.
+function edgeColor(data, W, H){
+  const op = (x, y) => x >= 0 && y >= 0 && x < W && y < H && data[(y * W + x) * 4 + 3] > 128;
+  let r = 0, g = 0, b = 0, n = 0, ar = 0, ag = 0, ab = 0, an = 0;
+  for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){
+    const i = (y * W + x) * 4;
+    if(data[i + 3] <= 128) continue;
+    ar += data[i]; ag += data[i+1]; ab += data[i+2]; an++;
+    if(!op(x-1,y) || !op(x+1,y) || !op(x,y-1) || !op(x,y+1)){
+      r += data[i]; g += data[i+1]; b += data[i+2]; n++;
+    }
+  }
+  if(n) return new THREE.Color(r/n/255, g/n/255, b/n/255);          // border pixels
+  if(an) return new THREE.Color(ar/an/255, ag/an/255, ab/an/255);   // fully-opaque image: whole-image avg
+  return new THREE.Color('#888888');
+}
+
 function buildPropAsset(asset){
   if(asset.type === 'box') return buildBoxAsset(asset);
+  if(asset.type === 'extruded') return buildExtrudedAsset(asset);
   return buildBillboardAsset(asset); // cylindrical or sprite
 }
 
@@ -537,7 +687,7 @@ function placeSlotAccessory(room, slot, asset){
   const obj = buildPropAsset(asset);
   if(slot.kind === 'wall'){
     const { axis, fixed } = wallSpan(room.size, slot.wall);
-    const depth = asset.type === 'box' ? (asset.size.d || 0.3) : 0.05;
+    const depth = (asset.type === 'box' || asset.type === 'extruded') ? (asset.size.d || 0.3) : 0.05;
     const clearance = WALL_THICK/2 + depth/2 + 0.02;
     let x, z;
     if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
@@ -556,7 +706,7 @@ function placeSlotAccessory(room, slot, asset){
     // local -z). An explicit slot.yaw still wins if one is authored; otherwise
     // aim the front at the entry point. Billboards always face the camera, so
     // they're left alone.
-    if(asset.type === 'box'){
+    if(asset.type === 'box' || asset.type === 'extruded'){
       obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(slot.x, slot.z, entryPoint);
     }
   }

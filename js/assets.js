@@ -12,6 +12,7 @@
 
 const ASSET_TYPES = {
   'box':                   { label: 'Prop: Box',                      kind: 'prop' },
+  'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
   'billboard-cylindrical': { label: 'Prop: Billboard (cylindrical)',  kind: 'prop' },
   'billboard-sprite':      { label: 'Prop: Billboard (sprite)',       kind: 'prop' },
   'surface':               { label: 'Surface (floor / wall texture)', kind: 'surface' },
@@ -255,6 +256,19 @@ function renderTypeFields(type, a){
         </select>
       </div>
       <div class="field"><label>Side color</label><input type="text" id="assetSideColor" value="${esc((a && a.sideColor) || '#888888')}"></div>
+    `;
+  } else if(type === 'extruded'){
+    box.innerHTML = `
+      <div class="assets-size-row">
+        <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 0.5}"></div>
+        <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
+        <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 1}"></div>
+        <div class="field"><label>Depth (m)</label><input type="number" step="0.01" id="assetSizeD" value="${size.d ?? 0.2}"></div>
+      </div>
+      <div class="field">
+        <label>Side color (blank = auto from the picture's edge)</label>
+        <input type="text" id="assetSideColor" placeholder="auto" value="${esc((a && a.sideColor && a.sideColor !== 'auto') ? a.sideColor : '')}">
+      </div>
     `;
   } else if(kind === 'prop'){
     box.innerHTML = `
@@ -520,6 +534,12 @@ function readTypeFields(type){
       sideColor: $('assetSideColor').value.trim() || '#888888',
     };
   }
+  if(type === 'extruded'){
+    return {
+      size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0, d: Number($('assetSizeD').value)||0 },
+      sideColor: $('assetSideColor').value.trim() || 'auto',
+    };
+  }
   if(type === 'billboard-cylindrical' || type === 'billboard-sprite'){
     return { size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 } };
   }
@@ -585,6 +605,8 @@ function assetToJson(a){
   const json = { id: a.id, type: a.type, texture: `${a.id}.png` };
   if(a.type === 'box'){
     Object.assign(json, { size: a.size, skinFace: a.skinFace, sideColor: a.sideColor });
+  } else if(a.type === 'extruded'){
+    Object.assign(json, { size: a.size, sideColor: a.sideColor });
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'facade'){
