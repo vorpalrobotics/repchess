@@ -978,6 +978,7 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
      <td class="eval-col"></td>
      <td class="name-col"></td>`;
   tb.appendChild(tr);
+  tr.dataset.seq = endSeq.join(',');   // identity for search/focus: this row stands in for the whole run, ending at endSeq
 
   const btnEval = tr.querySelector('td.resp > button.iconbtn');
   attachHoverPreview(btnEval, endSeq);
@@ -1805,6 +1806,107 @@ $('menuImportLine').onclick = ()=>{
 };
 $('importLineCancelBtn').onclick = ()=>{ $('importLineOverlay').style.display='none'; };
 $('importLineSaveBtn').onclick = ()=> importLine($('importLineInput').value);
+
+/* ---------- search for a line: find an exact path and reveal it ----------
+   Paste a move sequence starting from move 1; walks the currently-open
+   opening system's data (counts/manualReplies/standard responses) — not the
+   DOM, so it works the same whether compact mode is on or off — looking for
+   an exact match. On a match, expands every node along the path and focuses
+   on the deepest one found (reusing the same focus mechanism as a row's own
+   "Focus on this Line" action), which hides every sibling branch. */
+
+/* finds the branch-row that continues rendering after `row` (skipping its
+   meta-row, if any) and expands it if currently collapsed. */
+function expandRowBranch(row){
+  let branchRow = row.nextElementSibling;
+  if(branchRow && branchRow.classList.contains('meta-row')) branchRow = branchRow.nextElementSibling;
+  if(branchRow && branchRow.classList.contains('branch-row') && branchRow.style.display==='none'){
+    const toggle = row.querySelector('.toggle');
+    if(toggle) toggle.click();
+  }
+}
+
+async function searchForLine(text){
+  if(!CURRENT_LINE){ $('searchLineError').textContent = 'open an opening system first'; return; }
+  let moves;
+  try{ moves = parseAlgebraicMoveList(text.trim()); }
+  catch(err){ $('searchLineError').textContent = err.message; return; }
+  if(!moves.length){ $('searchLineError').textContent = 'paste a move sequence to search for'; return; }
+
+  const triggers = CURRENT_LINE.openingMoves || [];
+  if(!triggers.includes(moves[0])){
+    $('searchLineError').textContent =
+      `this opening system starts with 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`;
+    return;
+  }
+
+  /* walk the data model: opponent moves sit at odd indices for a White line,
+     even indices for a Black line (same convention as importParsedLine) */
+  const color = CURRENT_LINE.color;
+  const oppParity = color==='black' ? 0 : 1;
+  const checkpoints = [];
+  for(let k=oppParity; k<moves.length; k+=2){
+    const seq = moves.slice(0,k);
+    const opp = moves[k];
+    if(!(color==='black' && k===0)){
+      const {counts} = replies(GAMES,seq);
+      const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+      if(!(opp in counts) && !manual.includes(opp)){
+        $('searchLineError').textContent =
+          `no exact match: after ${seq.join(' ')||'the start'}, "${opp}" isn't a known reply in this opening system`;
+        return;
+      }
+    }
+    const lineSeq = moves.slice(0,k+1);
+    checkpoints.push(lineSeq.join(','));
+    if(k+1 < moves.length){
+      const saved = PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
+      const expectedReply = moves[k+1];
+      if(!saved?.reply){
+        $('searchLineError').textContent =
+          `no exact match: no standard response is set after ${lineSeq.join(' ')} yet`;
+        return;
+      }
+      if(saved.reply !== expectedReply){
+        $('searchLineError').textContent =
+          `no exact match: standard response after ${lineSeq.join(' ')} is "${saved.reply}", not "${expectedReply}"`;
+        return;
+      }
+    }
+  }
+
+  /* exact match found in the data — reveal it in the tree */
+  $('searchLineOverlay').style.display='none';
+  let lastRow = null;
+  checkpoints.forEach(seqStr=>{
+    const row = $('tree').querySelector(`.data-row[data-seq="${seqStr}"]`);
+    if(!row) return; // collapsed into a compact run — nothing to individually expand here
+    expandRowBranch(row);
+    lastRow = row;
+  });
+
+  if(!lastRow){
+    log(`found "${moves.join(' ')}" in your data, but compact mode is hiding the whole path inside a collapsed run — toggle compact mode off and search again to focus it`, true);
+    return;
+  }
+  focusOnLine(lastRow);
+  const finalSeqStr = checkpoints[checkpoints.length-1];
+  const finalRowFound = !!$('tree').querySelector(`.data-row[data-seq="${finalSeqStr}"]`);
+  log(finalRowFound
+    ? `found and focused: ${moves.join(' ')}`
+    : `found "${moves.join(' ')}" in your data, but compact mode is hiding the deepest part of it — focused as close as possible (toggle compact mode off to see the exact end)`);
+}
+
+$('menuSearchLine').onclick = ()=>{
+  $('menuList').style.display='none';
+  if(!CURRENT_LINE){ log('open an opening system first (from the home screen) to search it',true); return; }
+  $('searchLineInput').value='';
+  $('searchLineError').textContent='';
+  $('searchLineOverlay').style.display='flex';
+  $('searchLineInput').focus();
+};
+$('searchLineCancelBtn').onclick = ()=>{ $('searchLineOverlay').style.display='none'; };
+$('searchLineSaveBtn').onclick = ()=> searchForLine($('searchLineInput').value);
 
 /* ---------- new-line modal ---------- */
 /* every legal White first move: 16 pawn pushes + 4 knight moves */
