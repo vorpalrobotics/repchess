@@ -173,14 +173,14 @@ function renderEditor(a){
       </select>
     </div>
     <div class="field">
-      <label>Resolution (down-converted on import)</label>
+      <label>Resolution</label>
       <select id="assetResolution">
         ${RESOLUTION_TIERS.map(t => `<option value="${t}" ${t===EDIT_RESOLUTION?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}
       </select>
       <span class="assets-res-hint" id="assetResHint"></span>
     </div>
     <div class="field">
-      <label>Image (PNG, transparent background for props)</label>
+      <label>Image</label>
       <div class="asset-img-row">
         <div class="asset-img-drop" id="assetImgDrop">
           ${EDIT_IMAGE ? `<img id="assetImgPreview" src="${EDIT_IMAGE}">` : '<i class="fa-solid fa-image"></i>'}
@@ -266,7 +266,7 @@ function renderTypeFields(type, a){
         <div class="field"><label>Depth (m)</label><input type="number" step="0.01" id="assetSizeD" value="${size.d ?? 0.2}"></div>
       </div>
       <div class="field">
-        <label>Side color (blank = auto from the picture's edge)</label>
+        <label>Side color</label>
         <div class="side-color-row">
           <input type="text" id="assetSideColor" placeholder="auto" value="${esc((a && a.sideColor && a.sideColor !== 'auto') ? a.sideColor : '')}">
           <div class="side-color-swatch" id="assetSideColorSwatch"></div>
