@@ -890,17 +890,18 @@ function buildRoom(roomKey){
       const buildingKey = b.target;
       const facadeAsset = buildingFacadeFor(roomKey, buildingKey);
 
-      // A placed facade asset carries its own real-world size in meters: its
-      // width drives the front face's width (and so the block's width, to
-      // keep the doorway centered under it); its height drives only the
-      // *facade plane's* height, not the block's. The block (brick walls +
-      // overhanging roof) stays at its static config height -- shorter than
-      // a tall facade -- so the facade stands like a freestanding billboard
-      // in front of it: any transparent area near the top of the facade
-      // image (above the block's roofline) shows open sky behind it instead
-      // of the block's roof silhouette. With no override, width and height
-      // both fall back to the static config size. Min clamps keep the
-      // doorway from being squeezed out (door is DOOR_W wide, DOOR_H tall).
+      // A placed facade asset carries its own real-world size in meters; the
+      // facade plane is built at that full size. The block behind it (brick
+      // walls + roof) is deliberately built *smaller* -- 90% of the facade's
+      // width and half its height -- like a movie-set flat: from the front
+      // the facade fully covers the box (the box's roofline never peeks out
+      // past the facade's edges, top or sides), so no separate "see-through"
+      // alignment between the two shapes is needed. Side-on, the size
+      // mismatch is visible, which is an accepted tradeoff for this loci
+      // memory trainer (not a first-person walkthrough). With no override,
+      // width and height both fall back to the static config size. Min
+      // clamps keep the doorway from being squeezed out of the box (door is
+      // DOOR_W wide, DOOR_H tall).
       const { axis: doorAxis } = wallSpan(b.size, b.doorWall);
       let size = b.size;
       let facadeWidth = doorAxis === 'x' ? b.size.w : b.size.d;
@@ -908,7 +909,9 @@ function buildRoom(roomKey){
       if(facadeAsset && facadeAsset.size){
         const fw = Math.max(facadeAsset.size.w || 0, DOOR_W + 0.4);
         const fh = Math.max(facadeAsset.size.h || 0, DOOR_H + 0.4);
-        size = doorAxis === 'x' ? { w: fw, d: b.size.d, h: b.size.h } : { w: b.size.w, d: fw, h: b.size.h };
+        const boxW = Math.max(fw * 0.9, DOOR_W + 0.4);
+        const boxH = Math.max(fh * 0.5, DOOR_H + 0.4);
+        size = doorAxis === 'x' ? { w: boxW, d: b.size.d, h: boxH } : { w: b.size.w, d: boxW, h: boxH };
         facadeWidth = fw;
         facadeHeight = fh;
       }
