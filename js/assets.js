@@ -595,6 +595,14 @@ async function handleImageFile(file){
     drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
     await updateImgInfo();      // refresh dims/aspect note for the new image…
     snapHeightFromWidth();      // …and pull height to match it if the lock is on
+    if(!EDIT_ID){
+      const idInput = $('assetIdInput');
+      if(idInput && !idInput.value.trim()){
+        let base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if(!ID_RE.test(base)) base = 'asset';
+        idInput.value = base;
+      }
+    }
   }catch(err){
     console.error('[assets] image import failed', err);
     setError('could not read that image');
