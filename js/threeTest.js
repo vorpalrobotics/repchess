@@ -415,7 +415,11 @@ function assetSurfaceMaterial(asset, repeatX, repeatY){
 function buildBoxAsset(asset){
   const { w, h, d } = asset.size;
   const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(asset.sideColor || '#888888') });
-  const skin = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  // alphaTest cutout (not `transparent`, see buildBillboardAsset) so a
+  // non-rectangular image -- e.g. a clock face that doesn't fill its square
+  // canvas -- discards its transparent corners instead of rendering them as
+  // an opaque black square.
+  const skin = new THREE.MeshStandardMaterial({ color: 0xffffff, alphaTest: 0.5 });
   const myGen = buildGeneration;
   textureLoader.load(asset.image, (tex) => {
     if(buildGeneration !== myGen) return;
@@ -447,7 +451,11 @@ function buildBillboardAsset(asset){
     sprite.scale.set(w, h, 1);
     return sprite;
   }
-  const mat = new THREE.MeshStandardMaterial({ transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+  // alphaTest-only cutout (no `transparent` blending): semi-transparent
+  // anti-aliased edge pixels in the source PNG carry near-black RGB once
+  // alpha-blended, which read as a dark halo around the cutout shape.
+  // Hard-discarding below the threshold instead of blending avoids that.
+  const mat = new THREE.MeshStandardMaterial({ transparent: false, alphaTest: 0.5, side: THREE.DoubleSide });
   const myGen = buildGeneration;
   textureLoader.load(asset.image, (tex) => {
     if(buildGeneration !== myGen) return;
