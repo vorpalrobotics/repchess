@@ -11,7 +11,6 @@
 */
 
 const ASSET_TYPES = {
-  'box':                   { label: 'Prop: Box',                      kind: 'prop' },
   'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
   'billboard-cylindrical': { label: 'Prop: Billboard (cylindrical)',  kind: 'prop' },
   'billboard-sprite':      { label: 'Prop: Billboard (sprite)',       kind: 'prop' },
@@ -42,7 +41,7 @@ const RESOLUTION_CAPS = {
 function resolutionCategory(type){
   if(type === 'facade')  return 'large';
   if(type === 'surface') return 'tiled';
-  return 'object';                       // box, billboard-cylindrical, billboard-sprite
+  return 'object';                       // extruded, billboard-cylindrical, billboard-sprite
 }
 function resolutionCap(type, tier){
   const cat = RESOLUTION_CAPS[resolutionCategory(type)] || RESOLUTION_CAPS.object;
@@ -159,7 +158,7 @@ function openEditor(id){
 }
 
 function renderEditor(a){
-  const type = (a && a.type) || 'box';
+  const type = (a && a.type) || 'extruded';
   const editor = $('assetsEditor');
   editor.innerHTML = `
     <div class="field">
@@ -240,24 +239,7 @@ function renderTypeFields(type, a){
   const kind = (ASSET_TYPES[type] || {}).kind;
   const box = $('assetTypeFields');
   const size = (a && a.size) || {};
-  if(kind === 'prop' && type === 'box'){
-    box.innerHTML = `
-      <div class="assets-size-row">
-        <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 0.5}"></div>
-        <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
-        <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 1}"></div>
-        <div class="field"><label>Depth (m)</label><input type="number" step="0.01" id="assetSizeD" value="${size.d ?? 0.5}"></div>
-      </div>
-      <div class="field">
-        <label>Skin face</label>
-        <select id="assetSkinFace">
-          <option value="front" ${(!a || a.skinFace==='front') ? 'selected' : ''}>front</option>
-          <option value="front+top" ${(a && a.skinFace==='front+top') ? 'selected' : ''}>front+top</option>
-        </select>
-      </div>
-      <div class="field"><label>Side color</label><input type="text" id="assetSideColor" value="${esc((a && a.sideColor) || '#888888')}"></div>
-    `;
-  } else if(type === 'extruded'){
+  if(type === 'extruded'){
     box.innerHTML = `
       <div class="assets-size-row">
         <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 0.5}"></div>
@@ -559,7 +541,7 @@ async function importImageFile(file, type, tier){
   return downscaleDataUrl(full, resolutionCap(type, tier));
 }
 
-const editorType = () => { const el = $('assetTypeInput'); return el ? el.value : 'box'; };
+const editorType = () => { const el = $('assetTypeInput'); return el ? el.value : 'extruded'; };
 
 /* recompute the displayed pixel cap for the current type + tier */
 function updateResHint(){
@@ -749,13 +731,6 @@ function openCropModal(){
 }
 
 function readTypeFields(type){
-  if(type === 'box'){
-    return {
-      size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0, d: Number($('assetSizeD').value)||0 },
-      skinFace: $('assetSkinFace').value,
-      sideColor: $('assetSideColor').value.trim() || '#888888',
-    };
-  }
   if(type === 'extruded'){
     return {
       size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0, d: Number($('assetSizeD').value)||0 },
@@ -826,9 +801,7 @@ function downloadBlob(blob, filename){
 
 function assetToJson(a){
   const json = { id: a.id, type: a.type, texture: `${a.id}.png` };
-  if(a.type === 'box'){
-    Object.assign(json, { size: a.size, skinFace: a.skinFace, sideColor: a.sideColor });
-  } else if(a.type === 'extruded'){
+  if(a.type === 'extruded'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor });
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
     Object.assign(json, { size: a.size });
@@ -864,12 +837,12 @@ async function exportAllAsFiles(){
    }
 */
 let pickerOpts = null;
-let pickerUploadType = 'box';
+let pickerUploadType = 'extruded';
 let pickerResolution = RESOLUTION_DEFAULT;
 
 export function openAssetPicker(opts){
   pickerOpts = opts || {};
-  pickerUploadType = (pickerOpts.allow && pickerOpts.allow[0]) || 'box';
+  pickerUploadType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
   pickerResolution = RESOLUTION_DEFAULT;
   let ov = document.getElementById('assetPickerOverlay');
   if(!ov){

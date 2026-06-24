@@ -10,7 +10,7 @@ import { openAssetPicker } from './assets.js';
 let THREE = null;
 
 /* asset types that can sit in a slot (props, not surfaces) */
-const PROP_TYPES = ['box', 'extruded', 'billboard-cylindrical', 'billboard-sprite'];
+const PROP_TYPES = ['extruded', 'billboard-cylindrical', 'billboard-sprite'];
 
 const ROOMS = {
   mainStreet: {
@@ -521,33 +521,6 @@ function assetSurfaceMaterial(asset, repeatX, repeatY){
   return mat;
 }
 
-// box face material order is [+x,-x,+y,-y,+z,-z]; an asset's "front" faces
-// local -z (index 5), matching the furniture yaw convention.
-function buildBoxAsset(asset){
-  const { w, h, d } = asset.size;
-  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(asset.sideColor || '#888888') });
-  // alphaTest cutout (not `transparent`, see buildBillboardAsset) so a
-  // non-rectangular image -- e.g. a clock face that doesn't fill its square
-  // canvas -- discards its transparent corners instead of rendering them as
-  // an opaque black square.
-  const skin = new THREE.MeshStandardMaterial({ color: 0xffffff, alphaTest: 0.5 });
-  const myGen = buildGeneration;
-  textureLoader.load(asset.image, (tex) => {
-    if(buildGeneration !== myGen) return;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    skin.map = tex; skin.needsUpdate = true;
-  });
-  const skinned = new Set(['front']);
-  if(asset.skinFace === 'front+top') skinned.add('top');
-  const mats = [
-    side, side,                                  // +x, -x
-    skinned.has('top') ? skin : side, side,      // +y, -y
-    side,                                        // +z
-    skin                                         // -z (front)
-  ];
-  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
-}
-
 function buildBillboardAsset(asset){
   const { w, h } = asset.size;
   if(asset.type === 'billboard-sprite'){
@@ -731,7 +704,6 @@ function edgeColor(data, W, H){
 }
 
 function buildPropAsset(asset){
-  if(asset.type === 'box') return buildBoxAsset(asset);
   if(asset.type === 'extruded') return buildExtrudedAsset(asset);
   return buildBillboardAsset(asset); // cylindrical or sprite
 }
@@ -758,7 +730,7 @@ function placeSlotAccessory(room, slot, asset){
     obj.position.set(slot.x, room.size.h - h/2 - 0.05, slot.z);
   } else if(slot.kind === 'wall'){
     const { axis, fixed } = wallSpan(room.size, slot.wall);
-    const depth = (asset.type === 'box' || asset.type === 'extruded') ? (asset.size.d || 0.3) : 0.05;
+    const depth = (asset.type === 'extruded') ? (asset.size.d || 0.3) : 0.05;
     const clearance = WALL_THICK/2 + depth/2 + 0.02;
     let x, z;
     if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
@@ -772,16 +744,16 @@ function placeSlotAccessory(room, slot, asset){
       obj.rotation.y = WALL_INWARD_YAW[slot.wall] || 0;
     }
   } else {
-    // box / plane / sprite are all centred on their geometry, so sitting one
-    // on the floor means raising it by half its height
+    // extruded / plane / sprite are all centred on their geometry, so sitting
+    // one on the floor means raising it by half its height
     const floorY = floorHeightAt(room, slot.z);
     const h = (asset.size && asset.size.h) || 1;
     obj.position.set(slot.x, floorY + h/2, slot.z);
-    // Box props turn to face the door you walked in through (its image side is
-    // local -z). An explicit slot.yaw still wins if one is authored; otherwise
-    // aim the front at the entry point. Billboards always face the camera, so
-    // they're left alone.
-    if(asset.type === 'box' || asset.type === 'extruded'){
+    // Extruded props turn to face the door you walked in through (its image
+    // side is local -z). An explicit slot.yaw still wins if one is authored;
+    // otherwise aim the front at the entry point. Billboards always face the
+    // camera, so they're left alone.
+    if(asset.type === 'extruded'){
       obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(slot.x, slot.z, entryPoint);
     }
   }

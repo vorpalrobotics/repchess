@@ -228,8 +228,8 @@ async function setMnemonicSquare(square, patch){
    IndexedDB, before being exported to real files under assets/three/.
 */
 const BLANK_ASSET = {
-  id:'', type:'box', image:'', resolution:'normal',
-  size:{w:0.5,h:1,d:0.5}, skinFace:'front', sideColor:'#888888',
+  id:'', type:'extruded', image:'', resolution:'normal',
+  size:{w:0.5,h:1,d:0.5}, sideColor:'#888888',
   repeatPerMeter:0.5, rotation:0, tint:null, roughness:0.85, metalness:0,
   createdAt:0, updatedAt:0
 };
