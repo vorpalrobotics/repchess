@@ -286,18 +286,47 @@ function refreshSystemStats(){
 }
 
 /* ---------- FEN for a move sequence ---------- */
+/* FEN for a move sequence, memoised and computed incrementally: a sequence's
+   position is its parent's position with one more move applied, so we build on
+   the cached parent FEN (one chess.js move) instead of replaying the whole line
+   from move 1 every call. This is the hot path of the transposition graph /
+   castle build, which asks for the same and adjacent positions thousands of
+   times on a large repertoire. FENs depend only on the moves (never on PREFS or
+   games), so the cache is valid for the life of the page across rebuilds.
+
+   _FEN_BROKEN tracks sequences whose move failed to apply (corrupt data); once a
+   move fails, every longer sequence resolves to the position *before* the bad
+   move — identical to the old "break and return position-so-far" behaviour. */
+const _FEN_CACHE = new Map();
+const _FEN_BROKEN = new Set();
 function fenForSeq(seq){
-  const chess = new Chess();
-  for(let i=0;i<seq.length;i++){
-    const mv = seq[i];
-    if(!chess.move(mv,{sloppy:true})){
-      console.warn(`[fenForSeq] move ${i+1}/${seq.length} "${mv}" failed to apply; ` +
-        `returning position after move ${i} instead. seq=${JSON.stringify(seq)} ` +
-        `fen-before-failure=${chess.fen()}`);
-      break;
-    }
+  const key = seq.join('\x1f');
+  const cached = _FEN_CACHE.get(key);
+  if(cached !== undefined) return cached;
+
+  if(seq.length === 0){ const fen = new Chess().fen(); _FEN_CACHE.set(key, fen); return fen; }
+
+  const parent = seq.slice(0, -1);
+  const parentKey = parent.join('\x1f');
+  const parentFen = fenForSeq(parent);
+
+  // a broken ancestor "swallows" all further moves, exactly like the old loop's
+  // break did — return the last good position unchanged.
+  if(_FEN_BROKEN.has(parentKey)){ _FEN_BROKEN.add(key); _FEN_CACHE.set(key, parentFen); return parentFen; }
+
+  const chess = new Chess(parentFen);
+  const mv = seq[seq.length - 1];
+  if(!chess.move(mv, {sloppy:true})){
+    console.warn(`[fenForSeq] move ${seq.length}/${seq.length} "${mv}" failed to apply; ` +
+      `returning position after move ${seq.length-1} instead. seq=${JSON.stringify(seq)} ` +
+      `fen-before-failure=${parentFen}`);
+    _FEN_BROKEN.add(key);
+    _FEN_CACHE.set(key, parentFen);
+    return parentFen;
   }
-  return chess.fen();
+  const fen = chess.fen();
+  _FEN_CACHE.set(key, fen);
+  return fen;
 }
 
 /* ---------- transposition graph ----------
