@@ -188,7 +188,7 @@ function renderEditor(a){
         <div class="asset-img-side">
           <div class="asset-img-info" id="assetImgInfo"></div>
           <div class="asset-img-tools">
-            <button type="button" id="assetAutoCropBtn"><i class="fa-solid fa-crop-simple"></i> Auto-crop transparent edges</button>
+            <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop…</button>
             <span class="assets-res-hint" id="assetCropHint"></span>
           </div>
         </div>
@@ -230,7 +230,7 @@ function renderEditor(a){
     handleImageFile(e.dataTransfer.files[0]);
   });
 
-  $('assetAutoCropBtn').onclick = autoCropImage;
+  $('assetCropBtn').onclick = openCropModal;
   $('assetsSaveBtn').onclick = saveEditor;
   $('assetsCancelBtn').onclick = () => { showList(); };
   if(a) $('assetsDeleteBtn').onclick = () => deleteEditor(a.id);
@@ -498,12 +498,30 @@ function downscaleDataUrl(dataUrl, maxDim){
   });
 }
 
-/* crop a data-URL down to the smallest box that still contains every pixel whose
-   alpha is above AUTO_CROP_ALPHA — i.e. trim away fully-transparent margins.
-   Resolves { cropped, dataUrl, w, h, origW, origH }: cropped=false (and no dataUrl)
-   when there's nothing to trim (already tight, or fully transparent). Reads pixels
-   via getImageData — safe here because every image is a same-origin data-URL. */
-function autoCropDataUrl(dataUrl){
+/* crop a data-URL to a fractional rectangle {l,t,r,b} (each 0..1 of the image).
+   Returns a fresh PNG data-URL of just that region. */
+function cropDataUrl(dataUrl, { l, t, r, b }){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    img.onload = () => {
+      const W = img.width, H = img.height;
+      const sx = Math.round(l*W), sy = Math.round(t*H);
+      const sw = Math.max(1, Math.round((r-l)*W)), sh = Math.max(1, Math.round((b-t)*H));
+      const c = document.createElement('canvas');
+      c.width = sw; c.height = sh;
+      c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      resolve(c.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.src = dataUrl;
+  });
+}
+
+/* tightest box (as fractions {l,t,r,b}) that still contains every pixel whose
+   alpha is above AUTO_CROP_ALPHA — i.e. the auto-crop bounds. null when the
+   image is fully transparent. Reads pixels via getImageData (safe: every image
+   is a same-origin data-URL). */
+function alphaBoundsFrac(dataUrl){
   return new Promise((resolve,reject)=>{
     const img = new Image();
     img.onload = () => {
@@ -526,13 +544,8 @@ function autoCropDataUrl(dataUrl){
           }
         }
       }
-      if(maxX < 0){ resolve({ cropped:false, origW:w, origH:h }); return; }            // fully transparent — leave as-is
-      if(minX===0 && minY===0 && maxX===w-1 && maxY===h-1){ resolve({ cropped:false, origW:w, origH:h }); return; }  // already tight
-      const cw = maxX-minX+1, ch = maxY-minY+1;
-      const out = document.createElement('canvas');
-      out.width = cw; out.height = ch;
-      out.getContext('2d').drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
-      resolve({ cropped:true, dataUrl: out.toDataURL('image/png'), w:cw, h:ch, origW:w, origH:h });
+      if(maxX < 0){ resolve(null); return; }   // fully transparent — nothing to bound
+      resolve({ l:minX/w, t:minY/h, r:(maxX+1)/w, b:(maxY+1)/h });
     };
     img.onerror = () => reject(new Error('could not decode image'));
     img.src = dataUrl;
@@ -591,33 +604,140 @@ async function handleImageFile(file){
 function setError(msg){ $('assetsError').textContent = msg || ''; }
 function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
 
-/* trim fully-transparent margins off the current image. Operates on the kept
-   full-res original when there is one (a fresh upload this session) so quality is
-   preserved, then re-down-converts; otherwise (editing an existing asset) it crops
-   the already-staged image in place — cropping only removes pixels, so the result
-   still fits within the resolution cap. */
-async function autoCropImage(){
+/* Crop modal: shows the staged image full-viewport with four draggable edge
+   bars defining a crop rectangle, an Auto-crop button that snaps the bars to the
+   transparent-margin bounds, and a Crop button that cuts the working image down
+   to the current bars (repeatable). Operates on the kept full-res original when
+   there is one (a fresh upload this session) so quality is preserved, then
+   re-down-converts on save; otherwise it crops the already-staged image in place
+   (cropping only removes pixels, so the result still fits the resolution cap).
+   Cancel discards everything; Save commits the working image back to the editor. */
+function openCropModal(){
   const source = EDIT_IMAGE_ORIG || EDIT_IMAGE;
   if(!source){ setError('upload an image first'); return; }
   setError('');
-  try{
-    const res = await autoCropDataUrl(source);
-    if(!res.cropped){ setCropHint('nothing to trim — no transparent margin found'); return; }
-    if(EDIT_IMAGE_ORIG){
-      EDIT_IMAGE_ORIG = res.dataUrl;
-      EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
-    } else {
-      EDIT_IMAGE = res.dataUrl;
-    }
-    const drop = $('assetImgDrop');
-    if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
-    setCropHint(`cropped ${res.origW}×${res.origH} → ${res.w}×${res.h}`);
-    await updateImgInfo();      // cropping changes the aspect ratio…
-    snapHeightFromWidth();      // …so re-pull height to match it if the lock is on
-  }catch(err){
-    console.error('[assets] auto-crop failed', err);
-    setError('could not crop that image');
+
+  let ov = document.getElementById('cropOverlay');
+  if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); }
+  ov.style.display = 'flex';
+
+  let work = source;                    // current working data-URL (full-res when available)
+  let sel = { l:0, t:0, r:1, b:1 };     // crop rectangle as fractions of `work`
+  let natW = 0, natH = 0;
+
+  ov.innerHTML = `
+    <div class="modal">
+      <div class="crop-header">
+        <h2>Crop image</h2>
+        <span class="crop-dims" id="cropDims"></span>
+      </div>
+      <div class="crop-stage">
+        <div class="crop-wrap" id="cropWrap">
+          <img id="cropImg" src="${work}" alt="">
+          <div class="crop-sel" id="cropSel"></div>
+          <div class="crop-bar l" data-edge="l"></div>
+          <div class="crop-bar r" data-edge="r"></div>
+          <div class="crop-bar t" data-edge="t"></div>
+          <div class="crop-bar b" data-edge="b"></div>
+        </div>
+      </div>
+      <div class="crop-actions">
+        <button id="cropAutoBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-crop</button>
+        <button id="cropApplyBtn"><i class="fa-solid fa-scissors"></i> Crop</button>
+        <span class="spacer"></span>
+        <button id="cropCancelBtn">Cancel</button>
+        <button id="cropSaveBtn">SAVE</button>
+      </div>
+    </div>`;
+
+  const stage = ov.querySelector('.crop-stage');
+  const wrap  = ov.querySelector('#cropWrap');
+  const img   = ov.querySelector('#cropImg');
+  const selEl = ov.querySelector('#cropSel');
+  const dims  = ov.querySelector('#cropDims');
+  const bars  = { l: ov.querySelector('.crop-bar.l'), r: ov.querySelector('.crop-bar.r'),
+                  t: ov.querySelector('.crop-bar.t'), b: ov.querySelector('.crop-bar.b') };
+
+  function fitWrap(){
+    if(!natW || !natH) return;
+    const scale = Math.min(stage.clientWidth / natW, stage.clientHeight / natH) || 1;
+    wrap.style.width  = Math.max(1, Math.round(natW * scale)) + 'px';
+    wrap.style.height = Math.max(1, Math.round(natH * scale)) + 'px';
   }
+  function paint(){
+    selEl.style.left   = (sel.l*100) + '%';
+    selEl.style.top    = (sel.t*100) + '%';
+    selEl.style.width  = ((sel.r-sel.l)*100) + '%';
+    selEl.style.height = ((sel.b-sel.t)*100) + '%';
+    bars.l.style.left = (sel.l*100) + '%';
+    bars.r.style.left = (sel.r*100) + '%';
+    bars.t.style.top  = (sel.t*100) + '%';
+    bars.b.style.top  = (sel.b*100) + '%';
+    const cw = Math.max(1, Math.round((sel.r-sel.l)*natW));
+    const ch = Math.max(1, Math.round((sel.b-sel.t)*natH));
+    dims.textContent = `${natW}×${natH}  →  ${cw}×${ch}`;
+  }
+  function onImgReady(){ natW = img.naturalWidth; natH = img.naturalHeight; fitWrap(); paint(); }
+  img.onload = onImgReady;
+  if(img.complete && img.naturalWidth) onImgReady();
+
+  // each bar captures the pointer on grab, so its own pointermove/up fire even
+  // when the cursor leaves the image -- and because the bars are rebuilt with the
+  // modal each open, no listeners accumulate on the persistent overlay element.
+  for(const k of ['l','r','t','b']){
+    const bar = bars[k];
+    bar.addEventListener('pointerdown', e => { bar.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+    bar.addEventListener('pointermove', e => {
+      if(e.buttons === 0) return;        // not dragging
+      const r = wrap.getBoundingClientRect();
+      const fx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      const fy = Math.min(1, Math.max(0, (e.clientY - r.top)  / r.height));
+      const MIN = 0.02;
+      if(k === 'l') sel.l = Math.min(fx, sel.r - MIN);
+      if(k === 'r') sel.r = Math.max(fx, sel.l + MIN);
+      if(k === 't') sel.t = Math.min(fy, sel.b - MIN);
+      if(k === 'b') sel.b = Math.max(fy, sel.t + MIN);
+      paint();
+    });
+  }
+
+  async function applyCrop(){
+    if(sel.l <= 0 && sel.t <= 0 && sel.r >= 1 && sel.b >= 1) return;   // full image — nothing to cut
+    work = await cropDataUrl(work, sel);
+    sel = { l:0, t:0, r:1, b:1 };
+    img.src = work;        // onload → recompute natW/H, refit, repaint
+  }
+
+  ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[assets] crop failed', err); });
+  ov.querySelector('#cropAutoBtn').onclick = async () => {
+    try{
+      const b = await alphaBoundsFrac(work);
+      if(!b){ setCropHint('image is fully transparent — nothing to bound'); return; }
+      sel = b; paint();
+    }catch(err){ console.error('[assets] auto-crop bounds failed', err); }
+  };
+  ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; };
+  ov.querySelector('#cropSaveBtn').onclick = async () => {
+    try{
+      await applyCrop();                 // commit any pending bar selection first
+      if(EDIT_IMAGE_ORIG){
+        EDIT_IMAGE_ORIG = work;
+        EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
+      } else {
+        EDIT_IMAGE = work;
+      }
+      const drop = $('assetImgDrop');
+      if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+      const m = await measureDataUrl(EDIT_IMAGE);
+      setCropHint(`cropped to ${m.w}×${m.h}`);
+      await updateImgInfo();             // aspect ratio changed…
+      snapHeightFromWidth();             // …so re-pull height if the size lock is on
+      ov.style.display = 'none';
+    }catch(err){
+      console.error('[assets] crop save failed', err);
+      setError('could not crop that image');
+    }
+  };
 }
 
 function readTypeFields(type){
