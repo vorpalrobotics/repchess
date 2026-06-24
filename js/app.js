@@ -1904,11 +1904,7 @@ async function searchForLine(text){
     return;
   }
   focusOnLine(lastRow);
-  const finalSeqStr = checkpoints[checkpoints.length-1];
-  const finalRowFound = !!$('tree').querySelector(`.data-row[data-seq="${finalSeqStr}"]`);
-  log(finalRowFound
-    ? `found and focused: ${moves.join(' ')}`
-    : `found "${moves.join(' ')}" in your data, but compact mode is hiding the deepest part of it — focused as close as possible (toggle compact mode off to see the exact end)`);
+  log(`found and focused: ${moves.join(' ')}`);
 }
 
 $('menuSearchLine').onclick = ()=>{
