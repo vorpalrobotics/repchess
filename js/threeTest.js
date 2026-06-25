@@ -284,7 +284,7 @@ const FRONT_OUTWARD_YAW = { north: 0, south: Math.PI, west: Math.PI/2, east: -Ma
 const YARD_SLOT_COUNT = 3;
 const YARD_SLOT_SPACING = 2.2;
 const YARD_SLOT_START = DOOR_W/2 + 1.4;
-const YARD_SLOT_DEPTH = 3;
+const YARD_SLOT_DEPTH = 1.5;
 function yardSlots(b, buildingKey){
   const slots = [];
   const { axis, fixed } = wallSpan(b.size, b.doorWall);
@@ -1550,7 +1550,7 @@ function buildRoom(roomKey){
         // not mounted on the facade itself. The skin (if any) is an
         // override image stretched behind the name text -- see signAssetFor.
         const signAsset = signAssetFor(roomKey, buildingKey);
-        const signPos = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 2.5 };
+        const signPos = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 1.6 };
         const signGroup = buildGroundSign(b.sign, signAsset ? signAsset.image : null);
         signGroup.position.set(signPos.x, 0, signPos.z);
         scene.add(signGroup);
