@@ -1144,6 +1144,97 @@ function buildRoof(size, origin, color){
   return roof;
 }
 
+/* ---------- in-room move mnemonics (hard-coded demo) ----------
+   In the finished castle these billboards get placed automatically from the
+   repertoire walk; for now we hand-place the first move pair of the line
+   reached through the front door (the `start` room) so we can see how the
+   loci memory cues read in-world.
+
+   Display priority per move, matching the Mnemonics screen data
+   (mnemonicsBySquare[destSquare][piece] / [piece+'Img']):
+     1. graphic, if one was set  -> shown as a camera-facing billboard
+     2. else the mnemonic word, if set
+     3. else the move's algebraic notation
+   The opponent's move sits higher and to the viewer's left of the response
+   (you enter `start` from the south, facing north, so left is -x). */
+const DEMO_MNEMONICS = {
+  start: [
+    // black Nc6 -- the opponent's move: higher, to the left
+    { to: 'c6', piece: 'knight', san: 'Nc6', pos: { x: -1.3, y: 2.5, z: 0 } },
+    // white Bb4 -- our response: lower, to the right
+    { to: 'b4', piece: 'bishop', san: 'Bb4', pos: { x:  1.3, y: 1.5, z: 0 } }
+  ]
+};
+
+function makeImageBillboard(src){
+  const mat = new THREE.SpriteMaterial({ color: 0xffffff, alphaTest: 0.5 });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.4, 1.4, 1);            // square fallback until the image's aspect is known
+  const myGen = buildGeneration;
+  textureLoader.load(src, (tex) => {
+    if(buildGeneration !== myGen) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat.map = tex; mat.needsUpdate = true;
+    const im = tex.image;
+    if(im && im.width && im.height){
+      const H = 1.5;
+      sprite.scale.set(H * im.width / im.height, H, 1);
+    }
+  });
+  return sprite;
+}
+
+function makeTextBillboard(text){
+  const canvas = document.createElement('canvas');
+  let ctx = canvas.getContext('2d');
+  const font = 'bold 120px sans-serif';
+  ctx.font = font;
+  const pad = 44;
+  const tw = Math.ceil(ctx.measureText(text).width);
+  canvas.width = tw + pad * 2;
+  canvas.height = 180;
+  ctx = canvas.getContext('2d');           // re-read after the resize cleared the canvas
+  ctx.fillStyle = 'rgba(18,20,26,0.82)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#7fb0ff';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  const H = 0.8;
+  sprite.scale.set(H * canvas.width / canvas.height, H, 1);
+  return sprite;
+}
+
+function buildMnemonicBillboard(move, mnemonicsBySquare){
+  const entry = mnemonicsBySquare[move.to];
+  const img = entry && entry[move.piece + 'Img'];
+  if(img) return makeImageBillboard(img);
+  const word = entry && entry[move.piece];
+  return makeTextBillboard(word && word.trim() ? word.trim() : move.san);
+}
+
+function placeDemoMnemonics(roomKey){
+  const moves = DEMO_MNEMONICS[roomKey];
+  if(!moves) return;
+  const myGen = buildGeneration;
+  getAllMnemonics().then((mnemonicsBySquare) => {
+    if(buildGeneration !== myGen || !scene) return;
+    for(const m of moves){
+      const bb = buildMnemonicBillboard(m, mnemonicsBySquare);
+      bb.position.set(m.pos.x, m.pos.y, m.pos.z);
+      scene.add(bb);
+    }
+  });
+}
+
 function makeLabelMesh(text){
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 256;
@@ -1525,6 +1616,7 @@ function buildRoom(roomKey){
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
     buildSlots(room, roomKey, roomSlots(room));
+    placeDemoMnemonics(roomKey);
   } else {
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
