@@ -16,6 +16,7 @@ const ASSET_TYPES = {
   'billboard-sprite':      { label: 'Prop: Billboard (sprite)',       kind: 'prop' },
   'surface':               { label: 'Surface (floor / wall texture)', kind: 'surface' },
   'facade':                { label: 'Surface: Facade (large, non-tiled)', kind: 'facade' },
+  'sign':                  { label: 'Surface: Sign skin', kind: 'sign' },
 };
 
 /* ---------- import resolution ----------
@@ -41,7 +42,7 @@ const RESOLUTION_CAPS = {
 function resolutionCategory(type){
   if(type === 'facade')  return 'large';
   if(type === 'surface') return 'tiled';
-  return 'object';                       // extruded, billboard-cylindrical, billboard-sprite
+  return 'object';                       // extruded, billboard-cylindrical, billboard-sprite, sign
 }
 function resolutionCap(type, tier){
   const cat = RESOLUTION_CAPS[resolutionCategory(type)] || RESOLUTION_CAPS.object;
@@ -288,6 +289,12 @@ function renderTypeFields(type, a){
       <div class="field"><label>Tint (hex, optional)</label><input type="text" id="assetTint" value="${esc((a && a.tint) || '')}"></div>
       <div class="field"><label>Roughness</label><input type="number" step="0.01" min="0" max="1" id="assetRoughness" value="${(a && a.roughness) ?? 0.9}"></div>
       <div class="field"><label>Metalness</label><input type="number" step="0.01" min="0" max="1" id="assetMetalness" value="${(a && a.metalness) ?? 0}"></div>
+    `;
+  } else if(kind === 'sign'){
+    box.innerHTML = `
+      <p class="asset-hint">Skins the house-name sign panel (3.4m × 0.85m). The image
+      is stretched to fill the panel and the name text is drawn on top, so leave a
+      clear, readable area for it (centered works best).</p>
     `;
   } else {
     box.innerHTML = `
@@ -749,6 +756,7 @@ function readTypeFields(type){
       metalness: Number($('assetMetalness').value),
     };
   }
+  if(type === 'sign') return {};
   return {
     repeatPerMeter: Number($('assetRepeatPerMeter').value)||0,
     rotation: Number($('assetRotation').value)||0,
@@ -807,6 +815,8 @@ function assetToJson(a){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'facade'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
+  } else if(a.type === 'sign'){
+    // no extra fields — fixed-size panel, image is the whole skin
   } else {
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   }

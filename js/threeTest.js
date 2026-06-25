@@ -143,6 +143,10 @@ function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+function signAssetFor(roomKey, buildingKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].signs && LAYOUT[roomKey].signs[buildingKey];
+  return id ? ASSET_BY_ID[id] : null;
+}
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
 // overrides for fl-nw/fl-ne/fl-sw/fl-se keep working). A cell is dropped if
@@ -313,6 +317,7 @@ function ensureRoomLayout(roomKey){
   if(!r.walls) r.walls = {};
   if(!r.slots) r.slots = {};
   if(!r.buildings) r.buildings = {};
+  if(!r.signs) r.signs = {};
   return r;
 }
 
@@ -353,6 +358,12 @@ function setBuildingFacadeOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.buildings[buildingKey] = assetId; else delete r.buildings[buildingKey];
+  });
+}
+function setSignOverride(roomKey, buildingKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.signs[buildingKey] = assetId; else delete r.signs[buildingKey];
   });
 }
 
@@ -852,6 +863,25 @@ function buildFacadeMarker(size, b, roomKey, buildingKey, faceWidth, faceHeight)
   return panel;
 }
 
+// editor-only hotspot covering a building's ground sign panel, tinted distinct
+// from both the facade marker (orange) and yard-slot markers (cyan); clicking
+// it opens the sign-skin picker. Sized/positioned to match the sign panel
+// built by buildGroundSign (3.4 x 0.85, mounted at postH + 0.85/2).
+let signMarkerMat = null;
+function signMarkerMaterial(){
+  if(!signMarkerMat){
+    signMarkerMat = new THREE.MeshBasicMaterial({ color: 0xab47bc, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
+  }
+  return signMarkerMat;
+}
+function buildSignMarker(signPos, roomKey, buildingKey){
+  const postH = 1.1;
+  const marker = new THREE.Mesh(new THREE.PlaneGeometry(3.4 * 1.1, 0.85 * 1.4), signMarkerMaterial());
+  marker.position.set(signPos.x, postH + 0.85/2, signPos.z);
+  marker.userData = { kind: 'sign', roomKey, buildingKey };
+  return marker;
+}
+
 // renders a list of slots: placed accessory if one is assigned, else a
 // marker (only in edit mode, so normal walking is unchanged).
 function buildSlots(room, roomKey, slots){
@@ -1010,23 +1040,45 @@ function buildExitSign(size, wall, offset){
   return mesh;
 }
 
-function makeSignMesh(text){
-  const canvas = document.createElement('canvas');
-  canvas.width = 512; canvas.height = 128;
-  const ctx = canvas.getContext('2d');
+function drawSignBase(ctx, w, h){
   ctx.fillStyle = '#caa46a';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = '#4a3320';
   ctx.lineWidth = 10;
-  ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
+  ctx.strokeRect(5, 5, w - 10, h - 10);
+}
+function drawSignText(ctx, w, h, text){
   ctx.fillStyle = '#2b1d10';
   ctx.font = 'bold 54px serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, canvas.width/2, canvas.height/2 + 4);
+  ctx.fillText(text, w/2, h/2 + 4);
+}
+// Builds the sign panel mesh. Draws the flat tan background + text
+// immediately (so the panel is never blank), then if a skin image is
+// supplied, loads it asynchronously and redraws the skin as the
+// background with the name text layered on top once it's ready.
+function makeSignMesh(text, skinSrc){
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  drawSignBase(ctx, canvas.width, canvas.height);
+  drawSignText(ctx, canvas.width, canvas.height, text);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.MeshBasicMaterial({ map: tex });
+  if(skinSrc){
+    const myGeneration = buildGeneration;
+    const img = new Image();
+    img.onload = () => {
+      if(buildGeneration !== myGeneration || !scene) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      drawSignText(ctx, canvas.width, canvas.height, text);
+      tex.needsUpdate = true;
+    };
+    img.src = skinSrc;
+  }
   return new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), mat);
 }
 
@@ -1110,7 +1162,7 @@ function buildStairs(room){
 // apartment-complex sign out on the lawn -- not mounted on the building
 // wall. Faces +z (south, toward the street) by default, same orientation
 // convention as mountOutward's south case.
-function buildGroundSign(text){
+function buildGroundSign(text, skinSrc){
   const group = new THREE.Group();
   const postMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
   const postH = 1.1;
@@ -1120,7 +1172,7 @@ function buildGroundSign(text){
     post.position.set(dx, postH/2, 0);
     group.add(post);
   }
-  const panel = makeSignMesh(text);
+  const panel = makeSignMesh(text, skinSrc);
   panel.position.y = postH + 0.85/2;
   group.add(panel);
   return group;
@@ -1310,10 +1362,15 @@ function buildRoom(roomKey){
       if(b.sign){
         // Out on the lawn to the right of the front door (as seen walking
         // up to it), like a museum or apartment-complex entrance sign --
-        // not mounted on the facade itself.
-        const signGroup = buildGroundSign(b.sign);
-        signGroup.position.set(b.origin.x + 6, 0, b.origin.z + size.d/2 + 2.5);
+        // not mounted on the facade itself. The skin (if any) is an
+        // override image stretched behind the name text -- see signAssetFor.
+        const signAsset = signAssetFor(roomKey, buildingKey);
+        const signPos = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 2.5 };
+        const signGroup = buildGroundSign(b.sign, signAsset ? signAsset.image : null);
+        signGroup.position.set(signPos.x, 0, signPos.z);
         scene.add(signGroup);
+        // edit-mode hotspot: click the sign to set / replace / remove its skin
+        if(editMode) scene.add(buildSignMarker(signPos, roomKey, buildingKey));
       }
 
       // Movie-set facade: lay the image flat over the whole face (a single
@@ -1484,6 +1541,13 @@ function handleEditTarget(ud){
       onPick: id => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, null)
     });
+  } else if(ud.kind === 'sign'){
+    const current = signAssetFor(ud.roomKey, ud.buildingKey);
+    openAssetPicker({
+      allow: ['sign'], allowRemove: !!current, onClose,
+      onPick: id => setSignOverride(ud.roomKey, ud.buildingKey, id),
+      onRemove: () => setSignOverride(ud.roomKey, ud.buildingKey, null)
+    });
   }
 }
 
@@ -1494,7 +1558,7 @@ function setEditMode(on){
     // outdoors you edit building facades; indoors floors/walls/slots
     const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
     editHud.textContent = outdoor
-      ? 'EDIT MODE — click a building’s front face to set its facade, or a yard spot to landscape it; [E] or [Esc] to exit'
+      ? 'EDIT MODE — click a building’s front face for its facade, a yard spot to landscape it, or its sign to skin it; [E] or [Esc] to exit'
       : 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
     editHud.style.display = on ? 'block' : 'none';
   }
