@@ -244,11 +244,12 @@ function setRoomGeom(roomKey, geom){
   });
 }
 // commits a room-geometry-dialog session in one rebuild: the width/depth/
-// height patch plus any door moves (keyed by target room). `exitMoves` is a
-// { [target]: {wall, offset} } map of just the doors that actually moved from
-// their static position -- entries matching the static position are omitted
-// so a drag-then-drag-back doesn't leave a no-op override behind. Any door
-// skin saved under the old wall@offset key migrates to the new one.
+// height patch plus any door moves and/or type changes (keyed by target
+// room). `exitMoves` is a { [target]: {wall, offset, type} } map of the
+// dialog's full staged state -- entries matching the static position and
+// type ('door') are omitted so a drag-then-drag-back doesn't leave a no-op
+// override behind. Any door skin saved under the old wall@offset key
+// migrates to the new one.
 function commitRoomGeomDialog(roomKey, geom, exitMoves){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
@@ -260,10 +261,14 @@ function commitRoomGeomDialog(roomKey, geom, exitMoves){
       const oldOffset = oldOv ? oldOv.offset : ex.offset;
       const move = exitMoves[ex.target];
       if(!move){ continue; }
-      if(move.wall === ex.wall && Math.abs(move.offset - ex.offset) < 0.001){
+      const moveType = move.type || 'door';
+      const sameType = moveType === (ex.type || 'door');
+      if(move.wall === ex.wall && Math.abs(move.offset - ex.offset) < 0.001 && sameType){
         delete r.exits[ex.target];
       } else {
-        r.exits[ex.target] = { wall: move.wall, offset: move.offset };
+        const newOv = { wall: move.wall, offset: move.offset };
+        if(!sameType) newOv.type = moveType;
+        r.exits[ex.target] = newOv;
       }
       const oldKey = doorKey(oldWall, oldOffset);
       const newKey = doorKey(move.wall, move.offset);
@@ -1608,6 +1613,30 @@ function buildGroundSign(text, skinSrc){
   return group;
 }
 
+// a few shallow treads laid across a 'stair'-type exit's threshold -- purely
+// a visual/label cue distinguishing it from an ordinary door (no floor-height
+// change between rooms; real multi-floor mechanics are a future, separate
+// feature). Not registered with any collider, so it doesn't affect movement.
+function buildExitStairMarker(size, wall, offset, origin){
+  origin = origin || { x:0, z:0 };
+  const { axis, fixed } = wallSpan(size, wall);
+  const inSign = fixed > 0 ? -1 : 1; // step inward from the wall, into the room
+  const group = new THREE.Group();
+  const treadW = DOOR_W * 0.92, treadD = 0.22, treadH = 0.04;
+  const mat = new THREE.MeshStandardMaterial({ color: 0x8d6e63 });
+  for(let i = 0; i < 3; i++){
+    const geo = axis === 'x'
+      ? new THREE.BoxGeometry(treadW, treadH, treadD)
+      : new THREE.BoxGeometry(treadD, treadH, treadW);
+    const tread = new THREE.Mesh(geo, mat);
+    const across = fixed + inSign * (0.18 + i * treadD);
+    if(axis === 'x') tread.position.set(origin.x + offset, treadH/2, origin.z + across);
+    else tread.position.set(origin.x + across, treadH/2, origin.z + offset);
+    group.add(tread);
+  }
+  return group;
+}
+
 function doorTriggerBox(size, wall, offset, origin){
   origin = origin || { x:0, z:0 };
   const { axis, fixed, half } = wallSpan(size, wall);
@@ -1724,6 +1753,7 @@ function buildRoom(roomKey){
         const dKey = doorKey(wall, ex.offset);
         const doorAsset = doorAssetFor(roomKey, dKey);
         if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+        if(ex.type === 'stair') scene.add(buildExitStairMarker(room.size, wall, ex.offset));
         if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
       }
     }
@@ -2442,6 +2472,38 @@ const ROOM_GEOM_MIN = 2;
 function renderRoomGeomDialog(ov, roomKey){
   const room = mergedRoom(roomKey);
   const { w, d, h } = room.size;
+  // read straight off the static ROOMS config: exits, stairs and (outdoor)
+  // building footprints don't move when the room is resized, so the live
+  // preview overlays them on whatever width/depth the user is typing.
+  const staticRoom = ROOMS[roomKey] || {};
+  const staticExits = staticRoom.exits || [];
+  const stairs = staticRoom.stairs || null;
+  const buildings = staticRoom.buildings || [];
+
+  // staged door state: target room -> {wall, offset, type}, seeded from any
+  // existing override (or the static position/type) and only committed on
+  // Apply. Single-sided by construction -- this only ever edits roomKey's
+  // own exits. `type` defaults to 'door'; 'stair' is purely a visual/label
+  // distinction for now (a cosmetic threshold tread, no floor-height change
+  // between rooms) -- real multi-floor mechanics are future work.
+  const stagedExits = {};
+  for(const ex of staticExits){
+    const ov2 = LAYOUT[roomKey] && LAYOUT[roomKey].exits && LAYOUT[roomKey].exits[ex.target];
+    stagedExits[ex.target] = {
+      wall: ov2 ? ov2.wall : ex.wall,
+      offset: ov2 ? ov2.offset : ex.offset,
+      type: (ov2 && ov2.type) || ex.type || 'door'
+    };
+  }
+  const exitTypeRows = staticExits.map(ex => `
+    <label style="display:flex;align-items:center;justify-content:space-between;font-size:.78rem;gap:.5rem;padding:.15rem 0">
+      <span>${ex.target}${ex.back ? ' ↩' : ''}</span>
+      <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
+        <option value="door" ${stagedExits[ex.target].type === 'door' ? 'selected' : ''}>Door</option>
+        <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase</option>
+      </select>
+    </label>
+  `).join('');
   ov.innerHTML = `
     <div class="modal" style="width:min(28em,92vw)">
       <h2>Room Geometry — ${roomKey}</h2>
@@ -2457,7 +2519,8 @@ function renderRoomGeomDialog(ov, roomKey){
         </label>
       </div>
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
-      <p style="margin:0 0 .7rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a green doorway to nudge it or move it to another wall. Hatched = stairs.</p>
+      <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
+      ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <button id="roomGeomResetBtn">Reset</button>
         <div>
@@ -2469,21 +2532,11 @@ function renderRoomGeomDialog(ov, roomKey){
   `;
   const wEl = ov.querySelector('#roomGeomW'), dEl = ov.querySelector('#roomGeomD'), hEl = ov.querySelector('#roomGeomH');
   const canvas = ov.querySelector('#roomGeomPlan');
-  // read straight off the static ROOMS config: exits, stairs and (outdoor)
-  // building footprints don't move when the room is resized, so the live
-  // preview overlays them on whatever width/depth the user is typing.
-  const staticRoom = ROOMS[roomKey] || {};
-  const staticExits = staticRoom.exits || [];
-  const stairs = staticRoom.stairs || null;
-  const buildings = staticRoom.buildings || [];
-
-  // staged door positions: target room -> {wall, offset}, seeded from any
-  // existing override (or the static position) and only committed on Apply.
-  // Single-sided by construction -- this only ever edits roomKey's own exits.
-  const stagedExits = {};
-  for(const ex of staticExits){
-    const ov2 = LAYOUT[roomKey] && LAYOUT[roomKey].exits && LAYOUT[roomKey].exits[ex.target];
-    stagedExits[ex.target] = ov2 ? { wall: ov2.wall, offset: ov2.offset } : { wall: ex.wall, offset: ex.offset };
+  for(const sel of ov.querySelectorAll('[data-exit-type-for]')){
+    sel.addEventListener('change', () => {
+      stagedExits[sel.dataset.exitTypeFor].type = sel.value;
+      drawPlan();
+    });
   }
   let dragTarget = null;     // staticExits[i].target currently being dragged
   let dragStartWall = null;  // wall the drag began on, used as the fallback when the candidate wall is occupied
@@ -2552,8 +2605,12 @@ function renderRoomGeomDialog(ov, roomKey){
     for(const ex of staticExits){
       const pos = stagedExits[ex.target];
       const dragging = dragTarget === ex.target;
-      ctx.fillStyle = dragging ? '#f9a825' : '#2e7d32';
-      ctx.strokeStyle = dragging ? '#f9a825' : '#2e7d32'; ctx.lineWidth = dragging ? 6 : 4;
+      const isStair = pos.type === 'stair';
+      const baseColor = isStair ? '#8d6e63' : '#2e7d32';
+      const labelColor = isStair ? '#4e342e' : '#1b5e20';
+      ctx.fillStyle = dragging ? '#f9a825' : baseColor;
+      ctx.strokeStyle = dragging ? '#f9a825' : baseColor; ctx.lineWidth = dragging ? 6 : 4;
+      ctx.setLineDash(isStair && !dragging ? [4, 3] : []);
       let lx, ly;                              // label anchor, just inside the wall
       ctx.beginPath();
       if(pos.wall === 'north'){ const cx = px(pos.offset); ctx.moveTo(cx - doorPx/2, oy); ctx.lineTo(cx + doorPx/2, oy); lx = cx; ly = oy + 11; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
@@ -2561,8 +2618,9 @@ function renderRoomGeomDialog(ov, roomKey){
       if(pos.wall === 'west'){  const cz = pz(pos.offset); ctx.moveTo(ox, cz - doorPx/2); ctx.lineTo(ox, cz + doorPx/2); lx = ox + 3; ly = cz; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; }
       if(pos.wall === 'east'){  const cz = pz(pos.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
       ctx.stroke();
-      const label = ex.target + (ex.back ? ' ↩' : '');
-      ctx.fillStyle = dragging ? '#7a4a00' : '#1b5e20';
+      ctx.setLineDash([]);
+      const label = ex.target + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
+      ctx.fillStyle = dragging ? '#7a4a00' : labelColor;
       ctx.fillText(label, lx, ly);
     }
     ctx.textBaseline = 'alphabetic';
@@ -2658,7 +2716,7 @@ function renderRoomGeomDialog(ov, roomKey){
       }
     }
     if(!wallOccupied(candidate.wall, candidate.offset, dragTarget)){
-      stagedExits[dragTarget] = candidate;
+      stagedExits[dragTarget] = { wall: candidate.wall, offset: candidate.offset, type: stagedExits[dragTarget].type };
     }
     drawPlan();
   });
@@ -2677,7 +2735,11 @@ function renderRoomGeomDialog(ov, roomKey){
   ov.querySelector('#roomGeomResetBtn').onclick = () => {
     const base = ROOMS[roomKey].size;
     wEl.value = base.w; dEl.value = base.d; hEl.value = base.h;
-    for(const ex of staticExits){ stagedExits[ex.target] = { wall: ex.wall, offset: ex.offset }; }
+    for(const ex of staticExits){
+      stagedExits[ex.target] = { wall: ex.wall, offset: ex.offset, type: ex.type || 'door' };
+      const sel = ov.querySelector(`[data-exit-type-for="${ex.target}"]`);
+      if(sel) sel.value = stagedExits[ex.target].type;
+    }
     drawPlan();
   };
   ov.querySelector('#roomGeomApplyBtn').onclick = () => {
