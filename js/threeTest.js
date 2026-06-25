@@ -133,6 +133,12 @@ let editHud = null;
 let joystickEl = null, joyKnob = null, joyPointerId = null;
 let joyVec = { x: 0, y: 0 };
 
+/* ---------- on-screen edit controls (mobile) ----------
+   editToggleBtn flips edit mode (the desktop 'E' key has no touch equivalent);
+   editTouchEl is the move/scale pad shown while a prop is selected. Both are
+   built on coarse-pointer devices only. */
+let editToggleBtn = null, editTouchEl = null;
+
 /* ---------- in-world layout editor: prop selection (nudge/scale) ----------
    Clicking an existing accessory selects it instead of opening the picker.
    While selected, arrow keys nudge its position and +/- scale it; a gear
@@ -2141,6 +2147,8 @@ function handleEditTarget(ud){
 }
 
 function updateEditHud(){
+  updateEditToggle();
+  updateEditTouchControls();
   if(!editHud) return;
   if(selectedProp){
     editHud.textContent = selectedProp.kind === 'mnemonic'
@@ -2172,7 +2180,7 @@ function setEditMode(on){
    which tick() reads. Pointer events cover both touch and stylus; the knob is
    captured so a drag that slides off the base keeps tracking. */
 function buildJoystick(){
-  if(!window.matchMedia || !window.matchMedia('(pointer: coarse)').matches) return null;
+  if(!isCoarsePointer()) return null;
   const R = 58;                       // max knob travel from center (px)
   const base = document.createElement('div');
   base.style.cssText =
@@ -2216,6 +2224,92 @@ function buildJoystick(){
   base.addEventListener('pointerup', end);
   base.addEventListener('pointercancel', end);
   return base;
+}
+
+const isCoarsePointer = () => !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+const TOUCH_BTN_CSS =
+  'min-width:48px;height:46px;padding:0 .55rem;border-radius:8px;'
+  + 'border:1px solid rgba(255,255,255,.5);background:rgba(28,38,58,.78);color:#fff;'
+  + 'font:600 1rem sans-serif;line-height:1;touch-action:manipulation;'
+  + '-webkit-user-select:none;user-select:none;pointer-events:auto;';
+
+// a tap button that won't bubble into the canvas click/selection handler
+function makeTouchBtn(label, onTap){
+  const b = document.createElement('button');
+  b.innerHTML = label;
+  b.style.cssText = TOUCH_BTN_CSS;
+  b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onTap(); });
+  return b;
+}
+
+// top-right edit-mode toggle -- the touch stand-in for the 'E' key
+function buildEditToggle(){
+  if(!isCoarsePointer()) return null;
+  const b = makeTouchBtn('Edit', () => setEditMode(!editMode));
+  b.style.position = 'absolute';
+  b.style.top = '8px';
+  b.style.right = '8px';
+  b.style.zIndex = '4';
+  return b;
+}
+function updateEditToggle(){
+  if(!editToggleBtn) return;
+  editToggleBtn.textContent = editMode ? 'Exit Edit' : 'Edit';
+  editToggleBtn.style.background = editMode ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
+}
+
+// move/scale pad shown while a prop is selected. Buttons drive the same
+// nudgeSelected/scaleSelected paths the keyboard does, so behavior matches.
+function buildEditTouch(){
+  if(!isCoarsePointer()) return null;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;top:0;'
+    + 'pointer-events:none;z-index:4;display:none;';
+  return wrap;
+}
+function updateEditTouchControls(){
+  if(!editTouchEl) return;
+  // the move/scale pad and the walk joystick would overlap on a phone, so the
+  // joystick steps aside while a prop is being edited (it returns on deselect)
+  if(joystickEl){
+    joystickEl.style.display = selectedProp ? 'none' : 'block';
+    if(selectedProp){ joyVec.x = 0; joyVec.y = 0; joyPointerId = null; if(joyKnob) joyKnob.style.transform = 'translate(0px,0px)'; }
+  }
+  if(!selectedProp){ editTouchEl.style.display = 'none'; editTouchEl.innerHTML = ''; return; }
+  editTouchEl.innerHTML = '';
+  editTouchEl.style.display = 'block';
+  const mnem = selectedProp.kind === 'mnemonic';
+
+  // directional pad, bottom-right (a + arrangement with empty corners)
+  const pad = document.createElement('div');
+  pad.style.cssText = 'position:absolute;right:10px;bottom:14px;display:grid;'
+    + 'grid-template-columns:repeat(3,48px);grid-template-rows:repeat(3,46px);gap:6px;';
+  const blank = () => document.createElement('div');
+  pad.append(
+    blank(), makeTouchBtn('▲', () => nudgeSelected('ArrowUp')), blank(),
+    makeTouchBtn('◀', () => nudgeSelected('ArrowLeft')), blank(), makeTouchBtn('▶', () => nudgeSelected('ArrowRight')),
+    blank(), makeTouchBtn('▼', () => nudgeSelected('ArrowDown')), blank()
+  );
+  editTouchEl.appendChild(pad);
+
+  // left cluster: scale, height (mnemonic only), change (assets only), done
+  const col = document.createElement('div');
+  col.style.cssText = 'position:absolute;left:10px;bottom:14px;display:flex;flex-direction:column;gap:6px;';
+  const rowOf = (...els) => { const r = document.createElement('div'); r.style.cssText = 'display:flex;gap:6px'; r.append(...els); return r; };
+  col.appendChild(rowOf(
+    makeTouchBtn('Bigger', () => scaleSelected(SCALE_STEP)),
+    makeTouchBtn('Smaller', () => scaleSelected(1 / SCALE_STEP))
+  ));
+  if(mnem) col.appendChild(rowOf(
+    makeTouchBtn('Higher', () => nudgeSelected('PageUp')),
+    makeTouchBtn('Lower', () => nudgeSelected('PageDown'))
+  ));
+  else col.appendChild(rowOf(
+    makeTouchBtn('Change', () => { inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); })
+  ));
+  col.appendChild(rowOf(makeTouchBtn('Done', () => deselectProp())));
+  editTouchEl.appendChild(col);
 }
 
 function onResize(){
@@ -2294,9 +2388,14 @@ export async function openThreeTest(containerEl){
   editHud.textContent = 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
   container.appendChild(editHud);
 
-  // mobile walk control (touch devices only)
+  // mobile controls (touch devices only): walk joystick, edit-mode toggle,
+  // and the move/scale pad shown while a prop is selected
   joystickEl = buildJoystick();
   if(joystickEl) container.appendChild(joystickEl);
+  editToggleBtn = buildEditToggle();
+  if(editToggleBtn) container.appendChild(editToggleBtn);
+  editTouchEl = buildEditTouch();
+  if(editTouchEl) container.appendChild(editTouchEl);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
@@ -2354,5 +2453,6 @@ export function closeThreeTest(){
   editHud = null;
   joystickEl = null; joyKnob = null; joyPointerId = null;
   joyVec = { x: 0, y: 0 };
+  editToggleBtn = null; editTouchEl = null;
   scene = null; camera = null; clock = null; container = null;
 }
