@@ -2,7 +2,7 @@ import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest } from './threeTest.js';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js';
 import { openAssetManager, closeAssetManager } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -2243,15 +2243,32 @@ $('threeTestCloseBtn').onclick = ()=>{
   closeThreeTest();
 };
 
+// Opening the asset manager from inside the walking tour: the assets modal
+// stacks on top (it sits later in the DOM and has a higher z-index) without
+// closing threeTest, so dismissing it just drops back into the tour.
+let assetsOpenedFromThreeTest = false;
+$('threeTestAssetsBtn').onclick = ()=>{
+  assetsOpenedFromThreeTest = true;
+  setForeignModalOpen(true);
+  $('assetsOverlay').style.display='flex';
+  openAssetManager($('assetsBodyWrap'));
+};
+
 /* ---------- asset manager ---------- */
 $('menuAssets').onclick = ()=>{
   $('menuList').style.display='none';
+  assetsOpenedFromThreeTest = false;
   $('assetsOverlay').style.display='flex';
   openAssetManager($('assetsBodyWrap'));
 };
 $('assetsCloseBtn').onclick = ()=>{
   $('assetsOverlay').style.display='none';
   closeAssetManager();
+  if(assetsOpenedFromThreeTest){
+    assetsOpenedFromThreeTest = false;
+    setForeignModalOpen(false);
+    refreshAssetsLive();
+  }
 };
 
 /* ---------- about modal ---------- */

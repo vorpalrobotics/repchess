@@ -117,6 +117,7 @@ let buildGeneration = 0;
 const LAYOUT_KEY = 'threeLayout';
 let editMode = false;
 let inputLocked = false;       // true while a picker is open (suppresses movement)
+let foreignModalOpen = false;  // true while a modal outside threeTest (e.g. the asset manager) covers the canvas
 let LAYOUT = {};
 let ASSET_BY_ID = {};
 let raycaster = null;
@@ -1634,6 +1635,15 @@ function buildRoom(roomKey){
   if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
 }
 
+// Called after the asset manager is closed while the walking tour is still
+// open (e.g. opened on top via the in-world Assets button), so any
+// added/edited assets show up immediately without re-entering the room by hand.
+export async function refreshAssetsLive(){
+  if(!scene) return; // tour isn't open
+  await refreshAssetMap();
+  buildRoom(currentRoomKey);
+}
+
 function enterRoom(roomKey, spawn, preserveYaw){
   // remember where we came in *before* building, so floor props can face it
   entryPoint = { x: spawn.x, z: spawn.z };
@@ -1984,7 +1994,17 @@ function onResize(){
   camera.updateProjectionMatrix();
 }
 
+// Called when a modal outside threeTest (the asset manager) is opened on top
+// of the canvas, so stray keystrokes meant for its text fields don't walk the
+// player or toggle edit mode behind it; also drops any keys held at the
+// moment it opens so the player doesn't keep walking once it's covered.
+export function setForeignModalOpen(open){
+  foreignModalOpen = open;
+  if(open) for(const k in keys) keys[k] = false;
+}
+
 function onKeyDown(e){
+  if(foreignModalOpen) return;
   if(selectedProp && !inputLocked){
     if(e.key === 'Escape'){ deselectProp(); return; }
     if(e.key === 'Enter'){ inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); return; }
