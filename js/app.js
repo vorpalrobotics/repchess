@@ -2709,15 +2709,47 @@ $('engineMaxDepthSelect').onchange = () => {
 const engineModeTag = () => !engine.ready ? ''
   : engine.multithreaded ? ` · ${engine.threads} threads` : ' · 1 thread';
 
-/* the STOP button only appears while a live search is actually running (it can
-   peg several cores), so the user can halt it without resorting to dropping the
-   depth. Stopping just lets the current search finish early -- whatever lines
-   were found so far stay on screen. */
-const showEngineStop = on => { $('engineStopBtn').style.display = on ? 'inline-flex' : 'none'; };
+/* The STOP/PLAY button drives (and reflects) the live search state:
+     'running' -> STOP (square): a search is in progress (it can peg several
+                  cores), click to halt it without dropping the depth.
+     'stopped' -> PLAY (triangle): halted by the user; the lines found so far
+                  stay on screen and the status reads "Stopped — Depth N".
+                  Click to resume analysis of the same position.
+     'idle'    -> hidden: nothing to stop (no position, or it finished on its
+                  own at the target depth).
+   The status-line prefix ("Live" vs "Stopped") is derived from this state too,
+   so a stray late `info` line or a PV-expand click can't flip the label back. */
+let engineState = 'idle';
+let lastOnEvalUpdate = null, lastOnComplete = null;
+function setEngineUI(state){
+  engineState = state;
+  const btn = $('engineStopBtn');
+  const icon = btn.querySelector('i');
+  if(state === 'running'){
+    btn.style.display = 'inline-flex';
+    btn.title = 'Stop analysis';
+    icon.className = 'fa-solid fa-stop';
+    btn.classList.remove('engine-resume');
+  } else if(state === 'stopped'){
+    btn.style.display = 'inline-flex';
+    btn.title = 'Resume analysis';
+    icon.className = 'fa-solid fa-play';
+    btn.classList.add('engine-resume');
+  } else {
+    btn.style.display = 'none';
+    btn.classList.remove('engine-resume');
+  }
+}
 $('engineStopBtn').onclick = () => {
-  engine.stop();
-  showEngineStop(false);
-  $('engineDepth').textContent = $('engineDepth').textContent.replace(/^Live — /, 'Stopped — ');
+  if(engineState === 'running'){
+    // flip to 'stopped' *before* telling the engine, so any trailing info line
+    // the engine emits as it winds down renders with the "Stopped" prefix.
+    setEngineUI('stopped');
+    $('engineDepth').textContent = $('engineDepth').textContent.replace(/^Live — /, 'Stopped — ');
+    engine.stop();
+  } else if(engineState === 'stopped'){
+    if(currentEngineFen) runEngine(currentEngineFen, lastOnEvalUpdate, lastOnComplete);
+  }
 };
 
 engine.init().then(() => {
@@ -2994,7 +3026,8 @@ function pvToSan(fen, uciMoves, maxPlies){
 }
 
 function renderEngineLines(fen, depth, lines, multipv){
-  $('engineDepth').textContent = `Live — Depth ${depth}${engineModeTag()}`;
+  const prefix = engineState === 'stopped' ? 'Stopped' : 'Live';
+  $('engineDepth').textContent = `${prefix} — Depth ${depth}${engineModeTag()}`;
   const turn = fen.split(' ')[1];
   const ol = $('engineLines');
   ol.innerHTML = '';
@@ -3024,12 +3057,14 @@ const STARTING_FEN = new Chess().fen();
 
 async function runEngine(fen, onEvalUpdate, onComplete){
   currentEngineFen = fen;
+  // remember the callbacks so the PLAY button can resume this exact analysis
+  lastOnEvalUpdate = onEvalUpdate; lastOnComplete = onComplete;
   const runId = ++engineRunId;
   console.debug(`[runEngine] runId=${runId} fen=${fen}`);
   if(fen === STARTING_FEN){
     console.debug(`[runEngine] runId=${runId} starting position, skipping analysis to save cycles`);
     engine.stop();
-    showEngineStop(false);
+    setEngineUI('idle');
     $('engineDepth').textContent = '';
     $('engineLines').innerHTML = '';
     onComplete?.();
@@ -3040,7 +3075,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
   $('engineDepth').textContent = `Live — Thinking…${engineModeTag()}`;
   $('engineLines').innerHTML = '';
-  showEngineStop(true);
+  setEngineUI('running');
   expandedPvLines.clear();
   const multipv = engineMultiPV();
   const depth = engineMaxDepth();
@@ -3051,14 +3086,21 @@ async function runEngine(fen, onEvalUpdate, onComplete){
     depth,
     onInfo: (d,lines) => {
       if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
+      // the user hit STOP; ignore any final lines the engine emits as it halts
+      // so they can't overwrite the frozen "Stopped" snapshot/label.
+      if(engineState === 'stopped') return;
       renderEngineLines(fen,d,lines,multipv);
       if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score, lines[1].pv);
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
     // only the current run owns the status UI -- a stale run resolving (because
-    // a newer search superseded it) must not hide the button the new run lit.
-    if(runId === engineRunId){ showEngineStop(false); onComplete?.(); }
+    // a newer search superseded it) must not touch the button the new run owns.
+    // A user-initiated stop leaves the PLAY button up; a natural finish hides it.
+    if(runId === engineRunId){
+      if(engineState !== 'stopped') setEngineUI('idle');
+      onComplete?.();
+    }
   }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
