@@ -240,6 +240,39 @@ function ceilingSlots(room){
   return [{ id: 'ceil-c', kind: 'ceiling', x: 0, z: 0 }];
 }
 
+// rotation.y that points a prop's front (local -z) away from a building, out
+// into the street -- the outdoor counterpart to WALL_INWARD_YAW.
+const FRONT_OUTWARD_YAW = { north: 0, south: Math.PI, west: Math.PI/2, east: -Math.PI/2 };
+
+// yard ground spots flanking a building's front door, symmetric left/right,
+// for landscaping (trees, bushes, flowers, a bird bath) -- the outdoor
+// counterpart to doorFlankFloorSlots. Three per side, spaced out along the
+// door wall starting clear of the doorway itself, all at the same distance
+// out into the yard. Ids are scoped to the building so multiple buildings on
+// the same outdoor room don't collide.
+const YARD_SLOT_COUNT = 3;
+const YARD_SLOT_SPACING = 2.2;
+const YARD_SLOT_START = DOOR_W/2 + 1.4;
+const YARD_SLOT_DEPTH = 3;
+function yardSlots(b, buildingKey){
+  const slots = [];
+  const { axis, fixed } = wallSpan(b.size, b.doorWall);
+  const outSign = (b.doorWall === 'south' || b.doorWall === 'east') ? 1 : -1;
+  const out = fixed + outSign * YARD_SLOT_DEPTH;
+  for(const side of [-1, 1]){
+    for(let i = 0; i < YARD_SLOT_COUNT; i++){
+      const along = b.doorOffset + side * (YARD_SLOT_START + i * YARD_SLOT_SPACING);
+      const x = (axis === 'x' ? along : out) + b.origin.x;
+      const z = (axis === 'x' ? out : along) + b.origin.z;
+      slots.push({
+        id: `yard-${buildingKey}-${side < 0 ? 'l' : 'r'}-${i+1}`,
+        kind: 'floor', x, z, yaw: FRONT_OUTWARD_YAW[b.doorWall]
+      });
+    }
+  }
+  return slots;
+}
+
 // full set of placement slots for a room: the procedural floor grid, door-
 // flanking and low wall spots, the ceiling hang-point, plus any one-off hand-
 // authored slots in ROOMS (e.g. a wall mount with no door nearby).
@@ -254,7 +287,13 @@ function roomSlots(room){
   ];
 }
 function slotById(room, slotId){
-  return roomSlots(room).find(s => s.id === slotId) || null;
+  const found = roomSlots(room).find(s => s.id === slotId);
+  if(found) return found;
+  for(const b of room.buildings || []){
+    const ys = yardSlots(b, b.target).find(s => s.id === slotId);
+    if(ys) return ys;
+  }
+  return null;
 }
 
 async function refreshAssetMap(){
@@ -813,10 +852,10 @@ function buildFacadeMarker(size, b, roomKey, buildingKey, faceWidth, faceHeight)
   return panel;
 }
 
-// renders every slot in a room: placed accessory if one is assigned, else a
+// renders a list of slots: placed accessory if one is assigned, else a
 // marker (only in edit mode, so normal walking is unchanged).
-function buildSlots(room, roomKey){
-  for(const slot of roomSlots(room)){
+function buildSlots(room, roomKey, slots){
+  for(const slot of slots){
     const asset = slotAssetFor(roomKey, slot.id);
     if(asset){
       scene.add(placeSlotAccessory(room, slot, asset));
@@ -1015,7 +1054,6 @@ function mountOutward(size, wall, offset, origin, mesh, y, clearance){
 // over the (smaller) brick box. Rotation turns local -z to point outward.
 function mountFacadeExtrusion(group, size, wall, origin, depth, height, frontClear){
   origin = origin || { x:0, z:0 };
-  const FRONT_OUTWARD_YAW = { north: 0, south: Math.PI, west: Math.PI/2, east: -Math.PI/2 };
   const { axis, fixed } = wallSpan(size, wall);
   const outSign = (wall === 'south' || wall === 'east') ? 1 : -1;
   const along = fixed + outSign * (frontClear - depth / 2);   // slab centre, depth/2 behind the front cap
@@ -1214,7 +1252,7 @@ function buildRoom(roomKey){
     }
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
-    buildSlots(room, roomKey);
+    buildSlots(room, roomKey, roomSlots(room));
   } else {
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
@@ -1317,6 +1355,9 @@ function buildRoom(roomKey){
 
       // edit-mode hotspot: click the front face to set / replace / remove its facade
       if(editMode) scene.add(buildFacadeMarker(size, b, roomKey, buildingKey, facadeWidth, facadeHeight));
+
+      // yard landscaping: trees / bushes / flowers / bird baths flanking the door
+      buildSlots(room, roomKey, yardSlots(b, buildingKey));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       exitMeta.push({
@@ -1453,7 +1494,7 @@ function setEditMode(on){
     // outdoors you edit building facades; indoors floors/walls/slots
     const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
     editHud.textContent = outdoor
-      ? 'EDIT MODE — click a building’s front face to set its facade; [E] or [Esc] to exit'
+      ? 'EDIT MODE — click a building’s front face to set its facade, or a yard spot to landscape it; [E] or [Esc] to exit'
       : 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
     editHud.style.display = on ? 'block' : 'none';
   }
