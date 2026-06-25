@@ -125,6 +125,14 @@ let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
 let editHud = null;
 
+/* ---------- on-screen touch joystick (mobile) ----------
+   A virtual stick near the bottom-center drives the same walk the WASD/arrow
+   keys do: x turns (left/right), y walks (forward/back). joyVec holds the
+   current normalized tilt [-1..1] each axis; tick() folds it into the movement
+   the same frame. Only built on coarse-pointer (touch) devices. */
+let joystickEl = null, joyKnob = null, joyPointerId = null;
+let joyVec = { x: 0, y: 0 };
+
 /* ---------- in-world layout editor: prop selection (nudge/scale) ----------
    Clicking an existing accessory selects it instead of opening the picker.
    While selected, arrow keys nudge its position and +/- scale it; a gear
@@ -1801,12 +1809,20 @@ function tick(){
   animHandle = requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if(keys['ArrowLeft']  || keys['a'] || keys['A']) yaw += TURN_SPEED*dt;
-  if(keys['ArrowRight'] || keys['d'] || keys['D']) yaw -= TURN_SPEED*dt;
+  let turn = 0;
+  if(keys['ArrowLeft']  || keys['a'] || keys['A']) turn += 1;
+  if(keys['ArrowRight'] || keys['d'] || keys['D']) turn -= 1;
 
   let move = 0;
   if(keys['ArrowUp']   || keys['w'] || keys['W']) move += 1;
   if(keys['ArrowDown'] || keys['s'] || keys['S']) move -= 1;
+
+  // touch joystick (mobile): x turns, y walks -- same axes as the keys above
+  if(!inputLocked){ turn -= joyVec.x; move += joyVec.y; }
+  turn = Math.max(-1, Math.min(1, turn));
+  move = Math.max(-1, Math.min(1, move));
+
+  yaw += turn * TURN_SPEED * dt;
   if(move !== 0 && !inputLocked){
     // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
     pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
@@ -2150,6 +2166,58 @@ function setEditMode(on){
   buildRoom(currentRoomKey);
 }
 
+/* ---------- on-screen touch joystick ----------
+   Built into the container (a positioned ancestor, like editHud) on coarse-
+   pointer devices only, so desktop keeps its clean canvas. Drives joyVec,
+   which tick() reads. Pointer events cover both touch and stylus; the knob is
+   captured so a drag that slides off the base keeps tracking. */
+function buildJoystick(){
+  if(!window.matchMedia || !window.matchMedia('(pointer: coarse)').matches) return null;
+  const R = 58;                       // max knob travel from center (px)
+  const base = document.createElement('div');
+  base.style.cssText =
+    'position:absolute;left:50%;bottom:20px;transform:translateX(-50%);'
+    + `width:${R*2}px;height:${R*2}px;border-radius:50%;`
+    + 'background:rgba(255,255,255,.10);border:2px solid rgba(255,255,255,.35);'
+    + 'touch-action:none;z-index:3;';
+  const knob = document.createElement('div');
+  knob.style.cssText =
+    'position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;'
+    + 'border-radius:50%;background:rgba(255,255,255,.55);'
+    + 'border:2px solid rgba(255,255,255,.85);pointer-events:none;';
+  base.appendChild(knob);
+  joyKnob = knob;
+
+  const setFromEvent = (e) => {
+    const rect = base.getBoundingClientRect();
+    let dx = e.clientX - (rect.left + rect.width/2);
+    let dy = e.clientY - (rect.top + rect.height/2);
+    const dist = Math.hypot(dx, dy);
+    if(dist > R){ dx = dx/dist*R; dy = dy/dist*R; }
+    knob.style.transform = `translate(${dx}px,${dy}px)`;
+    joyVec.x = dx / R;
+    joyVec.y = -dy / R;               // screen y is down-positive; push up = forward
+  };
+  const reset = () => {
+    joyVec.x = 0; joyVec.y = 0;
+    knob.style.transform = 'translate(0px,0px)';
+    joyPointerId = null;
+  };
+  base.addEventListener('pointerdown', (e) => {
+    joyPointerId = e.pointerId;
+    base.setPointerCapture(e.pointerId);
+    setFromEvent(e);
+    e.preventDefault();
+  });
+  base.addEventListener('pointermove', (e) => {
+    if(e.pointerId === joyPointerId) setFromEvent(e);
+  });
+  const end = (e) => { if(e.pointerId === joyPointerId) reset(); };
+  base.addEventListener('pointerup', end);
+  base.addEventListener('pointercancel', end);
+  return base;
+}
+
 function onResize(){
   if(!container || !renderer || !camera) return;
   const w = container.clientWidth, h = container.clientHeight;
@@ -2165,7 +2233,12 @@ function onResize(){
 // moment it opens so the player doesn't keep walking once it's covered.
 export function setForeignModalOpen(open){
   foreignModalOpen = open;
-  if(open) for(const k in keys) keys[k] = false;
+  if(open){
+    for(const k in keys) keys[k] = false;
+    // drop any in-progress joystick tilt so the player doesn't keep walking
+    joyVec.x = 0; joyVec.y = 0; joyPointerId = null;
+    if(joyKnob) joyKnob.style.transform = 'translate(0px,0px)';
+  }
 }
 
 function onKeyDown(e){
@@ -2221,6 +2294,10 @@ export async function openThreeTest(containerEl){
   editHud.textContent = 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
   container.appendChild(editHud);
 
+  // mobile walk control (touch devices only)
+  joystickEl = buildJoystick();
+  if(joystickEl) container.appendChild(joystickEl);
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
   camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);
@@ -2275,5 +2352,7 @@ export function closeThreeTest(){
   selectionGear = null;
   selectionAnchor = null;
   editHud = null;
+  joystickEl = null; joyKnob = null; joyPointerId = null;
+  joyVec = { x: 0, y: 0 };
   scene = null; camera = null; clock = null; container = null;
 }
