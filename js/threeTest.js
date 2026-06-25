@@ -2002,15 +2002,17 @@ function nudgeSelected(key){
   } else if(kind === 'mnemonic'){
     // floats free in the room rather than resting on the floor, so arrows move
     // it horizontally (camera-relative, same convention as floor props) and
-    // PageUp/PageDown move it vertically.
+    // PageUp/PageDown (or h/l, for keyboards without dedicated Page keys)
+    // move it vertically -- a pure position change, the graphic itself isn't
+    // stretched.
     const fwd = cameraForwardVec(), right = cameraRightVec();
     let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
     if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
     if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
     if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
     if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
-    if(key === 'PageUp')      dy += NUDGE_STEP;
-    if(key === 'PageDown')    dy -= NUDGE_STEP;
+    if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
+    if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
     xform.dx = dx; xform.dz = dz; xform.dy = dy;
   } else {
     return; // ceiling slot: only scaling applies, no nudge
@@ -2126,7 +2128,7 @@ function updateEditHud(){
   if(!editHud) return;
   if(selectedProp){
     editHud.textContent = selectedProp.kind === 'mnemonic'
-      ? 'SELECTED — arrows: move · PageUp/PageDown: height · +/-: scale · Esc: deselect'
+      ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
       : 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
     editHud.style.display = 'block';
     return;
@@ -2179,7 +2181,8 @@ function onKeyDown(e){
       nudgeSelected(e.key);
       return;
     }
-    if(selectedProp.kind === 'mnemonic' && (e.key === 'PageUp' || e.key === 'PageDown')){
+    if(selectedProp.kind === 'mnemonic' &&
+       (e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'h' || e.key === 'H' || e.key === 'l' || e.key === 'L')){
       nudgeSelected(e.key);
       return;
     }
