@@ -17,6 +17,7 @@ const ASSET_TYPES = {
   'surface':               { label: 'Surface (floor / wall texture)', kind: 'surface' },
   'facade':                { label: 'Surface: Facade (large, non-tiled)', kind: 'facade' },
   'sign':                  { label: 'Surface: Sign skin', kind: 'sign' },
+  'door':                  { label: 'Surface: Door skin', kind: 'door' },
 };
 
 /* ---------- import resolution ----------
@@ -295,6 +296,11 @@ function renderTypeFields(type, a){
       <p class="asset-hint">Skins the house-name sign panel (3.4m × 0.85m). The image
       is stretched to fill the panel and the name text is drawn on top, so leave a
       clear, readable area for it (centered works best).</p>
+    `;
+  } else if(kind === 'door'){
+    box.innerHTML = `
+      <p class="asset-hint">Skins an interior doorway panel (2.2m × 2.6m). The image
+      is stretched to fill the opening and is visible from both sides.</p>
     `;
   } else {
     box.innerHTML = `
@@ -757,6 +763,7 @@ function readTypeFields(type){
     };
   }
   if(type === 'sign') return {};
+  if(type === 'door') return {};
   return {
     repeatPerMeter: Number($('assetRepeatPerMeter').value)||0,
     rotation: Number($('assetRotation').value)||0,
@@ -816,6 +823,8 @@ function assetToJson(a){
   } else if(a.type === 'facade'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   } else if(a.type === 'sign'){
+    // no extra fields — fixed-size panel, image is the whole skin
+  } else if(a.type === 'door'){
     // no extra fields — fixed-size panel, image is the whole skin
   } else {
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });

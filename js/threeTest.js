@@ -151,6 +151,13 @@ function yardAssetFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].yards && LAYOUT[roomKey].yards[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+function doorKey(wall, offset){
+  return `${wall}@${offset}`;
+}
+function doorAssetFor(roomKey, dKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey];
+  return id ? ASSET_BY_ID[id] : null;
+}
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
 // overrides for fl-nw/fl-ne/fl-sw/fl-se keep working). A cell is dropped if
@@ -323,6 +330,7 @@ function ensureRoomLayout(roomKey){
   if(!r.buildings) r.buildings = {};
   if(!r.signs) r.signs = {};
   if(!r.yards) r.yards = {};
+  if(!r.doors) r.doors = {};
   return r;
 }
 
@@ -375,6 +383,12 @@ function setYardOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.yards[buildingKey] = assetId; else delete r.yards[buildingKey];
+  });
+}
+function setDoorOverride(roomKey, dKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.doors[dKey] = assetId; else delete r.doors[dKey];
   });
 }
 
@@ -1094,6 +1108,55 @@ function buildExitSign(size, wall, offset){
   return mesh;
 }
 
+// A cosmetic textured panel filling a doorway opening (DOOR_W x DOOR_H),
+// double-sided since the same opening is approached from both rooms it
+// connects. Only built when a door asset is assigned -- otherwise the
+// doorway stays the open gap it always was.
+function makeDoorPanelMesh(asset){
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W, DOOR_H), mat);
+  const myGeneration = buildGeneration;
+  textureLoader.load(asset.image, (tex) => {
+    if(buildGeneration !== myGeneration) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat.map = tex;
+    mat.needsUpdate = true;
+  });
+  return mesh;
+}
+function buildDoorPanel(size, wall, offset, asset){
+  const mesh = makeDoorPanelMesh(asset);
+  const { fixed } = wallSpan(size, wall);
+  const y = DOOR_H/2;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed, y, offset); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+let doorMarkerMat = null;
+function doorMarkerMaterial(){
+  if(!doorMarkerMat){
+    doorMarkerMat = new THREE.MeshBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false });
+  }
+  return doorMarkerMat;
+}
+// Editor-only hotspot at the center of a passageway's opening -- a vertical
+// overlay slightly proud of the wall plane (same convention as the facade
+// marker), so it stays visible and clickable even once a door skin is
+// assigned, instead of being hidden behind the panel.
+function buildDoorMarker(size, wall, offset, roomKey, dKey){
+  const { fixed } = wallSpan(size, wall);
+  const marker = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * 0.9, DOOR_H * 0.9), doorMarkerMaterial());
+  const y = DOOR_H/2;
+  const clearance = WALL_THICK/2 + 0.08;
+  if(wall === 'north'){ marker.position.set(offset, y, fixed + clearance); marker.rotation.y = 0; }
+  if(wall === 'south'){ marker.position.set(offset, y, fixed - clearance); marker.rotation.y = Math.PI; }
+  if(wall === 'west'){  marker.position.set(fixed + clearance, y, offset); marker.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  marker.position.set(fixed - clearance, y, offset); marker.rotation.y = -Math.PI/2; }
+  marker.userData = { kind: 'door', roomKey, doorKey: dKey };
+  return marker;
+}
 function drawSignBase(ctx, w, h){
   ctx.fillStyle = '#caa46a';
   ctx.fillRect(0, 0, w, h);
@@ -1344,6 +1407,10 @@ function buildRoom(roomKey){
         const spawn = computeSpawnForExit(roomKey, room, ex);
         exitMeta.push({ box: doorTriggerBox(room.size, wall, ex.offset), target: ex.target, spawn });
         if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
+        const dKey = doorKey(wall, ex.offset);
+        const doorAsset = doorAssetFor(roomKey, dKey);
+        if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+        if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
       }
     }
     if(room.stairs) scene.add(buildStairs(room));
@@ -1613,6 +1680,13 @@ function handleEditTarget(ud){
       onPick: id => setYardOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setYardOverride(ud.roomKey, ud.buildingKey, null)
     });
+  } else if(ud.kind === 'door'){
+    const current = doorAssetFor(ud.roomKey, ud.doorKey);
+    openAssetPicker({
+      allow: ['door'], allowRemove: !!current, onClose,
+      onPick: id => setDoorOverride(ud.roomKey, ud.doorKey, id),
+      onRemove: () => setDoorOverride(ud.roomKey, ud.doorKey, null)
+    });
   }
 }
 
@@ -1624,7 +1698,7 @@ function setEditMode(on){
     const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
     editHud.textContent = outdoor
       ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
-      : 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
+      : 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
     editHud.style.display = on ? 'block' : 'none';
   }
   buildRoom(currentRoomKey);
@@ -1668,7 +1742,7 @@ export async function openThreeTest(containerEl){
   editHud.style.cssText = 'position:absolute;top:8px;left:8px;padding:.35rem .6rem;'
     + 'background:rgba(21,101,192,.85);color:#fff;font:600 .8rem sans-serif;'
     + 'border-radius:4px;pointer-events:none;display:none;z-index:2';
-  editHud.textContent = 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
+  editHud.textContent = 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
   container.appendChild(editHud);
 
   scene = new THREE.Scene();
