@@ -289,6 +289,18 @@ async function setMeta(key, value){
   });
 }
 
+/* wipes just the assets store -- used by the "import assets (replace)" flow,
+   which swaps the whole asset set without touching games/lines/mnemonics. */
+async function clearAssets(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('assets','readwrite');
+    txn.objectStore('assets').clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();

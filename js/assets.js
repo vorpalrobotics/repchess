@@ -101,6 +101,7 @@ function buildShell(){
       <span class="assets-count" id="assetsCount"></span>
       <span class="assets-spacer"></span>
       <button id="assetsNewBtn"><i class="fa-solid fa-plus"></i> New Asset</button>
+      <button id="assetsExportJsonBtn"><i class="fa-solid fa-file-export"></i> Export All as JSON</button>
       <button id="assetsExportBtn"><i class="fa-solid fa-file-export"></i> Export All as Files</button>
     </div>
     <div class="assets-body">
@@ -110,6 +111,7 @@ function buildShell(){
   `;
   $('assetsFilterType').onchange = e => { FILTER_TYPE = e.target.value; renderGrid(); };
   $('assetsNewBtn').onclick = () => openEditor(null);
+  $('assetsExportJsonBtn').onclick = exportAllAsJson;
   $('assetsExportBtn').onclick = exportAllAsFiles;
 }
 
@@ -838,6 +840,17 @@ function assetToJson(a){
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   }
   return json;
+}
+
+// Bundles every asset (full records, base64 images included) into a single
+// JSON file. The `repchessAssets` marker lets the hamburger-menu importer
+// recognize it as an asset bundle (vs a full backup) and offer a replace.
+function exportAllAsJson(){
+  if(!ASSETS.length){ alert('no assets to export'); return; }
+  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets: ASSETS };
+  const stamp = new Date().toISOString().slice(0,10);
+  downloadBlob(new Blob([JSON.stringify(bundle, null, 2)], {type:'application/json'}),
+    `repchess-assets-${stamp}.json`);
 }
 
 async function exportAllAsFiles(){

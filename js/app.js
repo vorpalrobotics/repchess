@@ -2203,6 +2203,21 @@ async function importBackup(data){
   await renderHome();
 }
 
+/* A standalone asset bundle (from the asset manager's "Export All as JSON"),
+   distinct from a full backup. A full backup carries an opening-systems `lines`
+   array; an asset bundle is just the assets, tagged with `repchessAssets`. */
+const isAssetBundle = d =>
+  !!d && (d.repchessAssets != null || (Array.isArray(d.assets) && !Array.isArray(d.lines)));
+
+/* asset-only REPLACE: clears the asset store and writes the bundle's assets,
+   leaving games/lines/mnemonics untouched. Destructive; caller confirms first. */
+async function importAssetBundle(data){
+  if(!Array.isArray(data.assets)) throw new Error('not a valid asset export file');
+  await clearAssets();
+  for(const a of data.assets) await setAsset(a.id, a);
+  log(`replaced assets — imported ${data.assets.length} asset(s)`);
+}
+
 $('menuExport').onclick = ()=>{
   $('menuList').style.display='none';
   exportBackup();
@@ -2215,6 +2230,37 @@ $('backupImport').addEventListener('change', async e=>{
   const f = e.target.files[0];
   e.target.value = '';
   if(!f) return;
+
+  let data;
+  try{ data = JSON.parse(await f.text()); }
+  catch(err){
+    console.error('[import] parse failed',err);
+    log('import failed: not a valid JSON file',true);
+    return;
+  }
+
+  // An asset-only export gets a different, asset-scoped replace flow.
+  if(isAssetBundle(data)){
+    const n = Array.isArray(data.assets) ? data.assets.length : 0;
+    if(!confirm(
+      'IMPORT ASSETS (REPLACE)?\n\n' +
+      `This file contains ${n} asset(s).\n\n` +
+      'Importing assets is currently a REPLACE operation: every asset currently ' +
+      'stored in this browser will be DELETED and replaced with the assets in this ' +
+      'file. (Merge imports are not supported yet.) Your games, opening systems, and ' +
+      'mnemonics are not affected.\n\n' +
+      'This cannot be undone. Continue?'
+    )) return;
+    try{
+      await importAssetBundle(data);
+    }catch(err){
+      console.error('[import] asset import failed',err);
+      log('asset import failed: '+err.message,true);
+    }
+    return;
+  }
+
+  // Otherwise treat it as a full backup restore.
   if(!confirm(
     'RESTORE FULL BACKUP?\n\n' +
     'This will permanently DELETE everything currently stored in this browser — ' +
@@ -2224,7 +2270,6 @@ $('backupImport').addEventListener('change', async e=>{
     'Continue?'
   )) return;
   try{
-    const data = JSON.parse(await f.text());
     await importBackup(data);
   }catch(err){
     console.error('[import] failed',err);
