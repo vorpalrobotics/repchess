@@ -147,6 +147,10 @@ function signAssetFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].signs && LAYOUT[roomKey].signs[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+function yardAssetFor(roomKey, buildingKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].yards && LAYOUT[roomKey].yards[buildingKey];
+  return id ? ASSET_BY_ID[id] : null;
+}
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
 // overrides for fl-nw/fl-ne/fl-sw/fl-se keep working). A cell is dropped if
@@ -318,6 +322,7 @@ function ensureRoomLayout(roomKey){
   if(!r.slots) r.slots = {};
   if(!r.buildings) r.buildings = {};
   if(!r.signs) r.signs = {};
+  if(!r.yards) r.yards = {};
   return r;
 }
 
@@ -364,6 +369,12 @@ function setSignOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.signs[buildingKey] = assetId; else delete r.signs[buildingKey];
+  });
+}
+function setYardOverride(roomKey, buildingKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.yards[buildingKey] = assetId; else delete r.yards[buildingKey];
   });
 }
 
@@ -880,6 +891,49 @@ function buildSignMarker(signPos, roomKey, buildingKey){
   marker.position.set(signPos.x, postH + 0.85/2, signPos.z);
   marker.userData = { kind: 'sign', roomKey, buildingKey };
   return marker;
+}
+
+// The front-yard turf patch for one building: the rectangle of lawn between the
+// door wall and the yard slots, wide enough to span the building's front face
+// plus the flanking slots. With a surface asset assigned it's a tiled grass
+// (or dead-grass, etc.) plane laid just above the base lawn; with none it's an
+// editor-only faint marker so the ground is clickable to re-turf it. Either way
+// it's tagged kind:'yard' so a click opens the surface picker in edit mode.
+let yardMarkerMat = null;
+function yardMarkerMaterial(){
+  if(!yardMarkerMat){
+    yardMarkerMat = new THREE.MeshBasicMaterial({ color: 0x7ad17a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+  }
+  return yardMarkerMat;
+}
+const YARD_PATCH_MARGIN = 1.0;     // extra lawn past the outermost slots, each side
+const YARD_PATCH_OUTSET = 1.8;     // extra depth past the slots, away from the wall
+function buildYardPatch(b, roomKey, buildingKey){
+  const asset = yardAssetFor(roomKey, buildingKey);
+  if(!asset && !editMode) return null;     // nothing to draw -> base lawn shows through
+
+  const { axis, fixed, half } = wallSpan(b.size, b.doorWall);
+  const outSign = (b.doorWall === 'south' || b.doorWall === 'east') ? 1 : -1;
+  const halfAlong = Math.max(half, YARD_SLOT_START + (YARD_SLOT_COUNT - 1) * YARD_SLOT_SPACING + YARD_PATCH_MARGIN);
+  const depth = YARD_SLOT_DEPTH + YARD_PATCH_OUTSET;
+  const alongSize = 2 * halfAlong;
+  const extentX = axis === 'x' ? alongSize : depth;
+  const extentZ = axis === 'x' ? depth : alongSize;
+
+  let mat;
+  if(asset){
+    const rpm = asset.repeatPerMeter || 0.5;
+    mat = assetSurfaceMaterial(asset, extentX * rpm, extentZ * rpm);
+  } else {
+    mat = yardMarkerMaterial();
+  }
+  const patch = new THREE.Mesh(new THREE.PlaneGeometry(extentX, extentZ), mat);
+  patch.rotation.x = -Math.PI/2;
+  const cx = (axis === 'x' ? b.doorOffset : fixed + outSign * depth/2) + b.origin.x;
+  const cz = (axis === 'x' ? fixed + outSign * depth/2 : b.doorOffset) + b.origin.z;
+  patch.position.set(cx, 0.012, cz);       // above base lawn (0), below slot markers (0.02)
+  patch.userData = { kind: 'yard', roomKey, buildingKey };
+  return patch;
 }
 
 // renders a list of slots: placed accessory if one is assigned, else a
@@ -1413,6 +1467,10 @@ function buildRoom(roomKey){
       // edit-mode hotspot: click the front face to set / replace / remove its facade
       if(editMode) scene.add(buildFacadeMarker(size, b, roomKey, buildingKey, facadeWidth, facadeHeight));
 
+      // front-yard turf: a tiled grass (or dead-grass) patch in front of the door
+      const yardPatch = buildYardPatch(b, roomKey, buildingKey);
+      if(yardPatch) scene.add(yardPatch);
+
       // yard landscaping: trees / bushes / flowers / bird baths flanking the door
       buildSlots(room, roomKey, yardSlots(b, buildingKey));
 
@@ -1548,6 +1606,13 @@ function handleEditTarget(ud){
       onPick: id => setSignOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setSignOverride(ud.roomKey, ud.buildingKey, null)
     });
+  } else if(ud.kind === 'yard'){
+    const current = yardAssetFor(ud.roomKey, ud.buildingKey);
+    openAssetPicker({
+      allow: ['surface'], allowRemove: !!current, onClose,
+      onPick: id => setYardOverride(ud.roomKey, ud.buildingKey, id),
+      onRemove: () => setYardOverride(ud.roomKey, ud.buildingKey, null)
+    });
   }
 }
 
@@ -1558,7 +1623,7 @@ function setEditMode(on){
     // outdoors you edit building facades; indoors floors/walls/slots
     const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
     editHud.textContent = outdoor
-      ? 'EDIT MODE — click a building’s front face for its facade, a yard spot to landscape it, or its sign to skin it; [E] or [Esc] to exit'
+      ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
       : 'EDIT MODE — click floor / wall / slot to set; [E] or [Esc] to exit';
     editHud.style.display = on ? 'block' : 'none';
   }
