@@ -123,6 +123,21 @@ let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
 let editHud = null;
 
+/* ---------- in-world layout editor: prop selection (nudge/scale) ----------
+   Clicking an existing accessory selects it instead of opening the picker.
+   While selected, arrow keys nudge its position and +/- scale it; a gear
+   icon (and Enter) reopens the asset picker to swap/remove it. Position/scale
+   deltas live in LAYOUT[roomKey].slotXform[slotId], separate from the plain
+   asset-id map in `slots`, so existing saved layouts need no migration. */
+let selectedProp = null;       // { roomKey, slotId, kind, ground }
+let selectionOutline = null;
+let selectionGear = null;
+let selectionAnchor = null;    // { center:Vector3, halfW, halfH } for gear placement
+let gearTexture = null;
+const NUDGE_STEP = 0.1;
+const SCALE_STEP = 1.02;
+const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
+
 function floorAssetFor(roomKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].floor;
   return id ? ASSET_BY_ID[id] : null;
@@ -327,6 +342,7 @@ function ensureRoomLayout(roomKey){
   const r = LAYOUT[roomKey];
   if(!r.walls) r.walls = {};
   if(!r.slots) r.slots = {};
+  if(!r.slotXform) r.slotXform = {};
   if(!r.buildings) r.buildings = {};
   if(!r.signs) r.signs = {};
   if(!r.yards) r.yards = {};
@@ -365,6 +381,17 @@ function setSlotOverride(roomKey, slotId, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
+    if(!assetId) delete r.slotXform[slotId];   // removed prop loses its nudge/scale too
+  });
+}
+function slotXformFor(roomKey, slotId){
+  const r = LAYOUT[roomKey];
+  return (r && r.slotXform && r.slotXform[slotId]) || null;
+}
+function setSlotXform(roomKey, slotId, xform){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    r.slotXform[slotId] = xform;
   });
 }
 function setBuildingFacadeOverride(roomKey, buildingKey, assetId){
@@ -795,25 +822,30 @@ function yawFacing(x, z, target){
 }
 
 // places a built prop into a slot (floor or wall), tags it for the editor,
-// and registers cylindrical billboards for per-frame facing.
-function placeSlotAccessory(room, slot, asset){
+// and registers cylindrical billboards for per-frame facing. `xform` is the
+// optional per-instance nudge/scale override from LAYOUT[roomKey].slotXform.
+function placeSlotAccessory(room, slot, asset, xform){
+  xform = xform || {};
+  const scale = xform.scale || 1;
   const obj = buildPropAsset(asset);
   if(slot.kind === 'ceiling'){
     // hangs from the ceiling centre; a billboard turns to face the camera, so
     // only its height matters -- drop it so its top is flush with the ceiling.
-    const h = (asset.size && asset.size.h) || 1;
+    const h = ((asset.size && asset.size.h) || 1) * scale;
     obj.position.set(slot.x, room.size.h - h/2 - 0.05, slot.z);
   } else if(slot.kind === 'wall'){
     const { axis, fixed } = wallSpan(room.size, slot.wall);
     const depth = (asset.type === 'extruded') ? (asset.size.d || 0.3) : 0.05;
     const clearance = WALL_THICK/2 + depth/2 + 0.02;
+    const offset = slot.offset + (xform.dOffset || 0);
     let x, z;
-    if(axis === 'x'){ x = slot.offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
-    else { z = slot.offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; }
+    if(axis === 'x'){ x = offset; z = slot.wall === 'north' ? fixed + clearance : fixed - clearance; }
+    else { z = offset; x = slot.wall === 'west' ? fixed + clearance : fixed - clearance; }
     // "ground" wall slots sit a floor-standing piece against the wall (bottom on
-    // the floor); ordinary wall slots centre the piece at the slot's y.
-    let y = slot.y;
-    if(slot.ground){ const h = (asset.size && asset.size.h) || 1; y = floorHeightAt(room, z) + h/2; }
+    // the floor); ordinary wall slots centre the piece at the slot's y plus any
+    // nudge (ground slots ignore dY -- their height is always floor-derived).
+    let y = slot.y + (xform.dY || 0);
+    if(slot.ground){ const h = ((asset.size && asset.size.h) || 1) * scale; y = floorHeightAt(room, z) + h/2; }
     obj.position.set(x, y, z);
     if(!(asset.type === 'billboard-cylindrical' || asset.type === 'billboard-sprite')){
       obj.rotation.y = WALL_INWARD_YAW[slot.wall] || 0;
@@ -821,17 +853,19 @@ function placeSlotAccessory(room, slot, asset){
   } else {
     // extruded / plane / sprite are all centred on their geometry, so sitting
     // one on the floor means raising it by half its height
-    const floorY = floorHeightAt(room, slot.z);
-    const h = (asset.size && asset.size.h) || 1;
-    obj.position.set(slot.x, floorY + h/2, slot.z);
+    const x = slot.x + (xform.dx || 0), z = slot.z + (xform.dz || 0);
+    const floorY = floorHeightAt(room, z);
+    const h = ((asset.size && asset.size.h) || 1) * scale;
+    obj.position.set(x, floorY + h/2, z);
     // Extruded props turn to face the door you walked in through (its image
     // side is local -z). An explicit slot.yaw still wins if one is authored;
     // otherwise aim the front at the entry point. Billboards always face the
     // camera, so they're left alone.
     if(asset.type === 'extruded'){
-      obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(slot.x, slot.z, entryPoint);
+      obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(x, z, entryPoint);
     }
   }
+  obj.scale.setScalar(scale);
   obj.userData = { kind: 'accessory', slotId: slot.id };
   if(asset.type === 'billboard-cylindrical') billboards.push(obj);
   return obj;
@@ -956,7 +990,7 @@ function buildSlots(room, roomKey, slots){
   for(const slot of slots){
     const asset = slotAssetFor(roomKey, slot.id);
     if(asset){
-      scene.add(placeSlotAccessory(room, slot, asset));
+      scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
     } else if(editMode){
       scene.add(buildSlotMarker(room, slot));
     }
@@ -1551,6 +1585,7 @@ function buildRoom(roomKey){
   }
 
   currentRoomKey = roomKey;
+  if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
 }
 
 function enterRoom(roomKey, spawn){
@@ -1589,6 +1624,19 @@ function tick(){
     b.rotation.y = Math.atan2(camera.position.x - b.position.x, camera.position.z - b.position.z);
   }
 
+  // gear icon tracks the selected prop's upper-right corner from the
+  // camera's current viewing angle, so it reads as "upper right" from
+  // wherever the player is standing
+  if(selectionGear && selectionAnchor){
+    const right = cameraRightVec();
+    const margin = 0.18;
+    selectionGear.position.set(
+      selectionAnchor.center.x + right.x * (selectionAnchor.halfW + margin),
+      selectionAnchor.center.y + selectionAnchor.halfH + margin,
+      selectionAnchor.center.z + right.z * (selectionAnchor.halfW + margin)
+    );
+  }
+
   // door teleports are suppressed in edit mode so you can stand in a doorway
   // and edit the wall beside it without being yanked into the next room
   if(!editMode && clock.getElapsedTime() > teleportLockUntil){
@@ -1601,6 +1649,156 @@ function tick(){
   }
 
   renderer.render(scene, camera);
+}
+
+/* ---------- in-world layout editor: prop selection, nudge & scale ---------- */
+
+// camera-relative unit vectors in the x/z ground plane, derived from `yaw`
+// the same way tick()'s movement code does -- used so floor-prop nudges move
+// "forward"/"right" from the player's current viewpoint.
+function cameraForwardVec(){ return { x: -Math.sin(yaw), z: -Math.cos(yaw) }; }
+function cameraRightVec(){ return { x: Math.cos(yaw), z: -Math.sin(yaw) }; }
+
+function clampFloorXZ(size, x, z){
+  const halfW = size.w/2 - 0.3, halfD = size.d/2 - 0.3;
+  return { x: Math.max(-halfW, Math.min(halfW, x)), z: Math.max(-halfD, Math.min(halfD, z)) };
+}
+
+let gearMat = null;
+function buildGearSprite(){
+  if(!gearTexture){
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(20,20,20,0.85)';
+    ctx.beginPath(); ctx.arc(32, 32, 30, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ffd400';
+    for(let i = 0; i < 8; i++){
+      ctx.save();
+      ctx.translate(32, 32);
+      ctx.rotate(i/8 * Math.PI*2);
+      ctx.fillRect(-3, -30, 6, 11);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(32, 32, 18, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(32, 32, 9, 0, Math.PI*2); ctx.fill();
+    gearTexture = new THREE.CanvasTexture(c);
+  }
+  if(!gearMat) gearMat = new THREE.SpriteMaterial({ map: gearTexture, depthTest: false });
+  const sprite = new THREE.Sprite(gearMat);
+  sprite.scale.set(0.35, 0.35, 1);
+  return sprite;
+}
+
+// finds the freshly-built accessory mesh for the current selection (buildRoom
+// rebuilds the whole scene from scratch on every edit) and (re)adds its
+// highlight outline + gear icon. Clears the selection if the prop is gone
+// (e.g. it was just removed via the picker).
+function attachSelectionVisuals(){
+  if(!selectedProp) return;
+  let found = null;
+  scene.traverse(o => { if(!found && o.userData && o.userData.kind === 'accessory' && o.userData.slotId === selectedProp.slotId) found = o; });
+  if(!found){ selectedProp = null; updateEditHud(); return; }
+  const box = new THREE.Box3().setFromObject(found);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const center = new THREE.Vector3(); box.getCenter(center);
+
+  const outline = new THREE.Mesh(
+    new THREE.BoxGeometry(size.x + 0.04, size.y + 0.04, size.z + 0.04),
+    new THREE.MeshBasicMaterial({ color: 0xffd400, wireframe: true, depthTest: false })
+  );
+  outline.position.copy(center);
+  scene.add(outline);
+  selectionOutline = outline;
+
+  const gear = buildGearSprite();
+  gear.userData = { kind: 'prop-gear', slotId: selectedProp.slotId };
+  scene.add(gear);
+  selectionGear = gear;
+  selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
+}
+
+// explicit teardown for deselecting without a full room rebuild (buildRoom's
+// scene.clear() already wipes these when a rebuild happens instead).
+function removeSelectionVisuals(){
+  if(selectionOutline){ scene.remove(selectionOutline); selectionOutline = null; }
+  if(selectionGear){ scene.remove(selectionGear); selectionGear = null; }
+  selectionAnchor = null;
+}
+
+function selectProp(roomKey, slotId){
+  const slot = slotById(ROOMS[roomKey], slotId);
+  if(!slot) return;
+  selectedProp = { roomKey, slotId, kind: slot.kind, ground: !!slot.ground };
+  attachSelectionVisuals();
+  updateEditHud();
+}
+function deselectProp(){
+  if(!selectedProp) return;
+  selectedProp = null;
+  removeSelectionVisuals();
+  updateEditHud();
+}
+
+function openPropManager(roomKey, slotId){
+  const slot = slotById(ROOMS[roomKey], slotId);
+  openAssetPicker({
+    allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true,
+    onClose: () => { inputLocked = false; },
+    onPick: id => setSlotOverride(roomKey, slotId, id),
+    onRemove: () => { deselectProp(); setSlotOverride(roomKey, slotId, null); }
+  });
+}
+
+// arrows nudge the selected prop 0.1m per press. Floor props move along the
+// camera's current forward/right (so "right" always means the player's
+// right); wall props move along the wall's own axes instead, since you're
+// normally facing the wall you're editing -- up/down is true vertical, not
+// camera-relative, and ground (low) wall props only get left/right.
+function nudgeSelected(key){
+  if(!selectedProp) return;
+  const { roomKey, slotId, kind, ground } = selectedProp;
+  const room = ROOMS[roomKey];
+  const slot = slotById(room, slotId);
+  if(!slot) return;
+  const xform = Object.assign({}, slotXformFor(roomKey, slotId));
+
+  if(kind === 'floor'){
+    const fwd = cameraForwardVec(), right = cameraRightVec();
+    let dx = xform.dx || 0, dz = xform.dz || 0;
+    if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
+    const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
+    xform.dx = clamped.x - slot.x;
+    xform.dz = clamped.z - slot.z;
+  } else if(kind === 'wall'){
+    let dOffset = xform.dOffset || 0, dY = xform.dY || 0;
+    if(key === 'ArrowRight') dOffset += NUDGE_STEP;
+    if(key === 'ArrowLeft')  dOffset -= NUDGE_STEP;
+    if(!ground){
+      if(key === 'ArrowUp')   dY += NUDGE_STEP;
+      if(key === 'ArrowDown') dY -= NUDGE_STEP;
+    }
+    const { half } = wallSpan(room.size, slot.wall);
+    const maxOffset = half - 0.4;
+    dOffset = Math.max(-maxOffset - slot.offset, Math.min(maxOffset - slot.offset, dOffset));
+    xform.dOffset = dOffset;
+    xform.dY = ground ? 0 : Math.max(0.3 - slot.y, Math.min(room.size.h - 0.3 - slot.y, dY));
+  } else {
+    return; // ceiling slot: only scaling applies, no nudge
+  }
+  setSlotXform(roomKey, slotId, xform);
+}
+
+function scaleSelected(factor){
+  if(!selectedProp) return;
+  const { roomKey, slotId } = selectedProp;
+  const xform = Object.assign({}, slotXformFor(roomKey, slotId));
+  xform.scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, (xform.scale || 1) * factor));
+  setSlotXform(roomKey, slotId, xform);
 }
 
 /* ---------- in-world layout editor: click handling ---------- */
@@ -1623,10 +1821,26 @@ function onCanvasClick(e){
     const ud = findInteractive(hit.object);
     if(ud){ handleEditTarget(ud); return; }
   }
+  // clicked nothing interactive (e.g. open floor/sky past everything) --
+  // treat it as "click away" and drop the current selection, if any
+  if(selectedProp) deselectProp();
 }
 
 function handleEditTarget(ud){
   const roomKey = currentRoomKey;
+
+  if(ud.kind === 'prop-gear'){
+    inputLocked = true;
+    openPropManager(roomKey, ud.slotId);
+    return;
+  }
+  if(ud.kind === 'accessory'){
+    if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
+    else selectProp(roomKey, ud.slotId);
+    return;
+  }
+  if(selectedProp){ deselectProp(); return; }
+
   inputLocked = true;
   const onClose = () => { inputLocked = false; };
   if(ud.kind === 'floor'){
@@ -1651,13 +1865,6 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ud.allow, onClose,
       onPick: id => setSlotOverride(roomKey, ud.slotId, id)
-    });
-  } else if(ud.kind === 'accessory'){
-    const slot = slotById(ROOMS[roomKey], ud.slotId);
-    openAssetPicker({
-      allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true, onClose,
-      onPick: id => setSlotOverride(roomKey, ud.slotId, id),
-      onRemove: () => setSlotOverride(roomKey, ud.slotId, null)
     });
   } else if(ud.kind === 'facade'){
     const current = buildingFacadeFor(ud.roomKey, ud.buildingKey);
@@ -1690,17 +1897,27 @@ function handleEditTarget(ud){
   }
 }
 
+function updateEditHud(){
+  if(!editHud) return;
+  if(selectedProp){
+    editHud.textContent = 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
+    editHud.style.display = 'block';
+    return;
+  }
+  if(!editMode){ editHud.style.display = 'none'; return; }
+  // outdoors you edit building facades; indoors floors/walls/slots
+  const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
+  editHud.textContent = outdoor
+    ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
+    : 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
+  editHud.style.display = 'block';
+}
+
 function setEditMode(on){
   editMode = on;
+  if(!on) deselectProp();
   if(renderer) renderer.domElement.style.cursor = on ? 'crosshair' : 'default';
-  if(editHud){
-    // outdoors you edit building facades; indoors floors/walls/slots
-    const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
-    editHud.textContent = outdoor
-      ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
-      : 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
-    editHud.style.display = on ? 'block' : 'none';
-  }
+  updateEditHud();
   buildRoom(currentRoomKey);
 }
 
@@ -1714,6 +1931,17 @@ function onResize(){
 }
 
 function onKeyDown(e){
+  if(selectedProp && !inputLocked){
+    if(e.key === 'Escape'){ deselectProp(); return; }
+    if(e.key === 'Enter'){ inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); return; }
+    if(e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+      nudgeSelected(e.key);
+      return;
+    }
+    if(e.key === '+' || e.key === '='){ scaleSelected(SCALE_STEP); return; }
+    if(e.key === '-' || e.key === '_'){ scaleSelected(1/SCALE_STEP); return; }
+    return; // swallow everything else while a prop is selected (no walking/turning)
+  }
   if(e.key === 'e' || e.key === 'E'){ setEditMode(!editMode); return; }
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
   if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
@@ -1794,6 +2022,10 @@ export function closeThreeTest(){
   editMode = false;
   inputLocked = false;
   billboards = [];
+  selectedProp = null;
+  selectionOutline = null;
+  selectionGear = null;
+  selectionAnchor = null;
   editHud = null;
   scene = null; camera = null; clock = null; container = null;
 }
