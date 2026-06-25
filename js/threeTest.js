@@ -315,6 +315,7 @@ function roomSlots(room){
     ...doorFlankFloorSlots(room),
     ...lowWallSlots(room),
     ...ceilingSlots(room),
+    ...mnemonicSlots(room),
     ...(room.slots || [])
   ];
 }
@@ -1049,6 +1050,10 @@ function buildYardPatch(b, roomKey, buildingKey){
 // marker (only in edit mode, so normal walking is unchanged).
 function buildSlots(room, roomKey, slots){
   for(const slot of slots){
+    if(slot.kind === 'mnemonic'){
+      scene.add(placeMnemonicSlot(roomKey, slot));
+      continue;
+    }
     const asset = slotAssetFor(roomKey, slot.id);
     if(asset){
       scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
@@ -1166,25 +1171,27 @@ const DEMO_MNEMONICS = {
   ]
 };
 
-function makeImageBillboard(src){
-  const mat = new THREE.SpriteMaterial({ color: 0xffffff, alphaTest: 0.5 });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(1.4, 1.4, 1);            // square fallback until the image's aspect is known
-  const myGen = buildGeneration;
-  textureLoader.load(src, (tex) => {
-    if(buildGeneration !== myGen) return;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    mat.map = tex; mat.needsUpdate = true;
-    const im = tex.image;
-    if(im && im.width && im.height){
-      const H = 1.5;
-      sprite.scale.set(H * im.width / im.height, H, 1);
-    }
-  });
-  return sprite;
+// mnemonic billboards are positioned/sized like any other accessory: a
+// synthetic floor-less "slot" (kind 'mnemonic') folded into roomSlots() so
+// the existing select/nudge/scale/persist machinery (LAYOUT[roomKey].slotXform,
+// keyed by slot id) just works for them with no changes elsewhere.
+function roomKeyOf(room){
+  return Object.keys(ROOMS).find(k => ROOMS[k] === room);
+}
+function mnemonicSlots(room){
+  const moves = DEMO_MNEMONICS[roomKeyOf(room)];
+  if(!moves) return [];
+  return moves.map((m, i) => ({ id: `mnem-${i}`, kind: 'mnemonic', x: m.pos.x, y: m.pos.y, z: m.pos.z, move: m }));
 }
 
-function makeTextBillboard(text){
+function applySpriteContentScale(sprite){
+  const userScale = sprite.userData.userScale || 1;
+  const H = sprite.userData.baseH || 1;
+  const aspect = sprite.userData.baseAspect || 1;
+  sprite.scale.set(H * aspect * userScale, H * userScale, 1);
+}
+
+function setSpriteToText(sprite, text){
   const canvas = document.createElement('canvas');
   let ctx = canvas.getContext('2d');
   const font = 'bold 120px sans-serif';
@@ -1206,33 +1213,53 @@ function makeTextBillboard(text){
   ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  sprite.material.map = tex;
+  sprite.material.alphaTest = 0;
+  sprite.material.color.set(0xffffff);
+  sprite.material.needsUpdate = true;
+  sprite.userData.baseH = 0.8;
+  sprite.userData.baseAspect = canvas.width / canvas.height;
+  applySpriteContentScale(sprite);
+}
+
+function setSpriteToImage(sprite, src){
+  sprite.material.alphaTest = 0.5;
+  const myGen = buildGeneration;
+  textureLoader.load(src, (tex) => {
+    if(buildGeneration !== myGen) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    sprite.material.map = tex;
+    sprite.material.needsUpdate = true;
+    const im = tex.image;
+    sprite.userData.baseH = 1.5;
+    sprite.userData.baseAspect = (im && im.width && im.height) ? im.width / im.height : 1;
+    applySpriteContentScale(sprite);
+  });
+}
+
+// builds the movable sprite for one mnemonic slot: position/scale come from
+// the slot's base placement plus any saved nudge/scale xform (same pattern as
+// placeSlotAccessory), content comes from the Mnemonics-screen data, falling
+// back from graphic -> word -> algebraic notation.
+function placeMnemonicSlot(roomKey, slot){
+  const xform = slotXformFor(roomKey, slot.id) || {};
+  const move = slot.move;
+  const mat = new THREE.SpriteMaterial({ color: 0xffffff, transparent: true });
   const sprite = new THREE.Sprite(mat);
-  const H = 0.8;
-  sprite.scale.set(H * canvas.width / canvas.height, H, 1);
-  return sprite;
-}
-
-function buildMnemonicBillboard(move, mnemonicsBySquare){
-  const entry = mnemonicsBySquare[move.to];
-  const img = entry && entry[move.piece + 'Img'];
-  if(img) return makeImageBillboard(img);
-  const word = entry && entry[move.piece];
-  return makeTextBillboard(word && word.trim() ? word.trim() : move.san);
-}
-
-function placeDemoMnemonics(roomKey){
-  const moves = DEMO_MNEMONICS[roomKey];
-  if(!moves) return;
+  sprite.userData = { kind: 'accessory', slotId: slot.id, userScale: xform.scale || 1 };
+  sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
+  setSpriteToText(sprite, move.san); // immediate fallback while mnemonic data loads
   const myGen = buildGeneration;
   getAllMnemonics().then((mnemonicsBySquare) => {
-    if(buildGeneration !== myGen || !scene) return;
-    for(const m of moves){
-      const bb = buildMnemonicBillboard(m, mnemonicsBySquare);
-      bb.position.set(m.pos.x, m.pos.y, m.pos.z);
-      scene.add(bb);
-    }
+    if(buildGeneration !== myGen) return;
+    const entry = mnemonicsBySquare[move.to];
+    const img = entry && entry[move.piece + 'Img'];
+    const word = entry && entry[move.piece];
+    if(img) setSpriteToImage(sprite, img);
+    else if(word && word.trim()) setSpriteToText(sprite, word.trim());
+    // else: already showing the algebraic-notation fallback set above
   });
+  return sprite;
 }
 
 function makeLabelMesh(text){
@@ -1616,7 +1643,6 @@ function buildRoom(roomKey){
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
     buildSlots(room, roomKey, roomSlots(room));
-    placeDemoMnemonics(roomKey);
   } else {
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
@@ -1894,11 +1920,15 @@ function attachSelectionVisuals(){
   scene.add(outline);
   selectionOutline = outline;
 
-  const gear = buildGearSprite();
-  gear.userData = { kind: 'prop-gear', slotId: selectedProp.slotId };
-  scene.add(gear);
-  selectionGear = gear;
-  selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
+  // mnemonic billboards aren't asset-based, so there's nothing for the gear
+  // icon's picker to do -- skip it, the outline alone shows the selection.
+  if(selectedProp.kind !== 'mnemonic'){
+    const gear = buildGearSprite();
+    gear.userData = { kind: 'prop-gear', slotId: selectedProp.slotId };
+    scene.add(gear);
+    selectionGear = gear;
+    selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
+  }
 }
 
 // explicit teardown for deselecting without a full room rebuild (buildRoom's
@@ -1969,6 +1999,19 @@ function nudgeSelected(key){
     dOffset = Math.max(-maxOffset - slot.offset, Math.min(maxOffset - slot.offset, dOffset));
     xform.dOffset = dOffset;
     xform.dY = ground ? 0 : Math.max(0.3 - slot.y, Math.min(room.size.h - 0.3 - slot.y, dY));
+  } else if(kind === 'mnemonic'){
+    // floats free in the room rather than resting on the floor, so arrows move
+    // it horizontally (camera-relative, same convention as floor props) and
+    // PageUp/PageDown move it vertically.
+    const fwd = cameraForwardVec(), right = cameraRightVec();
+    let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
+    if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
+    if(key === 'PageUp')      dy += NUDGE_STEP;
+    if(key === 'PageDown')    dy -= NUDGE_STEP;
+    xform.dx = dx; xform.dz = dz; xform.dy = dy;
   } else {
     return; // ceiling slot: only scaling applies, no nudge
   }
@@ -2082,7 +2125,9 @@ function handleEditTarget(ud){
 function updateEditHud(){
   if(!editHud) return;
   if(selectedProp){
-    editHud.textContent = 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
+    editHud.textContent = selectedProp.kind === 'mnemonic'
+      ? 'SELECTED — arrows: move · PageUp/PageDown: height · +/-: scale · Esc: deselect'
+      : 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
     editHud.style.display = 'block';
     return;
   }
@@ -2125,8 +2170,16 @@ function onKeyDown(e){
   if(foreignModalOpen) return;
   if(selectedProp && !inputLocked){
     if(e.key === 'Escape'){ deselectProp(); return; }
-    if(e.key === 'Enter'){ inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); return; }
+    // mnemonic billboards aren't asset-based -- there's nothing for the
+    // picker to swap, so Enter is a no-op for them.
+    if(e.key === 'Enter' && selectedProp.kind !== 'mnemonic'){
+      inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); return;
+    }
     if(e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+      nudgeSelected(e.key);
+      return;
+    }
+    if(selectedProp.kind === 'mnemonic' && (e.key === 'PageUp' || e.key === 'PageDown')){
       nudgeSelected(e.key);
       return;
     }
