@@ -301,10 +301,17 @@ function renderTypeFields(type, a){
       <div class="field"><label>Metalness</label><input type="number" step="0.01" min="0" max="1" id="assetMetalness" value="${(a && a.metalness) ?? 0}"></div>
     `;
   } else if(kind === 'sign'){
+    const size = (a && a.size) || {};
     box.innerHTML = `
-      <p class="asset-hint">Skins the house-name sign panel (3.4m × 0.85m). The image
-      is stretched to fill the panel and the name text is drawn on top, so leave a
-      clear, readable area for it (centered works best).</p>
+      <p class="asset-hint">Skins the whole freestanding sign at the size below — the
+      image replaces the entire sign (posts included), so draw the legs/stand into the
+      art. The name text is drawn over the upper third (to clear the legs), so leave a
+      clear, readable band across the top.</p>
+      <div class="assets-size-row">
+        <div class="field"><label>Width (m)</label><input type="number" step="0.01" id="assetSizeW" value="${size.w ?? 3.4}"></div>
+        <button type="button" class="size-lock" id="sizeLockBtn" title="Lock width:height to the image's aspect ratio"></button>
+        <div class="field"><label>Height (m)</label><input type="number" step="0.01" id="assetSizeH" value="${size.h ?? 2}"></div>
+      </div>
     `;
   } else if(kind === 'door'){
     box.innerHTML = `
@@ -772,7 +779,7 @@ function readTypeFields(type){
       metalness: Number($('assetMetalness').value),
     };
   }
-  if(type === 'sign') return {};
+  if(type === 'sign') return { size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 } };
   if(type === 'door') return {};
   return {
     repeatPerMeter: Number($('assetRepeatPerMeter').value)||0,
@@ -833,7 +840,7 @@ function assetToJson(a){
   } else if(a.type === 'facade'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   } else if(a.type === 'sign'){
-    // no extra fields — fixed-size panel, image is the whole skin
+    Object.assign(json, { size: a.size });
   } else if(a.type === 'door'){
     // no extra fields — fixed-size panel, image is the whole skin
   } else {

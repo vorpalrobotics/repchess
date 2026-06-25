@@ -1178,10 +1178,14 @@ function signMarkerMaterial(){
   }
   return signMarkerMat;
 }
-function buildSignMarker(signPos, roomKey, buildingKey){
-  const postH = 1.1;
-  const marker = new THREE.Mesh(new THREE.PlaneGeometry(3.4 * 1.1, 0.85 * 1.4), signMarkerMaterial());
-  marker.position.set(signPos.x, postH + 0.85/2, signPos.z);
+function buildSignMarker(signPos, roomKey, buildingKey, size){
+  // A full-board skin covers its own footprint; the legacy panel-on-posts needs
+  // a slightly oversized hotspot floating where the panel sits.
+  const w = size ? size.w : 3.4 * 1.1;
+  const h = size ? size.h : 0.85 * 1.4;
+  const cy = size ? size.h / 2 : 1.1 + 0.85/2;
+  const marker = new THREE.Mesh(new THREE.PlaneGeometry(w, h), signMarkerMaterial());
+  marker.position.set(signPos.x, cy, signPos.z);
   marker.userData = { kind: 'sign', roomKey, buildingKey };
   return marker;
 }
@@ -1560,39 +1564,57 @@ function drawSignBase(ctx, w, h){
   ctx.lineWidth = 10;
   ctx.strokeRect(5, 5, w - 10, h - 10);
 }
-function drawSignText(ctx, w, h, text){
+function drawSignText(ctx, w, h, text, textY, fontPx){
+  textY = (textY != null) ? textY : h/2 + 4;
+  fontPx = fontPx || 54;
   ctx.fillStyle = '#2b1d10';
-  ctx.font = 'bold 54px serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, w/2, h/2 + 4);
+  // shrink long names so they never overrun the board's printable width
+  let size = fontPx;
+  ctx.font = `bold ${size}px serif`;
+  while(size > 12 && ctx.measureText(text).width > w * 0.9){ size -= 2; ctx.font = `bold ${size}px serif`; }
+  ctx.fillText(text, w/2, textY);
 }
 // Builds the sign panel mesh. Draws the flat tan background + text
 // immediately (so the panel is never blank), then if a skin image is
 // supplied, loads it asynchronously and redraws the skin as the
 // background with the name text layered on top once it's ready.
-function makeSignMesh(text, skinSrc){
+// `board` (optional {w,h} in meters) switches from the small panel-on-posts
+// look to a full freestanding sign: the canvas aspect matches the board so the
+// skin isn't distorted, and the name is drawn across the upper third to clear
+// the legs that the skin art paints in. Without `board` it's the legacy
+// 3.4m × 0.85m panel with the name centered.
+function makeSignMesh(text, skinSrc, board){
+  const px = 150;
+  const meshW = board ? board.w : 3.4;
+  const meshH = board ? board.h : 0.85;
   const canvas = document.createElement('canvas');
-  canvas.width = 512; canvas.height = 128;
+  canvas.width = Math.max(64, Math.round(meshW * px));
+  canvas.height = Math.max(32, Math.round(meshH * px));
+  const cw = canvas.width, ch = canvas.height;
+  const textY = board ? Math.round(ch * 0.17) : ch/2 + 4;
+  const fontPx = board ? Math.round(ch * 0.13) : 54;
   const ctx = canvas.getContext('2d');
-  drawSignBase(ctx, canvas.width, canvas.height);
-  drawSignText(ctx, canvas.width, canvas.height, text);
+  drawSignBase(ctx, cw, ch);
+  drawSignText(ctx, cw, ch, text, textY, fontPx);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  // transparent so a skin with cut-out legs/edges shows the world behind it
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
   if(skinSrc){
     const myGeneration = buildGeneration;
     const img = new Image();
     img.onload = () => {
       if(buildGeneration !== myGeneration || !scene) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      drawSignText(ctx, canvas.width, canvas.height, text);
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.drawImage(img, 0, 0, cw, ch);
+      drawSignText(ctx, cw, ch, text, textY, fontPx);
       tex.needsUpdate = true;
     };
     img.src = skinSrc;
   }
-  return new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), mat);
+  return new THREE.Mesh(new THREE.PlaneGeometry(meshW, meshH), mat);
 }
 
 // Mounts a mesh flush against a wall facing *outward* (away from the
@@ -1675,8 +1697,21 @@ function buildStairs(room){
 // apartment-complex sign out on the lawn -- not mounted on the building
 // wall. Faces +z (south, toward the street) by default, same orientation
 // convention as mountOutward's south case.
-function buildGroundSign(text, skinSrc){
+function buildGroundSign(text, asset){
   const group = new THREE.Group();
+  const skinSrc = asset && asset.image ? asset.image : null;
+  const size = (asset && asset.size && asset.size.w > 0 && asset.size.h > 0) ? asset.size : null;
+  if(skinSrc && size){
+    // Full-board skin: the image IS the whole sign (legs painted into the art),
+    // so there are no separate posts. The board stands on the ground (bottom at
+    // y=0) and the name prints across its upper third, clearing the legs.
+    const panel = makeSignMesh(text, skinSrc, size);
+    panel.position.y = size.h / 2;
+    group.add(panel);
+    return group;
+  }
+  // Legacy look: a small panel held up on two wooden posts (no skin, or a
+  // pre-size skin with no authored dimensions).
   const postMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
   const postH = 1.1;
   const postGeo = new THREE.BoxGeometry(0.15, postH, 0.15);
@@ -1927,11 +1962,11 @@ function buildRoom(roomKey){
       const signAsset = signAssetFor(roomKey, signId);
       const off = signPosFor(roomKey, signId) || {};
       const signPos = { x: s.x + (off.dx || 0), z: s.z + (off.dz || 0) };
-      const signGroup = buildGroundSign(s.text, signAsset ? signAsset.image : null);
+      const signGroup = buildGroundSign(s.text, signAsset);
       signGroup.position.set(signPos.x, 0, signPos.z);
       signGroup.userData = { kind: 'sign', roomKey, buildingKey: signId };
       scene.add(signGroup);
-      if(editMode) scene.add(buildSignMarker(signPos, roomKey, signId));
+      if(editMode) scene.add(buildSignMarker(signPos, roomKey, signId, signAsset && signAsset.size));
     });
     // every building on this street gets its own exterior, door and sign
     for(const b of room.buildings){
@@ -1994,7 +2029,7 @@ function buildRoom(roomKey){
         const signAsset = signAssetFor(roomKey, buildingKey);
         const off = signPosFor(roomKey, buildingKey) || {};
         const signPos = { x: b.origin.x + 6 + (off.dx || 0), z: b.origin.z + size.d/2 + 1.6 + (off.dz || 0) };
-        const signGroup = buildGroundSign(b.sign, signAsset ? signAsset.image : null);
+        const signGroup = buildGroundSign(b.sign, signAsset);
         signGroup.position.set(signPos.x, 0, signPos.z);
         // tag the whole sign so clicking any part of it selects the sign for
         // nudging (arrows) -- the gear icon then opens the skin picker.
@@ -2002,7 +2037,7 @@ function buildRoom(roomKey){
         scene.add(signGroup);
         // edit-mode hotspot: a translucent panel over the sign so it reads as
         // editable even before it's clicked (same kind, so it routes the same).
-        if(editMode) scene.add(buildSignMarker(signPos, roomKey, buildingKey));
+        if(editMode) scene.add(buildSignMarker(signPos, roomKey, buildingKey, signAsset && signAsset.size));
       }
 
       // Movie-set facade: lay the image flat over the whole face (a single
