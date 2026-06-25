@@ -749,6 +749,11 @@ function buildExtrudedAsset(asset){
     });
     // ExtrudeGeometry groups material 0 = front/back caps, 1 = side walls.
     const mesh = new THREE.Mesh(geo, [capMat, sideMat]);
+    if(asset.orientation === 'flat'){
+      // tip the standing cutout onto its back so the cap (was facing -z) now
+      // faces +y -- a rug/floor-covering lying flat with its image up.
+      mesh.rotation.x = Math.PI / 2;
+    }
     group.add(mesh);
   };
   img.src = asset.image;
@@ -879,14 +884,22 @@ function placeSlotAccessory(room, slot, asset, xform){
     // one on the floor means raising it by half its height
     const x = slot.x + (xform.dx || 0), z = slot.z + (xform.dz || 0);
     const floorY = floorHeightAt(room, z);
-    const h = ((asset.size && asset.size.h) || 1) * scale;
-    obj.position.set(x, floorY + h/2, z);
+    const flat = asset.type === 'extruded' && asset.orientation === 'flat';
+    if(flat){
+      // a flat floor covering rests on its thickness, not its (now-horizontal) height
+      const d = ((asset.size && asset.size.d) || 0.3) * scale;
+      obj.position.set(x, floorY + d/2, z);
+    } else {
+      const h = ((asset.size && asset.size.h) || 1) * scale;
+      obj.position.set(x, floorY + h/2, z);
+    }
     // Extruded props turn to face the door you walked in through (its image
     // side is local -z). An explicit slot.yaw still wins if one is authored;
     // otherwise aim the front at the entry point. Billboards always face the
-    // camera, so they're left alone.
+    // camera, so they're left alone. Flat floor coverings have no "front" to
+    // aim, so they just take the authored yaw (defaulting to 0).
     if(asset.type === 'extruded'){
-      obj.rotation.y = slot.yaw != null ? slot.yaw : yawFacing(x, z, entryPoint);
+      obj.rotation.y = slot.yaw != null ? slot.yaw : (flat ? 0 : yawFacing(x, z, entryPoint));
     }
   }
   obj.scale.setScalar(scale);

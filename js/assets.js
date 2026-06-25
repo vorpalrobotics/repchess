@@ -257,6 +257,13 @@ function renderTypeFields(type, a){
           <button type="button" class="eyedropper-btn" id="assetEyedropperBtn" title="Pick side color from the image"><i class="fa-solid fa-eye-dropper"></i></button>
         </div>
       </div>
+      <div class="field">
+        <label>Orientation</label>
+        <select id="assetOrientation">
+          <option value="standing" ${(!a || a.orientation !== 'flat') ? 'selected' : ''}>Standing (cutout)</option>
+          <option value="flat" ${(a && a.orientation === 'flat') ? 'selected' : ''}>Floor covering (lies flat)</option>
+        </select>
+      </div>
     `;
   } else if(kind === 'prop'){
     box.innerHTML = `
@@ -748,6 +755,7 @@ function readTypeFields(type){
     return {
       size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0, d: Number($('assetSizeD').value)||0 },
       sideColor: $('assetSideColor').value.trim() || 'auto',
+      orientation: $('assetOrientation').value === 'flat' ? 'flat' : 'standing',
     };
   }
   if(type === 'billboard-cylindrical' || type === 'billboard-sprite'){
@@ -817,7 +825,7 @@ function downloadBlob(blob, filename){
 function assetToJson(a){
   const json = { id: a.id, type: a.type, texture: `${a.id}.png` };
   if(a.type === 'extruded'){
-    Object.assign(json, { size: a.size, sideColor: a.sideColor });
+    Object.assign(json, { size: a.size, sideColor: a.sideColor, orientation: a.orientation || 'standing' });
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'facade'){

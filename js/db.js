@@ -229,7 +229,7 @@ async function setMnemonicSquare(square, patch){
 */
 const BLANK_ASSET = {
   id:'', type:'extruded', image:'', resolution:'normal',
-  size:{w:0.5,h:1,d:0.5}, sideColor:'#888888',
+  size:{w:0.5,h:1,d:0.5}, sideColor:'#888888', orientation:'standing',
   repeatPerMeter:0.5, rotation:0, tint:null, roughness:0.85, metalness:0,
   createdAt:0, updatedAt:0
 };
