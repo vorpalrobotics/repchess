@@ -30,7 +30,7 @@ const ROOMS = {
       // sits just north of London Avenue, so walking up the avenue and
       // turning to face north brings you right up to its front door
       { target: 'start', sign: 'Chigoren Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
-        color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 20, z: -14 }, doorWall: 'south', doorOffset: 0 }
+        color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 20, z: -19 }, doorWall: 'south', doorOffset: 0 }
     ]
   },
   start: {
@@ -452,6 +452,29 @@ function clampToRoom(size, x, z){
 // teleport trigger (doorTriggerBox, built with a 1m pad) reaches a meter
 // outside the wall, well before this box would block you, so a legitimate
 // approach through the door always teleports you before collision engages.
+// Extends a building's collision box rearward (away from its door wall) until
+// its back face meets the room boundary, so the hollow back of this movie-set
+// box can never be reached -- the player can stand in front of it and to either
+// side, but the strip behind it (where the fakery shows) is walled off. The
+// front face (and thus the door and its trigger) is left exactly where it was.
+function sealBehindBuilding(collider, roomSize){
+  const { origin, size, doorWall, doorOffset } = collider;
+  const o = { x: origin.x, z: origin.z };
+  const s = { w: size.w, d: size.d, h: size.h };
+  if(doorWall === 'south' || doorWall === 'north'){
+    const front = doorWall === 'south' ? origin.z + size.d/2 : origin.z - size.d/2;
+    const back  = doorWall === 'south' ? -roomSize.d/2 : roomSize.d/2;
+    s.d = Math.abs(front - back);
+    o.z = (front + back) / 2;
+  } else {
+    const front = doorWall === 'east' ? origin.x + size.w/2 : origin.x - size.w/2;
+    const back  = doorWall === 'east' ? -roomSize.w/2 : roomSize.w/2;
+    s.w = Math.abs(front - back);
+    o.x = (front + back) / 2;
+  }
+  return { origin: o, size: s, doorWall, doorOffset };
+}
+
 function clampBuildings(x, z){
   for(const c of currentBuildingColliders){
     const halfW = c.size.w/2 + PLAYER_RADIUS, halfD = c.size.d/2 + PLAYER_RADIUS;
@@ -1552,8 +1575,11 @@ function buildRoom(roomKey){
 
       // block movement through this building's walls from the street -- only
       // its own door opening lets you through (the door's teleport trigger,
-      // below, has a wider catch zone than this box so it always fires first)
-      currentBuildingColliders.push({ origin: b.origin, size, doorWall: b.doorWall, doorOffset: b.doorOffset });
+      // below, has a wider catch zone than this box so it always fires first).
+      // The collider is also extended back to the room edge so you can't walk
+      // around behind the building, where the movie-set box gives the fake away.
+      currentBuildingColliders.push(
+        sealBehindBuilding({ origin: b.origin, size, doorWall: b.doorWall, doorOffset: b.doorOffset }, room.size));
 
       const buildingTex = makeBrickTexture(b.color);
       for(const wall of ['north','south','east','west']){
