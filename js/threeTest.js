@@ -1618,11 +1618,12 @@ function buildRoom(roomKey){
   if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
 }
 
-function enterRoom(roomKey, spawn){
+function enterRoom(roomKey, spawn, preserveYaw){
   // remember where we came in *before* building, so floor props can face it
   entryPoint = { x: spawn.x, z: spawn.z };
+  const keepYaw = preserveYaw ? yaw : spawn.yaw;
   buildRoom(roomKey);
-  pos.x = spawn.x; pos.z = spawn.z; yaw = spawn.yaw;
+  pos.x = spawn.x; pos.z = spawn.z; yaw = keepYaw;
   teleportLockUntil = clock.getElapsedTime() + 0.6;
 }
 
@@ -1670,11 +1671,16 @@ function tick(){
   }
 
   // door teleports are suppressed in edit mode so you can stand in a doorway
-  // and edit the wall beside it without being yanked into the next room
+  // and edit the wall beside it without being yanked into the next room.
+  // If the player backed through the door (walking backward, still facing
+  // into the room they're leaving) rather than walking through it forward,
+  // keep their current yaw instead of snapping to the door's canonical
+  // facing -- otherwise backing out spins you a near-180 to face the
+  // direction you were just walking away from.
   if(!editMode && clock.getElapsedTime() > teleportLockUntil){
     for(const m of exitMeta){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
-        enterRoom(m.target, m.spawn);
+        enterRoom(m.target, m.spawn, move < 0);
         break;
       }
     }
