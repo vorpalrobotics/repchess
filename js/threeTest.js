@@ -1685,22 +1685,34 @@ function buildGroundSign(text, skinSrc){
 // a-continuous-ramp split that buildStairs already uses for room.stairs).
 // The far end is left open -- like an ordinary door, the "next room" is an
 // illusion stitched together by enterRoom's teleport, not real geometry.
-function buildStairCorridor(room, wall, offset){
+function buildStairCorridor(room, wall, offset, surfaceAsset){
   const { axis, fixed } = wallSpan(room.size, wall);
   const outSign = fixed >= 0 ? 1 : -1;
   const { rise, steps, depth } = stairCorridorGeom(room);
   const dHalf = DOOR_W/2;
   const ceilingH = rise + EYE_HEIGHT + 1.0; // generous headroom above the highest step
   const group = new THREE.Group();
-  const wallTex = makeBrickTexture(room.color);
-  const wallMat = new THREE.MeshStandardMaterial({ map: wallTex });
+  // The corridor's side walls and ceiling can't be individually clicked (the
+  // doorway's marker sits in front of them), so they always inherit whatever
+  // skin the parent wall is wearing -- skin that wall and the corridor follows.
+  const wallTex = surfaceAsset ? null : makeBrickTexture(room.color);
+  const wallMatFor = (segW, segH) => {
+    if(surfaceAsset){
+      const rpm = surfaceAsset.repeatPerMeter || 0.5;
+      return assetSurfaceMaterial(surfaceAsset, segW * rpm, segH * rpm);
+    }
+    const tex = wallTex.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(Math.max(1, Math.round(segW/2.5)), Math.max(1, Math.round(segH/2)));
+    return new THREE.MeshStandardMaterial({ map: tex });
+  };
 
   for(const side of [-1, 1]){
     const across = offset + side*dHalf;
     let geo, x, z;
     if(axis === 'x'){ geo = new THREE.BoxGeometry(WALL_THICK, ceilingH, depth); x = across; z = fixed + outSign*depth/2; }
     else { geo = new THREE.BoxGeometry(depth, ceilingH, WALL_THICK); x = fixed + outSign*depth/2; z = across; }
-    const sideWall = new THREE.Mesh(geo, wallMat);
+    const sideWall = new THREE.Mesh(geo, wallMatFor(depth, ceilingH));
     sideWall.position.set(x, ceilingH/2, z);
     group.add(sideWall);
   }
@@ -1709,7 +1721,7 @@ function buildStairCorridor(room, wall, offset){
     let geo, x, z;
     if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W, WALL_THICK, depth); x = offset; z = fixed + outSign*depth/2; }
     else { geo = new THREE.BoxGeometry(depth, WALL_THICK, DOOR_W); x = fixed + outSign*depth/2; z = offset; }
-    const ceiling = new THREE.Mesh(geo, wallMat);
+    const ceiling = new THREE.Mesh(geo, wallMatFor(depth, DOOR_W));
     ceiling.position.set(x, ceilingH + WALL_THICK/2, z);
     group.add(ceiling);
   }
@@ -1871,7 +1883,7 @@ function buildRoom(roomKey){
         const dKey = doorKey(wall, ex.offset);
         const doorAsset = doorAssetFor(roomKey, dKey);
         if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-        if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset));
+        if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall)));
         if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
       }
     }
