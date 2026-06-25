@@ -2456,7 +2456,7 @@ function renderRoomGeomDialog(ov, roomKey){
           <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomH" value="${h}" style="width:6em">
         </label>
       </div>
-      <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab"></canvas>
+      <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .7rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a green doorway to nudge it or move it to another wall. Hatched = stairs.</p>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <button id="roomGeomResetBtn">Reset</button>
@@ -2583,9 +2583,10 @@ function renderRoomGeomDialog(ov, roomKey){
 
   // hit-tests a canvas-space point against each staged doorway segment,
   // returning the target room of the closest one within the pick radius.
-  const hitTestDoor = (cx, cz) => {
+  const hitTestDoor = (cx, cz, pad) => {
     const { px, pz, scale } = planGeom();
-    const doorPx = DOOR_W * scale, pad = 8;
+    const doorPx = DOOR_W * scale;
+    pad = pad || 8;
     let best = null, bestDist = Infinity;
     for(const ex of staticExits){
       const pos = stagedExits[ex.target];
@@ -2617,11 +2618,20 @@ function renderRoomGeomDialog(ov, roomKey){
     return false;
   };
 
+  // touch-action:none (set on the canvas above) keeps the browser from ever
+  // claiming the gesture as a page scroll/pan, which is what was causing the
+  // drag to spontaneously cancel after a few pixels of movement on mobile --
+  // without it, the OS would intermittently decide mid-drag that this was a
+  // scroll and hand off to native scrolling, firing pointercancel. Touch
+  // points also get a larger hit pad since a fingertip is far less precise
+  // than a mouse cursor.
   canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const cz = (e.clientY - rect.top) * (canvas.height / rect.height);
-    const hit = hitTestDoor(cx, cz);
+    const pad = e.pointerType === 'touch' ? 18 : 8;
+    const hit = hitTestDoor(cx, cz, pad);
     if(!hit) return;
     dragTarget = hit;
     dragStartWall = stagedExits[hit].wall;
@@ -2631,6 +2641,7 @@ function renderRoomGeomDialog(ov, roomKey){
   });
   canvas.addEventListener('pointermove', (e) => {
     if(!dragTarget) return;
+    e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const cz = (e.clientY - rect.top) * (canvas.height / rect.height);
@@ -2651,7 +2662,8 @@ function renderRoomGeomDialog(ov, roomKey){
     }
     drawPlan();
   });
-  const endDrag = () => {
+  const endDrag = (e) => {
+    if(e) e.preventDefault();
     dragTarget = null;
     dragStartWall = null;
     canvas.style.cursor = 'grab';
