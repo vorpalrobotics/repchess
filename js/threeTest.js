@@ -1038,17 +1038,20 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, op
   const group = new THREE.Group();
   const { axis, fixed, half } = wallSpan(size, wall);
   const h = size.h;
-  let mat;
-  if(opts.surfaceAsset){
-    // surface override from the layout editor: repeat density driven by the
-    // asset's repeatPerMeter across this wall's real dimensions
-    const rpm = opts.surfaceAsset.repeatPerMeter || 0.5;
-    mat = assetSurfaceMaterial(opts.surfaceAsset, half*2 * rpm, h * rpm);
-  } else {
+
+  // Each slab gets its own material sized to ITS OWN real-world width/height,
+  // not the whole wall's -- otherwise a narrow piece (like the lintel above a
+  // doorway) inherits a tile repeat meant for the full wall and ends up
+  // looking densely shrunken next to the full-height side panels.
+  function materialFor(segW, segH){
+    if(opts.surfaceAsset){
+      const rpm = opts.surfaceAsset.repeatPerMeter || 0.5;
+      return assetSurfaceMaterial(opts.surfaceAsset, segW * rpm, segH * rpm);
+    }
     const tex = wallTexture.clone();
     tex.needsUpdate = true;
-    tex.repeat.set(Math.max(1, Math.round(half*2/2.5)), Math.max(1, Math.round(h/2)));
-    mat = new THREE.MeshStandardMaterial({ map: tex });
+    tex.repeat.set(Math.max(1, Math.round(segW/2.5)), Math.max(1, Math.round(segH/2)));
+    return new THREE.MeshStandardMaterial({ map: tex });
   }
 
   function segment(start, end){
@@ -1063,7 +1066,7 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, op
       geo = new THREE.BoxGeometry(WALL_THICK, h, len);
       x = fixed + origin.x; z = mid + origin.z;
     }
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, materialFor(len, h));
     mesh.position.set(x, h/2, z);
     if(opts.editable) mesh.userData = { kind: 'wall', wall };
     group.add(mesh);
@@ -1085,7 +1088,7 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, op
       geo = new THREE.BoxGeometry(WALL_THICK, lintelH, DOOR_W);
       x = fixed + origin.x; z = doorOffset + origin.z;
     }
-    const lintel = new THREE.Mesh(geo, mat);
+    const lintel = new THREE.Mesh(geo, materialFor(DOOR_W, lintelH));
     lintel.position.set(x, DOOR_H + lintelH/2, z);
     if(opts.editable) lintel.userData = { kind: 'wall', wall };
     group.add(lintel);
