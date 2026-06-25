@@ -138,6 +138,11 @@ let joyVec = { x: 0, y: 0 };
    editTouchEl is the move/scale pad shown while a prop is selected. Both are
    built on coarse-pointer devices only. */
 let editToggleBtn = null, editTouchEl = null;
+// shown alongside the edit toggle (desktop and touch) while edit mode is on;
+// opens the room-geometry dialog -- a typed-attribute form + 2D plan preview,
+// kept deliberately separate from the click-to-edit in-world flow per the
+// user's request, rather than another click target in the 3D scene itself.
+let roomGeomBtn = null;
 
 /* ---------- in-world layout editor: prop selection (nudge/scale) ----------
    Clicking an existing accessory selects it instead of opening the picker.
@@ -188,6 +193,23 @@ function doorKey(wall, offset){
 function doorAssetFor(roomKey, dKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey];
   return id ? ASSET_BY_ID[id] : null;
+}
+// the static ROOMS table with any LAYOUT[roomKey].geom (w/d/h) override folded
+// onto its size -- the single accessor every size-dependent read should use,
+// so a saved room-dimension edit takes effect everywhere without touching the
+// dozens of call sites that already take a `room` object as a parameter.
+function mergedRoom(roomKey){
+  const room = ROOMS[roomKey];
+  if(!room) return room;
+  const geom = LAYOUT[roomKey] && LAYOUT[roomKey].geom;
+  if(!geom) return room;
+  return Object.assign({}, room, { size: Object.assign({}, room.size, geom) });
+}
+function setRoomGeom(roomKey, geom){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    r.geom = geom;
+  });
 }
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
@@ -322,19 +344,19 @@ function yardSlots(b, buildingKey){
 // full set of placement slots for a room: the procedural floor grid, door-
 // flanking and low wall spots, the ceiling hang-point, plus any one-off hand-
 // authored slots in ROOMS (e.g. a wall mount with no door nearby).
-function roomSlots(room){
+function roomSlots(room, roomKey){
   return [
     ...floorGridSlots(room),
     ...doorFlankSlots(room),
     ...doorFlankFloorSlots(room),
     ...lowWallSlots(room),
     ...ceilingSlots(room),
-    ...mnemonicSlots(room),
+    ...mnemonicSlots(roomKey),
     ...(room.slots || [])
   ];
 }
-function slotById(room, slotId){
-  const found = roomSlots(room).find(s => s.id === slotId);
+function slotById(room, roomKey, slotId){
+  const found = roomSlots(room, roomKey).find(s => s.id === slotId);
   if(found) return found;
   for(const b of room.buildings || []){
     const ys = yardSlots(b, b.target).find(s => s.id === slotId);
@@ -1189,11 +1211,8 @@ const DEMO_MNEMONICS = {
 // synthetic floor-less "slot" (kind 'mnemonic') folded into roomSlots() so
 // the existing select/nudge/scale/persist machinery (LAYOUT[roomKey].slotXform,
 // keyed by slot id) just works for them with no changes elsewhere.
-function roomKeyOf(room){
-  return Object.keys(ROOMS).find(k => ROOMS[k] === room);
-}
-function mnemonicSlots(room){
-  const moves = DEMO_MNEMONICS[roomKeyOf(room)];
+function mnemonicSlots(roomKey){
+  const moves = DEMO_MNEMONICS[roomKey];
   if(!moves) return [];
   return moves.map((m, i) => ({ id: `mnem-${i}`, kind: 'mnemonic', x: m.pos.x, y: m.pos.y, z: m.pos.z, move: m }));
 }
@@ -1559,7 +1578,7 @@ function doorSpawn(size, wall, offset, origin, inside){
 }
 
 function computeSpawnForExit(fromKey, room, ex){
-  const targetRoom = ROOMS[ex.target];
+  const targetRoom = mergedRoom(ex.target);
   if(targetRoom.outdoor){
     // walking out of a building's front door onto the street
     const building = targetRoom.buildings.find(b => b.target === fromKey);
@@ -1572,7 +1591,7 @@ function computeSpawnForExit(fromKey, room, ex){
 }
 
 function buildRoom(roomKey){
-  const room = ROOMS[roomKey];
+  const room = mergedRoom(roomKey);
   buildGeneration++;
   const myGeneration = buildGeneration;
   scene.clear();
@@ -1656,7 +1675,7 @@ function buildRoom(roomKey){
     }
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
-    buildSlots(room, roomKey, roomSlots(room));
+    buildSlots(room, roomKey, roomSlots(room, roomKey));
   } else {
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
@@ -1668,7 +1687,7 @@ function buildRoom(roomKey){
     }
     // every building on this street gets its own exterior, door and sign
     for(const b of room.buildings){
-      const targetRoom = ROOMS[b.target];
+      const targetRoom = mergedRoom(b.target);
       const buildingKey = b.target;
       const facadeAsset = buildingFacadeFor(roomKey, buildingKey);
 
@@ -1833,13 +1852,13 @@ function tick(){
     // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
     pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
     pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
-    const room = ROOMS[currentRoomKey];
+    const room = mergedRoom(currentRoomKey);
     let clamped = clampToRoom(room.size, pos.x, pos.z);
     if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
-  const eyeY = EYE_HEIGHT + floorHeightAt(ROOMS[currentRoomKey], pos.z);
+  const eyeY = EYE_HEIGHT + floorHeightAt(mergedRoom(currentRoomKey), pos.z);
   camera.position.set(pos.x, eyeY, pos.z);
   camera.rotation.set(0, yaw, 0);
   window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw, editMode };
@@ -1962,7 +1981,7 @@ function removeSelectionVisuals(){
 }
 
 function selectProp(roomKey, slotId){
-  const slot = slotById(ROOMS[roomKey], slotId);
+  const slot = slotById(mergedRoom(roomKey), roomKey, slotId);
   if(!slot) return;
   selectedProp = { roomKey, slotId, kind: slot.kind, ground: !!slot.ground };
   attachSelectionVisuals();
@@ -1976,7 +1995,7 @@ function deselectProp(){
 }
 
 function openPropManager(roomKey, slotId){
-  const slot = slotById(ROOMS[roomKey], slotId);
+  const slot = slotById(mergedRoom(roomKey), roomKey, slotId);
   openAssetPicker({
     allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true,
     onClose: () => { inputLocked = false; },
@@ -1993,8 +2012,8 @@ function openPropManager(roomKey, slotId){
 function nudgeSelected(key){
   if(!selectedProp) return;
   const { roomKey, slotId, kind, ground } = selectedProp;
-  const room = ROOMS[roomKey];
-  const slot = slotById(room, slotId);
+  const room = mergedRoom(roomKey);
+  const slot = slotById(room, roomKey, slotId);
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
 
@@ -2149,6 +2168,7 @@ function handleEditTarget(ud){
 function updateEditHud(){
   updateEditToggle();
   updateEditTouchControls();
+  updateRoomGeomBtn();
   if(!editHud) return;
   if(selectedProp){
     editHud.textContent = selectedProp.kind === 'mnemonic'
@@ -2259,6 +2279,22 @@ function updateEditToggle(){
   editToggleBtn.style.background = editMode ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
 }
 
+// top-right "Room…" button, visible (desktop and touch) only in edit mode --
+// opens the room-geometry dialog for the room currently being walked through.
+function buildRoomGeomBtn(){
+  const b = makeTouchBtn('Room…', () => openRoomGeomDialog(currentRoomKey));
+  b.style.position = 'absolute';
+  b.style.zIndex = '4';
+  b.style.display = 'none';
+  if(isCoarsePointer()){ b.style.top = '56px'; b.style.right = '8px'; }
+  else { b.style.top = '8px'; b.style.right = '8px'; }
+  return b;
+}
+function updateRoomGeomBtn(){
+  if(!roomGeomBtn) return;
+  roomGeomBtn.style.display = editMode ? 'block' : 'none';
+}
+
 // move/scale pad shown while a prop is selected. Buttons drive the same
 // nudgeSelected/scaleSelected paths the keyboard does, so behavior matches.
 function buildEditTouch(){
@@ -2310,6 +2346,108 @@ function updateEditTouchControls(){
   ));
   col.appendChild(rowOf(makeTouchBtn('Done', () => deselectProp())));
   editTouchEl.appendChild(col);
+}
+
+/* ---------- room geometry dialog ----------
+   A separate typed-attribute dialog (not another in-world click target) for
+   resizing the current room -- width/depth/height in meters -- with a live
+   2D top-down preview. Builds its own overlay on document.body (same pattern
+   as the asset picker in assets.js) so it layers above the threeTest modal
+   regardless of which container hosts the canvas. Saved as
+   LAYOUT[roomKey].geom and folded onto the static size by mergedRoom() at
+   every read site, so existing rooms with no override are unaffected. */
+function openRoomGeomDialog(roomKey){
+  setForeignModalOpen(true);
+  let ov = document.getElementById('roomGeomOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'roomGeomOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '70';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  renderRoomGeomDialog(ov, roomKey);
+}
+function closeRoomGeomDialog(){
+  const ov = document.getElementById('roomGeomOverlay');
+  if(ov) ov.style.display = 'none';
+  setForeignModalOpen(false);
+}
+const ROOM_GEOM_MIN = 2;
+function renderRoomGeomDialog(ov, roomKey){
+  const room = mergedRoom(roomKey);
+  const { w, d, h } = room.size;
+  ov.innerHTML = `
+    <div class="modal" style="width:min(28em,92vw)">
+      <h2>Room Geometry — ${roomKey}</h2>
+      <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.7rem">
+        <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
+          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomW" value="${w}" style="width:6em">
+        </label>
+        <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Depth (m)
+          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomD" value="${d}" style="width:6em">
+        </label>
+        <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Height (m)
+          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomH" value="${h}" style="width:6em">
+        </label>
+      </div>
+      <canvas id="roomGeomPlan" width="280" height="280" style="background:#eee;border-radius:4px;display:block;margin:0 auto .7rem"></canvas>
+      <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
+        <button id="roomGeomResetBtn">Reset</button>
+        <div>
+          <button id="roomGeomCancelBtn">Cancel</button>
+          <button id="roomGeomApplyBtn">Apply</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const wEl = ov.querySelector('#roomGeomW'), dEl = ov.querySelector('#roomGeomD'), hEl = ov.querySelector('#roomGeomH');
+  const canvas = ov.querySelector('#roomGeomPlan');
+  const staticExits = (ROOMS[roomKey] && ROOMS[roomKey].exits) || [];
+  const drawPlan = () => {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    const rw = Math.max(0.1, Number(wEl.value) || 0), rd = Math.max(0.1, Number(dEl.value) || 0);
+    const margin = 26;
+    const scale = Math.min((W - margin*2) / rw, (H - margin*2) / rd);
+    const pw = rw * scale, pd = rd * scale;
+    const ox = (W - pw) / 2, oy = (H - pd) / 2;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(ox, oy, pw, pd);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ox, oy, pw, pd);
+    ctx.fillStyle = '#1565c0';
+    const doorW = Math.min(pw, pd, 1.2 * scale);
+    for(const ex of staticExits){
+      if(ex.wall === 'north') ctx.fillRect(ox + pw/2 + ex.offset*scale - doorW/2, oy - 4, doorW, 4);
+      if(ex.wall === 'south') ctx.fillRect(ox + pw/2 + ex.offset*scale - doorW/2, oy + pd, doorW, 4);
+      if(ex.wall === 'west')  ctx.fillRect(ox - 4, oy + pd/2 + ex.offset*scale - doorW/2, 4, doorW);
+      if(ex.wall === 'east')  ctx.fillRect(ox + pw, oy + pd/2 + ex.offset*scale - doorW/2, 4, doorW);
+    }
+    ctx.fillStyle = '#666';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    const hv = Number(hEl.value) || 0;
+    ctx.fillText(`${rw.toFixed(1)} × ${rd.toFixed(1)} m  (height ${hv.toFixed(1)} m)`, W/2, H - 8);
+  };
+  [wEl, dEl, hEl].forEach(el => el.addEventListener('input', drawPlan));
+  drawPlan();
+  ov.querySelector('#roomGeomCancelBtn').onclick = closeRoomGeomDialog;
+  ov.querySelector('#roomGeomResetBtn').onclick = () => {
+    const base = ROOMS[roomKey].size;
+    wEl.value = base.w; dEl.value = base.d; hEl.value = base.h;
+    drawPlan();
+  };
+  ov.querySelector('#roomGeomApplyBtn').onclick = () => {
+    const w2 = Math.max(ROOM_GEOM_MIN, Number(wEl.value) || room.size.w);
+    const d2 = Math.max(ROOM_GEOM_MIN, Number(dEl.value) || room.size.d);
+    const h2 = Math.max(ROOM_GEOM_MIN, Number(hEl.value) || room.size.h);
+    closeRoomGeomDialog();
+    setRoomGeom(roomKey, { w: w2, d: d2, h: h2 });
+  };
 }
 
 function onResize(){
@@ -2396,6 +2534,8 @@ export async function openThreeTest(containerEl){
   if(editToggleBtn) container.appendChild(editToggleBtn);
   editTouchEl = buildEditTouch();
   if(editTouchEl) container.appendChild(editTouchEl);
+  roomGeomBtn = buildRoomGeomBtn();
+  container.appendChild(roomGeomBtn);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
@@ -2454,5 +2594,7 @@ export function closeThreeTest(){
   joystickEl = null; joyKnob = null; joyPointerId = null;
   joyVec = { x: 0, y: 0 };
   editToggleBtn = null; editTouchEl = null;
+  roomGeomBtn = null;
+  closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
 }
