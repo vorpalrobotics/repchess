@@ -100,6 +100,7 @@ let currentRoomKey = 'start';
 let entryPoint = null;
 let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
 let currentExitsByWall = {};
+let currentBuildingColliders = []; // outdoor only: [{origin,size,doorWall,doorOffset}]
 let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
 let textureLoader = null;
@@ -439,6 +440,29 @@ function clampToRoom(size, x, z){
   if(x > halfW){
     const ex = currentExitsByWall['east'];
     if(!(ex && z > ex.offset-dHalf && z < ex.offset+dHalf)) x = halfW;
+  }
+  return { x, z };
+}
+
+// Outdoor streets have no surrounding wall (clampToRoom only bounds the
+// overall street edges), so each building needs its own collision against
+// its brick box -- otherwise you can walk straight through it anywhere but
+// the door. No door-window exception is needed here: a building's door
+// teleport trigger (doorTriggerBox, built with a 1m pad) reaches a meter
+// outside the wall, well before this box would block you, so a legitimate
+// approach through the door always teleports you before collision engages.
+function clampBuildings(x, z){
+  for(const c of currentBuildingColliders){
+    const halfW = c.size.w/2 + PLAYER_RADIUS, halfD = c.size.d/2 + PLAYER_RADIUS;
+    const lx = x - c.origin.x, lz = z - c.origin.z;
+    if(lx <= -halfW || lx >= halfW || lz <= -halfD || lz >= halfD) continue;
+    const distLeft = lx + halfW, distRight = halfW - lx;
+    const distNear = lz + halfD, distFar = halfD - lz;
+    const min = Math.min(distLeft, distRight, distNear, distFar);
+    if(min === distLeft) x = c.origin.x - halfW;
+    else if(min === distRight) x = c.origin.x + halfW;
+    else if(min === distNear) z = c.origin.z - halfD;
+    else z = c.origin.z + halfD;
   }
   return { x, z };
 }
@@ -1429,6 +1453,7 @@ function buildRoom(roomKey){
   for(const ex of room.exits) currentExitsByWall[ex.wall] = ex;
 
   exitMeta = [];
+  currentBuildingColliders = [];
 
   if(!room.outdoor){
     const wallTex = makeBrickTexture(room.color);
@@ -1507,6 +1532,11 @@ function buildRoom(roomKey){
         facadeWidth = fw;
         facadeHeight = fh;
       }
+
+      // block movement through this building's walls from the street -- only
+      // its own door opening lets you through (the door's teleport trigger,
+      // below, has a wider catch zone than this box so it always fires first)
+      currentBuildingColliders.push({ origin: b.origin, size, doorWall: b.doorWall, doorOffset: b.doorOffset });
 
       const buildingTex = makeBrickTexture(b.color);
       for(const wall of ['north','south','east','west']){
@@ -1610,7 +1640,9 @@ function tick(){
     // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
     pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
     pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
-    const clamped = clampToRoom(ROOMS[currentRoomKey].size, pos.x, pos.z);
+    const room = ROOMS[currentRoomKey];
+    let clamped = clampToRoom(room.size, pos.x, pos.z);
+    if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
