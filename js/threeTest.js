@@ -2392,7 +2392,8 @@ function renderRoomGeomDialog(ov, roomKey){
           <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomH" value="${h}" style="width:6em">
         </label>
       </div>
-      <canvas id="roomGeomPlan" width="280" height="280" style="background:#eee;border-radius:4px;display:block;margin:0 auto .7rem"></canvas>
+      <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem"></canvas>
+      <p style="margin:0 0 .7rem;font-size:.72rem;color:#888;text-align:center">Top-down plan (read-only). Green = doorway, hatched = stairs.</p>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <button id="roomGeomResetBtn">Reset</button>
         <div>
@@ -2404,34 +2405,92 @@ function renderRoomGeomDialog(ov, roomKey){
   `;
   const wEl = ov.querySelector('#roomGeomW'), dEl = ov.querySelector('#roomGeomD'), hEl = ov.querySelector('#roomGeomH');
   const canvas = ov.querySelector('#roomGeomPlan');
-  const staticExits = (ROOMS[roomKey] && ROOMS[roomKey].exits) || [];
+  // read straight off the static ROOMS config: exits, stairs and (outdoor)
+  // building footprints don't move when the room is resized, so the live
+  // preview overlays them on whatever width/depth the user is typing.
+  const staticRoom = ROOMS[roomKey] || {};
+  const staticExits = staticRoom.exits || [];
+  const stairs = staticRoom.stairs || null;
+  const buildings = staticRoom.buildings || [];
+
+  // top-down plan: world +x is east (right), +z is south (down), so north is
+  // at the top of the canvas -- matches walking in facing north.
   const drawPlan = () => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
     const rw = Math.max(0.1, Number(wEl.value) || 0), rd = Math.max(0.1, Number(dEl.value) || 0);
-    const margin = 26;
+    const margin = 30;
     const scale = Math.min((W - margin*2) / rw, (H - margin*2) / rd);
     const pw = rw * scale, pd = rd * scale;
     const ox = (W - pw) / 2, oy = (H - pd) / 2;
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(ox, oy, pw, pd);
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(ox, oy, pw, pd);
-    ctx.fillStyle = '#1565c0';
-    const doorW = Math.min(pw, pd, 1.2 * scale);
-    for(const ex of staticExits){
-      if(ex.wall === 'north') ctx.fillRect(ox + pw/2 + ex.offset*scale - doorW/2, oy - 4, doorW, 4);
-      if(ex.wall === 'south') ctx.fillRect(ox + pw/2 + ex.offset*scale - doorW/2, oy + pd, doorW, 4);
-      if(ex.wall === 'west')  ctx.fillRect(ox - 4, oy + pd/2 + ex.offset*scale - doorW/2, 4, doorW);
-      if(ex.wall === 'east')  ctx.fillRect(ox + pw, oy + pd/2 + ex.offset*scale - doorW/2, 4, doorW);
+    // world (x,z) in meters -> canvas px
+    const px = (x) => ox + pw/2 + x*scale;
+    const pz = (z) => oy + pd/2 + z*scale;
+
+    // stair footprint: full width, from its south edge (fromZ) up to the north
+    // wall, drawn as a diagonal hatch with an arrow toward the high (north) end.
+    if(stairs){
+      const z0 = pz(Math.max(stairs.fromZ, -rd/2)), z1 = pz(-rd/2);
+      const top = Math.min(z0, z1), bot = Math.max(z0, z1);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(ox, top, pw, bot - top); ctx.clip();
+      ctx.fillStyle = 'rgba(120,120,120,.18)';
+      ctx.fillRect(ox, top, pw, bot - top);
+      ctx.strokeStyle = 'rgba(80,80,80,.5)'; ctx.lineWidth = 1;
+      for(let x = ox - pd; x < ox + pw; x += 8){
+        ctx.beginPath(); ctx.moveTo(x, bot); ctx.lineTo(x + (bot - top), top); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('stairs ↑', ox + pw/2, (top + bot)/2 + 3);
     }
-    ctx.fillStyle = '#666';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
+
+    // outdoor street: sketch each building footprint so the plan isn't empty
+    for(const b of buildings){
+      const bw = b.size.w*scale, bd = b.size.d*scale;
+      ctx.fillStyle = 'rgba(21,101,192,.12)';
+      ctx.fillRect(px(b.origin.x) - bw/2, pz(b.origin.z) - bd/2, bw, bd);
+      ctx.strokeStyle = 'rgba(21,101,192,.6)'; ctx.lineWidth = 1;
+      ctx.strokeRect(px(b.origin.x) - bw/2, pz(b.origin.z) - bd/2, bw, bd);
+    }
+
+    // room outline
+    ctx.fillStyle = 'rgba(255,255,255,.0)';
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+    ctx.strokeRect(ox, oy, pw, pd);
+
+    // doorways: a green segment laid over the wall at the exit's offset, plus
+    // the target room name just inside the opening.
+    const doorPx = DOOR_W * scale;
+    ctx.font = '9px sans-serif';
+    for(const ex of staticExits){
+      ctx.fillStyle = '#2e7d32';
+      ctx.strokeStyle = '#2e7d32'; ctx.lineWidth = 4;
+      let lx, ly;                              // label anchor, just inside the wall
+      ctx.beginPath();
+      if(ex.wall === 'north'){ const cx = px(ex.offset); ctx.moveTo(cx - doorPx/2, oy); ctx.lineTo(cx + doorPx/2, oy); lx = cx; ly = oy + 11; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
+      if(ex.wall === 'south'){ const cx = px(ex.offset); ctx.moveTo(cx - doorPx/2, oy+pd); ctx.lineTo(cx + doorPx/2, oy+pd); lx = cx; ly = oy + pd - 4; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
+      if(ex.wall === 'west'){  const cz = pz(ex.offset); ctx.moveTo(ox, cz - doorPx/2); ctx.lineTo(ox, cz + doorPx/2); lx = ox + 3; ly = cz; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; }
+      if(ex.wall === 'east'){  const cz = pz(ex.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
+      ctx.stroke();
+      const label = ex.target + (ex.back ? ' ↩' : '');
+      ctx.fillStyle = '#1b5e20';
+      ctx.fillText(label, lx, ly);
+    }
+    ctx.textBaseline = 'alphabetic';
+
+    // compass letters just outside each wall
+    ctx.fillStyle = '#999'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('N', ox + pw/2, oy - 6);
+    ctx.fillText('S', ox + pw/2, oy + pd + 16);
+    ctx.fillText('W', ox - 14, oy + pd/2 + 4);
+    ctx.fillText('E', ox + pw + 14, oy + pd/2 + 4);
+
+    // dimensions caption
+    ctx.fillStyle = '#666'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
     const hv = Number(hEl.value) || 0;
-    ctx.fillText(`${rw.toFixed(1)} × ${rd.toFixed(1)} m  (height ${hv.toFixed(1)} m)`, W/2, H - 8);
+    ctx.fillText(`${rw.toFixed(1)} × ${rd.toFixed(1)} m  (height ${hv.toFixed(1)} m)`, W/2, H - 6);
   };
   [wEl, dEl, hEl].forEach(el => el.addEventListener('input', drawPlan));
   drawPlan();
