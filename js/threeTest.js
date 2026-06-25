@@ -81,6 +81,8 @@ const DOOR_W = 2.2;
 const DOOR_H = 2.6;
 const WALL_THICK = 0.25;
 const EYE_HEIGHT = 1.6;
+const STAIR_STEP_RISE = 0.2;  // a stair-exit corridor's climbing steps, in meters
+const STAIR_STEP_RUN = 0.3;
 const MOVE_SPEED = 4.2;   // m/s
 const TURN_SPEED = 1.8;   // rad/s
 
@@ -100,6 +102,7 @@ let currentRoomKey = 'start';
 let entryPoint = null;
 let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
 let currentExitsByWall = {};
+let currentStairCorridors = {}; // wall -> {rise, depth, outSign}, for ex.type === 'stair'
 let currentBuildingColliders = []; // outdoor only: [{origin,size,doorWall,doorOffset}]
 let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
@@ -527,6 +530,11 @@ function setDoorOverride(roomKey, dKey, assetId){
   });
 }
 
+// A stair exit's doorway opens onto a real protruding corridor (built by
+// buildStairCorridor) rather than the usual "step through and teleport
+// almost immediately" gap, so once the player is in the gap we let them
+// keep walking past the wall plane -- clamped to the corridor's own width
+// and depth -- instead of snapping straight back to the wall.
 function clampToRoom(size, x, z){
   const { w, d } = size;
   const halfW = w/2 - PLAYER_RADIUS, halfD = d/2 - PLAYER_RADIUS;
@@ -534,19 +542,51 @@ function clampToRoom(size, x, z){
 
   if(z < -halfD){
     const ex = currentExitsByWall['north'];
-    if(!(ex && x > ex.offset-dHalf && x < ex.offset+dHalf)) z = -halfD;
+    const inGap = ex && x > ex.offset-dHalf && x < ex.offset+dHalf;
+    if(!inGap) z = -halfD;
+    else {
+      const c = currentStairCorridors['north'];
+      if(c){
+        x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+        z = Math.max(z, -halfD - c.depth);
+      }
+    }
   }
   if(z > halfD){
     const ex = currentExitsByWall['south'];
-    if(!(ex && x > ex.offset-dHalf && x < ex.offset+dHalf)) z = halfD;
+    const inGap = ex && x > ex.offset-dHalf && x < ex.offset+dHalf;
+    if(!inGap) z = halfD;
+    else {
+      const c = currentStairCorridors['south'];
+      if(c){
+        x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+        z = Math.min(z, halfD + c.depth);
+      }
+    }
   }
   if(x < -halfW){
     const ex = currentExitsByWall['west'];
-    if(!(ex && z > ex.offset-dHalf && z < ex.offset+dHalf)) x = -halfW;
+    const inGap = ex && z > ex.offset-dHalf && z < ex.offset+dHalf;
+    if(!inGap) x = -halfW;
+    else {
+      const c = currentStairCorridors['west'];
+      if(c){
+        z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+        x = Math.max(x, -halfW - c.depth);
+      }
+    }
   }
   if(x > halfW){
     const ex = currentExitsByWall['east'];
-    if(!(ex && z > ex.offset-dHalf && z < ex.offset+dHalf)) x = halfW;
+    const inGap = ex && z > ex.offset-dHalf && z < ex.offset+dHalf;
+    if(!inGap) x = halfW;
+    else {
+      const c = currentStairCorridors['east'];
+      if(c){
+        z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+        x = Math.min(x, halfW + c.depth);
+      }
+    }
   }
   return { x, z };
 }
@@ -610,6 +650,29 @@ function floorHeightAt(room, z){
   if(z <= toZ) return rise;
   const t = (fromZ - z) / (fromZ - toZ);
   return rise * t;
+}
+
+// A stair exit's corridor geometry, derived from the room's own ceiling
+// height so the climb always reaches exactly ceiling height by the far end.
+function stairCorridorGeom(room){
+  const rise = room.size.h;
+  const steps = Math.max(4, Math.ceil(rise / STAIR_STEP_RISE));
+  const depth = steps * STAIR_STEP_RUN;
+  return { rise, steps, depth };
+}
+
+// Like floorHeightAt, but also accounts for any stair-exit corridor the
+// player may have walked into (clampToRoom is what keeps x/z inside the
+// corridor's actual footprint once they're past the wall plane). Falls
+// back to the legacy single-room stairs platform when not in a corridor.
+function floorHeightAtPos(room, x, z){
+  for(const wall in currentStairCorridors){
+    const c = currentStairCorridors[wall];
+    const { axis, fixed } = wallSpan(room.size, wall);
+    const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
+    if(along > 0) return c.rise * Math.min(1, along / c.depth);
+  }
+  return floorHeightAt(room, z);
 }
 
 /* ---------- procedural textures & furniture ----------
@@ -1613,27 +1676,57 @@ function buildGroundSign(text, skinSrc){
   return group;
 }
 
-// a few shallow treads laid across a 'stair'-type exit's threshold -- purely
-// a visual/label cue distinguishing it from an ordinary door (no floor-height
-// change between rooms; real multi-floor mechanics are a future, separate
-// feature). Not registered with any collider, so it doesn't affect movement.
-function buildExitStairMarker(size, wall, offset, origin){
-  origin = origin || { x:0, z:0 };
-  const { axis, fixed } = wallSpan(size, wall);
-  const inSign = fixed > 0 ? -1 : 1; // step inward from the wall, into the room
+// A 'stair'-type exit gets a real protruding corridor instead of an ordinary
+// doorway gap: the room's geometry grows a DOOR_W-wide hallway out through
+// the wall, with stairs climbing from the room's own floor (0) up to its
+// own ceiling height (room.size.h) by the far end. clampToRoom lets the
+// player walk into this footprint, and floorHeightAtPos ramps their eye
+// height to match as they climb (mirroring the decorative-steps-on-top-of-
+// a-continuous-ramp split that buildStairs already uses for room.stairs).
+// The far end is left open -- like an ordinary door, the "next room" is an
+// illusion stitched together by enterRoom's teleport, not real geometry.
+function buildStairCorridor(room, wall, offset){
+  const { axis, fixed } = wallSpan(room.size, wall);
+  const outSign = fixed >= 0 ? 1 : -1;
+  const { rise, steps, depth } = stairCorridorGeom(room);
+  const dHalf = DOOR_W/2;
+  const ceilingH = rise + EYE_HEIGHT + 1.0; // generous headroom above the highest step
   const group = new THREE.Group();
-  const treadW = DOOR_W * 0.92, treadD = 0.22, treadH = 0.04;
-  const mat = new THREE.MeshStandardMaterial({ color: 0x8d6e63 });
-  for(let i = 0; i < 3; i++){
-    const geo = axis === 'x'
-      ? new THREE.BoxGeometry(treadW, treadH, treadD)
-      : new THREE.BoxGeometry(treadD, treadH, treadW);
-    const tread = new THREE.Mesh(geo, mat);
-    const across = fixed + inSign * (0.18 + i * treadD);
-    if(axis === 'x') tread.position.set(origin.x + offset, treadH/2, origin.z + across);
-    else tread.position.set(origin.x + across, treadH/2, origin.z + offset);
-    group.add(tread);
+  const wallTex = makeBrickTexture(room.color);
+  const wallMat = new THREE.MeshStandardMaterial({ map: wallTex });
+
+  for(const side of [-1, 1]){
+    const across = offset + side*dHalf;
+    let geo, x, z;
+    if(axis === 'x'){ geo = new THREE.BoxGeometry(WALL_THICK, ceilingH, depth); x = across; z = fixed + outSign*depth/2; }
+    else { geo = new THREE.BoxGeometry(depth, ceilingH, WALL_THICK); x = fixed + outSign*depth/2; z = across; }
+    const sideWall = new THREE.Mesh(geo, wallMat);
+    sideWall.position.set(x, ceilingH/2, z);
+    group.add(sideWall);
   }
+
+  {
+    let geo, x, z;
+    if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W, WALL_THICK, depth); x = offset; z = fixed + outSign*depth/2; }
+    else { geo = new THREE.BoxGeometry(depth, WALL_THICK, DOOR_W); x = fixed + outSign*depth/2; z = offset; }
+    const ceiling = new THREE.Mesh(geo, wallMat);
+    ceiling.position.set(x, ceilingH + WALL_THICK/2, z);
+    group.add(ceiling);
+  }
+
+  const stepMat = new THREE.MeshStandardMaterial({ color: 0x8a8a8a });
+  const stepRise = rise / steps;
+  for(let i = 0; i < steps; i++){
+    const stepH = stepRise * (i+1);
+    const along = (i + 0.5) * STAIR_STEP_RUN;
+    let geo, x, z;
+    if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W*0.96, stepH, STAIR_STEP_RUN); x = offset; z = fixed + outSign*along; }
+    else { geo = new THREE.BoxGeometry(STAIR_STEP_RUN, stepH, DOOR_W*0.96); x = fixed + outSign*along; z = offset; }
+    const step = new THREE.Mesh(geo, stepMat);
+    step.position.set(x, stepH/2, z);
+    group.add(step);
+  }
+
   return group;
 }
 
@@ -1652,6 +1745,21 @@ function doorTriggerBox(size, wall, offset, origin){
     minX: box.minX + origin.x, maxX: box.maxX + origin.x,
     minZ: box.minZ + origin.z, maxZ: box.maxZ + origin.z
   };
+}
+
+// A stair exit's trigger sits at the top of its corridor (the far end of the
+// climb) rather than the wall plane -- the player has to actually walk the
+// corridor and climb the steps before the room transition fires.
+function stairTriggerBox(room, wall, offset){
+  const { axis, fixed } = wallSpan(room.size, wall);
+  const c = currentStairCorridors[wall];
+  const dHalf = DOOR_W/2;
+  const pad = 0.8;
+  const farEdge = fixed + c.outSign*c.depth;
+  const nearEdge = fixed + c.outSign*(c.depth - pad);
+  const lo = Math.min(farEdge, nearEdge), hi = Math.max(farEdge, nearEdge);
+  if(axis === 'x') return { minX: offset-dHalf, maxX: offset+dHalf, minZ: lo, maxZ: hi };
+  return { minX: lo, maxX: hi, minZ: offset-dHalf, maxZ: offset+dHalf };
 }
 
 function doorSpawn(size, wall, offset, origin, inside){
@@ -1734,7 +1842,15 @@ function buildRoom(roomKey){
   }
 
   currentExitsByWall = {};
-  for(const ex of room.exits) currentExitsByWall[ex.wall] = ex;
+  currentStairCorridors = {};
+  for(const ex of room.exits){
+    currentExitsByWall[ex.wall] = ex;
+    if(ex.type === 'stair'){
+      const { fixed } = wallSpan(room.size, ex.wall);
+      const { rise, depth } = stairCorridorGeom(room);
+      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1 };
+    }
+  }
 
   exitMeta = [];
   currentBuildingColliders = [];
@@ -1747,13 +1863,15 @@ function buildRoom(roomKey){
         { editable: true, surfaceAsset: wallAssetFor(roomKey, wall) });
       scene.add(group);
       if(ex){
+        const isStair = ex.type === 'stair';
         const spawn = computeSpawnForExit(roomKey, room, ex);
-        exitMeta.push({ box: doorTriggerBox(room.size, wall, ex.offset), target: ex.target, spawn });
+        const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
+        exitMeta.push({ box, target: ex.target, spawn });
         if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
         const dKey = doorKey(wall, ex.offset);
         const doorAsset = doorAssetFor(roomKey, dKey);
-        if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-        if(ex.type === 'stair') scene.add(buildExitStairMarker(room.size, wall, ex.offset));
+        if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+        if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset));
         if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
       }
     }
@@ -1952,7 +2070,7 @@ function tick(){
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
-  const eyeY = EYE_HEIGHT + floorHeightAt(mergedRoom(currentRoomKey), pos.z);
+  const eyeY = EYE_HEIGHT + floorHeightAtPos(mergedRoom(currentRoomKey), pos.x, pos.z);
   camera.position.set(pos.x, eyeY, pos.z);
   camera.rotation.set(0, yaw, 0);
   window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw, editMode };
@@ -2483,9 +2601,9 @@ function renderRoomGeomDialog(ov, roomKey){
   // staged door state: target room -> {wall, offset, type}, seeded from any
   // existing override (or the static position/type) and only committed on
   // Apply. Single-sided by construction -- this only ever edits roomKey's
-  // own exits. `type` defaults to 'door'; 'stair' is purely a visual/label
-  // distinction for now (a cosmetic threshold tread, no floor-height change
-  // between rooms) -- real multi-floor mechanics are future work.
+  // own exits. `type` defaults to 'door'; 'stair' grows a real protruding
+  // corridor with climbing stairs through that wall (buildStairCorridor),
+  // reaching ceiling height by the far end where the room transition fires.
   const stagedExits = {};
   for(const ex of staticExits){
     const ov2 = LAYOUT[roomKey] && LAYOUT[roomKey].exits && LAYOUT[roomKey].exits[ex.target];
@@ -2597,6 +2715,32 @@ function renderRoomGeomDialog(ov, roomKey){
     ctx.fillStyle = 'rgba(255,255,255,.0)';
     ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
     ctx.strokeRect(ox, oy, pw, pd);
+
+    // stair-exit corridors: a real protrusion through the wall (see
+    // buildStairCorridor), previewed here as an outlined box poking outward
+    // from the doorway so the geometry change reads on the plan, not just
+    // in-world. Depth mirrors stairCorridorGeom's formula against the
+    // height field currently typed into the dialog.
+    {
+      const rise = Math.max(0.1, Number(hEl.value) || 0);
+      const steps = Math.max(4, Math.ceil(rise / STAIR_STEP_RISE));
+      const corridorDepthPx = steps * STAIR_STEP_RUN * scale;
+      const doorPxC = DOOR_W * scale;
+      for(const ex of staticExits){
+        const pos = stagedExits[ex.target];
+        if(pos.type !== 'stair') continue;
+        ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 1.5; ctx.setLineDash([3,2]);
+        ctx.fillStyle = 'rgba(141,110,99,.12)';
+        let rx, ry, rw2, rh2;
+        if(pos.wall === 'north'){ rx = px(pos.offset)-doorPxC/2; ry = oy - corridorDepthPx; rw2 = doorPxC; rh2 = corridorDepthPx; }
+        if(pos.wall === 'south'){ rx = px(pos.offset)-doorPxC/2; ry = oy + pd; rw2 = doorPxC; rh2 = corridorDepthPx; }
+        if(pos.wall === 'west'){  rx = ox - corridorDepthPx; ry = pz(pos.offset)-doorPxC/2; rw2 = corridorDepthPx; rh2 = doorPxC; }
+        if(pos.wall === 'east'){  rx = ox + pw; ry = pz(pos.offset)-doorPxC/2; rw2 = corridorDepthPx; rh2 = doorPxC; }
+        ctx.fillRect(rx, ry, rw2, rh2);
+        ctx.strokeRect(rx, ry, rw2, rh2);
+        ctx.setLineDash([]);
+      }
+    }
 
     // doorways: a green segment laid over the wall at the exit's offset, plus
     // the target room name just inside the opening.
