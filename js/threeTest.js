@@ -1919,11 +1919,20 @@ function buildRoom(roomKey){
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
     // bounded by clampToRoom (an invisible limit at the room's edges).
-    for(const s of room.streetSigns || []){
-      const signGroup = buildGroundSign(s.text);
-      signGroup.position.set(s.x, 0, s.z);
+    (room.streetSigns || []).forEach((s, i) => {
+      // Standalone street-name signs (not tied to any building) share the same
+      // movable/skinnable 'sign' machinery as building lawn signs -- they just
+      // need their own id namespace so they never collide with a buildingKey.
+      const signId = `street:${i}`;
+      const signAsset = signAssetFor(roomKey, signId);
+      const off = signPosFor(roomKey, signId) || {};
+      const signPos = { x: s.x + (off.dx || 0), z: s.z + (off.dz || 0) };
+      const signGroup = buildGroundSign(s.text, signAsset ? signAsset.image : null);
+      signGroup.position.set(signPos.x, 0, signPos.z);
+      signGroup.userData = { kind: 'sign', roomKey, buildingKey: signId };
       scene.add(signGroup);
-    }
+      if(editMode) scene.add(buildSignMarker(signPos, roomKey, signId));
+    });
     // every building on this street gets its own exterior, door and sign
     for(const b of room.buildings){
       const targetRoom = mergedRoom(b.target);
