@@ -186,6 +186,14 @@ function signAssetFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].signs && LAYOUT[roomKey].signs[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+// A building sign's persisted position nudge ({dx, dz} from its default lawn
+// spot). Kept separate from the skin override (r.signs, a plain asset id) so
+// the two are independent -- you can move a sign without skinning it and vice
+// versa.
+function signPosFor(roomKey, buildingKey){
+  const r = LAYOUT[roomKey];
+  return (r && r.signPos && r.signPos[buildingKey]) || null;
+}
 function yardAssetFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].yards && LAYOUT[roomKey].yards[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
@@ -455,6 +463,7 @@ function ensureRoomLayout(roomKey){
   if(!r.slotXform) r.slotXform = {};
   if(!r.buildings) r.buildings = {};
   if(!r.signs) r.signs = {};
+  if(!r.signPos) r.signPos = {};
   if(!r.yards) r.yards = {};
   if(!r.doors) r.doors = {};
   if(!r.exits) r.exits = {};
@@ -515,6 +524,12 @@ function setSignOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.signs[buildingKey] = assetId; else delete r.signs[buildingKey];
+  });
+}
+function setSignPos(roomKey, buildingKey, pos){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(pos && (pos.dx || pos.dz)) r.signPos[buildingKey] = pos; else delete r.signPos[buildingKey];
   });
 }
 function setYardOverride(roomKey, buildingKey, assetId){
@@ -1968,11 +1983,16 @@ function buildRoom(roomKey){
         // not mounted on the facade itself. The skin (if any) is an
         // override image stretched behind the name text -- see signAssetFor.
         const signAsset = signAssetFor(roomKey, buildingKey);
-        const signPos = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 1.6 };
+        const off = signPosFor(roomKey, buildingKey) || {};
+        const signPos = { x: b.origin.x + 6 + (off.dx || 0), z: b.origin.z + size.d/2 + 1.6 + (off.dz || 0) };
         const signGroup = buildGroundSign(b.sign, signAsset ? signAsset.image : null);
         signGroup.position.set(signPos.x, 0, signPos.z);
+        // tag the whole sign so clicking any part of it selects the sign for
+        // nudging (arrows) -- the gear icon then opens the skin picker.
+        signGroup.userData = { kind: 'sign', roomKey, buildingKey };
         scene.add(signGroup);
-        // edit-mode hotspot: click the sign to set / replace / remove its skin
+        // edit-mode hotspot: a translucent panel over the sign so it reads as
+        // editable even before it's clicked (same kind, so it routes the same).
         if(editMode) scene.add(buildSignMarker(signPos, roomKey, buildingKey));
       }
 
@@ -2170,8 +2190,16 @@ function buildGearSprite(){
 // (e.g. it was just removed via the picker).
 function attachSelectionVisuals(){
   if(!selectedProp) return;
+  const isSign = selectedProp.kind === 'sign';
   let found = null;
-  scene.traverse(o => { if(!found && o.userData && o.userData.kind === 'accessory' && o.userData.slotId === selectedProp.slotId) found = o; });
+  scene.traverse(o => {
+    if(found || !o.userData) return;
+    if(isSign){
+      if(o.userData.kind === 'sign' && o.userData.buildingKey === selectedProp.buildingKey) found = o;
+    } else if(o.userData.kind === 'accessory' && o.userData.slotId === selectedProp.slotId){
+      found = o;
+    }
+  });
   if(!found){ selectedProp = null; updateEditHud(); return; }
   const box = new THREE.Box3().setFromObject(found);
   const size = new THREE.Vector3(); box.getSize(size);
@@ -2189,7 +2217,9 @@ function attachSelectionVisuals(){
   // icon's picker to do -- skip it, the outline alone shows the selection.
   if(selectedProp.kind !== 'mnemonic'){
     const gear = buildGearSprite();
-    gear.userData = { kind: 'prop-gear', slotId: selectedProp.slotId };
+    gear.userData = isSign
+      ? { kind: 'sign-gear', buildingKey: selectedProp.buildingKey }
+      : { kind: 'prop-gear', slotId: selectedProp.slotId };
     scene.add(gear);
     selectionGear = gear;
     selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
@@ -2211,6 +2241,11 @@ function selectProp(roomKey, slotId){
   attachSelectionVisuals();
   updateEditHud();
 }
+function selectSign(roomKey, buildingKey){
+  selectedProp = { roomKey, kind: 'sign', buildingKey };
+  attachSelectionVisuals();
+  updateEditHud();
+}
 function deselectProp(){
   if(!selectedProp) return;
   selectedProp = null;
@@ -2228,6 +2263,26 @@ function openPropManager(roomKey, slotId){
   });
 }
 
+function openSignManager(roomKey, buildingKey){
+  const current = signAssetFor(roomKey, buildingKey);
+  openAssetPicker({
+    allow: ['sign'], allowRemove: !!current,
+    onClose: () => { inputLocked = false; },
+    onPick: id => setSignOverride(roomKey, buildingKey, id),
+    onRemove: () => setSignOverride(roomKey, buildingKey, null)
+  });
+}
+
+// Opens the asset picker appropriate to the current selection (sign skin for a
+// selected sign, prop asset otherwise). Shared by the gear icon, the Enter key
+// and the touch "Change" button so all three stay in sync.
+function openManagerForSelection(){
+  if(!selectedProp) return;
+  inputLocked = true;
+  if(selectedProp.kind === 'sign') openSignManager(selectedProp.roomKey, selectedProp.buildingKey);
+  else openPropManager(selectedProp.roomKey, selectedProp.slotId);
+}
+
 // arrows nudge the selected prop 0.1m per press. Floor props move along the
 // camera's current forward/right (so "right" always means the player's
 // right); wall props move along the wall's own axes instead, since you're
@@ -2235,8 +2290,24 @@ function openPropManager(roomKey, slotId){
 // camera-relative, and ground (low) wall props only get left/right.
 function nudgeSelected(key){
   if(!selectedProp) return;
-  const { roomKey, slotId, kind, ground } = selectedProp;
+  const { roomKey, slotId, kind, ground, buildingKey } = selectedProp;
   const room = mergedRoom(roomKey);
+
+  // A building sign moves freely on the lawn (camera-relative, same convention
+  // as floor props), clamped to the room bounds. Its offset persists in
+  // r.signPos rather than the slot-xform store.
+  if(kind === 'sign'){
+    const fwd = cameraForwardVec(), right = cameraRightVec();
+    const cur = signPosFor(roomKey, buildingKey) || {};
+    let dx = cur.dx || 0, dz = cur.dz || 0;
+    if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
+    setSignPos(roomKey, buildingKey, { dx, dz });
+    return;
+  }
+
   const slot = slotById(room, roomKey, slotId);
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
@@ -2286,7 +2357,7 @@ function nudgeSelected(key){
 }
 
 function scaleSelected(factor){
-  if(!selectedProp) return;
+  if(!selectedProp || selectedProp.kind === 'sign') return; // signs are fixed-size
   const { roomKey, slotId } = selectedProp;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, (xform.scale || 1) * factor));
@@ -2331,6 +2402,16 @@ function handleEditTarget(ud){
     else selectProp(roomKey, ud.slotId);
     return;
   }
+  if(ud.kind === 'sign'){
+    if(selectedProp && selectedProp.kind === 'sign' && selectedProp.buildingKey === ud.buildingKey) deselectProp();
+    else selectSign(ud.roomKey, ud.buildingKey);
+    return;
+  }
+  if(ud.kind === 'sign-gear'){
+    inputLocked = true;
+    openSignManager(roomKey, ud.buildingKey);
+    return;
+  }
   if(selectedProp){ deselectProp(); return; }
 
   inputLocked = true;
@@ -2365,13 +2446,6 @@ function handleEditTarget(ud){
       onPick: id => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, null)
     });
-  } else if(ud.kind === 'sign'){
-    const current = signAssetFor(ud.roomKey, ud.buildingKey);
-    openAssetPicker({
-      allow: ['sign'], allowRemove: !!current, onClose,
-      onPick: id => setSignOverride(ud.roomKey, ud.buildingKey, id),
-      onRemove: () => setSignOverride(ud.roomKey, ud.buildingKey, null)
-    });
   } else if(ud.kind === 'yard'){
     const current = yardAssetFor(ud.roomKey, ud.buildingKey);
     openAssetPicker({
@@ -2397,7 +2471,9 @@ function updateEditHud(){
   if(selectedProp){
     editHud.textContent = selectedProp.kind === 'mnemonic'
       ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
-      : 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
+      : selectedProp.kind === 'sign'
+        ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
+        : 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
     editHud.style.display = 'block';
     return;
   }
@@ -2540,6 +2616,7 @@ function updateEditTouchControls(){
   editTouchEl.innerHTML = '';
   editTouchEl.style.display = 'block';
   const mnem = selectedProp.kind === 'mnemonic';
+  const sign = selectedProp.kind === 'sign';
 
   // directional pad, bottom-right (a + arrangement with empty corners)
   const pad = document.createElement('div');
@@ -2557,7 +2634,7 @@ function updateEditTouchControls(){
   const col = document.createElement('div');
   col.style.cssText = 'position:absolute;left:10px;bottom:14px;display:flex;flex-direction:column;gap:6px;';
   const rowOf = (...els) => { const r = document.createElement('div'); r.style.cssText = 'display:flex;gap:6px'; r.append(...els); return r; };
-  col.appendChild(rowOf(
+  if(!sign) col.appendChild(rowOf(            // signs are fixed-size, no scaling
     makeTouchBtn('Bigger', () => scaleSelected(SCALE_STEP)),
     makeTouchBtn('Smaller', () => scaleSelected(1 / SCALE_STEP))
   ));
@@ -2566,7 +2643,7 @@ function updateEditTouchControls(){
     makeTouchBtn('Lower', () => nudgeSelected('PageDown'))
   ));
   else col.appendChild(rowOf(
-    makeTouchBtn('Change', () => { inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); })
+    makeTouchBtn('Change', () => openManagerForSelection())
   ));
   col.appendChild(rowOf(makeTouchBtn('Done', () => deselectProp())));
   editTouchEl.appendChild(col);
@@ -2937,7 +3014,7 @@ function onKeyDown(e){
     // mnemonic billboards aren't asset-based -- there's nothing for the
     // picker to swap, so Enter is a no-op for them.
     if(e.key === 'Enter' && selectedProp.kind !== 'mnemonic'){
-      inputLocked = true; openPropManager(selectedProp.roomKey, selectedProp.slotId); return;
+      openManagerForSelection(); return;
     }
     if(e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
       nudgeSelected(e.key);
