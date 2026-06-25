@@ -2664,6 +2664,17 @@ $('engineMaxDepthSelect').onchange = () => {
 const engineModeTag = () => !engine.ready ? ''
   : engine.multithreaded ? ` · ${engine.threads} threads` : ' · 1 thread';
 
+/* the STOP button only appears while a live search is actually running (it can
+   peg several cores), so the user can halt it without resorting to dropping the
+   depth. Stopping just lets the current search finish early -- whatever lines
+   were found so far stay on screen. */
+const showEngineStop = on => { $('engineStopBtn').style.display = on ? 'inline-flex' : 'none'; };
+$('engineStopBtn').onclick = () => {
+  engine.stop();
+  showEngineStop(false);
+  $('engineDepth').textContent = $('engineDepth').textContent.replace(/^Live — /, 'Stopped — ');
+};
+
 engine.init().then(() => {
   // surface the engine mode as soon as it's ready, if nothing is analysing yet
   if(!$('engineDepth').textContent){
@@ -2973,6 +2984,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(fen === STARTING_FEN){
     console.debug(`[runEngine] runId=${runId} starting position, skipping analysis to save cycles`);
     engine.stop();
+    showEngineStop(false);
     $('engineDepth').textContent = '';
     $('engineLines').innerHTML = '';
     onComplete?.();
@@ -2983,6 +2995,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   if(!engine.ready){ console.warn(`[runEngine] runId=${runId} engine never became ready, aborting`); return; }
   $('engineDepth').textContent = `Live — Thinking…${engineModeTag()}`;
   $('engineLines').innerHTML = '';
+  showEngineStop(true);
   expandedPvLines.clear();
   const multipv = engineMultiPV();
   const depth = engineMaxDepth();
@@ -2998,7 +3011,9 @@ async function runEngine(fen, onEvalUpdate, onComplete){
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
-    if(runId === engineRunId) onComplete?.();
+    // only the current run owns the status UI -- a stale run resolving (because
+    // a newer search superseded it) must not hide the button the new run lit.
+    if(runId === engineRunId){ showEngineStop(false); onComplete?.(); }
   }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
