@@ -190,25 +190,88 @@ function yardAssetFor(roomKey, buildingKey){
 function doorKey(wall, offset){
   return `${wall}@${offset}`;
 }
+function clampNum(v, lo, hi){
+  return Math.min(hi, Math.max(lo, v));
+}
+// projects a world-space point (meters, room-local) onto the nearest wall,
+// returning {wall, offset} clamped away from corners by the doorway's own
+// half-width so a dragged door never overhangs the end of a wall.
+function nearestWallPoint(rw, rd, wx, wz){
+  const marginW = DOOR_W/2 + 0.3;
+  const xLo = -rw/2 + marginW, xHi = rw/2 - marginW;
+  const zLo = -rd/2 + marginW, zHi = rd/2 - marginW;
+  const candidates = [
+    { wall: 'north', dist: Math.abs(wz - (-rd/2)), offset: clampNum(wx, xLo, xHi) },
+    { wall: 'south', dist: Math.abs(wz - (rd/2)),  offset: clampNum(wx, xLo, xHi) },
+    { wall: 'west',  dist: Math.abs(wx - (-rw/2)), offset: clampNum(wz, zLo, zHi) },
+    { wall: 'east',  dist: Math.abs(wx - (rw/2)),  offset: clampNum(wz, zLo, zHi) }
+  ];
+  candidates.sort((a, b) => a.dist - b.dist);
+  return { wall: candidates[0].wall, offset: candidates[0].offset };
+}
 function doorAssetFor(roomKey, dKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey];
   return id ? ASSET_BY_ID[id] : null;
 }
-// the static ROOMS table with any LAYOUT[roomKey].geom (w/d/h) override folded
-// onto its size -- the single accessor every size-dependent read should use,
-// so a saved room-dimension edit takes effect everywhere without touching the
-// dozens of call sites that already take a `room` object as a parameter.
+// the static ROOMS table with any LAYOUT[roomKey].geom (w/d/h) override and
+// any LAYOUT[roomKey].exits (per-target wall/offset) override folded in --
+// the single accessor every size- or exit-dependent read should use, so a
+// saved room-dimension or door-position edit takes effect everywhere without
+// touching the dozens of call sites that already take a `room` object as a
+// parameter. Exit overrides are keyed by target room (the stable identity an
+// exit resolves by), not by wall/offset, and only ever touch the room they're
+// stored under -- door moves are single-sided by construction: moving
+// roomA's door to roomB doesn't move roomB's door back to roomA.
 function mergedRoom(roomKey){
   const room = ROOMS[roomKey];
   if(!room) return room;
-  const geom = LAYOUT[roomKey] && LAYOUT[roomKey].geom;
-  if(!geom) return room;
-  return Object.assign({}, room, { size: Object.assign({}, room.size, geom) });
+  const L = LAYOUT[roomKey];
+  if(!L || (!L.geom && !L.exits)) return room;
+  const size = L.geom ? Object.assign({}, room.size, L.geom) : room.size;
+  let exits = room.exits;
+  if(L.exits && room.exits){
+    exits = room.exits.map(ex => {
+      const ov = L.exits[ex.target];
+      return ov ? Object.assign({}, ex, ov) : ex;
+    });
+  }
+  return Object.assign({}, room, { size, exits });
 }
 function setRoomGeom(roomKey, geom){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     r.geom = geom;
+  });
+}
+// commits a room-geometry-dialog session in one rebuild: the width/depth/
+// height patch plus any door moves (keyed by target room). `exitMoves` is a
+// { [target]: {wall, offset} } map of just the doors that actually moved from
+// their static position -- entries matching the static position are omitted
+// so a drag-then-drag-back doesn't leave a no-op override behind. Any door
+// skin saved under the old wall@offset key migrates to the new one.
+function commitRoomGeomDialog(roomKey, geom, exitMoves){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    r.geom = geom;
+    const staticExits = ROOMS[roomKey].exits || [];
+    for(const ex of staticExits){
+      const oldOv = r.exits[ex.target];
+      const oldWall = oldOv ? oldOv.wall : ex.wall;
+      const oldOffset = oldOv ? oldOv.offset : ex.offset;
+      const move = exitMoves[ex.target];
+      if(!move){ continue; }
+      if(move.wall === ex.wall && Math.abs(move.offset - ex.offset) < 0.001){
+        delete r.exits[ex.target];
+      } else {
+        r.exits[ex.target] = { wall: move.wall, offset: move.offset };
+      }
+      const oldKey = doorKey(oldWall, oldOffset);
+      const newKey = doorKey(move.wall, move.offset);
+      if(oldKey !== newKey && r.doors[oldKey] != null){
+        r.doors[newKey] = r.doors[oldKey];
+        delete r.doors[oldKey];
+      }
+    }
   });
 }
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
@@ -386,6 +449,7 @@ function ensureRoomLayout(roomKey){
   if(!r.signs) r.signs = {};
   if(!r.yards) r.yards = {};
   if(!r.doors) r.doors = {};
+  if(!r.exits) r.exits = {};
   return r;
 }
 
@@ -2392,8 +2456,8 @@ function renderRoomGeomDialog(ov, roomKey){
           <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomH" value="${h}" style="width:6em">
         </label>
       </div>
-      <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem"></canvas>
-      <p style="margin:0 0 .7rem;font-size:.72rem;color:#888;text-align:center">Top-down plan (read-only). Green = doorway, hatched = stairs.</p>
+      <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab"></canvas>
+      <p style="margin:0 0 .7rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a green doorway to nudge it or move it to another wall. Hatched = stairs.</p>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <button id="roomGeomResetBtn">Reset</button>
         <div>
@@ -2413,20 +2477,41 @@ function renderRoomGeomDialog(ov, roomKey){
   const stairs = staticRoom.stairs || null;
   const buildings = staticRoom.buildings || [];
 
+  // staged door positions: target room -> {wall, offset}, seeded from any
+  // existing override (or the static position) and only committed on Apply.
+  // Single-sided by construction -- this only ever edits roomKey's own exits.
+  const stagedExits = {};
+  for(const ex of staticExits){
+    const ov2 = LAYOUT[roomKey] && LAYOUT[roomKey].exits && LAYOUT[roomKey].exits[ex.target];
+    stagedExits[ex.target] = ov2 ? { wall: ov2.wall, offset: ov2.offset } : { wall: ex.wall, offset: ex.offset };
+  }
+  let dragTarget = null;     // staticExits[i].target currently being dragged
+  let dragStartWall = null;  // wall the drag began on, used as the fallback when the candidate wall is occupied
+
   // top-down plan: world +x is east (right), +z is south (down), so north is
-  // at the top of the canvas -- matches walking in facing north.
-  const drawPlan = () => {
-    const ctx = canvas.getContext('2d');
+  // at the top of the canvas -- matches walking in facing north. planGeom()
+  // is shared by drawPlan and the pointer handlers below so drag math uses
+  // exactly the same projection as the render.
+  const planGeom = () => {
     const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
     const rw = Math.max(0.1, Number(wEl.value) || 0), rd = Math.max(0.1, Number(dEl.value) || 0);
     const margin = 30;
     const scale = Math.min((W - margin*2) / rw, (H - margin*2) / rd);
     const pw = rw * scale, pd = rd * scale;
     const ox = (W - pw) / 2, oy = (H - pd) / 2;
-    // world (x,z) in meters -> canvas px
-    const px = (x) => ox + pw/2 + x*scale;
-    const pz = (z) => oy + pd/2 + z*scale;
+    return {
+      W, H, rw, rd, scale, pw, pd, ox, oy,
+      px: (x) => ox + pw/2 + x*scale,
+      pz: (z) => oy + pd/2 + z*scale,
+      worldX: (cx) => (cx - ox - pw/2) / scale,
+      worldZ: (cz) => (cz - oy - pd/2) / scale
+    };
+  };
+
+  const drawPlan = () => {
+    const ctx = canvas.getContext('2d');
+    const { W, H, rw, rd, scale, pw, pd, ox, oy, px, pz } = planGeom();
+    ctx.clearRect(0, 0, W, H);
 
     // stair footprint: full width, from its south edge (fromZ) up to the north
     // wall, drawn as a diagonal hatch with an arrow toward the high (north) end.
@@ -2465,17 +2550,19 @@ function renderRoomGeomDialog(ov, roomKey){
     const doorPx = DOOR_W * scale;
     ctx.font = '9px sans-serif';
     for(const ex of staticExits){
-      ctx.fillStyle = '#2e7d32';
-      ctx.strokeStyle = '#2e7d32'; ctx.lineWidth = 4;
+      const pos = stagedExits[ex.target];
+      const dragging = dragTarget === ex.target;
+      ctx.fillStyle = dragging ? '#f9a825' : '#2e7d32';
+      ctx.strokeStyle = dragging ? '#f9a825' : '#2e7d32'; ctx.lineWidth = dragging ? 6 : 4;
       let lx, ly;                              // label anchor, just inside the wall
       ctx.beginPath();
-      if(ex.wall === 'north'){ const cx = px(ex.offset); ctx.moveTo(cx - doorPx/2, oy); ctx.lineTo(cx + doorPx/2, oy); lx = cx; ly = oy + 11; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
-      if(ex.wall === 'south'){ const cx = px(ex.offset); ctx.moveTo(cx - doorPx/2, oy+pd); ctx.lineTo(cx + doorPx/2, oy+pd); lx = cx; ly = oy + pd - 4; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
-      if(ex.wall === 'west'){  const cz = pz(ex.offset); ctx.moveTo(ox, cz - doorPx/2); ctx.lineTo(ox, cz + doorPx/2); lx = ox + 3; ly = cz; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; }
-      if(ex.wall === 'east'){  const cz = pz(ex.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
+      if(pos.wall === 'north'){ const cx = px(pos.offset); ctx.moveTo(cx - doorPx/2, oy); ctx.lineTo(cx + doorPx/2, oy); lx = cx; ly = oy + 11; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
+      if(pos.wall === 'south'){ const cx = px(pos.offset); ctx.moveTo(cx - doorPx/2, oy+pd); ctx.lineTo(cx + doorPx/2, oy+pd); lx = cx; ly = oy + pd - 4; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; }
+      if(pos.wall === 'west'){  const cz = pz(pos.offset); ctx.moveTo(ox, cz - doorPx/2); ctx.lineTo(ox, cz + doorPx/2); lx = ox + 3; ly = cz; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; }
+      if(pos.wall === 'east'){  const cz = pz(pos.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
       ctx.stroke();
       const label = ex.target + (ex.back ? ' ↩' : '');
-      ctx.fillStyle = '#1b5e20';
+      ctx.fillStyle = dragging ? '#7a4a00' : '#1b5e20';
       ctx.fillText(label, lx, ly);
     }
     ctx.textBaseline = 'alphabetic';
@@ -2493,11 +2580,92 @@ function renderRoomGeomDialog(ov, roomKey){
     ctx.fillText(`${rw.toFixed(1)} × ${rd.toFixed(1)} m  (height ${hv.toFixed(1)} m)`, W/2, H - 6);
   };
   [wEl, dEl, hEl].forEach(el => el.addEventListener('input', drawPlan));
+
+  // hit-tests a canvas-space point against each staged doorway segment,
+  // returning the target room of the closest one within the pick radius.
+  const hitTestDoor = (cx, cz) => {
+    const { px, pz, scale } = planGeom();
+    const doorPx = DOOR_W * scale, pad = 8;
+    let best = null, bestDist = Infinity;
+    for(const ex of staticExits){
+      const pos = stagedExits[ex.target];
+      let dist;
+      let segX0, segY0, segX1, segY1;
+      if(pos.wall === 'north'){ const cxp = px(pos.offset); const { oy } = planGeom(); segX0 = cxp - doorPx/2; segY0 = oy; segX1 = cxp + doorPx/2; segY1 = oy; }
+      else if(pos.wall === 'south'){ const cxp = px(pos.offset); const { oy, pd } = planGeom(); segX0 = cxp - doorPx/2; segY0 = oy + pd; segX1 = cxp + doorPx/2; segY1 = oy + pd; }
+      else if(pos.wall === 'west'){ const czp = pz(pos.offset); const { ox } = planGeom(); segX0 = ox; segY0 = czp - doorPx/2; segX1 = ox; segY1 = czp + doorPx/2; }
+      else { const czp = pz(pos.offset); const { ox, pw } = planGeom(); segX0 = ox + pw; segY0 = czp - doorPx/2; segX1 = ox + pw; segY1 = czp + doorPx/2; }
+      const midX = (segX0 + segX1)/2, midY = (segY0 + segY1)/2;
+      const along = pos.wall === 'north' || pos.wall === 'south' ? Math.abs(cx - midX) : Math.abs(cz - midY);
+      const across = pos.wall === 'north' || pos.wall === 'south' ? Math.abs(cz - midY) : Math.abs(cx - midX);
+      if(along <= doorPx/2 + pad && across <= pad){
+        dist = along + across;
+        if(dist < bestDist){ bestDist = dist; best = ex.target; }
+      }
+    }
+    return best;
+  };
+
+  // returns true if `wall`/`offset` would overlap another exit already
+  // staged on that wall (excluding `exceptTarget`, the one being dragged).
+  const wallOccupied = (wall, offset, exceptTarget) => {
+    for(const target in stagedExits){
+      if(target === exceptTarget) continue;
+      const pos = stagedExits[target];
+      if(pos.wall === wall && Math.abs(pos.offset - offset) < DOOR_W + 0.2) return true;
+    }
+    return false;
+  };
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const cz = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const hit = hitTestDoor(cx, cz);
+    if(!hit) return;
+    dragTarget = hit;
+    dragStartWall = stagedExits[hit].wall;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+    drawPlan();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if(!dragTarget) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const cz = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const { rw, rd, worldX, worldZ } = planGeom();
+    const wx = worldX(cx), wz = worldZ(cz);
+    let candidate = nearestWallPoint(rw, rd, wx, wz);
+    if(candidate.wall !== dragStartWall && wallOccupied(candidate.wall, candidate.offset, dragTarget)){
+      // candidate wall is taken -- fall back to sliding along the wall the drag started on
+      const marginW = DOOR_W/2 + 0.3;
+      if(dragStartWall === 'north' || dragStartWall === 'south'){
+        candidate = { wall: dragStartWall, offset: clampNum(wx, -rw/2 + marginW, rw/2 - marginW) };
+      } else {
+        candidate = { wall: dragStartWall, offset: clampNum(wz, -rd/2 + marginW, rd/2 - marginW) };
+      }
+    }
+    if(!wallOccupied(candidate.wall, candidate.offset, dragTarget)){
+      stagedExits[dragTarget] = candidate;
+    }
+    drawPlan();
+  });
+  const endDrag = () => {
+    dragTarget = null;
+    dragStartWall = null;
+    canvas.style.cursor = 'grab';
+    drawPlan();
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+
   drawPlan();
   ov.querySelector('#roomGeomCancelBtn').onclick = closeRoomGeomDialog;
   ov.querySelector('#roomGeomResetBtn').onclick = () => {
     const base = ROOMS[roomKey].size;
     wEl.value = base.w; dEl.value = base.d; hEl.value = base.h;
+    for(const ex of staticExits){ stagedExits[ex.target] = { wall: ex.wall, offset: ex.offset }; }
     drawPlan();
   };
   ov.querySelector('#roomGeomApplyBtn').onclick = () => {
@@ -2505,7 +2673,7 @@ function renderRoomGeomDialog(ov, roomKey){
     const d2 = Math.max(ROOM_GEOM_MIN, Number(dEl.value) || room.size.d);
     const h2 = Math.max(ROOM_GEOM_MIN, Number(hEl.value) || room.size.h);
     closeRoomGeomDialog();
-    setRoomGeom(roomKey, { w: w2, d: d2, h: h2 });
+    commitRoomGeomDialog(roomKey, { w: w2, d: d2, h: h2 }, stagedExits);
   };
 }
 
