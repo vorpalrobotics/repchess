@@ -1159,8 +1159,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
     const metaTr = document.createElement('tr');
     metaTr.className = 'meta-row';
+    const metaSpacerTd = document.createElement('td');
+    metaSpacerTd.className = 'resp';
+    metaTr.appendChild(metaSpacerTd);
     const metaTd = document.createElement('td');
-    metaTd.colSpan = 5;
+    metaTd.colSpan = 4;
     metaTr.appendChild(metaTd);
     tr.after(metaTr);
 
@@ -1186,9 +1189,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
     function continuationHtml(){
       if(!showContinuation) return '';
       const ev = currentSaved()?.eval;
-      if(!ev?.pv) return `<span class="meta-pv"><i class="fa-solid fa-route"></i><em>not available</em></span>`;
+      if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
       const chips = pvChipsFromSan(ev.pvFen || fenForSeq(lineSeq), ev.pv);
-      return `<span class="meta-pv"><i class="fa-solid fa-route"></i>${chips || escapeHtml(ev.pv)}</span>`;
+      return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
     }
     function refreshMeta(){
       const saved = currentSaved();
@@ -1473,8 +1476,11 @@ function renderBlackRoot(parent,games,trigger){
 
   const metaTr = document.createElement('tr');
   metaTr.className = 'meta-row';
+  const metaSpacerTd = document.createElement('td');
+  metaSpacerTd.className = 'resp';
+  metaTr.appendChild(metaSpacerTd);
   const metaTd = document.createElement('td');
-  metaTd.colSpan = 5;
+  metaTd.colSpan = 4;
   metaTr.appendChild(metaTd);
   tr.after(metaTr);
 
