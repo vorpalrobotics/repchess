@@ -1443,7 +1443,8 @@ function placeMnemonicSlot(roomKey, slot){
     const img = entry && entry[move.piece + 'Img'];
     const word = entry && entry[move.piece];
     if(img) setSpriteToImage(sprite, img);
-    else if(word && word.trim()) setSpriteToText(sprite, word.trim());
+    // word fallback shows the cue *and* the move so it's unambiguous, e.g. "Famine (Nf3)"
+    else if(word && word.trim()) setSpriteToText(sprite, `${word.trim()} (${move.san})`);
     // else: already showing the algebraic-notation fallback set above
   });
   return sprite;
