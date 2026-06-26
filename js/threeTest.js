@@ -1584,7 +1584,9 @@ function drawSignText(ctx, w, h, text, textY, fontPx){
 // look to a full freestanding sign: the canvas aspect matches the board so the
 // skin isn't distorted, and the name is drawn across the upper third to clear
 // the legs that the skin art paints in. Without `board` it's the legacy
-// 3.4m × 0.85m panel with the name centered.
+// 3.4m × 0.85m panel with the name centered. Built as a thin slab (not a flat
+// plane) so the board reads as a real object from the side, not a paper cutout.
+const SIGN_DEPTH = 0.1;
 function makeSignMesh(text, skinSrc, board){
   const px = 150;
   const meshW = board ? board.w : 3.4;
@@ -1600,8 +1602,8 @@ function makeSignMesh(text, skinSrc, board){
   drawSignText(ctx, cw, ch, text, textY, fontPx);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  // transparent so a skin with cut-out legs/edges shows the world behind it
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+  const faceMat = new THREE.MeshBasicMaterial({ map: tex });
+  const edgeMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
   if(skinSrc){
     const myGeneration = buildGeneration;
     const img = new Image();
@@ -1614,7 +1616,13 @@ function makeSignMesh(text, skinSrc, board){
     };
     img.src = skinSrc;
   }
-  return new THREE.Mesh(new THREE.PlaneGeometry(meshW, meshH), mat);
+  // BoxGeometry material order: +x, -x, +y, -y, +z, -z. The artwork sits on
+  // the +z face (the side facing the street, same convention buildGroundSign
+  // already uses); the thin edges and the blank back read as the board itself.
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(meshW, meshH, SIGN_DEPTH),
+    [edgeMat, edgeMat, edgeMat, edgeMat, faceMat, edgeMat]
+  );
 }
 
 // Mounts a mesh flush against a wall facing *outward* (away from the
