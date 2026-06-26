@@ -1180,14 +1180,24 @@ function renderBranch(parent,games,seq,depth,flip=false){
     attachHoverPreview(btnEval, lineSeq);
     const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
+    /* continuation (PV) line, shown only while toggled open by tapping the
+       eval tag; "not available" covers evals saved before PV storage existed */
+    let showContinuation = false;
+    function continuationHtml(){
+      if(!showContinuation) return '';
+      const pv = currentSaved()?.eval?.pv;
+      return `<span class="meta-pv"><i class="fa-solid fa-route"></i>${pv ? escapeHtml(pv) : '<em>not available</em>'}</span>`;
+    }
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
       const note = saved?.note || '';
-      if(!mnem && !note){ metaTr.style.display='none'; return; }
+      const pvHtml = continuationHtml();
+      if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '');
+        (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+        pvHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
@@ -1196,6 +1206,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     }
     refreshMeta();
+    evalSpan.onclick = () => {
+      if(!currentSaved()?.eval) return;
+      showContinuation = !showContinuation;
+      refreshMeta();
+    };
     refreshRowMenuLabels(rowMenu, currentSaved());
 
     function saveField(field,value){

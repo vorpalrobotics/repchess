@@ -47,7 +47,7 @@
   .add-move .addMoveBtn{color:#aaa;font-size:.85em}
   .add-move .addMoveBtn:hover{color:#777}
 
-  .evaltag{font-weight:700;font-family:'Courier New',monospace}
+  .evaltag{font-weight:700;font-family:'Courier New',monospace;cursor:pointer}
   .evaltag.evaltag-live{outline:2px solid #1565c0;outline-offset:2px;border-radius:3px;animation:evaltag-live-pulse 1.2s ease-in-out infinite}
   @keyframes evaltag-live-pulse{0%,100%{outline-color:#1565c0}50%{outline-color:#90caf9}}
   .evaltag.eval-neutral  {color:#777}
@@ -77,6 +77,8 @@
   tr.meta-row .meta-note{margin-right:1.3em;cursor:pointer}
   tr.meta-row .meta-mnem:hover,
   tr.meta-row .meta-note:hover{text-decoration:underline}
+  tr.meta-row .meta-pv{margin-right:1.3em;font-family:'Courier New',monospace}
+  tr.meta-row .meta-pv em{color:#999}
   tr.meta-row i{margin-right:.35em;color:#888}
 
   .row-menu-wrap{position:relative;display:inline-block}
