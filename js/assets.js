@@ -72,6 +72,7 @@ let EDIT_IMG_H = 0;       // aspect ratio shown in the note and used by the size
 let SIZE_LOCK = true;     // when on, editing width (m) auto-sets height (m) to match the
                           // image's pixel aspect ratio, and vice versa. Depth stays manual.
 let FILTER_TYPE = 'all';
+let FILTER_TEXT = '';
 
 function $(id){ return containerEl.querySelector(`#${id}`); }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -98,6 +99,7 @@ function buildShell(){
         <option value="all">All types</option>
         ${Object.entries(ASSET_TYPES).map(([t,info]) => `<option value="${t}">${esc(info.label)}</option>`).join('')}
       </select>
+      <input type="text" id="assetsFilterText" class="assets-search" placeholder="Search name…">
       <span class="assets-count" id="assetsCount"></span>
       <span class="assets-spacer"></span>
       <button id="assetsNewBtn"><i class="fa-solid fa-plus"></i> New Asset</button>
@@ -110,6 +112,7 @@ function buildShell(){
     </div>
   `;
   $('assetsFilterType').onchange = e => { FILTER_TYPE = e.target.value; renderGrid(); };
+  $('assetsFilterText').oninput = e => { FILTER_TEXT = e.target.value.trim().toLowerCase(); renderGrid(); };
   $('assetsNewBtn').onclick = () => openEditor(null);
   $('assetsExportJsonBtn').onclick = exportAllAsJson;
   $('assetsExportBtn').onclick = exportAllAsFiles;
@@ -127,7 +130,8 @@ async function refreshGrid(){
 
 function renderGrid(){
   const grid = $('assetsGrid');
-  const visible = FILTER_TYPE === 'all' ? ASSETS : ASSETS.filter(a => a.type === FILTER_TYPE);
+  let visible = FILTER_TYPE === 'all' ? ASSETS : ASSETS.filter(a => a.type === FILTER_TYPE);
+  if(FILTER_TEXT) visible = visible.filter(a => a.id.toLowerCase().includes(FILTER_TEXT));
   $('assetsCount').textContent = `${visible.length} asset${visible.length===1?'':'s'}`;
   if(!visible.length){
     grid.innerHTML = '<p class="assets-empty">No assets yet. Click "New Asset" to upload one.</p>';
