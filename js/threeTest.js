@@ -1292,48 +1292,48 @@ function yardMarkerMaterial(){
   }
   return yardMarkerMat;
 }
-const YARD_PATCH_MARGIN = 1.0;     // extra lawn past the outermost slots, each side
-const YARD_PATCH_OUTSET = 1.8;     // extra depth past the slots, away from the wall
-const YARD_PATCH_ROAD_GAP = 0.4;   // stop the front lawn this far short of a road it runs up to
-const YARD_PATCH_MAX_DEPTH = 14;   // never grow the front lawn past this, even with a distant road
+const YARD_PLOT_GROW = 9;     // max lawn grown out past the footprint on a side with no road
+const YARD_PLOT_GAP  = 0.4;   // stop the lawn this far short of a bounding road
 
-// How deep the front-yard grass patch should reach: from the building's front
-// wall out to just shy of the nearest road directly in front of it (so the lawn
-// fills the whole gap between house and street, not just a thin door-side band).
-// Falls back to the base outset depth when no road faces the door.
-function frontYardDepth(room, b, axis, fixed, outSign, halfAlong){
-  const base = YARD_SLOT_DEPTH + YARD_PATCH_OUTSET;
-  const roads = room && room.roads;
-  if(!roads || !roads.length) return base;
-  // perpendicular (depth) axis is z for an x-running wall, x otherwise
-  const perpWall   = fixed + (axis === 'x' ? b.origin.z : b.origin.x);
-  const alongCenter = b.doorOffset + (axis === 'x' ? b.origin.x : b.origin.z);
-  const alongMin = alongCenter - halfAlong, alongMax = alongCenter + halfAlong;
-  let best = Infinity;
+// The building's lawn plot: its footprint grown outward on each side until it
+// meets the nearest road that crosses that side (so the grass fills the whole
+// fenced front/side lawn bounded by the streets), or YARD_PLOT_GROW when no
+// road blocks. Returns world-space {minX,maxX,minZ,maxZ}.
+function buildingPlotRect(room, b){
+  const fX0 = b.origin.x - b.size.w/2, fX1 = b.origin.x + b.size.w/2;
+  const fZ0 = b.origin.z - b.size.d/2, fZ1 = b.origin.z + b.size.d/2;
+  const roads = (room && room.roads) || [];
+  const overlap = (a0,a1,c0,c1) => a1 > c0 && c1 > a0;
+  // each road's world extents
+  const ext = r => ({ x0: r.x - r.sx/2, x1: r.x + r.sx/2, z0: r.z - r.sz/2, z1: r.z + r.sz/2 });
+  let maxX = fX1 + YARD_PLOT_GROW, minX = fX0 - YARD_PLOT_GROW;
+  let maxZ = fZ1 + YARD_PLOT_GROW, minZ = fZ0 - YARD_PLOT_GROW;
   for(const r of roads){
-    const perpC  = (axis === 'x') ? r.z : r.x;
-    const perpH  = ((axis === 'x') ? r.sz : r.sx) / 2;
-    const alongC = (axis === 'x') ? r.x : r.z;
-    const alongH = ((axis === 'x') ? r.sx : r.sz) / 2;
-    if(alongC + alongH < alongMin || alongC - alongH > alongMax) continue;  // road doesn't span the front
-    const nearEdge = perpC - outSign * perpH;        // road edge closest to the wall
-    const dist = outSign * (nearEdge - perpWall);    // >0 when the road sits in front of the door
-    if(dist > 0.2 && dist < best) best = dist;
+    const e = ext(r);
+    if(overlap(fZ0, fZ1, e.z0, e.z1)){          // road spans the building's z-range -> bounds east/west
+      if(e.x0 >= fX1) maxX = Math.min(maxX, e.x0 - YARD_PLOT_GAP);
+      if(e.x1 <= fX0) minX = Math.max(minX, e.x1 + YARD_PLOT_GAP);
+    }
+    if(overlap(fX0, fX1, e.x0, e.x1)){          // road spans the building's x-range -> bounds north/south
+      if(e.z0 >= fZ1) maxZ = Math.min(maxZ, e.z0 - YARD_PLOT_GAP);
+      if(e.z1 <= fZ0) minZ = Math.max(minZ, e.z1 + YARD_PLOT_GAP);
+    }
   }
-  if(best === Infinity) return base;
-  return Math.min(YARD_PATCH_MAX_DEPTH, Math.max(base, best - YARD_PATCH_ROAD_GAP));
+  // never spill past the outdoor ground plane itself
+  const RW = (room && room.size ? room.size.w : 1e4) / 2;
+  const RD = (room && room.size ? room.size.d : 1e4) / 2;
+  return {
+    minX: Math.max(minX, -RW), maxX: Math.min(maxX, RW),
+    minZ: Math.max(minZ, -RD), maxZ: Math.min(maxZ, RD)
+  };
 }
 function buildYardPatch(b, roomKey, buildingKey){
   const asset = yardAssetFor(roomKey, buildingKey);
   if(!asset && !editMode) return null;     // nothing to draw -> base lawn shows through
 
-  const { axis, fixed, half } = wallSpan(b.size, b.doorWall);
-  const outSign = (b.doorWall === 'south' || b.doorWall === 'east') ? 1 : -1;
-  const halfAlong = Math.max(half, YARD_SLOT_START + (YARD_SLOT_COUNT - 1) * YARD_SLOT_SPACING + YARD_PATCH_MARGIN);
-  const depth = frontYardDepth(ROOMS[roomKey], b, axis, fixed, outSign, halfAlong);
-  const alongSize = 2 * halfAlong;
-  const extentX = axis === 'x' ? alongSize : depth;
-  const extentZ = axis === 'x' ? depth : alongSize;
+  const plot = buildingPlotRect(ROOMS[roomKey], b);
+  const extentX = Math.max(0.5, plot.maxX - plot.minX);
+  const extentZ = Math.max(0.5, plot.maxZ - plot.minZ);
 
   let mat;
   if(asset){
@@ -1344,9 +1344,7 @@ function buildYardPatch(b, roomKey, buildingKey){
   }
   const patch = new THREE.Mesh(new THREE.PlaneGeometry(extentX, extentZ), mat);
   patch.rotation.x = -Math.PI/2;
-  const cx = (axis === 'x' ? b.doorOffset : fixed + outSign * depth/2) + b.origin.x;
-  const cz = (axis === 'x' ? fixed + outSign * depth/2 : b.doorOffset) + b.origin.z;
-  patch.position.set(cx, 0.012, cz);       // above base lawn (0), below slot markers (0.02)
+  patch.position.set((plot.minX + plot.maxX)/2, 0.012, (plot.minZ + plot.maxZ)/2); // above base lawn (0), below slot markers (0.02)
   patch.userData = { kind: 'yard', roomKey, buildingKey };
   return patch;
 }
