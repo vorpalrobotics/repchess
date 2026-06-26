@@ -2391,15 +2391,17 @@ async function renderMnemonicsGrid(){
       const sq = squareName(col,row);
       const isLight = (col+row)%2===0;
       const entry = MNEMONICS[sq] || {};
-      let pieceHtml;
+      let pieceHtml, squareIncomplete = false;
       if(MNEM_COVERAGE){
         pieceHtml = MNEM_PIECES
           .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
           .map(p=>{
             const occurs = MNEM_COVERAGE.has(`${sq}|${p}`);
             if(occurs){
-              if(!entry[p]) missingWords++;
-              if(!entry[p+'Img']) missingImages++;
+              const missingWord = !entry[p], missingImg = !entry[p+'Img'];
+              if(missingWord) missingWords++;
+              if(missingImg) missingImages++;
+              if(missingWord || missingImg) squareIncomplete = true;
             }
             const cls = `mnem-word${occurs?' mnem-occurs':''}`;
             return entry[p]
@@ -2414,7 +2416,7 @@ async function renderMnemonicsGrid(){
           .join('');
       }
       const div = document.createElement('div');
-      div.className = `mnem-square ${isLight?'light':'dark'}`;
+      div.className = `mnem-square ${isLight?'light':'dark'}${squareIncomplete?' mnem-incomplete':''}`;
       div.dataset.square = sq;
       div.innerHTML =
         (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
