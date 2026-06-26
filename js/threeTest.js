@@ -1841,7 +1841,12 @@ function makeSignMesh(text, skinSrc, board){
   drawSignText(ctx, cw, ch, text, textY, fontPx);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const faceMat = new THREE.MeshBasicMaterial({ map: tex });
+  // alphaTest-only cutout (no `transparent` blending) -- same fix as the
+  // billboard assets use: a plain MeshBasicMaterial ignores the canvas's
+  // alpha channel entirely and shows the transparent pixels' baked RGB
+  // (often black), which is the reported bug. Hard-discarding below the
+  // threshold also avoids the dark anti-aliased-edge halo blending would give.
+  const faceMat = new THREE.MeshBasicMaterial({ map: tex, transparent: false, alphaTest: 0.5 });
   const edgeMat = new THREE.MeshStandardMaterial({ color: 0x4a3320 });
   if(skinSrc){
     const myGeneration = buildGeneration;
