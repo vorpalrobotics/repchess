@@ -3,7 +3,7 @@ import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js';
-import { openAssetManager, closeAssetManager } from './assets.js';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
@@ -2483,6 +2483,12 @@ const mnemImgFile = p => $(`mnem${mnemCap(p)}ImgFile`);
 
 /* images are staged in memory while the editor is open, committed on Save */
 const MNEM_EDIT_IMAGES = {};
+// full-res upload behind each staged image, kept only for this editor session so
+// the Crop button can work from full quality instead of the already-downscaled
+// stored copy -- there's no full-res original once a square's image was loaded
+// from storage (only the 512px copy was ever saved), so cropping an existing,
+// not-freshly-uploaded image just crops that smaller copy.
+const MNEM_EDIT_IMAGES_ORIG = {};
 const MNEM_IMG_MAX_DIM = 512;       // stored image is downscaled to fit within this box
                                     // (512 keeps the 3D move billboards crisp up close;
                                     //  the 2D grid only ever shows a 66px thumbnail)
@@ -2503,17 +2509,16 @@ function renderMnemImgDrop(p){
   }
 }
 
-/* downscale to fit within MNEM_IMG_MAX_DIM x MNEM_IMG_MAX_DIM (no cropping).
-   Images with any transparency are kept as PNG so cut-out backgrounds survive
-   (JPEG has no alpha and would flatten transparent pixels to black); fully
-   opaque images re-encode as JPEG to keep the stored size small. */
-function resizeImageFile(file){
+/* downscale a data-URL to fit within MNEM_IMG_MAX_DIM x MNEM_IMG_MAX_DIM (no
+   cropping). Images with any transparency are kept as PNG so cut-out
+   backgrounds survive (JPEG has no alpha and would flatten transparent pixels
+   to black); fully opaque images re-encode as JPEG to keep the stored size
+   small. */
+function downscaleMnemImage(dataUrl, maxDim){
   return new Promise((resolve,reject)=>{
     const img = new Image();
-    const url = URL.createObjectURL(file);
     img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, MNEM_IMG_MAX_DIM / img.width, MNEM_IMG_MAX_DIM / img.height);
+      const scale = Math.min(1, maxDim / img.width, maxDim / img.height);
       const w = Math.max(1, Math.round(img.width * scale));
       const h = Math.max(1, Math.round(img.height * scale));
       const canvas = document.createElement('canvas');
@@ -2527,9 +2532,14 @@ function resizeImageFile(file){
       }catch(_){ /* tainted canvas — fall back to JPEG */ }
       resolve(hasAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85));
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not decode image')); };
-    img.src = url;
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.src = dataUrl;
   });
+}
+
+/* used by bulk import, which has no crop step -- read straight to the stored size */
+async function resizeImageFile(file){
+  return downscaleMnemImage(await fileToDataUrl(file), MNEM_IMG_MAX_DIM);
 }
 
 async function handleMnemImageFile(p, file){
@@ -2537,11 +2547,29 @@ async function handleMnemImageFile(p, file){
   if(!file.type.startsWith('image/')){ log('that file is not an image',true); return; }
   if(file.size > MNEM_IMG_MAX_FILE_BYTES){ log(`image too large (max ${MNEM_IMG_MAX_FILE_BYTES/1024/1024}MB)`,true); return; }
   try{
-    MNEM_EDIT_IMAGES[p] = await resizeImageFile(file);
+    // keep the full-res upload around for this editor session so Crop can work
+    // from full quality, then store the downscaled copy as usual
+    MNEM_EDIT_IMAGES_ORIG[p] = await fileToDataUrl(file);
+    MNEM_EDIT_IMAGES[p] = await downscaleMnemImage(MNEM_EDIT_IMAGES_ORIG[p], MNEM_IMG_MAX_DIM);
     renderMnemImgDrop(p);
   }catch(err){
     console.error('[mnemonics] image resize failed',err);
     log('could not read that image',true);
+  }
+}
+
+async function handleMnemImageCrop(p){
+  const source = MNEM_EDIT_IMAGES_ORIG[p] || MNEM_EDIT_IMAGES[p];
+  if(!source) return;
+  const cropped = await cropImage(source);
+  if(cropped == null) return;   // cancelled
+  try{
+    MNEM_EDIT_IMAGES_ORIG[p] = cropped;
+    MNEM_EDIT_IMAGES[p] = await downscaleMnemImage(cropped, MNEM_IMG_MAX_DIM);
+    renderMnemImgDrop(p);
+  }catch(err){
+    console.error('[mnemonics] crop failed',err);
+    log('could not crop that image',true);
   }
 }
 
@@ -2562,7 +2590,12 @@ for(const p of MNEM_PIECES){
   drop.querySelector('.mnem-img-clear').addEventListener('click', e=>{
     e.stopPropagation();
     MNEM_EDIT_IMAGES[p] = '';
+    MNEM_EDIT_IMAGES_ORIG[p] = '';
     renderMnemImgDrop(p);
+  });
+  drop.querySelector('.mnem-img-crop').addEventListener('click', e=>{
+    e.stopPropagation();
+    handleMnemImageCrop(p);
   });
 }
 
@@ -2642,6 +2675,7 @@ function openMnemonicsEditor(sq){
     mnemWordInput(p).value = entry[p] || '';
     mnemDescInput(p).value = entry[p+'Desc'] || '';
     MNEM_EDIT_IMAGES[p] = entry[p+'Img'] || '';
+    MNEM_EDIT_IMAGES_ORIG[p] = '';   // no full-res original until a fresh upload this session
     renderMnemImgDrop(p);
     const inCoverage = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
     mnemPieceIconEl(p).classList.toggle('mnem-icon-in-coverage', inCoverage);

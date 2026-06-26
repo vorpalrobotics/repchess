@@ -449,7 +449,7 @@ function wireSizeLock(){
 }
 
 /* measure the staged image and refresh the "(width: … height: … aspect: …)" note */
-function measureDataUrl(dataUrl){
+export function measureDataUrl(dataUrl){
   return new Promise(resolve => {
     if(!dataUrl){ resolve({ w:0, h:0 }); return; }
     const img = new Image();
@@ -472,7 +472,7 @@ async function updateImgInfo(){
 }
 
 /* read a file to a full-resolution PNG data-URL (no scaling) */
-function fileToDataUrl(file){
+export function fileToDataUrl(file){
   return new Promise((resolve,reject)=>{
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -491,7 +491,7 @@ function fileToDataUrl(file){
 /* down-convert a data-URL to fit within maxDim x maxDim (aspect preserved, no
    cropping); PNG keeps alpha so billboard/sprite cutouts and box transparency
    survive. Returns the source unchanged when it already fits. */
-function downscaleDataUrl(dataUrl, maxDim){
+export function downscaleDataUrl(dataUrl, maxDim){
   return new Promise((resolve,reject)=>{
     const img = new Image();
     img.onload = () => {
@@ -623,24 +623,19 @@ async function handleImageFile(file){
 function setError(msg){ $('assetsError').textContent = msg || ''; }
 function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
 
-/* Crop modal: shows the staged image full-viewport with four draggable edge
-   bars defining a crop rectangle, an Auto-crop button that snaps the bars to the
-   transparent-margin bounds, and a Crop button that cuts the working image down
-   to the current bars (repeatable). Operates on the kept full-res original when
-   there is one (a fresh upload this session) so quality is preserved, then
-   re-down-converts on save; otherwise it crops the already-staged image in place
-   (cropping only removes pixels, so the result still fits the resolution cap).
-   Cancel discards everything; Save commits the working image back to the editor. */
-function openCropModal(){
-  const source = EDIT_IMAGE_ORIG || EDIT_IMAGE;
-  if(!source){ setError('upload an image first'); return; }
-  setError('');
-
+/* Generic crop modal: shows `sourceDataUrl` full-viewport with four draggable
+   edge bars defining a crop rectangle, an Auto-crop button that snaps the bars
+   to the transparent-margin bounds, and a Crop button that cuts the working
+   image down to the current bars (repeatable). Resolves to the final cropped
+   data-URL on Save, or null on Cancel (caller's image is left untouched).
+   Shared by the asset editor's own openCropModal below and by the mnemonics
+   move-image editor in app.js. */
+export function cropImage(sourceDataUrl){
   let ov = document.getElementById('cropOverlay');
   if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); }
   ov.style.display = 'flex';
 
-  let work = source;                    // current working data-URL (full-res when available)
+  let work = sourceDataUrl;             // current working data-URL (full-res when caller passed one)
   let sel = { l:0, t:0, r:1, b:1 };     // crop rectangle as fractions of `work`
   let natW = 0, natH = 0;
 
@@ -727,36 +722,57 @@ function openCropModal(){
     img.src = work;        // onload → recompute natW/H, refit, repaint
   }
 
-  ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[assets] crop failed', err); });
-  ov.querySelector('#cropAutoBtn').onclick = async () => {
-    try{
-      const b = await alphaBoundsFrac(work);
-      if(!b){ setCropHint('image is fully transparent — nothing to bound'); return; }
-      sel = b; paint();
-    }catch(err){ console.error('[assets] auto-crop bounds failed', err); }
-  };
-  ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; };
-  ov.querySelector('#cropSaveBtn').onclick = async () => {
-    try{
-      await applyCrop();                 // commit any pending bar selection first
-      if(EDIT_IMAGE_ORIG){
-        EDIT_IMAGE_ORIG = work;
-        EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
-      } else {
-        EDIT_IMAGE = work;
+  return new Promise((resolve) => {
+    ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[crop] crop failed', err); });
+    ov.querySelector('#cropAutoBtn').onclick = async () => {
+      try{
+        const b = await alphaBoundsFrac(work);
+        if(!b){ dims.textContent = 'image is fully transparent — nothing to bound'; return; }
+        sel = b; paint();
+      }catch(err){ console.error('[crop] auto-crop bounds failed', err); }
+    };
+    ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; resolve(null); };
+    ov.querySelector('#cropSaveBtn').onclick = async () => {
+      try{
+        await applyCrop();                 // commit any pending bar selection first
+        ov.style.display = 'none';
+        resolve(work);
+      }catch(err){
+        console.error('[crop] crop save failed', err);
+        dims.textContent = 'could not crop that image';
       }
-      const drop = $('assetImgDrop');
-      if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
-      const m = await measureDataUrl(EDIT_IMAGE);
-      setCropHint(`cropped to ${m.w}×${m.h}`);
-      await updateImgInfo();             // aspect ratio changed…
-      snapHeightFromWidth();             // …so re-pull height if the size lock is on
-      ov.style.display = 'none';
-    }catch(err){
-      console.error('[assets] crop save failed', err);
-      setError('could not crop that image');
+    };
+  });
+}
+
+/* Asset editor's own crop entry point: feeds the kept full-res original when
+   there is one (a fresh upload this session) so quality is preserved, then
+   re-down-converts on save; otherwise it crops the already-staged image in
+   place (cropping only removes pixels, so the result still fits the
+   resolution cap). Cancel (cropImage resolving null) leaves the editor as-is. */
+async function openCropModal(){
+  const source = EDIT_IMAGE_ORIG || EDIT_IMAGE;
+  if(!source){ setError('upload an image first'); return; }
+  setError('');
+  const work = await cropImage(source);
+  if(work == null) return;   // cancelled
+  try{
+    if(EDIT_IMAGE_ORIG){
+      EDIT_IMAGE_ORIG = work;
+      EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
+    } else {
+      EDIT_IMAGE = work;
     }
-  };
+    const drop = $('assetImgDrop');
+    if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+    const m = await measureDataUrl(EDIT_IMAGE);
+    setCropHint(`cropped to ${m.w}×${m.h}`);
+    await updateImgInfo();             // aspect ratio changed…
+    snapHeightFromWidth();             // …so re-pull height if the size lock is on
+  }catch(err){
+    console.error('[assets] crop save failed', err);
+    setError('could not crop that image');
+  }
 }
 
 function readTypeFields(type){
