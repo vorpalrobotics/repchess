@@ -2447,6 +2447,70 @@ for(const p of MNEM_PIECES){
   });
 }
 
+/* ---------- bulk import: move images named like Nf6.png / a1.png ---------- */
+const MNEM_LETTER_TO_PIECE = {n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
+
+// "Nf6.png" -> {square:'f6', piece:'knight'}; "a1.png" (no letter) -> pawn.
+// Returns null for anything that doesn't match a piece-letter + square stem.
+function parseMoveImageFilename(filename){
+  const stem = filename.replace(/\.[^.]+$/, '');
+  const m = /^([nbrqk])?([a-h][1-8])$/i.exec(stem);
+  if(!m) return null;
+  const piece = m[1] ? MNEM_LETTER_TO_PIECE[m[1].toLowerCase()] : 'pawn';
+  return { square: m[2].toLowerCase(), piece };
+}
+
+function logImportMoveImageRow(text, isError){
+  const row = document.createElement('div');
+  row.className = isError ? 'err' : 'ok';
+  row.textContent = text;
+  $('importMoveImagesResults').appendChild(row);
+}
+
+async function importMoveImageFiles(files){
+  const list = Array.from(files).filter(f => f.type.startsWith('image/'));
+  if(!list.length) return;
+  for(const file of list){
+    const parsed = parseMoveImageFilename(file.name);
+    if(!parsed){
+      logImportMoveImageRow(`${file.name} — skipped (name doesn't look like a move, e.g. Nf6.png or a1.png)`, true);
+      continue;
+    }
+    if(file.size > MNEM_IMG_MAX_FILE_BYTES){
+      logImportMoveImageRow(`${file.name} — skipped (image too large, max ${MNEM_IMG_MAX_FILE_BYTES/1024/1024}MB)`, true);
+      continue;
+    }
+    try{
+      const dataUrl = await resizeImageFile(file);
+      await setMnemonicSquare(parsed.square, { [parsed.piece+'Img']: dataUrl });
+      logImportMoveImageRow(`${file.name} -> ${parsed.square} (${parsed.piece}) ✓`, false);
+    }catch(err){
+      console.error('[import move images]', file.name, err);
+      logImportMoveImageRow(`${file.name} — failed to read image`, true);
+    }
+  }
+}
+
+$('menuImportMoveImages').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('importMoveImagesResults').innerHTML = '';
+  $('importMoveImagesOverlay').style.display='flex';
+};
+$('importMoveImagesCloseBtn').onclick = ()=>{ $('importMoveImagesOverlay').style.display='none'; };
+const importMoveImagesDrop = $('importMoveImagesDrop');
+importMoveImagesDrop.addEventListener('click', ()=> $('importMoveImagesFile').click());
+$('importMoveImagesFile').addEventListener('change', e=>{
+  importMoveImageFiles(e.target.files);
+  e.target.value = '';
+});
+importMoveImagesDrop.addEventListener('dragover', e=>{ e.preventDefault(); importMoveImagesDrop.classList.add('dragover'); });
+importMoveImagesDrop.addEventListener('dragleave', ()=> importMoveImagesDrop.classList.remove('dragover'));
+importMoveImagesDrop.addEventListener('drop', e=>{
+  e.preventDefault();
+  importMoveImagesDrop.classList.remove('dragover');
+  importMoveImageFiles(e.dataTransfer.files);
+});
+
 function openMnemonicsEditor(sq){
   MNEM_EDIT_SQUARE = sq;
   const entry = MNEMONICS[sq] || {};

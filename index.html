@@ -308,6 +308,17 @@
   .mnem-img-drop.has-img .mnem-img-clear{display:block}
   .mnem-editor-table td:first-child{text-align:center;color:#888}
   .mnem-editor-table input{width:100%}
+
+  #importMoveImagesOverlay .modal{width:min(40em, 92vw)}
+  .import-move-images-drop{border:2px dashed #aaa;border-radius:6px;padding:2.2em 1em;
+    text-align:center;cursor:pointer;color:#666}
+  .import-move-images-drop:hover,.import-move-images-drop.dragover{border-color:#1565c0;color:#1565c0;background:#e3f2fd}
+  .import-move-images-drop i{font-size:2em;display:block;margin-bottom:.3em}
+  .import-move-images-results{max-height:240px;overflow-y:auto;margin-top:1em;font-size:.85em;
+    border-top:1px solid #ddd;padding-top:.5em}
+  .import-move-images-results div{padding:.15em 0}
+  .import-move-images-results .ok{color:#2e7d32}
+  .import-move-images-results .err{color:#c62828}
 </style>
 </head>
 <body>
@@ -318,6 +329,7 @@
     <div id="menuList">
       <button id="menuDownload">Import Games</button>
       <button id="menuMnemonics">Manage Mnemonics</button>
+      <button id="menuImportMoveImages">Import Move Images</button>
       <button id="menuQuiz">Quiz Mnemonics</button>
       <hr class="row-menu-sep">
       <button id="menuImportLine">Import Variations</button>
@@ -740,6 +752,27 @@
     <div class="modal-actions">
       <button id="mnemonicsEditorCancelBtn">Cancel</button>
       <button id="mnemonicsEditorSaveBtn">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<!-- bulk move-image import modal -->
+<div id="importMoveImagesOverlay" class="overlay">
+  <div class="modal">
+    <h2>Import Move Images</h2>
+    <p class="asset-hint">Drop image files named for the move they belong to — piece letter
+      (N/B/R/Q/K) plus the destination square, e.g. <code>Nf6.png</code> or <code>Bc4.jpg</code>.
+      Pawn moves use just the square, e.g. <code>a1.png</code>. Each file is filed into the
+      matching square's mnemonic automatically; existing images for that square/piece are
+      overwritten.</p>
+    <div id="importMoveImagesDrop" class="import-move-images-drop">
+      <i class="fa-solid fa-images"></i>
+      <span>Drop image files here, or click to choose</span>
+      <input id="importMoveImagesFile" type="file" accept="image/*" multiple style="display:none">
+    </div>
+    <div id="importMoveImagesResults" class="import-move-images-results"></div>
+    <div class="modal-actions">
+      <button id="importMoveImagesCloseBtn">Close</button>
     </div>
   </div>
 </div>
