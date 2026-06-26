@@ -151,9 +151,55 @@ const microEnvironment = {
 };
 ```
 
+## Follow-up thinking: fit and authoring model
+
+A clarification on where micro-environments actually fit, refining open
+question #1: they're a good match specifically for **mostly-linear
+sequences with a small amount of branching** — not a general replacement
+for wide branch points. In the desk example: the four-drawer stacks are
+each a straight run of forced moves with no branching at all (exactly the
+kind of sequence `CastleBuildingNotes.md` already collapses into hallway
+`feature` chains within an ordinary room), while the top-of-desk row is
+where the real decision lives — an initial 3-way branch. So a
+micro-environment isn't "a denser way to do branchy rooms" so much as "a
+single object that can hold one shallow branch point plus two-or-three
+short linear tails," which is a narrower and more tractable target than
+the original framing suggested.
+
+That reframing raises a more fundamental open question, still unresolved
+and flagged by the user as needing more thought before going further:
+
+- **Pre-defined template library, matched by the software.** We'd design
+  a fixed catalog of micro-environment "shapes" up front (desk with N
+  top-row slots and two M-drawer stacks; bookshelf with K shelves; etc.),
+  each shape declaring what branch/sequence-length pattern it's good for
+  (e.g. "1 branch point with 2-4 short linear tails of length L"). When
+  building a castle, the software inspects the upcoming move-tree shape at
+  each room and picks the best-fitting template from the catalog, the same
+  way `classification: "auto"` already picks `feature` vs `exit` from
+  branch count today. This keeps authoring purely declarative (catalog of
+  shapes + a fitting heuristic) but means the catalog has to anticipate
+  every shape of branch pattern that shows up across real repertoires,
+  which could be a long tail.
+- **On-the-fly collapsing of existing rooms.** Instead of (or alongside) a
+  template catalog, the builder could look at an already-built run of
+  ordinary rooms/exits and, when it spots a candidate pattern (a short
+  forced run feeding 2-4 parallel short forced runs), offer to "suck" that
+  whole cluster into a single micro-environment object, replacing several
+  rooms+doors with one furniture piece. This is more general — no
+  pre-anticipated shape catalog needed — but pushes more complexity into
+  the builder (detecting candidate clusters, and reversibly converting a
+  room subgraph into a micro-environment's locus list and back).
+- These aren't necessarily exclusive: a small template catalog could cover
+  the common shapes, with on-the-fly collapsing as a fallback or manual
+  override for everything else. Which to start with — or whether to do
+  either yet — is exactly the kind of decision the user wants to defer
+  until there's been more time to think it through.
+
 ## Explicitly deferred
 
-- Pinning down the move/branch-to-locus mapping (open question #1) — needs
+- Resolving the template-catalog vs. on-the-fly-collapsing question above,
+  and pinning down the move-to-locus mapping (open question #1) — needs
   more thought before any schema is final.
 - Any editor UI for placing/ordering objects on a micro-environment's
   faces.
