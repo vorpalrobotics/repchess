@@ -1164,6 +1164,12 @@ function buildPropAsset(asset){
 // rotation.y so a prop's front (local -z) points into the room off a wall
 const WALL_INWARD_YAW = { north: Math.PI, south: 0, west: -Math.PI/2, east: Math.PI/2 };
 
+// unit ground-plane normal pointing OUT of a room through each wall (away from
+// room centre). Used to confirm the player is actually heading through a
+// doorway before teleporting -- not just pressing forward while standing in
+// the trigger box facing back into the room.
+const WALL_OUT_NORMAL = { north:{x:0,z:-1}, south:{x:0,z:1}, west:{x:-1,z:0}, east:{x:1,z:0} };
+
 // rotation.y that aims a prop's front (local -z) at world point `target` from
 // (x,z). Derived so the wall cases above fall out exactly (e.g. a prop south of
 // a target gets yaw 0). With no target, default to facing -z (north).
@@ -2361,8 +2367,9 @@ function buildRoom(roomKey){
         const doorAsset = doorAssetFor(roomKey, dKey);
         if(carMode){
           const box = doorTriggerBox(room.size, wall, ex.offset);
+          const thru = WALL_OUT_NORMAL[wall];
           if(ex.back){
-            elevatorMeta.push({ box, kind: 'back', target: ex.target, spawn: computeSpawnForExit(roomKey, room, ex) });
+            elevatorMeta.push({ box, thru, kind: 'back', target: ex.target, spawn: computeSpawnForExit(roomKey, room, ex) });
             scene.add(buildExitSign(room.size, wall, ex.offset));
           } else {
             const floors = wallExits.map((fe, i) => ({
@@ -2372,7 +2379,7 @@ function buildRoom(roomKey){
               target: fe.target,
               spawn: computeSpawnForExit(roomKey, room, fe)
             }));
-            elevatorMeta.push({ box, kind: 'forward', floors });
+            elevatorMeta.push({ box, thru, kind: 'forward', floors });
             scene.add(buildElevatorPanel(room.size, wall, ex.offset, floors));
           }
           if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
@@ -2380,7 +2387,7 @@ function buildRoom(roomKey){
         } else {
           const spawn = computeSpawnForExit(roomKey, room, ex);
           const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
-          exitMeta.push({ box, target: ex.target, spawn });
+          exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
           if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey));
@@ -2540,8 +2547,12 @@ function buildRoom(roomKey){
       buildSlots(room, roomKey, yardSlots(b, buildingKey));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
+      // entering a building means walking TOWARD it -- the opposite of a room's
+      // outward exit normal, so the player heads in through the front door.
+      const bout = WALL_OUT_NORMAL[b.doorWall];
       exitMeta.push({
         box: doorTriggerBox(size, b.doorWall, b.doorOffset, b.origin),
+        thru: { x: -bout.x, z: -bout.z },
         target: b.target,
         spawn
       });
@@ -2691,12 +2702,16 @@ function tick(){
 
   // door teleports are suppressed in edit mode so you can stand in a doorway
   // and edit the wall beside it without being yanked into the next room.
-  // Only trigger on forward movement -- backing up to get a wider view of
-  // the room (a deliberate negative `move`) should never walk you through
-  // the door you just backed past.
+  // Only trigger when actually heading OUT through the door: forward movement
+  // (move > 0) whose facing has a positive component along the door's through
+  // direction. Without the facing check, backing up to a wall (which leaves you
+  // parked inside the trigger box) and then nudging forward into the room would
+  // fire the exit even though you're walking away from the door.
   if(!editMode && move > 0 && clock.getElapsedTime() > teleportLockUntil){
+    const fwd = cameraForwardVec();
     for(const m of exitMeta){
-      if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
+      if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
+         && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
         enterRoom(m.target, m.spawn, false);
         break;
       }
@@ -2712,8 +2727,10 @@ function tick(){
       const stillIn = pos.x >= b.minX && pos.x <= b.maxX && pos.z >= b.minZ && pos.z <= b.maxZ;
       if(!stillIn) closeElevatorPopup();
     } else if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
+      const fwd = cameraForwardVec();
       for(const m of elevatorMeta){
-        if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
+        if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
+           && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
           openElevatorPopup(m);
           break;
         }
