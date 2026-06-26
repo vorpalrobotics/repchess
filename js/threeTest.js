@@ -44,23 +44,59 @@ const ROOMS = {
       { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
     ],
     exits: [
-      { wall: 'north', offset: 0, target: 'roomB' },
+      { wall: 'north', offset: 0, target: 'roomB', type: 'elevator' },
       { wall: 'east',  offset: 0, target: 'roomC' },
       { wall: 'south', offset: 0, target: 'mainStreet', back: true }
     ]
   },
+  // the elevator car for start's north exit (marked type:'elevator' below) --
+  // a real, decoratable room, just sized like a freight elevator. Its own
+  // exits become floor buttons on the forward wall instead of separate
+  // doors (see isElevatorCar/buildRoom), except the back:true exit, which
+  // gets a single physical door directly opposite the one you walked in
+  // through. w is widened past a literal 2.5m square to give the forward
+  // wall's door clearance to share space with the button panel and the
+  // mnemonic billboard flanking it -- DOOR_W (2.2m) plus flanking room on
+  // both sides wouldn't fit in a true 2.5m-wide wall.
   roomB: {
     color: 0xb07070,
-    size: { w: 10, d: 10, h: 4 },
-    label: { wall: 'north', text: '2' },
-    furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
-    stairs: { fromZ: 2.0, toZ: -1.0, rise: 1.3 },
+    size: { w: 3.8, d: 2.5, h: 3 },
     slots: [
       { id: 'w-east', kind: 'wall', wall: 'east', offset: 0, y: 1.6 },
       { id: 'w-west', kind: 'wall', wall: 'west', offset: 0, y: 1.6 }
     ],
     exits: [
-      { wall: 'south', offset: 0, target: 'start', back: true }
+      { wall: 'south', offset: 0, target: 'start', back: true },
+      { wall: 'north', offset: 0, target: 'roomB1', label: 'e6' },
+      { wall: 'north', offset: 0, target: 'roomB2', label: 'f6' },
+      { wall: 'north', offset: 0, target: 'roomB3', label: 'Nf6' }
+    ]
+  },
+  roomB1: {
+    color: 0x9a7a50,
+    size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'north', text: '4' },
+    furniture: { type: 'chest', x: -3.2, z: -3.2, yaw: 0 },
+    exits: [
+      { wall: 'south', offset: 0, target: 'roomB', back: true }
+    ]
+  },
+  roomB2: {
+    color: 0x6f9a7a,
+    size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'north', text: '5' },
+    furniture: { type: 'chair', x: 3.2, z: -3.2, yaw: Math.PI },
+    exits: [
+      { wall: 'south', offset: 0, target: 'roomB', back: true }
+    ]
+  },
+  roomB3: {
+    color: 0x7a7a9a,
+    size: { w: 10, d: 10, h: 4 },
+    label: { wall: 'north', text: '6' },
+    furniture: { type: 'table', x: 3.2, z: 3.2, yaw: 0 },
+    exits: [
+      { wall: 'south', offset: 0, target: 'roomB', back: true }
     ]
   },
   roomC: {
@@ -101,6 +137,10 @@ let currentRoomKey = 'start';
 // you as you enter -- the only viewpoint that matters for a memory walk.
 let entryPoint = null;
 let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
+// elevator-car doors, popup-triggered instead of instant on contact:
+// [{box, kind:'forward', floors:[{label,target,spawn}]} | {box, kind:'back', target, spawn}]
+let elevatorMeta = [];
+let activeElevatorDoor = null;  // the elevatorMeta entry whose popup is currently open
 let currentExitsByWall = {};
 let currentStairCorridors = {}; // wall -> {rise, depth, outSign}, for ex.type === 'stair'
 let currentBuildingColliders = []; // outdoor only: [{origin,size,doorWall,doorOffset}]
@@ -247,6 +287,20 @@ function mergedRoom(roomKey){
     });
   }
   return Object.assign({}, room, { size, exits });
+}
+// a room is an "elevator car" if any other room has an exit targeting it
+// with type 'elevator' -- checked via mergedRoom so an editor-applied type
+// change (commitRoomGeomDialog) takes effect immediately. This is intrinsic
+// to the room, not the door you happened to walk in through: re-entering a
+// car room via one of its own floor's back doors still finds it in car mode.
+function isElevatorCar(roomKey){
+  for(const srcKey of Object.keys(ROOMS)){
+    const src = mergedRoom(srcKey);
+    for(const ex of (src && src.exits) || []){
+      if(ex.target === roomKey && ex.type === 'elevator') return true;
+    }
+  }
+  return false;
 }
 function setRoomGeom(roomKey, geom){
   applyEdit(() => {
@@ -424,11 +478,17 @@ function yardSlots(b, buildingKey){
 // flanking and low wall spots, the ceiling hang-point, plus any one-off hand-
 // authored slots in ROOMS (e.g. a wall mount with no door nearby).
 function roomSlots(room, roomKey){
+  // the procedural floor grid and door-flanking spots are tuned for ~10m
+  // rooms and would clip/collide/duplicate in a small elevator car -- car
+  // rooms keep only the ceiling hang-point, the mnemonic billboard slot
+  // (already generic) and whatever one-off slots ROOMS hand-places (the
+  // single east/west wall mounts).
+  const carMode = isElevatorCar(roomKey);
   return [
-    ...floorGridSlots(room),
-    ...doorFlankSlots(room),
-    ...doorFlankFloorSlots(room),
-    ...lowWallSlots(room),
+    ...(carMode ? [] : floorGridSlots(room)),
+    ...(carMode ? [] : doorFlankSlots(room)),
+    ...(carMode ? [] : doorFlankFloorSlots(room)),
+    ...(carMode ? [] : lowWallSlots(room)),
     ...ceilingSlots(room),
     ...mnemonicSlots(roomKey),
     ...(room.slots || [])
@@ -1366,6 +1426,24 @@ const DEMO_MNEMONICS = {
     opponent: { to: 'c6', piece: 'knight', san: 'Nc6' },  // black Nc6
     response: { to: 'f4', piece: 'bishop', san: 'Bf4' },  // white Bf4
     pos: { x: -0.1, y: 1.6, z: -1.7 }
+  },
+  // the three rooms behind roomB's elevator floor buttons -- each one's
+  // pair is the opponent reply that floor's button is labelled with, plus
+  // the response that room is built around.
+  roomB1: {
+    opponent: { to: 'e6', piece: 'pawn', san: 'e6' },
+    response: { to: 'c3', piece: 'knight', san: 'Nc3' },
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
+  },
+  roomB2: {
+    opponent: { to: 'f6', piece: 'pawn', san: 'f6' },
+    response: { to: 'c4', piece: 'pawn', san: 'c4' },
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
+  },
+  roomB3: {
+    opponent: { to: 'f6', piece: 'knight', san: 'Nf6' },
+    response: { to: 'e3', piece: 'pawn', san: 'e3' },
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
   }
 };
 
@@ -1557,6 +1635,59 @@ function buildExitSign(size, wall, offset){
   if(wall === 'south'){ mesh.position.set(offset, y, fixed - clearance); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + clearance, y, offset); mesh.rotation.y = Math.PI/2; }
   if(wall === 'east'){  mesh.position.set(fixed - clearance, y, offset); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+
+// elevator car only: a canvas-textured panel listing the floor buttons,
+// mounted to the left of the forward door (mirrors buildExitSign's
+// lintel-mount convention, but at chest height and offset along the wall
+// rather than centred over the doorway). Floor labels fall back to plain
+// algebraic notation for now -- the move-picture door-hint mechanism this
+// is meant to eventually reuse hasn't been built yet.
+function makeElevatorPanelMesh(floors, panelW, panelH){
+  const cw = 220, rowH = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = Math.max(rowH, rowH * floors.length + 16);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  floors.forEach((f, i) => {
+    const cy = 16 + rowH * i + rowH/2;
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(14, 16 + rowH * i + 8, canvas.width - 28, rowH - 16);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(f.label, canvas.width/2, cy);
+  });
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // physical size is dictated by the wall's clear space beside the door, not
+  // the canvas's own pixel aspect -- the texture stretches slightly, an
+  // acceptable tradeoff for fitting a multi-row panel into a narrow flank.
+  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  return new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), mat);
+}
+function buildElevatorPanel(size, wall, doorOffset, floors){
+  const { fixed, half } = wallSpan(size, wall);
+  const margin = 0.1;
+  const avail = half - DOOR_W/2 - margin * 2;
+  const panelW = Math.max(0.3, Math.min(0.6, avail));
+  const panelH = Math.min(0.9, 0.22 * floors.length + 0.16);
+  const mesh = makeElevatorPanelMesh(floors, panelW, panelH);
+  const clearance = WALL_THICK/2 + 0.02;
+  const along = doorOffset - DOOR_W/2 - margin - panelW/2;
+  const y = 1.5;
+  if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(along, y, fixed - clearance); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
   return mesh;
 }
 
@@ -1891,7 +2022,12 @@ function doorSpawn(size, wall, offset, origin, inside){
   // of (-sin(yaw), -cos(yaw)).
   origin = origin || { x:0, z:0 };
   const { fixed } = wallSpan(size, wall);
-  const inset = 2.5;
+  // how far in from the door to stand -- capped by the room's own depth
+  // along this wall's inward axis, so a small elevator car doesn't spawn
+  // you out past its opposite wall (normal 10m rooms are unaffected: their
+  // half-depth comfortably clears the 2.5m default).
+  const depthDim = (wall === 'north' || wall === 'south') ? size.d : size.w;
+  const inset = Math.min(2.5, Math.max(0.6, depthDim/2 - 0.3));
   let x, z, yaw;
   if(wall === 'north'){ x = offset; z = inside ? fixed+inset : fixed-inset; yaw = inside ? Math.PI : 0; }
   if(wall === 'south'){ x = offset; z = inside ? fixed-inset : fixed+inset; yaw = inside ? 0 : Math.PI; }
@@ -1963,6 +2099,8 @@ function buildRoom(roomKey){
     scene.add(ceiling);
   }
 
+  const carMode = isElevatorCar(roomKey);
+
   currentExitsByWall = {};
   currentStairCorridors = {};
   for(const ex of room.exits){
@@ -1975,26 +2113,51 @@ function buildRoom(roomKey){
   }
 
   exitMeta = [];
+  elevatorMeta = [];
+  closeElevatorPopup();
   currentBuildingColliders = [];
 
   if(!room.outdoor){
     const wallTex = makeBrickTexture(room.color);
     for(const wall of ['north','south','east','west']){
-      const ex = currentExitsByWall[wall];
+      // car rooms can have several exits sharing one physical wall (all of
+      // a floor's worth of buttons behind a single door) -- gather all of
+      // them, not just whichever currentExitsByWall last saw.
+      const wallExits = carMode ? room.exits.filter(e => e.wall === wall)
+                                 : (currentExitsByWall[wall] ? [currentExitsByWall[wall]] : []);
+      const ex = wallExits[0];
       const group = buildWallGroup(room.size, wall, !!ex, ex ? ex.offset : 0, wallTex, null,
         { editable: true, surfaceAsset: wallAssetFor(roomKey, wall) });
       scene.add(group);
       if(ex){
         const isStair = ex.type === 'stair';
-        const spawn = computeSpawnForExit(roomKey, room, ex);
-        const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
-        exitMeta.push({ box, target: ex.target, spawn });
-        if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
         const dKey = doorKey(wall, ex.offset);
         const doorAsset = doorAssetFor(roomKey, dKey);
-        if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-        if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall)));
-        if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
+        if(carMode){
+          const box = doorTriggerBox(room.size, wall, ex.offset);
+          if(ex.back){
+            elevatorMeta.push({ box, kind: 'back', target: ex.target, spawn: computeSpawnForExit(roomKey, room, ex) });
+            scene.add(buildExitSign(room.size, wall, ex.offset));
+          } else {
+            const floors = wallExits.map(fe => ({
+              label: fe.label || fe.target,
+              target: fe.target,
+              spawn: computeSpawnForExit(roomKey, room, fe)
+            }));
+            elevatorMeta.push({ box, kind: 'forward', floors });
+            scene.add(buildElevatorPanel(room.size, wall, ex.offset, floors));
+          }
+          if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+          if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
+        } else {
+          const spawn = computeSpawnForExit(roomKey, room, ex);
+          const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
+          exitMeta.push({ box, target: ex.target, spawn });
+          if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
+          if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+          if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall)));
+          if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
+        }
       }
     }
     if(room.stairs) scene.add(buildStairs(room));
@@ -2178,6 +2341,48 @@ function enterRoom(roomKey, spawn, preserveYaw){
   teleportLockUntil = clock.getElapsedTime() + 0.6;
 }
 
+// elevator-car doors don't teleport on contact like a normal exit -- they
+// pop up a choice instead (a floor list for the forward door, a single
+// confirm for the back one), reusing inputLocked the same way the asset
+// picker does to freeze movement while it's open. Lightweight prototype
+// interaction per spec: no animated door-slide, just the popup.
+function openElevatorPopup(meta){
+  activeElevatorDoor = meta;
+  inputLocked = true;
+  let ov = document.getElementById('elevatorOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'elevatorOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '70';
+    document.body.appendChild(ov);
+  }
+  const buttonsHtml = meta.kind === 'back'
+    ? `<button data-elevator-target="${meta.target}">Go back</button>`
+    : meta.floors.map(f => `<button data-elevator-target="${f.target}">${f.label}</button>`).join('');
+  ov.innerHTML = `
+    <div class="modal" style="width:min(16em,86vw)">
+      <h2>${meta.kind === 'back' ? 'Elevator' : 'Choose a floor'}</h2>
+      <div style="display:flex;flex-direction:column;gap:.4rem">${buttonsHtml}</div>
+    </div>
+  `;
+  ov.style.display = 'flex';
+  ov.querySelectorAll('[data-elevator-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-elevator-target');
+      const dest = meta.kind === 'back' ? meta : meta.floors.find(f => f.target === target);
+      closeElevatorPopup();
+      enterRoom(dest.target, dest.spawn, false);
+    });
+  });
+}
+function closeElevatorPopup(){
+  const ov = document.getElementById('elevatorOverlay');
+  if(ov) ov.style.display = 'none';
+  inputLocked = false;
+  activeElevatorDoor = null;
+}
+
 function tick(){
   animHandle = requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -2241,6 +2446,24 @@ function tick(){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
         enterRoom(m.target, m.spawn, move < 0);
         break;
+      }
+    }
+  }
+
+  // elevator doors pop up a choice instead of teleporting on contact --
+  // open it on approach, and auto-close if the player steps back out of
+  // the doorway without picking anything.
+  if(!editMode){
+    if(activeElevatorDoor){
+      const b = activeElevatorDoor.box;
+      const stillIn = pos.x >= b.minX && pos.x <= b.maxX && pos.z >= b.minZ && pos.z <= b.maxZ;
+      if(!stillIn) closeElevatorPopup();
+    } else if(clock.getElapsedTime() > teleportLockUntil){
+      for(const m of elevatorMeta){
+        if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ){
+          openElevatorPopup(m);
+          break;
+        }
       }
     }
   }
@@ -2812,6 +3035,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
         <option value="door" ${stagedExits[ex.target].type === 'door' ? 'selected' : ''}>Door</option>
         <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase</option>
+        <option value="elevator" ${stagedExits[ex.target].type === 'elevator' ? 'selected' : ''}>Elevator</option>
       </select>
     </label>
   `).join('');
@@ -3113,6 +3337,10 @@ export function setForeignModalOpen(open){
 
 function onKeyDown(e){
   if(foreignModalOpen) return;
+  if(activeElevatorDoor){
+    if(e.key === 'Escape') closeElevatorPopup();
+    return; // swallow everything else while the elevator popup is open
+  }
   if(selectedProp && !inputLocked){
     if(e.key === 'Escape'){ deselectProp(); return; }
     // mnemonic billboards aren't asset-based -- there's nothing for the
