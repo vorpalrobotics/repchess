@@ -1185,8 +1185,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
     let showContinuation = false;
     function continuationHtml(){
       if(!showContinuation) return '';
-      const pv = currentSaved()?.eval?.pv;
-      return `<span class="meta-pv"><i class="fa-solid fa-route"></i>${pv ? escapeHtml(pv) : '<em>not available</em>'}</span>`;
+      const ev = currentSaved()?.eval;
+      if(!ev?.pv) return `<span class="meta-pv"><i class="fa-solid fa-route"></i><em>not available</em></span>`;
+      const chips = pvChipsFromSan(ev.pvFen || fenForSeq(lineSeq), ev.pv);
+      return `<span class="meta-pv"><i class="fa-solid fa-route"></i>${chips || escapeHtml(ev.pv)}</span>`;
     }
     function refreshMeta(){
       const saved = currentSaved();
@@ -2827,6 +2829,46 @@ function attachHoverPreview(icon, seq){
   icon.addEventListener('mouseleave', hideHoverPreview);
 }
 
+/* ---------- PV move float board (tap a move in a displayed line) ----------
+   Shared by the saved-eval continuation lines in the move table and the live
+   engine lines under the board; each rendered move chip carries the FEN of the
+   position right after it (data-fen). */
+const pvFloatBoard = new Chessboard($('pvFloatBoard'), {
+  position: new Chess().fen(),
+  orientation: COLOR.white,
+  style: { pieces: { file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg' } }
+});
+let pvFloatEl = null;
+function hidePvFloat(){
+  $('pvFloat').style.display = 'none';
+  pvFloatEl?.classList.remove('pv-move-active');
+  pvFloatEl = null;
+}
+function showPvFloat(el){
+  const fen = el.dataset.fen;
+  if(!fen) return;
+  pvFloatBoard.setPosition(fen);
+  pvFloatBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+  const r = el.getBoundingClientRect();
+  const f = $('pvFloat');
+  f.style.display = 'block';
+  const size = 212; // 200 board + padding/border
+  const left = Math.min(r.left, window.innerWidth - size - 8);
+  const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
+  f.style.left = `${Math.round(Math.max(8,left))}px`;
+  f.style.top  = `${Math.round(Math.max(8,top))}px`;
+  pvFloatEl?.classList.remove('pv-move-active');
+  el.classList.add('pv-move-active');
+  pvFloatEl = el;
+}
+/* one delegated listener: tap a PV move to toggle its mini board; tap anywhere
+   else (other than the float itself) dismisses it */
+document.addEventListener('click', (e)=>{
+  const moveEl = e.target.closest('.pv-move');
+  if(moveEl){ moveEl === pvFloatEl ? hidePvFloat() : showPvFloat(moveEl); return; }
+  if(!e.target.closest('#pvFloat')) hidePvFloat();
+});
+
 /* ---------- engine ---------- */
 const ENGINE_PV_PLIES = 8;
 const PV_COMPLETE_SLACK = 3; // expanded PV only shown in full once it's within this many plies of its reported depth
@@ -3030,7 +3072,7 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
   const existing = currentSaved()?.eval;
   if(existing && existing.depth >= depth) return;
   const pvSan = pv?.length ? pvToSan(fen, pv, EVAL_TAG_PV_PLIES) : '';
-  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan};
+  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan, pvFen: fen};
   saveField('eval', evalObj);
   refreshEvalSpan(evalSpan, evalObj);
 }
@@ -3185,6 +3227,50 @@ function pvToSan(fen, uciMoves, maxPlies){
   return parts.join(' ');
 }
 
+function pvChip(label, fenAfter){
+  return `<span class="pv-move" data-fen="${escapeHtml(fenAfter)}">${escapeHtml(label)}</span>`;
+}
+
+/* Like pvToSan, but emits each move as a tappable chip carrying the FEN of the
+   position right after it, so a tap can float a mini board there. */
+function pvChipsFromUci(fen, uciMoves, maxPlies){
+  const chess = new Chess(fen);
+  let moveNum = parseInt(fen.split(' ')[5], 10) || 1;
+  let turn = fen.split(' ')[1];
+  const chips = [];
+  let first = true;
+  for(const uci of uciMoves.slice(0, maxPlies)){
+    const from = uci.slice(0,2), to = uci.slice(2,4), promotion = uci.slice(4,5) || undefined;
+    const mv = chess.move({from,to,promotion},{sloppy:true});
+    if(!mv) break;
+    let label;
+    if(turn === 'w') label = `${moveNum}.${mv.san}`;
+    else { label = first ? `${moveNum}...${mv.san}` : mv.san; moveNum++; }
+    chips.push(pvChip(label, chess.fen()));
+    first = false;
+    turn = turn === 'w' ? 'b' : 'w';
+  }
+  return chips.join(' ');
+}
+
+/* Build tappable chips from a stored SAN string (eval.pv) replayed from
+   startFen. Returns null if the line can't be replayed (caller then shows the
+   raw, non-tappable text — e.g. legacy evals whose start FEN we can't recover). */
+function pvChipsFromSan(startFen, sanStr){
+  if(!startFen || !sanStr) return null;
+  let chess;
+  try { chess = new Chess(startFen); } catch(_){ return null; }
+  const chips = [];
+  for(const tok of sanStr.trim().split(/\s+/)){
+    const san = tok.replace(/^\d+\.(\.\.)?/, '');   // strip "12." / "12..." prefix
+    if(!san) continue;
+    const mv = chess.move(san, {sloppy:true});
+    if(!mv) return null;
+    chips.push(pvChip(tok, chess.fen()));
+  }
+  return chips.length ? chips.join(' ') : null;
+}
+
 function renderEngineLines(fen, depth, lines, multipv){
   const prefix = engineState === 'stopped' ? 'Stopped' : 'Live';
   $('engineDepth').textContent = `${prefix} — Depth ${depth}${engineModeTag()}`;
@@ -3202,7 +3288,7 @@ function renderEngineLines(fen, depth, lines, multipv){
       `<button class="iconbtn pvToggle" title="${expanded ? 'Show fewer moves' : 'Show full line'}">` +
         `<i class="fa-solid fa-caret-${expanded ? 'down' : 'right'}"></i>` +
       `</button>` +
-      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${escapeHtml(pvToSan(fen,line.pv,showFull ? Infinity : ENGINE_PV_PLIES))}` +
+      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${pvChipsFromUci(fen,line.pv,showFull ? Infinity : ENGINE_PV_PLIES)}` +
       (expanded && !pvComplete ? ' <i>(still calculating…)</i>' : '') +
       `</span>`;
     li.querySelector('.pvToggle').onclick = () => {
