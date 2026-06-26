@@ -1563,18 +1563,19 @@ function drawMnemQuadrant(ctx, qx, qy, content){
   ctx.restore();
 }
 
-// composites both moves of the pair onto one square canvas -- opponent in
-// the upper-left quadrant, our response in the lower-right, the other two
-// quadrants left blank -- and applies it as the sprite's texture. Always
-// exactly 1m x 1m regardless of content (baseH/baseAspect fixed at 1), per
-// the user's spec for the composite billboard's default size.
+// composites both moves of the pair onto one square canvas -- opponent in the
+// left half, our response in the right half, both vertically centred so the two
+// sit side by side and touching rather than diagonally apart. Always exactly
+// 1m x 1m regardless of content (baseH/baseAspect fixed at 1), per the user's
+// spec for the composite billboard's default size.
 function renderMnemPairCanvas(sprite, oppContent, respContent){
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE;
   const ctx = canvas.getContext('2d');
-  drawMnemQuadrant(ctx, 0, 0, oppContent);
-  drawMnemQuadrant(ctx, MNEM_QUADRANT, MNEM_QUADRANT, respContent);
+  const midY = MNEM_QUADRANT / 2;                 // vertical-centre band
+  drawMnemQuadrant(ctx, 0, midY, oppContent);
+  drawMnemQuadrant(ctx, MNEM_QUADRANT, midY, respContent);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
