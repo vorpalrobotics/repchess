@@ -2331,29 +2331,89 @@ let MNEM_EDIT_SQUARE = null;
 
 function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
 
+/* ---------- repertoire coverage (which square+piece mnemonics are actually
+   used by a given opening system) ----------
+   A room's seq ends in OUR move; an edge's seq ends in the OPPONENT's move.
+   Together they cover every move that appears anywhere in the line's full
+   visible tree, so we feed both through lastMoveInfo() to collect the set of
+   "destination square + piece" combos actually played. */
+let MNEM_COVERAGE = null; // null = no system selected; else a Set of "sq|pieceField"
+
+async function computeMnemonicCoverage(line){
+  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  const graph = buildCastleGraph(line, GAMES);
+  const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
+  const set = new Set();
+  for(const seq of seqs){
+    if(!seq || !seq.length) continue;
+    const info = lastMoveInfo(seq);
+    if(!info) continue;
+    const pieceField = MNEM_WORD_FOR_PIECE[info.piece];
+    if(!pieceField) continue;
+    set.add(`${info.to}|${pieceField}`);
+  }
+  return set;
+}
+
+async function populateMnemonicsCoverageSelect(){
+  const sel = $('mnemonicsCoverageSelect');
+  const prevValue = sel.value;
+  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  sel.innerHTML = '<option value="">(none selected)</option>' +
+    lines.map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('');
+  if(lines.some(l=>l.id===prevValue)) sel.value = prevValue;
+}
+
 async function renderMnemonicsGrid(){
   MNEMONICS = await getAllMnemonics();
   const grid = $('mnemonicsGrid');
   grid.innerHTML='';
+  let missingWords = 0, missingImages = 0;
   for(let row=0;row<8;row++){
     for(let col=0;col<8;col++){
       const sq = squareName(col,row);
       const isLight = (col+row)%2===0;
       const entry = MNEMONICS[sq] || {};
-      const words = MNEM_PIECES
-        .filter(p=>entry[p])
-        .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`)
-        .join('');
+      let pieceHtml;
+      if(MNEM_COVERAGE){
+        pieceHtml = MNEM_PIECES
+          .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
+          .map(p=>{
+            const occurs = MNEM_COVERAGE.has(`${sq}|${p}`);
+            if(occurs){
+              if(!entry[p]) missingWords++;
+              if(!entry[p+'Img']) missingImages++;
+            }
+            const cls = `mnem-word${occurs?' mnem-occurs':''}`;
+            return entry[p]
+              ? `<div class="${cls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`
+              : `<div class="mnem-icon-only${occurs?' mnem-occurs':''}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>(none)</div>`;
+          })
+          .join('');
+      } else {
+        pieceHtml = MNEM_PIECES
+          .filter(p=>entry[p])
+          .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`)
+          .join('');
+      }
       const div = document.createElement('div');
       div.className = `mnem-square ${isLight?'light':'dark'}`;
       div.dataset.square = sq;
       div.innerHTML =
         (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
         (col===0 ? `<span class="mnem-coord-rank">${sq[1]}</span>` : '') +
-        words;
+        pieceHtml;
       div.onclick = ()=> openMnemonicsEditor(sq);
       grid.appendChild(div);
     }
+  }
+  const counts = $('mnemonicsCoverageCounts');
+  if(MNEM_COVERAGE){
+    counts.innerHTML = `${MNEM_COVERAGE.size} used` +
+      (missingWords ? ` · <span class="mc-missing">${missingWords} missing words</span>` : '') +
+      (missingImages ? ` · <span class="mc-missing">${missingImages} missing images</span>` : '');
+  } else {
+    counts.textContent = '';
   }
 }
 
@@ -2528,11 +2588,21 @@ function openMnemonicsEditor(sq){
 
 $('menuMnemonics').onclick = async ()=>{
   $('menuList').style.display='none';
+  await populateMnemonicsCoverageSelect();
   renderMnemonicsGrid();
   $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
   $('mnemonicsOverlay').style.display='flex';
 };
 $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+$('mnemonicsCoverageSelect').onchange = async (e)=>{
+  const id = e.target.value;
+  if(!id){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
+  const lines = await getLines(CURRENT_USER);
+  const line = lines.find(l=>l.id===id);
+  if(!line){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
+  MNEM_COVERAGE = await computeMnemonicCoverage(line);
+  renderMnemonicsGrid();
+};
 
 /* ---------- mnemonics notes (autosave) ---------- */
 const MNEM_NOTES_KEY = 'mnemonicsNotes';
