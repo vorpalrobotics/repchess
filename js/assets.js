@@ -772,7 +772,9 @@ export function cropImage(sourceDataUrl){
   // Erase-background mode: clicking the image samples that pixel and flood-fills
   // the connected region of near-matching colour to full transparency (handles
   // the "looks transparent but is actually a flat/near-white fill" exports).
-  // The crop bars are hidden while erasing so clicks reach the image instead.
+  // The crop bars stay visible and usable throughout -- a click on the image
+  // interior erases, a grab of a (thin, edge) crop bar still crops -- so
+  // toggling erase on never makes the crop handles disappear.
   const eraseBtn = ov.querySelector('#cropEraseBtn');
   const eraseTools = ov.querySelector('#cropEraseTools');
   const tolEl = ov.querySelector('#cropTol');
@@ -780,12 +782,11 @@ export function cropImage(sourceDataUrl){
   function setEraseMode(on){
     eraseMode = on;
     eraseTools.style.display = on ? 'inline-flex' : 'none';
-    selEl.style.display = on ? 'none' : '';
-    for(const k of ['l','r','t','b']) bars[k].style.display = on ? 'none' : '';
     img.style.cursor = on ? 'crosshair' : '';
     eraseBtn.style.background = on ? '#1565c0' : '';
     eraseBtn.style.color = on ? '#fff' : '';
-    dims.textContent = on ? 'click a background area to erase it' : `${natW}×${natH}`;
+    if(on) dims.textContent = 'click a background area to erase it';
+    else paint();   // restore the dimensions readout
   }
   tolEl.oninput = () => { tolVal.textContent = tolEl.value; };
   img.addEventListener('pointerdown', (e) => {
