@@ -2383,7 +2383,20 @@ let MNEM_COVERAGE = null; // null = no system selected; else a Set of "sq|pieceF
 
 async function computeMnemonicCoverage(line){
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
-  const graph = buildCastleGraph(line, GAMES);
+  /* buildCastleGraph/walk/processExit all read the global PREFS map keyed by
+     line.id to find each branch's saved reply; PREFS only ever holds the
+     prefs of whichever line is currently open in the main tree, which is
+     often NOT the line picked in this dropdown. Swap in the right line's
+     prefs for the traversal, then restore so the open line's in-memory
+     state isn't disturbed. */
+  const savedPrefs = PREFS;
+  let graph;
+  try {
+    PREFS = await getAllPrefs(line.id);
+    graph = buildCastleGraph(line, GAMES);
+  } finally {
+    PREFS = savedPrefs;
+  }
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
   for(const seq of seqs){
