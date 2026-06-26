@@ -565,11 +565,42 @@ function slotXformFor(roomKey, slotId){
   const r = LAYOUT[roomKey];
   return (r && r.slotXform && r.slotXform[slotId]) || null;
 }
-function setSlotXform(roomKey, slotId, xform){
-  applyEdit(() => {
-    const r = ensureRoomLayout(roomKey);
-    r.slotXform[slotId] = xform;
+// Transform-only edit (nudge/scale/rotate): persist the new xform and move the
+// existing object in place, skipping the full applyEdit -> buildRoom rebuild
+// that would tear down and reload every mesh/texture in the room (the cause of
+// the edit-time flashing). Geometry/assets are unchanged, so re-placing the one
+// object is enough.
+function setSlotXformLive(roomKey, slotId, xform){
+  const r = ensureRoomLayout(roomKey);
+  r.slotXform[slotId] = xform;
+  persistLayout();
+  const obj = findAccessoryObject(slotId);
+  if(!obj){ buildRoom(currentRoomKey); return; }   // fallback if it wasn't found
+  const room = mergedRoom(roomKey);
+  const slot = slotById(room, roomKey, slotId);
+  if(!slot) return;
+  if(slot.kind === 'mnemonic'){
+    obj.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
+    obj.userData.userScale = xform.scale || 1;
+    applySpriteContentScale(obj);
+  } else {
+    const asset = slotAssetFor(roomKey, slotId);
+    if(asset) applyAccessoryTransform(obj, room, slot, asset, xform);
+  }
+  refreshSelectionVisuals();
+}
+function findAccessoryObject(slotId){
+  let obj = null;
+  if(scene) scene.traverse(o => {
+    if(!obj && o.userData && o.userData.kind === 'accessory' && o.userData.slotId === slotId) obj = o;
   });
+  return obj;
+}
+// rebuilds just the selection outline/gear around the (possibly moved) object --
+// cheap, no textures, so no flash.
+function refreshSelectionVisuals(){
+  removeSelectionVisuals();
+  attachSelectionVisuals();
 }
 function setBuildingFacadeOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
@@ -583,11 +614,19 @@ function setSignOverride(roomKey, buildingKey, assetId){
     if(assetId) r.signs[buildingKey] = assetId; else delete r.signs[buildingKey];
   });
 }
-function setSignPos(roomKey, buildingKey, pos){
-  applyEdit(() => {
-    const r = ensureRoomLayout(roomKey);
-    if(pos && (pos.dx || pos.dz)) r.signPos[buildingKey] = pos; else delete r.signPos[buildingKey];
+// persist a sign's lawn offset and slide the existing sign group in place, no
+// room rebuild (same anti-flash idea as setSlotXformLive).
+function setSignPosLive(roomKey, buildingKey, pos){
+  const r = ensureRoomLayout(roomKey);
+  if(pos && (pos.dx || pos.dz)) r.signPos[buildingKey] = pos; else delete r.signPos[buildingKey];
+  persistLayout();
+  let obj = null;
+  if(scene) scene.traverse(o => {
+    if(!obj && o.userData && o.userData.kind === 'sign' && o.userData.buildingKey === buildingKey) obj = o;
   });
+  if(!obj || !obj.userData.basePos){ buildRoom(currentRoomKey); return; }
+  obj.position.set(obj.userData.basePos.x + (pos.dx || 0), 0, obj.userData.basePos.z + (pos.dz || 0));
+  refreshSelectionVisuals();
 }
 function setYardOverride(roomKey, buildingKey, assetId){
   applyEdit(() => {
@@ -1155,8 +1194,19 @@ function defaultFloorYaw(room){
 // optional per-instance nudge/scale override from LAYOUT[roomKey].slotXform.
 function placeSlotAccessory(room, slot, asset, xform){
   xform = xform || {};
-  const scale = xform.scale || 1;
   const obj = buildPropAsset(asset);
+  applyAccessoryTransform(obj, room, slot, asset, xform);
+  obj.userData = { kind: 'accessory', slotId: slot.id };
+  if(asset.type === 'billboard-cylindrical') billboards.push(obj);
+  return obj;
+}
+
+// positions/rotates/scales a built accessory in its slot from the saved xform.
+// Split out of placeSlotAccessory so the editor can re-apply a changed xform to
+// the existing object in place (no full room rebuild -> no texture-reload flash).
+function applyAccessoryTransform(obj, room, slot, asset, xform){
+  xform = xform || {};
+  const scale = xform.scale || 1;
   if(slot.kind === 'ceiling'){
     // hangs from the ceiling centre; a billboard turns to face the camera, so
     // only its height matters -- drop it so its top is flush with the ceiling.
@@ -1205,9 +1255,6 @@ function placeSlotAccessory(room, slot, asset, xform){
     }
   }
   obj.scale.setScalar(scale);
-  obj.userData = { kind: 'accessory', slotId: slot.id };
-  if(asset.type === 'billboard-cylindrical') billboards.push(obj);
-  return obj;
 }
 
 /* faint editor-only marker shown at an empty slot. Floor slots get a flat
@@ -2352,7 +2399,7 @@ function buildRoom(roomKey){
       const signPos = { x: s.x + (off.dx || 0), z: s.z + (off.dz || 0) };
       const signGroup = buildGroundSign(s.text, signAsset);
       signGroup.position.set(signPos.x, 0, signPos.z);
-      signGroup.userData = { kind: 'sign', roomKey, buildingKey: signId };
+      signGroup.userData = { kind: 'sign', roomKey, buildingKey: signId, basePos: { x: s.x, z: s.z } };
       scene.add(signGroup);
       if(editMode) scene.add(buildSignMarker(signPos, roomKey, signId, signAsset && signAsset.size));
     });
@@ -2416,12 +2463,13 @@ function buildRoom(roomKey){
         // override image stretched behind the name text -- see signAssetFor.
         const signAsset = signAssetFor(roomKey, buildingKey);
         const off = signPosFor(roomKey, buildingKey) || {};
-        const signPos = { x: b.origin.x + 6 + (off.dx || 0), z: b.origin.z + size.d/2 + 1.6 + (off.dz || 0) };
+        const signBase = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 1.6 };
+        const signPos = { x: signBase.x + (off.dx || 0), z: signBase.z + (off.dz || 0) };
         const signGroup = buildGroundSign(b.sign, signAsset);
         signGroup.position.set(signPos.x, 0, signPos.z);
         // tag the whole sign so clicking any part of it selects the sign for
         // nudging (arrows) -- the gear icon then opens the skin picker.
-        signGroup.userData = { kind: 'sign', roomKey, buildingKey };
+        signGroup.userData = { kind: 'sign', roomKey, buildingKey, basePos: signBase };
         scene.add(signGroup);
         // edit-mode hotspot: a translucent panel over the sign so it reads as
         // editable even before it's clicked (same kind, so it routes the same).
@@ -2820,7 +2868,7 @@ function nudgeSelected(key){
     if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
     if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
     if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
-    setSignPos(roomKey, buildingKey, { dx, dz });
+    setSignPosLive(roomKey, buildingKey, { dx, dz });
     return;
   }
 
@@ -2869,7 +2917,7 @@ function nudgeSelected(key){
   } else {
     return; // ceiling slot: only scaling applies, no nudge
   }
-  setSlotXform(roomKey, slotId, xform);
+  setSlotXformLive(roomKey, slotId, xform);
 }
 
 // the selected prop's current resize as a whole-number percent of its default
@@ -2884,7 +2932,7 @@ function scaleSelected(factor){
   const { roomKey, slotId } = selectedProp;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, (xform.scale || 1) * factor));
-  setSlotXform(roomKey, slotId, xform);
+  setSlotXformLive(roomKey, slotId, xform);
   updateEditHud();   // refresh the "Resize: NN%" readout live as it changes
 }
 
@@ -2900,7 +2948,7 @@ function rotateSelected(dir){
   if(!asset || asset.type !== 'extruded') return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.dYaw = (xform.dYaw || 0) - dir * ROT_STEP;   // clockwise from above = negative yaw
-  setSlotXform(roomKey, slotId, xform);
+  setSlotXformLive(roomKey, slotId, xform);
 }
 
 /* ---------- in-world layout editor: click handling ---------- */
