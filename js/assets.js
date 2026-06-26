@@ -99,7 +99,7 @@ function buildShell(){
         <option value="all">All types</option>
         ${Object.entries(ASSET_TYPES).map(([t,info]) => `<option value="${t}">${esc(info.label)}</option>`).join('')}
       </select>
-      <input type="text" id="assetsFilterText" class="assets-search" placeholder="Search name…">
+      <input type="text" id="assetsFilterText" class="assets-search" placeholder="Search name / keywords…">
       <span class="assets-count" id="assetsCount"></span>
       <span class="assets-spacer"></span>
       <button id="assetsNewBtn"><i class="fa-solid fa-plus"></i> New Asset</button>
@@ -131,7 +131,7 @@ async function refreshGrid(){
 function renderGrid(){
   const grid = $('assetsGrid');
   let visible = FILTER_TYPE === 'all' ? ASSETS : ASSETS.filter(a => a.type === FILTER_TYPE);
-  if(FILTER_TEXT) visible = visible.filter(a => a.id.toLowerCase().includes(FILTER_TEXT));
+  if(FILTER_TEXT) visible = visible.filter(a => `${a.id} ${a.keywords || ''}`.toLowerCase().includes(FILTER_TEXT));
   $('assetsCount').textContent = `${visible.length} asset${visible.length===1?'':'s'}`;
   if(!visible.length){
     grid.innerHTML = '<p class="assets-empty">No assets yet. Click "New Asset" to upload one.</p>';
@@ -178,6 +178,10 @@ function renderEditor(a){
       <select id="assetTypeInput">
         ${Object.entries(ASSET_TYPES).map(([t,info]) => `<option value="${t}" ${t===type?'selected':''}>${esc(info.label)}</option>`).join('')}
       </select>
+    </div>
+    <div class="field">
+      <label>Keywords (optional, space- or comma-separated; searchable alongside the id)</label>
+      <input type="text" id="assetKeywords" placeholder="e.g. nautical ocean blue" value="${esc((a && a.keywords) || '')}">
     </div>
     <div class="field">
       <label>Resolution</label>
@@ -816,7 +820,8 @@ async function saveEditor(){
   if(!EDIT_ID && ASSETS.some(a => a.id === id)){ setError('an asset with that id already exists'); return; }
   if(!EDIT_IMAGE){ setError('please choose an image'); return; }
   const type = $('assetTypeInput').value;
-  const patch = { type, image: EDIT_IMAGE, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
+  const keywords = $('assetKeywords').value.trim();
+  const patch = { type, keywords, image: EDIT_IMAGE, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
   await setAsset(id, patch);
   await refreshGrid();
   showList();
@@ -853,6 +858,7 @@ function downloadBlob(blob, filename){
 
 function assetToJson(a){
   const json = { id: a.id, type: a.type, texture: `${a.id}.png` };
+  if(a.keywords) json.keywords = a.keywords;
   if(a.type === 'extruded'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, orientation: a.orientation || 'standing' });
   } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
