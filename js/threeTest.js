@@ -1522,8 +1522,12 @@ function applySpriteContentScale(sprite){
   sprite.scale.set(H * aspect * userScale, H * userScale, 1);
 }
 
-const MNEM_PAIR_SIZE = 1024;
-const MNEM_QUADRANT = MNEM_PAIR_SIZE / 2;
+// Each move box is 1x1 unit (512px); the billboard surface is 1.5x1.5 units, so
+// the opponent box pegged to the top-left and the response box pegged to the
+// bottom-right overlap by half a unit in each axis -- tight but still diagonal.
+const MNEM_QUADRANT = 512;
+const MNEM_PAIR_SIZE = Math.round(MNEM_QUADRANT * 1.5);   // 768
+const MNEM_PAIR_UNITS = 1.5;                              // world size of the billboard, in meters
 
 // draws one move's content into a QUADRANT x QUADRANT box of the shared
 // canvas, top-left corner at (qx, qy) -- image (clipped/letterboxed to fit)
@@ -1563,19 +1567,19 @@ function drawMnemQuadrant(ctx, qx, qy, content){
   ctx.restore();
 }
 
-// composites both moves of the pair onto one square canvas -- opponent in the
-// left half, our response in the right half, both vertically centred so the two
-// sit side by side and touching rather than diagonally apart. Always exactly
-// 1m x 1m regardless of content (baseH/baseAspect fixed at 1), per the user's
-// spec for the composite billboard's default size.
+// composites both moves of the pair onto one 1.5x1.5-unit canvas -- the
+// opponent box (1x1) pegged to the top-left corner, the response box (1x1)
+// pegged to the bottom-right corner -- so the two overlap by half a unit each
+// way and sit close instead of a full quadrant apart. Drawn opponent-first so
+// the response laps over it in the shared corner.
 function renderMnemPairCanvas(sprite, oppContent, respContent){
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE;
   const ctx = canvas.getContext('2d');
-  const midY = MNEM_QUADRANT / 2;                 // vertical-centre band
-  drawMnemQuadrant(ctx, 0, midY, oppContent);
-  drawMnemQuadrant(ctx, MNEM_QUADRANT, midY, respContent);
+  const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
+  drawMnemQuadrant(ctx, 0, 0, oppContent);        // opponent pegged top-left
+  drawMnemQuadrant(ctx, far, far, respContent);   // response pegged bottom-right
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -1584,18 +1588,23 @@ function renderMnemPairCanvas(sprite, oppContent, respContent){
   sprite.material.alphaTest = (oppContent.image || respContent.image) ? 0.5 : 0;
   sprite.material.color.set(0xffffff);
   sprite.material.needsUpdate = true;
-  sprite.userData.baseH = 1;
+  sprite.userData.baseH = MNEM_PAIR_UNITS;
   sprite.userData.baseAspect = 1;
   applySpriteContentScale(sprite);
 }
 
 // resolves one move to its display content, preferring graphic -> word ->
-// algebraic notation, same priority the Mnemonics screen itself uses.
-function resolveMoveContent(move, mnemonicsBySquare){
+// algebraic notation, same priority the Mnemonics screen itself uses. With
+// wordOnly the text fallback is the bare word (or notation), without the
+// "(san)" suffix -- used by the elevator's compact floor labels.
+function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
   const entry = mnemonicsBySquare && mnemonicsBySquare[move.to];
   const imgSrc = entry && entry[move.piece + 'Img'];
   const word = entry && entry[move.piece];
-  const wordFallback = (word && word.trim()) ? `${word.trim()} (${move.san})` : move.san;
+  const wordTrim = word && word.trim();
+  const wordFallback = wordOnly
+    ? (wordTrim || move.san)
+    : (wordTrim ? `${wordTrim} (${move.san})` : move.san);
   if(!imgSrc) return Promise.resolve({ text: wordFallback });
   return new Promise((resolve) => {
     const img = new Image();
@@ -1608,8 +1617,8 @@ function resolveMoveContent(move, mnemonicsBySquare){
 // builds the movable sprite for one mnemonic slot: position/scale come from
 // the slot's base placement plus any saved nudge/scale xform (same pattern as
 // placeSlotAccessory). Both moves of the pair are composited onto a single
-// 1m x 1m billboard -- see DEMO_MNEMONICS comment above for why this replaced
-// two independently camera-facing sprites.
+// 1.5m x 1.5m billboard -- see DEMO_MNEMONICS comment above for why this
+// replaced two independently camera-facing sprites.
 function placeMnemonicSlot(roomKey, slot){
   const xform = slotXformFor(roomKey, slot.id) || {};
   const pair = slot.pair;
@@ -1707,13 +1716,20 @@ function ordinal(n){
   }
 }
 
-// draws one floor list onto a canvas: ordinal + move label per row, plus a
-// small thumbnail of the move's mnemonic image (~0.2m once mapped onto the
-// panel's physical size) when one has resolved -- contents[i] holds
-// {image} or {text}, the same shape resolveMoveContent returns -- falling
-// back to plain algebraic notation otherwise.
+// spelled-out ordinal for the elevator floor labels ("First Floor:", ...),
+// falling back to the numeric ordinal past the named range.
+const ORDINAL_WORDS = ['First','Second','Third','Fourth','Fifth','Sixth','Seventh',
+  'Eighth','Ninth','Tenth','Eleventh','Twelfth'];
+function ordinalWord(n){
+  return ORDINAL_WORDS[n - 1] || ordinal(n);
+}
+
+// draws one floor list onto a canvas: "<Nth> Floor:" then the move's content
+// per row -- the mnemonic image thumbnail when one has resolved, else the
+// move's word, else its algebraic notation. contents[i] holds {image} or
+// {text}, the same shape resolveMoveContent returns.
 function makeElevatorPanelTexture(floors, contents){
-  const cw = 260, rowH = 76;
+  const cw = 380, rowH = 76;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = Math.max(rowH, rowH * floors.length + 16);
   const ctx = canvas.getContext('2d');
@@ -1722,6 +1738,7 @@ function makeElevatorPanelTexture(floors, contents){
   ctx.strokeStyle = '#888';
   ctx.lineWidth = 3;
   ctx.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
+  ctx.textBaseline = 'middle';
   floors.forEach((f, i) => {
     const rowTop = 16 + rowH * i;
     const cy = rowTop + rowH/2;
@@ -1730,22 +1747,19 @@ function makeElevatorPanelTexture(floors, contents){
     ctx.strokeRect(14, rowTop + 8, canvas.width - 28, rowH - 16);
     const content = contents && contents[i];
     ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'left';
+    const label = `${ordinalWord(f.ordinal)} Floor:`;
+    ctx.fillText(label, 22, cy);
+    const contentX = 22 + ctx.measureText(label).width + 12;
     if(content && content.image){
       const thumb = rowH - 24;
       const im = content.image;
       const scale = Math.min(thumb / im.width, thumb / im.height);
       const w = im.width * scale, h = im.height * scale;
-      ctx.drawImage(im, 24, rowTop + 8 + (rowH - 16 - h) / 2, w, h);
-      ctx.font = 'bold 24px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${ordinal(f.ordinal)}  ${f.label}`, 24 + thumb + 14, cy);
+      ctx.drawImage(im, contentX, cy - h / 2, w, h);
     } else {
-      const text = content && content.text ? content.text : f.label;
-      ctx.font = 'bold 26px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${ordinal(f.ordinal)}  ${text}`, canvas.width/2, cy);
+      ctx.fillText(content && content.text ? content.text : f.label, contentX, cy);
     }
   });
   const tex = new THREE.CanvasTexture(canvas);
@@ -1782,7 +1796,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   const myGen = buildGeneration;
   getAllMnemonics().then((mnemonicsBySquare) => {
     if(buildGeneration !== myGen) return;
-    Promise.all(floors.map(f => f.move ? resolveMoveContent(f.move, mnemonicsBySquare) : Promise.resolve({ text: f.label })))
+    Promise.all(floors.map(f => f.move ? resolveMoveContent(f.move, mnemonicsBySquare, true) : Promise.resolve({ text: f.label })))
       .then((contents) => {
         if(buildGeneration !== myGen) return;
         mat.map.dispose();
@@ -2514,8 +2528,12 @@ function renderElevatorPopup(ov, meta, mnemonicsBySquare){
   const floorRow = (f) => {
     const entry = f.move && mnemonicsBySquare && mnemonicsBySquare[f.move.to];
     const imgSrc = entry && entry[f.move.piece + 'Img'];
-    const thumb = imgSrc ? `<img data-elevator-thumb src="${imgSrc}" style="width:2.2em;height:2.2em;object-fit:contain;border-radius:3px">` : '';
-    return `<button data-elevator-target="${f.target}" style="display:flex;align-items:center;gap:.5em">${thumb}<span>${ordinal(f.ordinal)}&nbsp;&nbsp;${f.label}</span></button>`;
+    const word = entry && entry[f.move.piece];
+    // content priority: image -> word -> move notation (thumbnails doubled to 4.4em)
+    const content = imgSrc
+      ? `<img data-elevator-thumb src="${imgSrc}" style="width:4.4em;height:4.4em;object-fit:contain;border-radius:3px">`
+      : `<span>${(word && word.trim()) ? word.trim() : f.label}</span>`;
+    return `<button data-elevator-target="${f.target}" style="display:flex;align-items:center;gap:.5em"><span>${ordinalWord(f.ordinal)} Floor:</span>${content}</button>`;
   };
   const buttonsHtml = meta.kind === 'back'
     ? `<button data-elevator-target="${meta.target}">Go back</button>`
