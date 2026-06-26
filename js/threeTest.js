@@ -29,7 +29,7 @@ const ROOMS = {
     buildings: [
       // sits just north of London Avenue, so walking up the avenue and
       // turning to face north brings you right up to its front door
-      { target: 'start', sign: 'Chigoren Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
+      { target: 'start', sign: 'Chigorin Mansion', frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
         color: 0x6f8fb0, size: { w: 25, d: 10, h: 10 }, origin: { x: 20, z: -19 }, doorWall: 'south', doorOffset: 0 }
     ]
   },
@@ -1294,6 +1294,35 @@ function yardMarkerMaterial(){
 }
 const YARD_PATCH_MARGIN = 1.0;     // extra lawn past the outermost slots, each side
 const YARD_PATCH_OUTSET = 1.8;     // extra depth past the slots, away from the wall
+const YARD_PATCH_ROAD_GAP = 0.4;   // stop the front lawn this far short of a road it runs up to
+const YARD_PATCH_MAX_DEPTH = 14;   // never grow the front lawn past this, even with a distant road
+
+// How deep the front-yard grass patch should reach: from the building's front
+// wall out to just shy of the nearest road directly in front of it (so the lawn
+// fills the whole gap between house and street, not just a thin door-side band).
+// Falls back to the base outset depth when no road faces the door.
+function frontYardDepth(room, b, axis, fixed, outSign, halfAlong){
+  const base = YARD_SLOT_DEPTH + YARD_PATCH_OUTSET;
+  const roads = room && room.roads;
+  if(!roads || !roads.length) return base;
+  // perpendicular (depth) axis is z for an x-running wall, x otherwise
+  const perpWall   = fixed + (axis === 'x' ? b.origin.z : b.origin.x);
+  const alongCenter = b.doorOffset + (axis === 'x' ? b.origin.x : b.origin.z);
+  const alongMin = alongCenter - halfAlong, alongMax = alongCenter + halfAlong;
+  let best = Infinity;
+  for(const r of roads){
+    const perpC  = (axis === 'x') ? r.z : r.x;
+    const perpH  = ((axis === 'x') ? r.sz : r.sx) / 2;
+    const alongC = (axis === 'x') ? r.x : r.z;
+    const alongH = ((axis === 'x') ? r.sx : r.sz) / 2;
+    if(alongC + alongH < alongMin || alongC - alongH > alongMax) continue;  // road doesn't span the front
+    const nearEdge = perpC - outSign * perpH;        // road edge closest to the wall
+    const dist = outSign * (nearEdge - perpWall);    // >0 when the road sits in front of the door
+    if(dist > 0.2 && dist < best) best = dist;
+  }
+  if(best === Infinity) return base;
+  return Math.min(YARD_PATCH_MAX_DEPTH, Math.max(base, best - YARD_PATCH_ROAD_GAP));
+}
 function buildYardPatch(b, roomKey, buildingKey){
   const asset = yardAssetFor(roomKey, buildingKey);
   if(!asset && !editMode) return null;     // nothing to draw -> base lawn shows through
@@ -1301,7 +1330,7 @@ function buildYardPatch(b, roomKey, buildingKey){
   const { axis, fixed, half } = wallSpan(b.size, b.doorWall);
   const outSign = (b.doorWall === 'south' || b.doorWall === 'east') ? 1 : -1;
   const halfAlong = Math.max(half, YARD_SLOT_START + (YARD_SLOT_COUNT - 1) * YARD_SLOT_SPACING + YARD_PATCH_MARGIN);
-  const depth = YARD_SLOT_DEPTH + YARD_PATCH_OUTSET;
+  const depth = frontYardDepth(ROOMS[roomKey], b, axis, fixed, outSign, halfAlong);
   const alongSize = 2 * halfAlong;
   const extentX = axis === 'x' ? alongSize : depth;
   const extentZ = axis === 'x' ? depth : alongSize;
@@ -1879,11 +1908,15 @@ function makeSignMesh(text, skinSrc, board){
     img.src = skinSrc;
   }
   // BoxGeometry material order: +x, -x, +y, -y, +z, -z. The artwork sits on
-  // the +z face (the side facing the street, same convention buildGroundSign
-  // already uses); the thin edges and the blank back read as the board itself.
+  // the +z face (the side facing the street). For a SKINNED sign the image's
+  // silhouette rarely fills the whole board, so the dark edge faces would poke
+  // out past the art's transparent margin as a detached bar -- give every face
+  // the same alpha-tested skin so the cutout applies all around and no edge
+  // floats (opaque parts of the board still show a thin textured thickness).
+  // The legacy un-skinned tan panel fills its board, so it keeps solid edges.
   return new THREE.Mesh(
     new THREE.BoxGeometry(meshW, meshH, SIGN_DEPTH),
-    [edgeMat, edgeMat, edgeMat, edgeMat, faceMat, edgeMat]
+    skinSrc ? faceMat : [edgeMat, edgeMat, edgeMat, edgeMat, faceMat, edgeMat]
   );
 }
 
