@@ -1527,7 +1527,9 @@ function applySpriteContentScale(sprite){
 // bottom-right overlap by half a unit in each axis -- tight but still diagonal.
 const MNEM_QUADRANT = 512;
 const MNEM_PAIR_SIZE = Math.round(MNEM_QUADRANT * 1.5);   // 768
-const MNEM_PAIR_UNITS = 1.5;                              // world size of the billboard, in meters
+const MNEM_PAIR_UNITS = 1.2;                              // world size of the billboard, in meters
+                                                         // (overlap ratio is fixed by the canvas geometry
+                                                         //  above, so this only changes the overall size)
 
 // draws one move's content into a QUADRANT x QUADRANT box of the shared
 // canvas, top-left corner at (qx, qy) -- image (clipped/letterboxed to fit)
@@ -2864,12 +2866,20 @@ function nudgeSelected(key){
   setSlotXform(roomKey, slotId, xform);
 }
 
+// the selected prop's current resize as a whole-number percent of its default
+// size (100%), or null for signs (fixed-size, no scaling).
+function selectionScalePct(){
+  if(!selectedProp || selectedProp.kind === 'sign') return null;
+  const x = slotXformFor(selectedProp.roomKey, selectedProp.slotId);
+  return Math.round(((x && x.scale) || 1) * 100);
+}
 function scaleSelected(factor){
   if(!selectedProp || selectedProp.kind === 'sign') return; // signs are fixed-size
   const { roomKey, slotId } = selectedProp;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, (xform.scale || 1) * factor));
   setSlotXform(roomKey, slotId, xform);
+  updateEditHud();   // refresh the "Resize: NN%" readout live as it changes
 }
 
 // rotate a free-standing extruded floor prop about the vertical axis, dir = +1
@@ -2992,11 +3002,15 @@ function updateEditHud(){
   updateRoomGeomBtn();
   if(!editHud) return;
   if(selectedProp){
-    editHud.textContent = selectedProp.kind === 'mnemonic'
+    // current resize relative to the prop's default (100%), shown so the user
+    // can read off where they are; signs are fixed-size so they have none.
+    const pct = selectionScalePct();
+    const resize = pct != null ? `  ·  Resize: ${pct}%` : '';
+    editHud.textContent = (selectedProp.kind === 'mnemonic'
       ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
       : selectedProp.kind === 'sign'
         ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
-        : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
+        : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect') + resize;
     editHud.style.display = 'block';
     return;
   }
