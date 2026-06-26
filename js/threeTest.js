@@ -1347,14 +1347,17 @@ function buildRoof(size, origin, color){
      1. graphic, if one was set  -> shown as a camera-facing billboard
      2. else the mnemonic word, if set
      3. else the move's algebraic notation
-   The opponent's move sits higher and to the viewer's left of the response
-   (you enter `start` from the south, facing north, so left is -x). */
+   The opponent's move sits just above and slightly left of the response, the
+   pair held close together about eye level. They're placed ~2/3 of the way
+   into the room from the entry door (not dead center, so you aren't right on
+   top of them as you walk in). You enter `start` from the south (door at
+   z=+5) facing north, so left is -x and deeper into the room is -z. */
 const DEMO_MNEMONICS = {
   start: [
-    // black Nc6 -- the opponent's move: higher, to the left
-    { to: 'c6', piece: 'knight', san: 'Nc6', pos: { x: -1.3, y: 2.5, z: 0 } },
-    // white Bf4 -- our response: lower, to the right
-    { to: 'f4', piece: 'bishop', san: 'Bf4', pos: { x:  1.3, y: 1.5, z: 0 } }
+    // black Nc6 -- the opponent's move: above and slightly left
+    { to: 'c6', piece: 'knight', san: 'Nc6', pos: { x: -0.3, y: 1.9, z: -1.7 } },
+    // white Bf4 -- our response: just below and slightly right
+    { to: 'f4', piece: 'bishop', san: 'Bf4', pos: { x:  0.1, y: 1.3, z: -1.7 } }
   ]
 };
 
@@ -1415,7 +1418,7 @@ function setSpriteToImage(sprite, src){
     sprite.material.map = tex;
     sprite.material.needsUpdate = true;
     const im = tex.image;
-    sprite.userData.baseH = 1.5;
+    sprite.userData.baseH = 0.5; // 0.5m tall by default (square art -> 0.5 x 0.5)
     sprite.userData.baseAspect = (im && im.width && im.height) ? im.width / im.height : 1;
     applySpriteContentScale(sprite);
   });
