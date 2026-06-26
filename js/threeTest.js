@@ -1958,7 +1958,9 @@ function makeExtrudedSignMesh(text, skinSrc, board, sideColor){
     ctx.drawImage(img, 0, 0, cw, ch);
     drawSignText(ctx, cw, ch, text, Math.round(ch * 0.17), Math.round(ch * 0.13));
     const ex = buildExtrudedAsset({ image: canvas.toDataURL(), size: { w: board.w, h: board.h, d: SIGN_DEPTH }, sideColor });
-    ex.rotation.y = Math.PI;        // extruded front cap faces -z; turn it to face the street (+z)
+    // No Y-flip: the extrusion's +z cap already faces the street and reads
+    // correctly. Rotating it 180 brought the -z cap forward instead, which
+    // shows the art mirrored (it reads right only from behind).
     ex.position.y = board.h / 2;    // stand the board on the ground
     group.add(ex);
   };
