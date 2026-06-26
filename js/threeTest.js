@@ -1005,10 +1005,15 @@ function buildExtrudedAsset(asset){
     });
     shape.closePath();
 
-    const toUV = (X, Y) => new THREE.Vector2(X / w + 0.5, Y / h + 0.5);
+    // map a cap vertex to UV; `flip` mirrors U so the back cap reads the same
+    // way round as the front instead of mirror-imaged (the two caps face
+    // opposite directions, so one of them must flip to look right from its side)
+    const capUV = (X, Y, flip) => new THREE.Vector2((flip ? -X : X) / w + 0.5, Y / h + 0.5);
     const uvGen = {
       generateTopUV(g, v, a, b, c){
-        return [ toUV(v[a*3], v[a*3+1]), toUV(v[b*3], v[b*3+1]), toUV(v[c*3], v[c*3+1]) ];
+        // the z~0 cap becomes the -z (back) face after the centring translate
+        const back = v[a*3+2] <= depth * 0.5;
+        return [ capUV(v[a*3], v[a*3+1], back), capUV(v[b*3], v[b*3+1], back), capUV(v[c*3], v[c*3+1], back) ];
       },
       generateSideWallUV(){
         return [ new THREE.Vector2(0,0), new THREE.Vector2(1,0), new THREE.Vector2(1,1), new THREE.Vector2(0,1) ];
@@ -1958,9 +1963,8 @@ function makeExtrudedSignMesh(text, skinSrc, board, sideColor){
     ctx.drawImage(img, 0, 0, cw, ch);
     drawSignText(ctx, cw, ch, text, Math.round(ch * 0.17), Math.round(ch * 0.13));
     const ex = buildExtrudedAsset({ image: canvas.toDataURL(), size: { w: board.w, h: board.h, d: SIGN_DEPTH }, sideColor });
-    // No Y-flip: the extrusion's +z cap already faces the street and reads
-    // correctly. Rotating it 180 brought the -z cap forward instead, which
-    // shows the art mirrored (it reads right only from behind).
+    // No Y-flip needed: the +z cap faces the street, and buildExtrudedAsset now
+    // flips the back cap's UVs so the sign reads correctly from both sides.
     ex.position.y = board.h / 2;    // stand the board on the ground
     group.add(ex);
   };
