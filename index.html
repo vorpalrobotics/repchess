@@ -74,6 +74,15 @@
 
   #pvFloat{position:fixed;display:none;z-index:60;background:#fff;border:2px solid #333;border-radius:4px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.3)}
   #pvFloat #pvFloatBoard{width:200px;height:200px}
+  #pvFloatActions{display:flex;align-items:center;gap:.3em;margin-top:3px;max-width:280px}
+  #pvFloatActions .iconbtn{padding:0 .3em;font-size:1em;flex:0 0 auto}
+  #pvFloatAnalysisText{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78rem;min-width:0}
+  #pvFloatAnalysisText .pv-float-score{font-weight:700;font-family:'Courier New',monospace;margin-right:.4em}
+  #pvFloatAnalysisText .eval-neutral  {color:#777}
+  #pvFloatAnalysisText .eval-inferior {color:#e65100}
+  #pvFloatAnalysisText .eval-losing   {color:#c62828}
+  #pvFloatAnalysisText .eval-superior {color:#1565c0}
+  #pvFloatAnalysisText .eval-winning  {color:#2e7d32}
   .pv-move{cursor:pointer;padding:0 .15em;border-radius:3px}
   .pv-move:hover{background:#e3f2fd}
   .pv-move.pv-move-active{background:#1565c0;color:#fff}
@@ -824,7 +833,13 @@
 
 <!-- hover preview mini-board (shown on dwell over an analyse icon) -->
 <div id="hoverPreview"><div id="hoverPreviewBoard"></div></div>
-<div id="pvFloat"><div id="pvFloatBoard"></div></div>
+<div id="pvFloat">
+  <div id="pvFloatBoard"></div>
+  <div id="pvFloatActions">
+    <button id="pvFloatAnalyzeBtn" class="iconbtn" title="Analyze this position in the live engine"><i class="fa-solid fa-chess-board"></i></button>
+    <span id="pvFloatAnalysisText"></span>
+  </div>
+</div>
 
 <!-- hidden file chooser for manual NDJSON uploads -->
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">

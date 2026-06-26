@@ -2895,6 +2895,41 @@ function hidePvFloat(){
   pvFloatEl?.classList.remove('pv-move-active');
   pvFloatEl = null;
 }
+
+/* on-demand analyses run from the pvFloat's own analyze button, keyed by fen,
+   kept only for this page session (not persisted) -- lets reopening the float
+   on the same position later show the result without re-running the engine. */
+const PV_FLOAT_EVAL_CACHE = new Map();
+const PV_FLOAT_SHORT_PLIES = 4;
+let pvFloatAnalysisFen = null;
+
+/* "known" analysis for a pvFloat position: either something we've already
+   run from this widget this session, or -- by luck -- a position that's
+   also a real node elsewhere in the currently open line, whose own saved
+   eval (recordEvalIfDeeper anchors eval.pvFen to the node's own position)
+   happens to match exactly. */
+function findKnownPvFloatEval(fen){
+  if(PV_FLOAT_EVAL_CACHE.has(fen)) return PV_FLOAT_EVAL_CACHE.get(fen);
+  for(const saved of Object.values(PREFS)){
+    if(saved?.eval?.pvFen === fen) return saved.eval;
+  }
+  return null;
+}
+
+function shortPvText(evalObj){
+  if(evalObj.pvUci?.length) return pvToSan(evalObj.pvFen, evalObj.pvUci, PV_FLOAT_SHORT_PLIES);
+  if(evalObj.pv) return evalObj.pv.trim().split(/\s+/).slice(0, PV_FLOAT_SHORT_PLIES).join(' ');
+  return '';
+}
+
+function renderPvFloatAnalysisText(evalObj){
+  const span = $('pvFloatAnalysisText');
+  if(!evalObj){ span.innerHTML = ''; return; }
+  const cls = evalClass(evalObj, CURRENT_LINE?.color || 'white');
+  const lineText = shortPvText(evalObj);
+  span.innerHTML = `<span class="pv-float-score ${cls}">${escapeHtml(formatEvalTag(evalObj))}</span>${lineText ? escapeHtml(lineText) : ''}`;
+}
+
 function showPvFloat(el){
   const fen = el.dataset.fen;
   if(!fen) return;
@@ -2907,15 +2942,31 @@ function showPvFloat(el){
   } catch(err){
     console.warn('pvFloat: failed to render position', fen, err);
   }
-  const size = 212; // 200 board + padding/border
-  const left = Math.min(r.left, window.innerWidth - size - 8);
-  const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
+  pvFloatAnalysisFen = fen;
+  renderPvFloatAnalysisText(findKnownPvFloatEval(fen));
+  const fr = f.getBoundingClientRect();
+  const left = Math.min(r.left, window.innerWidth - fr.width - 8);
+  const top  = r.bottom + fr.height + 6 <= window.innerHeight ? r.bottom + 6 : r.top - fr.height - 6;
   f.style.left = `${Math.round(Math.max(8,left))}px`;
   f.style.top  = `${Math.round(Math.max(8,top))}px`;
   pvFloatEl?.classList.remove('pv-move-active');
   el.classList.add('pv-move-active');
   pvFloatEl = el;
 }
+
+$('pvFloatAnalyzeBtn').onclick = () => {
+  const fen = pvFloatAnalysisFen;
+  if(!fen) return;
+  if(liveEvalSpan) clearLiveEval(liveEvalSpan);
+  $('pvFloatAnalysisText').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing…';
+  showPosition(fen,
+    (depth, rawScore, pv) => {
+      const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvToSan(fen,pv,EVAL_TAG_PV_PLIES), pvFen: fen, pvUci: pv?.slice(0, EVAL_TAG_PV_PLIES)};
+      PV_FLOAT_EVAL_CACHE.set(fen, evalObj);
+      if(fen === pvFloatAnalysisFen) renderPvFloatAnalysisText(evalObj);
+    },
+    () => {});
+};
 /* one delegated listener: tap a PV move to toggle its mini board; tap anywhere
    else (other than the float itself) dismisses it */
 document.addEventListener('click', (e)=>{
