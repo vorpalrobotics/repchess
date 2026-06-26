@@ -1342,33 +1342,43 @@ function buildRoof(size, origin, color){
    reached through the front door (the `start` room) so we can see how the
    loci memory cues read in-world.
 
+   Both moves of the pair live on ONE composite billboard (a single square
+   sprite, 1m x 1m by default) instead of two independently camera-facing
+   sprites -- two separate billboards each turning to face the camera lost
+   their spatial relationship to each other as you moved around (each one
+   rotates to face you, so neither stays "above-left of" the other on
+   screen the way two fixed objects would). A single shared billboard
+   divided into quadrants keeps the opponent's move fixed in the upper-left
+   and our response fixed in the lower-right, matching the on-paper
+   memory-palace convention, with no relative drift.
+
    Display priority per move, matching the Mnemonics screen data
    (mnemonicsBySquare[destSquare][piece] / [piece+'Img']):
-     1. graphic, if one was set  -> shown as a camera-facing billboard
+     1. graphic, if one was set  -> drawn into that move's quadrant
      2. else the mnemonic word, if set
      3. else the move's algebraic notation
-   The opponent's move sits just above and slightly left of the response, the
-   pair held close together about eye level. They're placed ~2/3 of the way
-   into the room from the entry door (not dead center, so you aren't right on
-   top of them as you walk in). You enter `start` from the south (door at
-   z=+5) facing north, so left is -x and deeper into the room is -z. */
+   The pair is placed ~2/3 of the way into the room from the entry door (not
+   dead center, so you aren't right on top of it as you walk in), about eye
+   level. You enter `start` from the south (door at z=+5) facing north, so
+   left is -x and deeper into the room is -z. */
 const DEMO_MNEMONICS = {
-  start: [
-    // black Nc6 -- the opponent's move: above and slightly left
-    { to: 'c6', piece: 'knight', san: 'Nc6', pos: { x: -0.3, y: 1.9, z: -1.7 } },
-    // white Bf4 -- our response: just below and slightly right
-    { to: 'f4', piece: 'bishop', san: 'Bf4', pos: { x:  0.1, y: 1.3, z: -1.7 } }
-  ]
+  start: {
+    opponent: { to: 'c6', piece: 'knight', san: 'Nc6' },  // black Nc6
+    response: { to: 'f4', piece: 'bishop', san: 'Bf4' },  // white Bf4
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
+  }
 };
 
 // mnemonic billboards are positioned/sized like any other accessory: a
 // synthetic floor-less "slot" (kind 'mnemonic') folded into roomSlots() so
 // the existing select/nudge/scale/persist machinery (LAYOUT[roomKey].slotXform,
-// keyed by slot id) just works for them with no changes elsewhere.
+// keyed by slot id) just works for them with no changes elsewhere. One slot
+// per room now (the composite pair billboard), not one per move -- the pair
+// moves/scales as a single unit.
 function mnemonicSlots(roomKey){
-  const moves = DEMO_MNEMONICS[roomKey];
-  if(!moves) return [];
-  return moves.map((m, i) => ({ id: `mnem-${i}`, kind: 'mnemonic', x: m.pos.x, y: m.pos.y, z: m.pos.z, move: m }));
+  const pair = DEMO_MNEMONICS[roomKey];
+  if(!pair) return [];
+  return [{ id: 'mnem-0', kind: 'mnemonic', x: pair.pos.x, y: pair.pos.y, z: pair.pos.z, pair }];
 }
 
 function applySpriteContentScale(sprite){
@@ -1378,74 +1388,112 @@ function applySpriteContentScale(sprite){
   sprite.scale.set(H * aspect * userScale, H * userScale, 1);
 }
 
-function setSpriteToText(sprite, text){
+const MNEM_PAIR_SIZE = 1024;
+const MNEM_QUADRANT = MNEM_PAIR_SIZE / 2;
+
+// draws one move's content into a QUADRANT x QUADRANT box of the shared
+// canvas, top-left corner at (qx, qy) -- image (clipped/letterboxed to fit)
+// if one was set, else a boxed/bordered text label (mirrors the styling the
+// old per-move text sprites used).
+function drawMnemQuadrant(ctx, qx, qy, content){
+  const s = MNEM_QUADRANT;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(qx, qy, s, s);
+  ctx.clip();
+  if(content.image){
+    const im = content.image;
+    const scale = Math.min(s / im.width, s / im.height);
+    const w = im.width * scale, h = im.height * scale;
+    ctx.drawImage(im, qx + (s - w) / 2, qy + (s - h) / 2, w, h);
+  } else {
+    const pad = 22;
+    ctx.fillStyle = 'rgba(18,20,26,0.82)';
+    ctx.fillRect(qx + pad / 2, qy + pad / 2, s - pad, s - pad);
+    ctx.strokeStyle = '#7fb0ff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(qx + pad / 2 + 2, qy + pad / 2 + 2, s - pad - 4, s - pad - 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const text = content.text;
+    let font = 64;
+    ctx.font = `bold ${font}px sans-serif`;
+    const maxW = s - pad * 2;
+    while(font > 20 && ctx.measureText(text).width > maxW){
+      font -= 4;
+      ctx.font = `bold ${font}px sans-serif`;
+    }
+    ctx.fillText(text, qx + s / 2, qy + s / 2 + 4);
+  }
+  ctx.restore();
+}
+
+// composites both moves of the pair onto one square canvas -- opponent in
+// the upper-left quadrant, our response in the lower-right, the other two
+// quadrants left blank -- and applies it as the sprite's texture. Always
+// exactly 1m x 1m regardless of content (baseH/baseAspect fixed at 1), per
+// the user's spec for the composite billboard's default size.
+function renderMnemPairCanvas(sprite, oppContent, respContent){
   const canvas = document.createElement('canvas');
-  let ctx = canvas.getContext('2d');
-  const font = 'bold 120px sans-serif';
-  ctx.font = font;
-  const pad = 44;
-  const tw = Math.ceil(ctx.measureText(text).width);
-  canvas.width = tw + pad * 2;
-  canvas.height = 180;
-  ctx = canvas.getContext('2d');           // re-read after the resize cleared the canvas
-  ctx.fillStyle = 'rgba(18,20,26,0.82)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = '#7fb0ff';
-  ctx.lineWidth = 6;
-  ctx.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = font;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
+  canvas.width = MNEM_PAIR_SIZE;
+  canvas.height = MNEM_PAIR_SIZE;
+  const ctx = canvas.getContext('2d');
+  drawMnemQuadrant(ctx, 0, 0, oppContent);
+  drawMnemQuadrant(ctx, MNEM_QUADRANT, MNEM_QUADRANT, respContent);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
-  sprite.material.alphaTest = 0;
+  // hard alpha-cutout (vs. blended) avoids dark edge-fringing on photo/PNG
+  // art; only needed when a quadrant actually holds an image.
+  sprite.material.alphaTest = (oppContent.image || respContent.image) ? 0.5 : 0;
   sprite.material.color.set(0xffffff);
   sprite.material.needsUpdate = true;
-  sprite.userData.baseH = 0.8;
-  sprite.userData.baseAspect = canvas.width / canvas.height;
+  sprite.userData.baseH = 1;
+  sprite.userData.baseAspect = 1;
   applySpriteContentScale(sprite);
 }
 
-function setSpriteToImage(sprite, src){
-  sprite.material.alphaTest = 0.5;
-  const myGen = buildGeneration;
-  textureLoader.load(src, (tex) => {
-    if(buildGeneration !== myGen) return;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    sprite.material.map = tex;
-    sprite.material.needsUpdate = true;
-    const im = tex.image;
-    sprite.userData.baseH = 0.5; // 0.5m tall by default (square art -> 0.5 x 0.5)
-    sprite.userData.baseAspect = (im && im.width && im.height) ? im.width / im.height : 1;
-    applySpriteContentScale(sprite);
+// resolves one move to its display content, preferring graphic -> word ->
+// algebraic notation, same priority the Mnemonics screen itself uses.
+function resolveMoveContent(move, mnemonicsBySquare){
+  const entry = mnemonicsBySquare && mnemonicsBySquare[move.to];
+  const imgSrc = entry && entry[move.piece + 'Img'];
+  const word = entry && entry[move.piece];
+  const wordFallback = (word && word.trim()) ? `${word.trim()} (${move.san})` : move.san;
+  if(!imgSrc) return Promise.resolve({ text: wordFallback });
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ image: img });
+    img.onerror = () => resolve({ text: wordFallback });
+    img.src = imgSrc;
   });
 }
 
 // builds the movable sprite for one mnemonic slot: position/scale come from
 // the slot's base placement plus any saved nudge/scale xform (same pattern as
-// placeSlotAccessory), content comes from the Mnemonics-screen data, falling
-// back from graphic -> word -> algebraic notation.
+// placeSlotAccessory). Both moves of the pair are composited onto a single
+// 1m x 1m billboard -- see DEMO_MNEMONICS comment above for why this replaced
+// two independently camera-facing sprites.
 function placeMnemonicSlot(roomKey, slot){
   const xform = slotXformFor(roomKey, slot.id) || {};
-  const move = slot.move;
+  const pair = slot.pair;
   const mat = new THREE.SpriteMaterial({ color: 0xffffff, transparent: true });
   const sprite = new THREE.Sprite(mat);
   sprite.userData = { kind: 'accessory', slotId: slot.id, userScale: xform.scale || 1 };
   sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
-  setSpriteToText(sprite, move.san); // immediate fallback while mnemonic data loads
+  // immediate fallback (algebraic notation in both quadrants) while mnemonic data loads
+  renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san });
   const myGen = buildGeneration;
   getAllMnemonics().then((mnemonicsBySquare) => {
     if(buildGeneration !== myGen) return;
-    const entry = mnemonicsBySquare[move.to];
-    const img = entry && entry[move.piece + 'Img'];
-    const word = entry && entry[move.piece];
-    if(img) setSpriteToImage(sprite, img);
-    // word fallback shows the cue *and* the move so it's unambiguous, e.g. "Famine (Nf3)"
-    else if(word && word.trim()) setSpriteToText(sprite, `${word.trim()} (${move.san})`);
-    // else: already showing the algebraic-notation fallback set above
+    Promise.all([
+      resolveMoveContent(pair.opponent, mnemonicsBySquare),
+      resolveMoveContent(pair.response, mnemonicsBySquare)
+    ]).then(([oppContent, respContent]) => {
+      if(buildGeneration !== myGen) return;
+      renderMnemPairCanvas(sprite, oppContent, respContent);
+    });
   });
   return sprite;
 }
