@@ -2657,7 +2657,12 @@ $('mnemonicsCoverageSelect').onchange = async (e)=>{
   const lines = await getLines(CURRENT_USER);
   const line = lines.find(l=>l.id===id);
   if(!line){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
-  MNEM_COVERAGE = await computeMnemonicCoverage(line);
+  const spinner = showSpinner('Loading opening system…');
+  try {
+    MNEM_COVERAGE = await computeMnemonicCoverage(line);
+  } finally {
+    hideSpinner(spinner);
+  }
   renderMnemonicsGrid();
 };
 
