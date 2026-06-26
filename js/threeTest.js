@@ -215,6 +215,10 @@ function ceilingAssetFor(roomKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].ceiling;
   return id ? ASSET_BY_ID[id] : null;
 }
+function stairAssetFor(roomKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].stairSurface;
+  return id ? ASSET_BY_ID[id] : null;
+}
 function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
   return id ? ASSET_BY_ID[id] : null;
@@ -552,6 +556,12 @@ function setCeilingOverride(roomKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.ceiling = assetId; else delete r.ceiling;
+  });
+}
+function setStairOverride(roomKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.stairSurface = assetId; else delete r.stairSurface;
   });
 }
 function setSlotOverride(roomKey, slotId, assetId){
@@ -2041,22 +2051,37 @@ function mountFacadeExtrusion(group, size, wall, origin, depth, height, frontCle
   return group;
 }
 
+// Material for a staircase's steps/risers: the room's assigned stair surface
+// asset if one was picked, else a warm wood plank default (gray steps read as
+// unfinished concrete). `spanW` is the run width, used to tile the texture so
+// the planks aren't stretched. Tagged-as-clickable by the caller.
+function stairMaterial(roomKey, spanW){
+  const asset = stairAssetFor(roomKey);
+  if(asset){
+    const rpm = asset.repeatPerMeter || 0.5;
+    return assetSurfaceMaterial(asset, Math.max(1, spanW * rpm), 1);
+  }
+  const tex = makeFloorTexture();          // already a wood-plank canvas texture
+  tex.repeat.set(Math.max(1, Math.round(spanW / 1.2)), 1);
+  return new THREE.MeshStandardMaterial({ map: tex });
+}
+
 // Builds a raised platform (reached by a staircase) within a room's
 // existing walls/ceiling -- the platform spans from `toZ` back to the
 // room's far wall, and the steps climb the gap between `fromZ` and `toZ`.
-function buildStairs(room){
+function buildStairs(room, roomKey){
   const { fromZ, toZ, rise } = room.stairs;
   const { w, d } = room.size;
 
   const group = new THREE.Group();
+  const mat = stairMaterial(roomKey, w);
+  const tag = { kind: 'stair-surface', roomKey };
 
   const platformDepth = toZ - (-d/2);
   const platformZ = (toZ + (-d/2)) / 2;
-  const platform = new THREE.Mesh(
-    new THREE.BoxGeometry(w, rise, platformDepth),
-    new THREE.MeshStandardMaterial({ color: 0x7a7a7a })
-  );
+  const platform = new THREE.Mesh(new THREE.BoxGeometry(w, rise, platformDepth), mat);
   platform.position.set(0, rise/2, platformZ);
+  platform.userData = tag;
   group.add(platform);
 
   const topTex = makeFloorTexture();
@@ -2072,12 +2097,12 @@ function buildStairs(room){
   const steps = 8;
   const stepRun = (fromZ - toZ) / steps;
   const stepRise = rise / steps;
-  const stepMat = new THREE.MeshStandardMaterial({ color: 0x8a8a8a });
   for(let i=0; i<steps; i++){
     const stepH = stepRise * (i+1);
     const zCenter = fromZ - stepRun*i - stepRun/2;
-    const step = new THREE.Mesh(new THREE.BoxGeometry(w, stepH, stepRun), stepMat);
+    const step = new THREE.Mesh(new THREE.BoxGeometry(w, stepH, stepRun), mat);
     step.position.set(0, stepH/2, zCenter);
+    step.userData = tag;
     group.add(step);
   }
 
@@ -2125,7 +2150,7 @@ function buildGroundSign(text, asset){
 // a-continuous-ramp split that buildStairs already uses for room.stairs).
 // The far end is left open -- like an ordinary door, the "next room" is an
 // illusion stitched together by enterRoom's teleport, not real geometry.
-function buildStairCorridor(room, wall, offset, surfaceAsset){
+function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey){
   const { axis, fixed } = wallSpan(room.size, wall);
   const outSign = fixed >= 0 ? 1 : -1;
   const { rise, steps, depth } = stairCorridorGeom(room);
@@ -2166,7 +2191,8 @@ function buildStairCorridor(room, wall, offset, surfaceAsset){
     group.add(ceiling);
   }
 
-  const stepMat = new THREE.MeshStandardMaterial({ color: 0x8a8a8a });
+  const stepMat = stairMaterial(roomKey, DOOR_W);
+  const stepTag = { kind: 'stair-surface', roomKey };
   const stepRise = rise / steps;
   for(let i = 0; i < steps; i++){
     const stepH = stepRise * (i+1);
@@ -2176,6 +2202,7 @@ function buildStairCorridor(room, wall, offset, surfaceAsset){
     else { geo = new THREE.BoxGeometry(STAIR_STEP_RUN, stepH, DOOR_W*0.96); x = fixed + outSign*along; z = offset; }
     const step = new THREE.Mesh(geo, stepMat);
     step.position.set(x, stepH/2, z);
+    step.userData = stepTag;
     group.add(step);
   }
 
@@ -2356,12 +2383,12 @@ function buildRoom(roomKey){
           exitMeta.push({ box, target: ex.target, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-          if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall)));
+          if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
       }
     }
-    if(room.stairs) scene.add(buildStairs(room));
+    if(room.stairs) scene.add(buildStairs(room, roomKey));
     if(room.label){
       let labelY;
       if(room.stairs){
@@ -3010,6 +3037,12 @@ function handleEditTarget(ud){
       onPick: id => setCeilingOverride(roomKey, id),
       onRemove: () => setCeilingOverride(roomKey, null)
     });
+  } else if(ud.kind === 'stair-surface'){
+    openAssetPicker({
+      allow: ['surface'], allowRemove: !!stairAssetFor(roomKey), onClose,
+      onPick: id => setStairOverride(roomKey, id),
+      onRemove: () => setStairOverride(roomKey, null)
+    });
   } else if(ud.kind === 'slot'){
     openAssetPicker({
       allow: ud.allow, onClose,
@@ -3062,7 +3095,7 @@ function updateEditHud(){
   const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
   editHud.textContent = outdoor
     ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
-    : 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
+    : 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [E] or [Esc] to exit';
   editHud.style.display = 'block';
 }
 
@@ -3654,7 +3687,7 @@ export async function openThreeTest(containerEl){
   editHud.style.cssText = 'position:absolute;top:8px;left:8px;padding:.35rem .6rem;'
     + 'background:rgba(21,101,192,.85);color:#fff;font:600 .8rem sans-serif;'
     + 'border-radius:4px;pointer-events:none;display:none;z-index:2';
-  editHud.textContent = 'EDIT MODE — click floor / wall / slot / doorway to set; [E] or [Esc] to exit';
+  editHud.textContent = 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [E] or [Esc] to exit';
   container.appendChild(editHud);
 
   // mobile controls (touch devices only): walk joystick, edit-mode toggle,
