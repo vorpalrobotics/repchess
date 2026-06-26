@@ -199,7 +199,7 @@ function renderEditor(a){
         <div class="asset-img-side">
           <div class="asset-img-info" id="assetImgInfo"></div>
           <div class="asset-img-tools">
-            <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop…</button>
+            <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop / Erase BG…</button>
             <span class="assets-res-hint" id="assetCropHint"></span>
           </div>
         </div>
@@ -517,6 +517,38 @@ export function downscaleDataUrl(dataUrl, maxDim){
   });
 }
 
+/* Flood-fill from (sx,sy) across all 4-connected pixels whose colour is within
+   `tol` (Euclidean RGB distance) of the seed, setting their alpha to 0. Mutates
+   `data` (a Uint8ClampedArray of RGBA) in place; returns how many pixels were
+   cleared. Used by the Erase-BG tool to knock a flat/near-flat background out to
+   real transparency. */
+function floodFillTransparent(data, W, H, sx, sy, tol){
+  const seed = sy*W + sx, si = seed*4;
+  if(data[si+3] === 0) return 0;                 // already transparent
+  const r0 = data[si], g0 = data[si+1], b0 = data[si+2];
+  const tol2 = tol*tol;
+  const matches = (i) => {
+    if(data[i+3] === 0) return false;
+    const dr = data[i]-r0, dg = data[i+1]-g0, db = data[i+2]-b0;
+    return dr*dr + dg*dg + db*db <= tol2;
+  };
+  const seen = new Uint8Array(W*H);
+  const stack = [seed];
+  seen[seed] = 1;
+  let count = 0;
+  while(stack.length){
+    const p = stack.pop();
+    data[p*4+3] = 0;
+    count++;
+    const x = p % W, y = (p - x) / W;
+    if(x > 0   && !seen[p-1] && matches((p-1)*4)){ seen[p-1] = 1; stack.push(p-1); }
+    if(x < W-1 && !seen[p+1] && matches((p+1)*4)){ seen[p+1] = 1; stack.push(p+1); }
+    if(y > 0   && !seen[p-W] && matches((p-W)*4)){ seen[p-W] = 1; stack.push(p-W); }
+    if(y < H-1 && !seen[p+W] && matches((p+W)*4)){ seen[p+W] = 1; stack.push(p+W); }
+  }
+  return count;
+}
+
 /* crop a data-URL to a fractional rectangle {l,t,r,b} (each 0..1 of the image).
    Returns a fresh PNG data-URL of just that region. */
 function cropDataUrl(dataUrl, { l, t, r, b }){
@@ -647,10 +679,12 @@ export function cropImage(sourceDataUrl){
   let sel = { l:0, t:0, r:1, b:1 };     // crop rectangle as fractions of `work`
   let natW = 0, natH = 0;
 
+  let eraseMode = false;
+
   ov.innerHTML = `
     <div class="modal">
       <div class="crop-header">
-        <h2>Crop image</h2>
+        <h2>Edit image</h2>
         <span class="crop-dims" id="cropDims"></span>
       </div>
       <div class="crop-stage">
@@ -666,6 +700,11 @@ export function cropImage(sourceDataUrl){
       <div class="crop-actions">
         <button id="cropAutoBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-crop</button>
         <button id="cropApplyBtn"><i class="fa-solid fa-scissors"></i> Crop</button>
+        <button id="cropEraseBtn"><i class="fa-solid fa-eraser"></i> Erase BG</button>
+        <span id="cropEraseTools" style="display:none;align-items:center;gap:.4rem;font-size:.85rem;color:#444">
+          fuzz <input type="range" id="cropTol" min="0" max="120" value="32" style="width:120px">
+          <span id="cropTolVal" style="font-family:ui-monospace,monospace;min-width:2.2em">32</span>
+        </span>
         <span class="spacer"></span>
         <button id="cropCancelBtn">Cancel</button>
         <button id="cropSaveBtn">SAVE</button>
@@ -697,7 +736,7 @@ export function cropImage(sourceDataUrl){
     bars.b.style.top  = (sel.b*100) + '%';
     const cw = Math.max(1, Math.round((sel.r-sel.l)*natW));
     const ch = Math.max(1, Math.round((sel.b-sel.t)*natH));
-    dims.textContent = `${natW}×${natH}  →  ${cw}×${ch}`;
+    if(!eraseMode) dims.textContent = `${natW}×${natH}  →  ${cw}×${ch}`;   // erase mode shows its own status
   }
   function onImgReady(){ natW = img.naturalWidth; natH = img.naturalHeight; fitWrap(); paint(); }
   img.onload = onImgReady;
@@ -730,6 +769,46 @@ export function cropImage(sourceDataUrl){
     img.src = work;        // onload → recompute natW/H, refit, repaint
   }
 
+  // Erase-background mode: clicking the image samples that pixel and flood-fills
+  // the connected region of near-matching colour to full transparency (handles
+  // the "looks transparent but is actually a flat/near-white fill" exports).
+  // The crop bars are hidden while erasing so clicks reach the image instead.
+  const eraseBtn = ov.querySelector('#cropEraseBtn');
+  const eraseTools = ov.querySelector('#cropEraseTools');
+  const tolEl = ov.querySelector('#cropTol');
+  const tolVal = ov.querySelector('#cropTolVal');
+  function setEraseMode(on){
+    eraseMode = on;
+    eraseTools.style.display = on ? 'inline-flex' : 'none';
+    selEl.style.display = on ? 'none' : '';
+    for(const k of ['l','r','t','b']) bars[k].style.display = on ? 'none' : '';
+    img.style.cursor = on ? 'crosshair' : '';
+    eraseBtn.style.background = on ? '#1565c0' : '';
+    eraseBtn.style.color = on ? '#fff' : '';
+    dims.textContent = on ? 'click a background area to erase it' : `${natW}×${natH}`;
+  }
+  tolEl.oninput = () => { tolVal.textContent = tolEl.value; };
+  img.addEventListener('pointerdown', (e) => {
+    if(!eraseMode || !natW) return;
+    const r = img.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left) / r.width * natW);
+    const y = Math.floor((e.clientY - r.top) / r.height * natH);
+    if(x < 0 || y < 0 || x >= natW || y >= natH) return;
+    const c = document.createElement('canvas');
+    c.width = natW; c.height = natH;
+    const cx = c.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(img, 0, 0, natW, natH);
+    let id;
+    try{ id = cx.getImageData(0, 0, natW, natH); }
+    catch(err){ console.error('[crop] erase read failed', err); return; }
+    const n = floodFillTransparent(id.data, natW, natH, x, y, Number(tolEl.value));
+    if(!n){ dims.textContent = 'that spot is already transparent'; return; }
+    cx.putImageData(id, 0, 0);
+    work = c.toDataURL('image/png');
+    img.src = work;
+    dims.textContent = `erased ${n.toLocaleString()} px — click more or SAVE`;
+  });
+
   return new Promise((resolve) => {
     ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[crop] crop failed', err); });
     ov.querySelector('#cropAutoBtn').onclick = async () => {
@@ -739,10 +818,14 @@ export function cropImage(sourceDataUrl){
         sel = b; paint();
       }catch(err){ console.error('[crop] auto-crop bounds failed', err); }
     };
+    eraseBtn.onclick = async () => {
+      if(!eraseMode){ await applyCrop().catch(err => console.error('[crop] crop failed', err)); }  // bake in any pending crop before erasing
+      setEraseMode(!eraseMode);
+    };
     ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; resolve(null); };
     ov.querySelector('#cropSaveBtn').onclick = async () => {
       try{
-        await applyCrop();                 // commit any pending bar selection first
+        await applyCrop();                 // commit any pending bar selection first (no-op if full)
         ov.style.display = 'none';
         resolve(work);
       }catch(err){
@@ -774,7 +857,7 @@ async function openCropModal(){
     const drop = $('assetImgDrop');
     if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
     const m = await measureDataUrl(EDIT_IMAGE);
-    setCropHint(`cropped to ${m.w}×${m.h}`);
+    setCropHint(`updated — ${m.w}×${m.h}`);
     await updateImgInfo();             // aspect ratio changed…
     snapHeightFromWidth();             // …so re-pull height if the size lock is on
   }catch(err){
