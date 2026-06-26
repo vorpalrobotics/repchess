@@ -1190,7 +1190,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(!showContinuation) return '';
       const ev = currentSaved()?.eval;
       if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
-      const chips = pvChipsFromSan(ev.pvFen || fenForSeq(lineSeq), ev.pv);
+      const startFen = ev.pvFen || fenForSeq(lineSeq);
+      const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
+        || pvChipsFromSan(startFen, ev.pv);
       return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
     }
     function refreshMeta(){
@@ -1499,14 +1501,26 @@ function renderBlackRoot(parent,games,trigger){
   attachHoverPreview(btnEval, lineSeq);
   const currentSaved = () => PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
 
+  let showContinuation = false;
+  function continuationHtml(){
+    if(!showContinuation) return '';
+    const ev = currentSaved()?.eval;
+    if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
+    const startFen = ev.pvFen || fenForSeq(lineSeq);
+    const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
+      || pvChipsFromSan(startFen, ev.pv);
+    return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+  }
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
     const note = saved?.note || '';
-    if(!mnem && !note){ metaTr.style.display='none'; return; }
+    const pvHtml = continuationHtml();
+    if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-      (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '');
+      (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+      pvHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
@@ -1515,6 +1529,11 @@ function renderBlackRoot(parent,games,trigger){
     if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
   }
   refreshMeta();
+  evalSpan.onclick = () => {
+    if(!currentSaved()?.eval) return;
+    showContinuation = !showContinuation;
+    refreshMeta();
+  };
   refreshRowMenuLabels(rowMenu, currentSaved());
 
   function saveField(field,value){
@@ -2855,11 +2874,15 @@ function hidePvFloat(){
 function showPvFloat(el){
   const fen = el.dataset.fen;
   if(!fen) return;
-  pvFloatBoard.setPosition(fen);
-  pvFloatBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
   const r = el.getBoundingClientRect();
   const f = $('pvFloat');
   f.style.display = 'block';
+  try {
+    pvFloatBoard.setPosition(fen);
+    pvFloatBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+  } catch(err){
+    console.warn('pvFloat: failed to render position', fen, err);
+  }
   const size = 212; // 200 board + padding/border
   const left = Math.min(r.left, window.innerWidth - size - 8);
   const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
@@ -3080,7 +3103,7 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
   const existing = currentSaved()?.eval;
   if(existing && existing.depth >= depth) return;
   const pvSan = pv?.length ? pvToSan(fen, pv, EVAL_TAG_PV_PLIES) : '';
-  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan, pvFen: fen};
+  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan, pvFen: fen, pvUci: pv?.length ? pv.slice(0, EVAL_TAG_PV_PLIES) : undefined};
   saveField('eval', evalObj);
   refreshEvalSpan(evalSpan, evalObj);
 }
