@@ -1920,6 +1920,37 @@ function makeSignMesh(text, skinSrc, board){
   );
 }
 
+// A skinned sign as a real silhouette extrusion (the same path the grandfather
+// clock and the mansion facade use), so the board's depth follows the skin's
+// outline instead of a flat rectangular slab. The name text is composited onto
+// the skin first, then the whole thing is traced/extruded by buildExtrudedAsset.
+// Returns a group that fills in once the skin decodes (guarded by buildGeneration).
+function makeExtrudedSignMesh(text, skinSrc, board, sideColor){
+  const group = new THREE.Group();
+  const myGen = buildGeneration;
+  const img = new Image();
+  img.onload = () => {
+    if(buildGeneration !== myGen || !scene) return;
+    // composite the skin + name onto a board-aspect canvas; the text lands
+    // inside the opaque artwork, so it rides along without changing the
+    // silhouette that gets traced.
+    const px = 150;
+    const cw = Math.max(64, Math.round(board.w * px));
+    const ch = Math.max(32, Math.round(board.h * px));
+    const canvas = document.createElement('canvas');
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, cw, ch);
+    drawSignText(ctx, cw, ch, text, Math.round(ch * 0.17), Math.round(ch * 0.13));
+    const ex = buildExtrudedAsset({ image: canvas.toDataURL(), size: { w: board.w, h: board.h, d: SIGN_DEPTH }, sideColor });
+    ex.rotation.y = Math.PI;        // extruded front cap faces -z; turn it to face the street (+z)
+    ex.position.y = board.h / 2;    // stand the board on the ground
+    group.add(ex);
+  };
+  img.src = skinSrc;
+  return group;
+}
+
 // Mounts a mesh flush against a wall facing *outward* (away from the
 // room/building it belongs to) -- the mirror image of placeLabelOnWall,
 // which faces inward. Used for exterior signage on building facades.
@@ -2006,11 +2037,10 @@ function buildGroundSign(text, asset){
   const size = (asset && asset.size && asset.size.w > 0 && asset.size.h > 0) ? asset.size : null;
   if(skinSrc && size){
     // Full-board skin: the image IS the whole sign (legs painted into the art),
-    // so there are no separate posts. The board stands on the ground (bottom at
-    // y=0) and the name prints across its upper third, clearing the legs.
-    const panel = makeSignMesh(text, skinSrc, size);
-    panel.position.y = size.h / 2;
-    group.add(panel);
+    // so there are no separate posts. It's extruded from its own silhouette so
+    // the sides follow the outline (not a flat slab); the board stands on the
+    // ground and the name prints across its upper third, clearing the legs.
+    group.add(makeExtrudedSignMesh(text, skinSrc, size, asset.sideColor));
     return group;
   }
   // Legacy look: a small panel held up on two wooden posts (no skin, or a
