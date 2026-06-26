@@ -2384,7 +2384,10 @@ function renderMnemImgDrop(p){
   }
 }
 
-/* downscale to fit within MNEM_IMG_MAX_DIM x MNEM_IMG_MAX_DIM (no cropping) and re-encode as JPEG to keep stored size small */
+/* downscale to fit within MNEM_IMG_MAX_DIM x MNEM_IMG_MAX_DIM (no cropping).
+   Images with any transparency are kept as PNG so cut-out backgrounds survive
+   (JPEG has no alpha and would flatten transparent pixels to black); fully
+   opaque images re-encode as JPEG to keep the stored size small. */
 function resizeImageFile(file){
   return new Promise((resolve,reject)=>{
     const img = new Image();
@@ -2396,8 +2399,14 @@ function resizeImageFile(file){
       const h = Math.max(1, Math.round(img.height * scale));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      let hasAlpha = false;
+      try{
+        const data = ctx.getImageData(0, 0, w, h).data;
+        for(let i = 3; i < data.length; i += 4){ if(data[i] < 255){ hasAlpha = true; break; } }
+      }catch(_){ /* tainted canvas — fall back to JPEG */ }
+      resolve(hasAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85));
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not decode image')); };
     img.src = url;

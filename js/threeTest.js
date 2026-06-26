@@ -1353,8 +1353,8 @@ const DEMO_MNEMONICS = {
   start: [
     // black Nc6 -- the opponent's move: higher, to the left
     { to: 'c6', piece: 'knight', san: 'Nc6', pos: { x: -1.3, y: 2.5, z: 0 } },
-    // white Bb4 -- our response: lower, to the right
-    { to: 'b4', piece: 'bishop', san: 'Bb4', pos: { x:  1.3, y: 1.5, z: 0 } }
+    // white Bf4 -- our response: lower, to the right
+    { to: 'f4', piece: 'bishop', san: 'Bf4', pos: { x:  1.3, y: 1.5, z: 0 } }
   ]
 };
 
