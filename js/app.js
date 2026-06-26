@@ -2366,7 +2366,9 @@ const mnemImgFile = p => $(`mnem${mnemCap(p)}ImgFile`);
 
 /* images are staged in memory while the editor is open, committed on Save */
 const MNEM_EDIT_IMAGES = {};
-const MNEM_IMG_MAX_DIM = 250;       // stored image is downscaled to fit within this box
+const MNEM_IMG_MAX_DIM = 512;       // stored image is downscaled to fit within this box
+                                    // (512 keeps the 3D move billboards crisp up close;
+                                    //  the 2D grid only ever shows a 66px thumbnail)
 const MNEM_IMG_MAX_FILE_BYTES = 8 * 1024 * 1024; // reject absurdly large source files outright
 
 function renderMnemImgDrop(p){
