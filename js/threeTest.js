@@ -651,53 +651,42 @@ function clampToRoom(size, x, z){
   const halfW = w/2 - PLAYER_RADIUS, halfD = d/2 - PLAYER_RADIUS;
   const dHalf = DOOR_W/2;
 
+  // An ordinary doorway is only ever crossed by the forward teleport (which
+  // fires a metre inside the wall), so the wall plane stays SOLID even across
+  // the gap -- otherwise backing up through the opening walks you out the back
+  // of the room into the void. Only a stair corridor's gap is walkable, and
+  // then only within the corridor's own footprint.
   if(z < -halfD){
     const ex = currentExitsByWall['north'];
-    const inGap = ex && x > ex.offset-dHalf && x < ex.offset+dHalf;
-    if(!inGap) z = -halfD;
-    else {
-      const c = currentStairCorridors['north'];
-      if(c){
-        x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
-        z = Math.max(z, -halfD - c.depth);
-      }
-    }
+    const c = ex && currentStairCorridors['north'];
+    if(c && x > ex.offset-dHalf && x < ex.offset+dHalf){
+      x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+      z = Math.max(z, -halfD - c.depth);
+    } else z = -halfD;
   }
   if(z > halfD){
     const ex = currentExitsByWall['south'];
-    const inGap = ex && x > ex.offset-dHalf && x < ex.offset+dHalf;
-    if(!inGap) z = halfD;
-    else {
-      const c = currentStairCorridors['south'];
-      if(c){
-        x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
-        z = Math.min(z, halfD + c.depth);
-      }
-    }
+    const c = ex && currentStairCorridors['south'];
+    if(c && x > ex.offset-dHalf && x < ex.offset+dHalf){
+      x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+      z = Math.min(z, halfD + c.depth);
+    } else z = halfD;
   }
   if(x < -halfW){
     const ex = currentExitsByWall['west'];
-    const inGap = ex && z > ex.offset-dHalf && z < ex.offset+dHalf;
-    if(!inGap) x = -halfW;
-    else {
-      const c = currentStairCorridors['west'];
-      if(c){
-        z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
-        x = Math.max(x, -halfW - c.depth);
-      }
-    }
+    const c = ex && currentStairCorridors['west'];
+    if(c && z > ex.offset-dHalf && z < ex.offset+dHalf){
+      z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+      x = Math.max(x, -halfW - c.depth);
+    } else x = -halfW;
   }
   if(x > halfW){
     const ex = currentExitsByWall['east'];
-    const inGap = ex && z > ex.offset-dHalf && z < ex.offset+dHalf;
-    if(!inGap) x = halfW;
-    else {
-      const c = currentStairCorridors['east'];
-      if(c){
-        z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
-        x = Math.min(x, halfW + c.depth);
-      }
-    }
+    const c = ex && currentStairCorridors['east'];
+    if(c && z > ex.offset-dHalf && z < ex.offset+dHalf){
+      z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+      x = Math.min(x, halfW + c.depth);
+    } else x = halfW;
   }
   return { x, z };
 }
