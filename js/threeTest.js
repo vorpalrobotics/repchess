@@ -1129,6 +1129,22 @@ function yawFacing(x, z, target){
   return Math.atan2(x - target.x, z - target.z);
 }
 
+// The wall a room is normally entered through: its `back:true` exit leads back
+// the way you came, so that's the entrance. Rooms with no back exit (the
+// outdoor root) fall back to south.
+function entranceWall(room){
+  const back = (room.exits || []).find(e => e.back);
+  return (back && back.wall) || 'south';
+}
+// Default yaw for a free-standing extruded floor prop: its front (local -z)
+// points TOWARD the entrance wall (the opposite of WALL_INWARD_YAW, which faces
+// a wall-mounted prop *into* the room) so the image side greets you as you walk
+// in. Fixed per room -- unlike the old behavior, it no longer swings to track
+// whichever door you happened to use.
+function defaultFloorYaw(room){
+  return (WALL_INWARD_YAW[entranceWall(room)] || 0) + Math.PI;
+}
+
 // places a built prop into a slot (floor or wall), tags it for the editor,
 // and registers cylindrical billboards for per-frame facing. `xform` is the
 // optional per-instance nudge/scale override from LAYOUT[roomKey].slotXform.
@@ -1172,13 +1188,15 @@ function placeSlotAccessory(room, slot, asset, xform){
       const h = ((asset.size && asset.size.h) || 1) * scale;
       obj.position.set(x, floorY + h/2, z);
     }
-    // Extruded props turn to face the door you walked in through (its image
-    // side is local -z). An explicit slot.yaw still wins if one is authored;
-    // otherwise aim the front at the entry point. Billboards always face the
-    // camera, so they're left alone. Flat floor coverings have no "front" to
-    // aim, so they just take the authored yaw (defaulting to 0).
+    // Extruded props face a FIXED default -- the entrance wall (image side is
+    // local -z), so they greet you on the way in without swinging to track
+    // whichever door you used. An explicit authored slot.yaw still wins; the
+    // editor's per-instance rotation is added on top as xform.dYaw. Billboards
+    // always face the camera, so they're left alone. Flat floor coverings have
+    // no "front", so their base is 0 (still rotatable via dYaw).
     if(asset.type === 'extruded'){
-      obj.rotation.y = slot.yaw != null ? slot.yaw : (flat ? 0 : yawFacing(x, z, entryPoint));
+      const base = slot.yaw != null ? slot.yaw : (flat ? 0 : defaultFloorYaw(room));
+      obj.rotation.y = base + (xform.dYaw || 0);
     }
   }
   obj.scale.setScalar(scale);
@@ -2774,6 +2792,21 @@ function scaleSelected(factor){
   setSlotXform(roomKey, slotId, xform);
 }
 
+// rotate a free-standing extruded floor prop about the vertical axis, dir = +1
+// clockwise (viewed from above) / -1 counter-clockwise. Persisted as a delta
+// off the fixed default orientation. Wall-mounted props face their wall and
+// billboards face the camera, so neither rotates.
+const ROT_STEP = Math.PI / 12;   // 15 degrees per press
+function rotateSelected(dir){
+  if(!selectedProp || selectedProp.kind !== 'floor') return;
+  const { roomKey, slotId } = selectedProp;
+  const asset = slotAssetFor(roomKey, slotId);
+  if(!asset || asset.type !== 'extruded') return;
+  const xform = Object.assign({}, slotXformFor(roomKey, slotId));
+  xform.dYaw = (xform.dYaw || 0) - dir * ROT_STEP;   // clockwise from above = negative yaw
+  setSlotXform(roomKey, slotId, xform);
+}
+
 /* ---------- in-world layout editor: click handling ---------- */
 function findInteractive(obj){
   while(obj){
@@ -2883,7 +2916,7 @@ function updateEditHud(){
       ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
       : selectedProp.kind === 'sign'
         ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
-        : 'SELECTED — arrows: nudge · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
+        : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect';
     editHud.style.display = 'block';
     return;
   }
@@ -3055,6 +3088,15 @@ function updateEditTouchControls(){
   else col.appendChild(rowOf(
     makeTouchBtn('Change', () => openManagerForSelection())
   ));
+  // rotate controls for a free-standing extruded floor prop (only this kind has
+  // a steerable front; wall props face their wall, billboards face the camera)
+  if(selectedProp.kind === 'floor'){
+    const fa = slotAssetFor(selectedProp.roomKey, selectedProp.slotId);
+    if(fa && fa.type === 'extruded') col.appendChild(rowOf(
+      makeTouchBtn('‹', () => rotateSelected(-1)),
+      makeTouchBtn('›', () => rotateSelected(1))
+    ));
+  }
   col.appendChild(rowOf(makeTouchBtn('Done', () => deselectProp())));
   editTouchEl.appendChild(col);
 }
@@ -3442,6 +3484,9 @@ function onKeyDown(e){
     }
     if(e.key === '+' || e.key === '='){ scaleSelected(SCALE_STEP); return; }
     if(e.key === '-' || e.key === '_'){ scaleSelected(1/SCALE_STEP); return; }
+    // < / > rotate a floor prop (the unshifted , / . on the same keys work too)
+    if(e.key === '<' || e.key === ','){ rotateSelected(-1); return; }
+    if(e.key === '>' || e.key === '.'){ rotateSelected(1); return; }
     return; // swallow everything else while a prop is selected (no walking/turning)
   }
   if(e.key === 'e' || e.key === 'E'){ setEditMode(!editMode); return; }
