@@ -2630,6 +2630,10 @@ importMoveImagesDrop.addEventListener('drop', e=>{
   importMoveImageFiles(e.dataTransfer.files);
 });
 
+function mnemPieceIconEl(p){
+  return $(`mnem${p[0].toUpperCase()}${p.slice(1)}Icon`);
+}
+
 function openMnemonicsEditor(sq){
   MNEM_EDIT_SQUARE = sq;
   const entry = MNEMONICS[sq] || {};
@@ -2639,6 +2643,8 @@ function openMnemonicsEditor(sq){
     mnemDescInput(p).value = entry[p+'Desc'] || '';
     MNEM_EDIT_IMAGES[p] = entry[p+'Img'] || '';
     renderMnemImgDrop(p);
+    const inCoverage = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
+    mnemPieceIconEl(p).classList.toggle('mnem-icon-in-coverage', inCoverage);
   }
   $('mnemonicsEditorOverlay').style.display='flex';
 }
