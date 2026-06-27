@@ -57,6 +57,7 @@ const ROOMS = {
   // walked in through.
   roomB: {
     color: 0xb07070,
+    name: 'Kitchen',           // hard-coded demo room name (will be data-driven)
     size: { w: 4, d: 4, h: 3 },
     slots: [
       { id: 'w-east', kind: 'wall', wall: 'east', offset: 0, y: 1.6 },
@@ -98,6 +99,7 @@ const ROOMS = {
   },
   roomC: {
     color: 0x70b078,
+    name: 'Study',             // hard-coded demo room name (will be data-driven)
     size: { w: 10, d: 10, h: 4 },
     label: { wall: 'east', text: '3' },
     furniture: { type: 'chest', x: 3.2, z: 3.2, yaw: Math.PI/4 },
@@ -183,6 +185,11 @@ let editToggleBtn = null, editTouchEl = null;
 // kept deliberately separate from the click-to-edit in-world flow per the
 // user's request, rather than another click target in the 3D scene itself.
 let roomGeomBtn = null;
+// "hints" toggle (top of the modal): when on, doors show the name of (and a move
+// thumbnail for) the room beyond, and the in-room move-pair billboard is shown.
+// Turning it off hides all of those so the layout can be used as a self-test.
+let hintsBtn = null;
+let hintsOn = true;
 
 /* ---------- in-world layout editor: prop selection (nudge/scale) ----------
    Clicking an existing accessory selects it instead of opening the picker.
@@ -1593,7 +1600,7 @@ function buildYardPatch(b, roomKey, buildingKey){
 function buildSlots(room, roomKey, slots){
   for(const slot of slots){
     if(slot.kind === 'mnemonic'){
-      scene.add(placeMnemonicSlot(roomKey, slot));
+      if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
       continue;
     }
     const asset = slotAssetFor(roomKey, slot.id);
@@ -1938,6 +1945,66 @@ function buildExitSign(size, wall, offset){
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.02;
   const y = DOOR_H + 0.3;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed + clearance); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed - clearance); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, offset); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+
+// A hint placard mounted over a forward door: the name of the room beyond plus
+// a thumbnail of that room's opponent move (the "higher" of its move pair) when
+// one resolves -- a memory cue you can hide via the hints toggle for self-test.
+// Drawn name-first (instant), then re-drawn with the move image once it loads.
+function buildDoorHint(size, wall, offset, targetKey){
+  const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
+  const move = (DEMO_MNEMONICS[targetKey] && DEMO_MNEMONICS[targetKey].opponent) || null;
+  const cw = 320, ch = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  const draw = (content) => {
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.fillStyle = 'rgba(28,30,38,0.88)';
+    ctx.fillRect(4, 4, cw - 8, ch - 8);
+    ctx.strokeStyle = '#caa46a';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(6, 6, cw - 12, ch - 12);
+    let textX = 20;
+    if(content && content.image){
+      const im = content.image, box = ch - 32;
+      const sc = Math.min(box / im.width, box / im.height);
+      const w = im.width * sc, h = im.height * sc;
+      ctx.drawImage(im, 18, (ch - h) / 2, w, h);
+      textX = 18 + box + 14;
+    }
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const label = name || (content && content.text) || '';
+    let font = 44;
+    ctx.font = `bold ${font}px sans-serif`;
+    while(font > 16 && ctx.measureText(label).width > cw - textX - 16){ font -= 2; ctx.font = `bold ${font}px sans-serif`; }
+    ctx.fillText(label, textX, ch/2);
+  };
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.52), mat);
+  draw(move ? { text: move.san } : null);
+  if(move){
+    const myGen = buildGeneration;
+    getAllMnemonics().then((mn) => {
+      if(buildGeneration !== myGen || !scene) return;
+      resolveMoveContent(move, mn).then((c) => {
+        if(buildGeneration !== myGen || !scene) return;
+        draw(c); tex.needsUpdate = true;
+      });
+    });
+  }
+  const { fixed } = wallSpan(size, wall);
+  const clearance = WALL_THICK/2 + 0.025;
+  const y = DOOR_H + 0.34;
   if(wall === 'north'){ mesh.position.set(offset, y, fixed + clearance); mesh.rotation.y = 0; }
   if(wall === 'south'){ mesh.position.set(offset, y, fixed - clearance); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + clearance, y, offset); mesh.rotation.y = Math.PI/2; }
@@ -2574,6 +2641,8 @@ function buildRoom(roomKey){
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
           if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey));
+          // forward-door hint: name (and move thumbnail) of the room beyond
+          if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
       }
@@ -3437,6 +3506,30 @@ function updateRoomGeomBtn(){
   roomGeomBtn.style.display = editMode ? 'block' : 'none';
 }
 
+// top-center hints toggle, always visible -- a lit lightbulb when hints are on.
+function buildHintsToggle(){
+  const b = makeTouchBtn('<i class="fa-solid fa-lightbulb"></i>', () => setHintsOn(!hintsOn));
+  b.title = 'Show/hide hints (room names, door hints, move billboards)';
+  b.style.position = 'absolute';
+  b.style.top = '8px';
+  b.style.left = '50%';
+  b.style.transform = 'translateX(-50%)';
+  b.style.zIndex = '5';
+  return b;
+}
+function updateHintsToggle(){
+  if(!hintsBtn) return;
+  hintsBtn.style.background = hintsOn ? 'rgba(245,193,7,.92)' : 'rgba(28,38,58,.78)';
+  hintsBtn.style.color = hintsOn ? '#1a1a1a' : '#fff';
+  hintsBtn.style.opacity = hintsOn ? '1' : '.75';
+}
+function setHintsOn(on){
+  hintsOn = on;
+  try{ localStorage.setItem('threeHintsOn', on ? '1' : '0'); }catch(_){}
+  updateHintsToggle();
+  if(scene) buildRoom(currentRoomKey);
+}
+
 // move/scale pad shown while a prop is selected. Buttons drive the same
 // nudgeSelected/scaleSelected paths the keyboard does, so behavior matches.
 function buildEditTouch(){
@@ -4055,6 +4148,10 @@ export async function openThreeTest(containerEl){
   if(editTouchEl) container.appendChild(editTouchEl);
   roomGeomBtn = buildRoomGeomBtn();
   container.appendChild(roomGeomBtn);
+  hintsOn = (() => { try{ return localStorage.getItem('threeHintsOn') !== '0'; }catch(_){ return true; } })();
+  hintsBtn = buildHintsToggle();
+  container.appendChild(hintsBtn);
+  updateHintsToggle();
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
@@ -4114,6 +4211,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editToggleBtn = null; editTouchEl = null;
   roomGeomBtn = null;
+  hintsBtn = null;
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
 }
