@@ -1027,13 +1027,22 @@ async function renderPicker(ov){
   const list = allow ? all.filter(a => allow.includes(a.type)) : all;
   list.sort((a,b) => a.id.localeCompare(b.id));
   const typeLabel = allow ? allow.map(t => (ASSET_TYPES[t]||{}).label || t).join(' / ') : 'any';
+  // current selection + where it comes from (a per-room override vs an inherited
+  // building default), so the user can tell custom from inherited at a glance.
+  const curId = pickerOpts.currentId || null;
+  const curSrc = pickerOpts.currentSource || null;     // 'room' | 'default' | null
+  const curLine = curId
+    ? `Current: <strong>${esc(curId)}</strong>${curSrc === 'default' ? ' <em>(inherited from building default)</em>' : curSrc === 'room' ? ' <em>(set for this room)</em>' : ''}`
+    : 'Current: <em>none (procedural default)</em>';
+  const removeLabel = pickerOpts.defaultExists ? 'Remove (revert to default)' : 'Remove';
   ov.innerHTML = `
     <div class="modal" style="width:min(52em,92vw);max-height:88vh;display:flex;flex-direction:column">
       <div class="assets-header">
         <h2>Choose Asset</h2>
         <button id="pickerCloseBtn">Cancel</button>
       </div>
-      <p style="margin:.2rem 0 .6rem;font-size:.8rem;color:#666">Showing: ${esc(typeLabel)}</p>
+      <p style="margin:.2rem 0 .2rem;font-size:.8rem;color:#666">Showing: ${esc(typeLabel)}</p>
+      <p style="margin:0 0 .6rem;font-size:.8rem;color:#666">${curLine}</p>
       <div class="assets-body" style="overflow:auto">
         <div class="assets-grid" id="pickerGrid"></div>
       </div>
@@ -1045,7 +1054,7 @@ async function renderPicker(ov){
           </select>
           <input type="file" id="pickerUploadFile" accept="image/*" style="display:none">
         </div>
-        ${pickerOpts.allowRemove ? '<button id="pickerRemoveBtn" style="background:#c62828;color:#fff">Remove</button>' : ''}
+        ${pickerOpts.allowRemove ? `<button id="pickerRemoveBtn" style="background:#c62828;color:#fff">${removeLabel}</button>` : ''}
       </div>
     </div>
   `;
@@ -1055,10 +1064,10 @@ async function renderPicker(ov){
   } else {
     for(const a of list){
       const card = document.createElement('div');
-      card.className = 'asset-card';
+      card.className = 'asset-card' + (a.id === curId ? ' asset-card-current' : '');
       card.innerHTML = `
         <div class="asset-thumb">${a.image ? `<img src="${a.image}" alt="">` : ''}</div>
-        <div class="asset-id">${esc(a.id)}</div>
+        <div class="asset-id">${esc(a.id)}${a.id === curId ? ' ✓' : ''}</div>
         <div class="asset-type">${esc((ASSET_TYPES[a.type]||{}).label || a.type)}</div>
       `;
       card.onclick = () => { const cb = pickerOpts.onPick; closePicker(); if(cb) cb(a.id); };

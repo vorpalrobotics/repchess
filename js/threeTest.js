@@ -1286,6 +1286,25 @@ function captureBuildingDefaults(roomKey){
   if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
   LAYOUT.__defaults[buildingIdFor(roomKey)] = d;
 }
+// the raw per-room override id for a surface (no default fallback), so the
+// editor can tell a real override from an inherited default -- used to decide
+// whether "Remove" is meaningful and to label the picker's source line.
+function surfaceOverrideId(roomKey, kind, wall){
+  const r = LAYOUT[roomKey];
+  if(!r) return null;
+  if(kind === 'floor') return r.floor || null;
+  if(kind === 'ceiling') return r.ceiling || null;
+  if(kind === 'stair') return r.stairSurface || null;
+  if(kind === 'wall') return (r.walls && r.walls[wall]) || null;
+  return null;
+}
+// wipe this building's captured defaults; rooms relying on them revert to the
+// procedural fallback. Per-room overrides are untouched.
+function clearBuildingDefaults(roomKey){
+  applyEdit(() => {
+    if(LAYOUT.__defaults) delete LAYOUT.__defaults[buildingIdFor(roomKey)];
+  });
+}
 // Default yaw for a free-standing extruded floor prop: its front (local -z)
 // points TOWARD the entrance wall (the opposite of WALL_INWARD_YAW, which faces
 // a wall-mounted prop *into* the room) so the image side greets you as you walk
@@ -3140,25 +3159,25 @@ function handleEditTarget(ud){
   const onClose = () => { inputLocked = false; };
   if(ud.kind === 'floor'){
     openAssetPicker({
-      allow: ['surface'], allowRemove: !!floorAssetFor(roomKey), onClose,
+      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
       onPick: id => setFloorOverride(roomKey, id),
       onRemove: () => setFloorOverride(roomKey, null)
     });
   } else if(ud.kind === 'wall'){
     openAssetPicker({
-      allow: ['surface'], allowRemove: !!wallAssetFor(roomKey, ud.wall), onClose,
+      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
       onPick: id => setWallOverride(roomKey, ud.wall, id),
       onRemove: () => setWallOverride(roomKey, ud.wall, null)
     });
   } else if(ud.kind === 'ceiling-surface'){
     openAssetPicker({
-      allow: ['surface'], allowRemove: !!ceilingAssetFor(roomKey), onClose,
+      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
       onPick: id => setCeilingOverride(roomKey, id),
       onRemove: () => setCeilingOverride(roomKey, null)
     });
   } else if(ud.kind === 'stair-surface'){
     openAssetPicker({
-      allow: ['surface'], allowRemove: !!stairAssetFor(roomKey), onClose,
+      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
       onPick: id => setStairOverride(roomKey, id),
       onRemove: () => setStairOverride(roomKey, null)
     });
@@ -3182,13 +3201,42 @@ function handleEditTarget(ud){
       onRemove: () => setYardOverride(ud.roomKey, ud.buildingKey, null)
     });
   } else if(ud.kind === 'door'){
-    const current = doorAssetFor(ud.roomKey, ud.doorKey);
+    const room = mergedRoom(ud.roomKey);
+    const ex = (room.exits || []).find(e => doorKey(e.wall, e.offset) === ud.doorKey);
+    const isExit = !!(ex && ex.back);
+    const override = doorAssetFor(ud.roomKey, ud.doorKey);     // raw override (asset or null)
+    const def = defaultDoorAsset(ud.roomKey, isExit);
+    const eff = override || def;
     openAssetPicker({
-      allow: ['door'], allowRemove: !!current, onClose,
+      allow: ['door'], onClose,
+      allowRemove: !!override,
+      currentId: (eff && eff.id) || null,
+      currentSource: override ? 'room' : (eff ? 'default' : null),
+      defaultExists: !!def,
       onPick: id => setDoorOverride(ud.roomKey, ud.doorKey, id),
       onRemove: () => setDoorOverride(ud.roomKey, ud.doorKey, null)
     });
   }
+}
+
+// picker extras for a room surface: whether a real per-room override exists
+// (so Remove is meaningful), the currently-shown asset and whether it comes
+// from this room or the inherited building default, for the picker's labels.
+function surfacePickerExtras(roomKey, kind, wall, effAsset){
+  const override = surfaceOverrideId(roomKey, kind, wall);
+  let def;
+  if(kind === 'wall'){
+    const d = buildingDefaults(roomKey);
+    def = d && d.walls ? (d.walls[wallRelative(entranceWall(mergedRoom(roomKey)), wall)] || null) : null;
+  } else {
+    def = defaultFieldId(roomKey, kind === 'stair' ? 'stairSurface' : kind);
+  }
+  return {
+    allowRemove: !!override,
+    currentId: (effAsset && effAsset.id) || null,
+    currentSource: override ? 'room' : (effAsset ? 'default' : null),
+    defaultExists: !!def
+  };
 }
 
 function updateEditHud(){
@@ -3417,6 +3465,38 @@ function closeRoomGeomDialog(){
   setForeignModalOpen(false);
 }
 const ROOM_GEOM_MIN = 2;
+// summary of the building's captured defaults, shown in the Room dialog, with a
+// Clear control when any are set.
+function defaultsBoxHtml(roomKey){
+  const d = buildingDefaults(roomKey);
+  if(!d){
+    return `<span style="font-size:.74rem;color:#999">No building defaults set yet — tick the box below and Apply to make this room's look the default for the building.</span>`;
+  }
+  const m = (on) => on ? '✓' : '—';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+      <div style="font-size:.74rem;color:#555;line-height:1.45">
+        <strong>Building defaults</strong> — floor ${m(d.floor)} · ceiling ${m(d.ceiling)} · stairs ${m(d.stairSurface)}<br>
+        walls: ent ${m(d.walls&&d.walls.entrance)}, opp ${m(d.walls&&d.walls.opposite)}, L ${m(d.walls&&d.walls.left)}, R ${m(d.walls&&d.walls.right)} ·
+        doors: exit ${m(d.exitDoor)}, std ${m(d.door)}
+      </div>
+      <button id="roomGeomClearDefaultsBtn" style="font-size:.68rem;white-space:nowrap;align-self:center">Clear defaults</button>
+    </div>`;
+}
+function wireDefaultsBox(ov, roomKey){
+  const btn = ov.querySelector('#roomGeomClearDefaultsBtn');
+  if(!btn) return;
+  btn.onclick = () => {
+    if(!confirm(
+      'Clear the building defaults for this castle?\n\n' +
+      'Rooms that rely on these defaults will revert to plain procedural surfaces. ' +
+      "Each room's own custom styling is NOT affected.\n\nThis cannot be undone."
+    )) return;
+    clearBuildingDefaults(roomKey);
+    const box = ov.querySelector('#roomGeomDefaultsBox');
+    if(box){ box.innerHTML = defaultsBoxHtml(roomKey); wireDefaultsBox(ov, roomKey); }
+  };
+}
 function renderRoomGeomDialog(ov, roomKey){
   const room = mergedRoom(roomKey);
   const { w, d, h } = room.size;
@@ -3470,6 +3550,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
+      <div id="roomGeomDefaultsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${defaultsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
         <input type="checkbox" id="roomGeomMakeDefault" style="margin-top:.15rem">
         <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door keeps its own style).</span>
@@ -3713,6 +3794,7 @@ function renderRoomGeomDialog(ov, roomKey){
   canvas.addEventListener('pointercancel', endDrag);
 
   drawPlan();
+  wireDefaultsBox(ov, roomKey);
   ov.querySelector('#roomGeomCancelBtn').onclick = closeRoomGeomDialog;
   ov.querySelector('#roomGeomResetBtn').onclick = () => {
     const base = ROOMS[roomKey].size;
