@@ -1317,6 +1317,34 @@ function applyPresetToBuilding(name, roomKey){
     LAYOUT.__defaults[buildingIdFor(roomKey)] = JSON.parse(JSON.stringify(p));   // own copy
   });
 }
+// stamp a preset directly onto one room as per-room overrides -- walls are
+// rotated from relative back to this room's absolute walls, the exit-door style
+// goes on the back:true door and the ordinary style on the rest. Replaces the
+// room's current surface styling (props are left alone). A preset entry of null
+// means "no override" (so it falls back to the building default / procedural).
+function applyPresetToRoom(name, roomKey){
+  const p = LAYOUT.__presets && LAYOUT.__presets[name];
+  if(!p) return;
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    const room = mergedRoom(roomKey);
+    const ent = entranceWall(room);
+    if(p.floor) r.floor = p.floor; else delete r.floor;
+    if(p.ceiling) r.ceiling = p.ceiling; else delete r.ceiling;
+    if(p.stairSurface) r.stairSurface = p.stairSurface; else delete r.stairSurface;
+    r.walls = {};
+    for(const rel of ['entrance','opposite','left','right']){
+      const id = p.walls && p.walls[rel];
+      if(id) r.walls[wallForRelative(ent, rel)] = id;
+    }
+    r.doors = {};
+    for(const ex of (room.exits || [])){
+      if(ex.type && ex.type !== 'door') continue;
+      const id = ex.back ? p.exitDoor : p.door;
+      if(id) r.doors[doorKey(ex.wall, ex.offset)] = id;
+    }
+  });
+}
 function escHtml(s){
   return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
@@ -3544,6 +3572,7 @@ function presetsBoxHtml(roomKey){
         ${names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('')}
       </select>
       <button id="roomGeomApplyPresetBtn" style="font-size:.7rem">Apply to building</button>
+      <button id="roomGeomApplyPresetRoomBtn" style="font-size:.7rem">Apply to this room</button>
       <button id="roomGeomDeletePresetBtn" style="font-size:.7rem">Delete</button>
     </div>` : `<div style="font-size:.72rem;color:#999;margin-top:.3rem">No presets yet.</div>`;
   return `
@@ -3578,6 +3607,14 @@ function wirePresetsBox(ov, roomKey){
     if(!confirm(`Apply preset "${name}" as the default for this building?\n\nUn-customized rooms will take on this look. Per-room overrides are kept.`)) return;
     applyPresetToBuilding(name, roomKey);
     refreshDefaultsBox(ov, roomKey);   // defaults just changed
+  };
+  const applyRoomBtn = ov.querySelector('#roomGeomApplyPresetRoomBtn');
+  if(applyRoomBtn) applyRoomBtn.onclick = () => {
+    const name = ov.querySelector('#roomGeomPresetSelect').value;
+    if(!name) return;
+    if(!confirm(`Apply preset "${name}" to THIS room only?\n\nIts floor, walls, ceiling, stairs and doors will be set to the preset, replacing this room's current surface styling. Placed props are kept.`)) return;
+    applyPresetToRoom(name, roomKey);
+    closeRoomGeomDialog();   // surfaces changed -- close so the result is visible
   };
   const delBtn = ov.querySelector('#roomGeomDeletePresetBtn');
   if(delBtn) delBtn.onclick = () => {
