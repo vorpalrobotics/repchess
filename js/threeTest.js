@@ -199,12 +199,23 @@ const NUDGE_STEP = 0.1;
 const SCALE_STEP = 1.02;
 const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 
+// surface getters resolve in layers: this room's own override -> the building's
+// default (set via the Room dialog's "make default" checkbox) -> null, which
+// leaves the procedural brick/wood fallback. See buildingDefaults() below.
 function floorAssetFor(roomKey){
-  const id = LAYOUT[roomKey] && LAYOUT[roomKey].floor;
+  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].floor) || defaultFieldId(roomKey, 'floor');
   return id ? ASSET_BY_ID[id] : null;
 }
 function wallAssetFor(roomKey, wall){
-  const id = LAYOUT[roomKey] && LAYOUT[roomKey].walls && LAYOUT[roomKey].walls[wall];
+  let id = LAYOUT[roomKey] && LAYOUT[roomKey].walls && LAYOUT[roomKey].walls[wall];
+  if(!id){
+    const d = buildingDefaults(roomKey);
+    if(d && d.walls){
+      // defaults store walls relative to the entrance, so they rotate correctly
+      // into rooms whose entrance door is on a different wall
+      id = d.walls[wallRelative(entranceWall(mergedRoom(roomKey)), wall)] || null;
+    }
+  }
   return id ? ASSET_BY_ID[id] : null;
 }
 function slotAssetFor(roomKey, slotId){
@@ -212,11 +223,11 @@ function slotAssetFor(roomKey, slotId){
   return id ? ASSET_BY_ID[id] : null;
 }
 function ceilingAssetFor(roomKey){
-  const id = LAYOUT[roomKey] && LAYOUT[roomKey].ceiling;
+  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].ceiling) || defaultFieldId(roomKey, 'ceiling');
   return id ? ASSET_BY_ID[id] : null;
 }
 function stairAssetFor(roomKey){
-  const id = LAYOUT[roomKey] && LAYOUT[roomKey].stairSurface;
+  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].stairSurface) || defaultFieldId(roomKey, 'stairSurface');
   return id ? ASSET_BY_ID[id] : null;
 }
 function buildingFacadeFor(roomKey, buildingKey){
@@ -1184,6 +1195,80 @@ function yawFacing(x, z, target){
 function entranceWall(room){
   const back = (room.exits || []).find(e => e.back);
   return (back && back.wall) || 'south';
+}
+
+/* ---------- per-building surface defaults ----------
+   A building's default floor/ceiling/stairs/walls/doors, stored in
+   LAYOUT.__defaults keyed by building id, so a freshly-generated castle room
+   inherits a consistent look without per-room styling. Walls are stored
+   relative to the entrance door (the back:true exit) so a default rotates
+   correctly into rooms whose door is on a different wall. Two door styles are
+   kept: `exitDoor` for the back:true door (lets you make exits stand out) and
+   `door` for every other door. Resolution everywhere is: room override ->
+   building default -> procedural fallback. */
+const WALL_OPPOSITE = { north:'south', south:'north', east:'west', west:'east' };
+// the wall on your right / left when standing in the entrance facing into the room
+const WALL_RIGHT_OF = { south:'east', north:'west', west:'south', east:'north' };
+const WALL_LEFT_OF  = { south:'west', north:'east', west:'north', east:'south' };
+function wallRelative(entrance, wall){
+  if(wall === entrance) return 'entrance';
+  if(wall === WALL_OPPOSITE[entrance]) return 'opposite';
+  if(wall === WALL_RIGHT_OF[entrance]) return 'right';
+  return 'left';
+}
+function wallForRelative(entrance, rel){
+  if(rel === 'entrance') return entrance;
+  if(rel === 'opposite') return WALL_OPPOSITE[entrance];
+  if(rel === 'right') return WALL_RIGHT_OF[entrance];
+  return WALL_LEFT_OF[entrance];
+}
+// the building a room belongs to (the generator stamps `building`; the demo's
+// rooms have none, so they share one '_default' bucket -- exactly what we want
+// for styling the one prototype castle).
+function buildingIdFor(roomKey){
+  const r = ROOMS[roomKey];
+  return (r && r.building) || '_default';
+}
+function buildingDefaults(roomKey){
+  return (LAYOUT.__defaults && LAYOUT.__defaults[buildingIdFor(roomKey)]) || null;
+}
+function defaultFieldId(roomKey, field){
+  const d = buildingDefaults(roomKey);
+  return (d && d[field]) || null;
+}
+// the building-default door asset for a door, choosing the exit-door style when
+// the door sits on the back:true exit. Returns an asset record or null.
+function defaultDoorAsset(roomKey, isExit){
+  const id = defaultFieldId(roomKey, isExit ? 'exitDoor' : 'door');
+  return id ? ASSET_BY_ID[id] : null;
+}
+// snapshot the current room's *effective* surfaces into its building's defaults.
+function captureBuildingDefaults(roomKey){
+  const room = mergedRoom(roomKey);
+  const ent = entranceWall(room);
+  const idOf = (a) => (a && a.id) || null;
+  const d = {
+    floor: idOf(floorAssetFor(roomKey)),
+    ceiling: idOf(ceilingAssetFor(roomKey)),
+    stairSurface: idOf(stairAssetFor(roomKey)),
+    door: null,
+    exitDoor: null,
+    walls: { entrance:null, opposite:null, left:null, right:null }
+  };
+  for(const wall of ['north','south','east','west']){
+    const a = wallAssetFor(roomKey, wall);
+    if(a) d.walls[wallRelative(ent, wall)] = a.id;
+  }
+  // first back:true door -> exitDoor, first ordinary door -> door
+  for(const ex of (room.exits || [])){
+    if(ex.type && ex.type !== 'door') continue;          // stairs/elevator have no door panel
+    const a = doorAssetFor(roomKey, doorKey(ex.wall, ex.offset)) || defaultDoorAsset(roomKey, !!ex.back);
+    if(!a) continue;
+    if(ex.back){ if(!d.exitDoor) d.exitDoor = a.id; }
+    else if(!d.door) d.door = a.id;
+  }
+  if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
+  LAYOUT.__defaults[buildingIdFor(roomKey)] = d;
 }
 // Default yaw for a free-standing extruded floor prop: its front (local -z)
 // points TOWARD the entrance wall (the opposite of WALL_INWARD_YAW, which faces
@@ -2364,7 +2449,8 @@ function buildRoom(roomKey){
       if(ex){
         const isStair = ex.type === 'stair';
         const dKey = doorKey(wall, ex.offset);
-        const doorAsset = doorAssetFor(roomKey, dKey);
+        // room override wins, else the building's exit-door / ordinary-door default
+        const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex.back);
         if(carMode){
           const box = doorTriggerBox(room.size, wall, ex.offset);
           const thru = WALL_OUT_NORMAL[wall];
@@ -3368,6 +3454,10 @@ function renderRoomGeomDialog(ov, roomKey){
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
+      <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
+        <input type="checkbox" id="roomGeomMakeDefault" style="margin-top:.15rem">
+        <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door keeps its own style).</span>
+      </label>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <button id="roomGeomResetBtn">Reset</button>
         <div>
@@ -3619,7 +3709,9 @@ function renderRoomGeomDialog(ov, roomKey){
     const w2 = Math.max(ROOM_GEOM_MIN, Number(wEl.value) || room.size.w);
     const d2 = Math.max(ROOM_GEOM_MIN, Number(dEl.value) || room.size.d);
     const h2 = Math.max(ROOM_GEOM_MIN, Number(hEl.value) || room.size.h);
+    const makeDefault = ov.querySelector('#roomGeomMakeDefault').checked;
     closeRoomGeomDialog();
+    if(makeDefault) captureBuildingDefaults(roomKey);   // snapshot before the rebuild so the readout/rooms pick it up
     commitRoomGeomDialog(roomKey, { w: w2, d: d2, h: h2 }, stagedExits);
   };
 }
