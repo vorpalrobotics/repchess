@@ -1,11 +1,19 @@
 # Castle Data Model — Design Proposal
 
-Status: **proposal, not yet implemented**. This document specifies the data
-shapes for turning the Opening Graph into a navigable, decorated
-memory-palace castle (see `CastleBuildingNotes.md` for the underlying
-mnemonic-design considerations this builds on). Nothing here changes
-`buildCastleGraph`, the room-info click panel, or any other shipped
+Status: **proposal for the generated-castle data model — not yet implemented
+here**. This document specifies the data shapes for turning the Opening Graph
+into a navigable, decorated memory-palace castle (see `CastleBuildingNotes.md`
+for the underlying mnemonic-design considerations this builds on). Nothing here
+changes `buildCastleGraph`, the room-info click panel, or any other shipped
 behavior yet — this is the target schema to implement against.
+
+> **Note:** the standalone Three.js walking prototype (`js/threeTest.js`)
+> already implements several of these concepts — room names, per-building
+> surface defaults, named presets, elevators, stairs/door skinning, and a
+> hints/self-test toggle — against its own `ROOMS`/`LAYOUT` structures. Their
+> concrete shapes are recorded in
+> "[Already implemented in the walking prototype](#already-implemented-in-the-walking-prototype-jsthreetestjs)"
+> below so the mapping into this model is explicit.
 
 ## Three layers
 
@@ -200,6 +208,53 @@ time `buildCastleGraph` runs. This mirrors how `prefs` (keyed by
 `prefKey(lineId, seq)`) and the per-square `mnemonics` store already
 survive line edits and new game imports — the decoration layer should live
 in IndexedDB alongside them, not be recomputed.
+
+## Already implemented in the walking prototype (`js/threeTest.js`)
+
+The standalone walking prototype implements several concepts above ahead of the
+generator, but against its own structures — a hand-authored `ROOMS` table
+(geometry + exits) plus a persisted `LAYOUT` override store (one IndexedDB JSON
+blob) — rather than the generated `castle`/`rooms` schema. When the generator
+lands these should fold into Layer 2; they're recorded here so the mapping is
+explicit. See `CastleBuildingNotes.md` → "Implemented in the walking prototype"
+for the user-facing behavior.
+
+- **Room name** — `ROOMS[key].name` (e.g. `"Study"`), shown on door hints. Maps
+  to Layer 2's `rooms[<roomKey>].name`.
+- **Per-room surface overrides** — `LAYOUT[roomKey]` holds `floor`, `ceiling`,
+  `stairSurface`, `walls[wall]` (keyed by absolute compass wall), and
+  `doors[doorKey]`, each an asset id. Map to `floorTexture` / `wallTexture` /
+  `ceilingTexture` plus new `stairSurface` / per-door-skin fields in Layer 2.
+- **Per-building surface defaults** — `LAYOUT.__defaults[buildingId]`:
+
+  ```js
+  {
+    floor: assetId|null, ceiling: assetId|null, stairSurface: assetId|null,
+    door: assetId|null,      // style for ordinary doors
+    exitDoor: assetId|null,  // style for the back/exit door, so exits can stand out
+    walls: { entrance, opposite, left, right }  // each assetId|null, stored
+                                                // RELATIVE to the entrance door
+  }
+  ```
+
+  Resolution everywhere is layered: **room override → building default →
+  procedural fallback**. Walls are entrance-relative so a default rotates
+  correctly into a room whose door is on a different wall. Building identity in
+  the prototype is `ROOMS[key].building` or a single shared `_default` bucket;
+  in the generated model the "building" is the castle.
+- **Named presets** — `LAYOUT.__presets[name]`: the same style-set shape as a
+  default ("Formal", "Rustic", …). Made from the current room; applied either as
+  a building's defaults or stamped onto one room.
+- **Elevator** — already one of the Layer 2 exit `type`s. In the prototype a
+  `type:'elevator'` exit's target room renders in *car mode* (plain walls, a
+  floor-button panel, popup floor selection); the car's own exits are the floor
+  buttons, and it's a normal node with its own move pair. Used to represent a
+  high-branch position compactly (see `CastleBuildingNotes.md` for the
+  branch-count discussion and the still-open auto-vs-manual question).
+- **Hints / self-test** — runtime *view* state, not castle data: a toggle that
+  shows/hides door name placards, the ~0.3 m door-side move decoration of the
+  room-beyond's opponent move, and the in-room move-pair billboards, so the
+  palace can be walked as a recall test.
 
 ## Explicitly deferred (not part of this proposal)
 
