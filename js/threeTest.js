@@ -1746,6 +1746,13 @@ const DEMO_MNEMONICS = {
     opponent: { to: 'f6', piece: 'knight', san: 'Nf6' },
     response: { to: 'e3', piece: 'pawn', san: 'e3' },
     pos: { x: -0.1, y: 1.6, z: -1.7 }
+  },
+  // demo move pair for the Study (roomC) so the door into it shows a move
+  // decoration; real data will come from the opening tree.
+  roomC: {
+    opponent: { to: 'd5', piece: 'pawn', san: 'd5' },
+    response: { to: 'e4', piece: 'pawn', san: 'e4' },
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
   }
 };
 
@@ -1986,64 +1993,95 @@ function buildExitSign(size, wall, offset){
   return mesh;
 }
 
-// A hint placard mounted over a forward door: the name of the room beyond plus
-// a thumbnail of that room's opponent move (the "higher" of its move pair) when
-// one resolves -- a memory cue you can hide via the hints toggle for self-test.
-// Drawn name-first (instant), then re-drawn with the move image once it loads.
-function buildDoorHint(size, wall, offset, targetKey){
-  const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
-  const move = (DEMO_MNEMONICS[targetKey] && DEMO_MNEMONICS[targetKey].opponent) || null;
-  const cw = 320, ch = 128;
+// name placard for the room beyond a door (text only -- the move sits beside it
+// as its own square decoration).
+function makeNameSignMesh(name){
+  const cw = 300, ch = 110;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(28,30,38,0.9)';
+  ctx.fillRect(4, 4, cw - 8, ch - 8);
+  ctx.strokeStyle = '#caa46a';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(7, 7, cw - 14, ch - 14);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let font = 56;
+  ctx.font = `bold ${font}px serif`;
+  while(font > 16 && ctx.measureText(name).width > cw - 36){ font -= 2; ctx.font = `bold ${font}px serif`; }
+  ctx.fillText(name, cw/2, ch/2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.33), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+}
+// a small framed square showing one move's image (or its notation if no image
+// has been set), used as a door-side decoration cueing the room beyond.
+function makeMoveDecorationMesh(move, sizeM){
+  const px = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = px; canvas.height = px;
+  const ctx = canvas.getContext('2d');
   const draw = (content) => {
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.fillStyle = 'rgba(28,30,38,0.88)';
-    ctx.fillRect(4, 4, cw - 8, ch - 8);
+    ctx.clearRect(0, 0, px, px);
+    ctx.fillStyle = 'rgba(24,26,32,0.92)';
+    ctx.fillRect(0, 0, px, px);
     ctx.strokeStyle = '#caa46a';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(6, 6, cw - 12, ch - 12);
-    let textX = 20;
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, px - 10, px - 10);
     if(content && content.image){
-      const im = content.image, box = ch - 32;
+      const im = content.image, box = px - 36;
       const sc = Math.min(box / im.width, box / im.height);
       const w = im.width * sc, h = im.height * sc;
-      ctx.drawImage(im, 18, (ch - h) / 2, w, h);
-      textX = 18 + box + 14;
+      ctx.drawImage(im, (px - w) / 2, (px - h) / 2, w, h);
+    } else {
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const t = (content && content.text) || move.san;
+      let font = 90;
+      ctx.font = `bold ${font}px sans-serif`;
+      while(font > 20 && ctx.measureText(t).width > px - 40){ font -= 4; ctx.font = `bold ${font}px sans-serif`; }
+      ctx.fillText(t, px/2, px/2 + 4);
     }
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    const label = name || (content && content.text) || '';
-    let font = 44;
-    ctx.font = `bold ${font}px sans-serif`;
-    while(font > 16 && ctx.measureText(label).width > cw - textX - 16){ font -= 2; ctx.font = `bold ${font}px sans-serif`; }
-    ctx.fillText(label, textX, ch/2);
   };
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.52), mat);
-  draw(move ? { text: move.san } : null);
-  if(move){
-    const myGen = buildGeneration;
-    getAllMnemonics().then((mn) => {
+  draw({ text: move.san });
+  const myGen = buildGeneration;
+  getAllMnemonics().then((mn) => {
+    if(buildGeneration !== myGen || !scene) return;
+    resolveMoveContent(move, mn).then((c) => {
       if(buildGeneration !== myGen || !scene) return;
-      resolveMoveContent(move, mn).then((c) => {
-        if(buildGeneration !== myGen || !scene) return;
-        draw(c); tex.needsUpdate = true;
-      });
+      draw(c); tex.needsUpdate = true;
     });
-  }
+  });
+  return new THREE.Mesh(new THREE.PlaneGeometry(sizeM, sizeM), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+}
+
+// Hint over a forward door: a name placard for the room beyond, and -- when that
+// room has an opponent move -- a ~0.3m square decoration of that move mounted
+// beside the sign, flat on the wall facing into the room. Hidden by the hints
+// toggle for self-test.
+function buildDoorHint(size, wall, offset, targetKey){
+  const group = new THREE.Group();
+  const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
+  const move = (DEMO_MNEMONICS[targetKey] && DEMO_MNEMONICS[targetKey].opponent) || null;
   const { fixed } = wallSpan(size, wall);
-  const clearance = WALL_THICK/2 + 0.025;
-  const y = DOOR_H + 0.34;
-  if(wall === 'north'){ mesh.position.set(offset, y, fixed + clearance); mesh.rotation.y = 0; }
-  if(wall === 'south'){ mesh.position.set(offset, y, fixed - clearance); mesh.rotation.y = Math.PI; }
-  if(wall === 'west'){  mesh.position.set(fixed + clearance, y, offset); mesh.rotation.y = Math.PI/2; }
-  if(wall === 'east'){  mesh.position.set(fixed - clearance, y, offset); mesh.rotation.y = -Math.PI/2; }
-  return mesh;
+  const clearance = WALL_THICK/2 + 0.03;
+  const y = DOOR_H + 0.36;
+  // mount a mesh flat on this wall at `along` (the wall-axis coordinate), facing in
+  const mount = (mesh, along) => {
+    if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
+    if(wall === 'south'){ mesh.position.set(along, y, fixed - clearance); mesh.rotation.y = Math.PI; }
+    if(wall === 'west'){  mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI/2; }
+    if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
+    group.add(mesh);
+  };
+  if(name) mount(makeNameSignMesh(name), offset - (move ? 0.24 : 0));
+  if(move) mount(makeMoveDecorationMesh(move, 0.3), offset + (name ? 0.56 : 0));
+  return group;
 }
 
 // "1st", "2nd", "3rd", "4th"... for floor button labels.
