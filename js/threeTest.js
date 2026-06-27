@@ -1755,10 +1755,44 @@ const DEMO_MNEMONICS = {
 // keyed by slot id) just works for them with no changes elsewhere. One slot
 // per room now (the composite pair billboard), not one per move -- the pair
 // moves/scales as a single unit.
+// the room whose `type:'elevator'` exit leads into this car -- its move pair is
+// the context shown on the car's own billboard.
+function elevatorParent(carKey){
+  for(const k in ROOMS){
+    if((ROOMS[k].exits || []).some(e => e.type === 'elevator' && e.target === carKey)) return k;
+  }
+  return null;
+}
+// a spot just in front of the floor-button wall, to the RIGHT of the door (the
+// floor panel sits on the left), at eye height -- mirrors buildElevatorPanel.
+function elevatorBillboardPos(room, wall, offset){
+  const { axis, fixed } = wallSpan(room.size, wall);
+  const dcx = axis === 'x' ? offset : fixed;          // door centre on the wall plane
+  const dcz = axis === 'x' ? fixed : offset;
+  // player's right (facing the wall) and the inward normal, per wall
+  const V = {
+    north: { rx: 1, rz: 0, ix: 0, iz: 1 }, south: { rx:-1, rz: 0, ix: 0, iz:-1 },
+    west:  { rx: 0, rz:-1, ix: 1, iz: 0 }, east:  { rx: 0, rz: 1, ix:-1, iz: 0 }
+  }[wall];
+  const side = DOOR_W/2 + 0.2, inset = 0.6;
+  return { x: dcx + V.rx*side + V.ix*inset, y: 1.5, z: dcz + V.rz*side + V.iz*inset };
+}
 function mnemonicSlots(roomKey){
-  const pair = DEMO_MNEMONICS[roomKey];
-  if(!pair) return [];
-  return [{ id: 'mnem-0', kind: 'mnemonic', x: pair.pos.x, y: pair.pos.y, z: pair.pos.z, pair }];
+  let pair = DEMO_MNEMONICS[roomKey];
+  let pos = pair && pair.pos;
+  // an elevator car has no pair of its own -- show the move that LED to it (the
+  // parent room's pair) as context, to the right of the floor-button door.
+  if(!pair && isElevatorCar(roomKey)){
+    const parent = elevatorParent(roomKey);
+    pair = parent ? DEMO_MNEMONICS[parent] : null;
+    if(pair){
+      const room = mergedRoom(roomKey);
+      const fwd = (room.exits || []).find(e => !e.back);   // floors share one wall
+      pos = fwd ? elevatorBillboardPos(room, fwd.wall, fwd.offset) : null;
+    }
+  }
+  if(!pair || !pos) return [];
+  return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair }];
 }
 
 function applySpriteContentScale(sprite){
