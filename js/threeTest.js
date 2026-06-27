@@ -1258,8 +1258,10 @@ function defaultDoorAsset(roomKey, isExit){
   const id = defaultFieldId(roomKey, isExit ? 'exitDoor' : 'door');
   return id ? ASSET_BY_ID[id] : null;
 }
-// snapshot the current room's *effective* surfaces into its building's defaults.
-function captureBuildingDefaults(roomKey){
+// snapshot a room's *effective* surfaces into a style set (the shape shared by
+// building defaults and named presets): floor/ceiling/stairs, walls stored
+// relative to the entrance door, and two door styles (exit vs ordinary).
+function snapshotRoomStyle(roomKey){
   const room = mergedRoom(roomKey);
   const ent = entranceWall(room);
   const idOf = (a) => (a && a.id) || null;
@@ -1283,8 +1285,40 @@ function captureBuildingDefaults(roomKey){
     if(ex.back){ if(!d.exitDoor) d.exitDoor = a.id; }
     else if(!d.door) d.door = a.id;
   }
+  return d;
+}
+function captureBuildingDefaults(roomKey){
   if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
-  LAYOUT.__defaults[buildingIdFor(roomKey)] = d;
+  LAYOUT.__defaults[buildingIdFor(roomKey)] = snapshotRoomStyle(roomKey);
+}
+
+/* ---------- named presets ----------
+   Reusable, named style sets ("Formal", "Rustic", ...) stored in
+   LAYOUT.__presets, the same shape as a building default. Made from the current
+   room, applied by stamping into a building's defaults (reusing all the
+   resolution machinery above), so one click styles a whole castle. */
+function listPresetNames(){
+  return (LAYOUT.__presets && Object.keys(LAYOUT.__presets)) || [];
+}
+function savePreset(name, roomKey){
+  if(!LAYOUT.__presets) LAYOUT.__presets = {};
+  LAYOUT.__presets[name] = snapshotRoomStyle(roomKey);
+  persistLayout();
+}
+function deletePreset(name){
+  if(LAYOUT.__presets) delete LAYOUT.__presets[name];
+  persistLayout();
+}
+function applyPresetToBuilding(name, roomKey){
+  const p = LAYOUT.__presets && LAYOUT.__presets[name];
+  if(!p) return;
+  applyEdit(() => {
+    if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
+    LAYOUT.__defaults[buildingIdFor(roomKey)] = JSON.parse(JSON.stringify(p));   // own copy
+  });
+}
+function escHtml(s){
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 // the raw per-room override id for a surface (no default fallback), so the
 // editor can tell a real override from an inherited default -- used to decide
@@ -3493,8 +3527,65 @@ function wireDefaultsBox(ov, roomKey){
       "Each room's own custom styling is NOT affected.\n\nThis cannot be undone."
     )) return;
     clearBuildingDefaults(roomKey);
-    const box = ov.querySelector('#roomGeomDefaultsBox');
-    if(box){ box.innerHTML = defaultsBoxHtml(roomKey); wireDefaultsBox(ov, roomKey); }
+    refreshDefaultsBox(ov, roomKey);
+  };
+}
+function refreshDefaultsBox(ov, roomKey){
+  const box = ov.querySelector('#roomGeomDefaultsBox');
+  if(box){ box.innerHTML = defaultsBoxHtml(roomKey); wireDefaultsBox(ov, roomKey); }
+}
+// reusable named-preset controls in the Room dialog: save the current room as a
+// named preset, or apply a preset as this building's defaults.
+function presetsBoxHtml(roomKey){
+  const names = listPresetNames();
+  const picker = names.length ? `
+    <div style="display:flex;gap:.3rem;align-items:center;margin-top:.35rem;flex-wrap:wrap">
+      <select id="roomGeomPresetSelect" style="font-size:.74rem;max-width:10em">
+        ${names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('')}
+      </select>
+      <button id="roomGeomApplyPresetBtn" style="font-size:.7rem">Apply to building</button>
+      <button id="roomGeomDeletePresetBtn" style="font-size:.7rem">Delete</button>
+    </div>` : `<div style="font-size:.72rem;color:#999;margin-top:.3rem">No presets yet.</div>`;
+  return `
+    <div style="font-size:.74rem;color:#555">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem">
+        <strong>Presets</strong>
+        <button id="roomGeomSavePresetBtn" style="font-size:.68rem;white-space:nowrap">Save this room as preset…</button>
+      </div>
+      ${picker}
+    </div>`;
+}
+function wirePresetsBox(ov, roomKey){
+  const refresh = () => {
+    const box = ov.querySelector('#roomGeomPresetsBox');
+    if(box){ box.innerHTML = presetsBoxHtml(roomKey); wirePresetsBox(ov, roomKey); }
+  };
+  const saveBtn = ov.querySelector('#roomGeomSavePresetBtn');
+  if(saveBtn) saveBtn.onclick = () => {
+    let name = prompt('Name this preset (e.g. Formal, Rustic):');
+    if(name == null) return;
+    name = name.trim();
+    if(!name) return;
+    if(LAYOUT.__presets && LAYOUT.__presets[name] &&
+       !confirm(`A preset named "${name}" already exists. Overwrite it?`)) return;
+    savePreset(name, roomKey);
+    refresh();
+  };
+  const applyBtn = ov.querySelector('#roomGeomApplyPresetBtn');
+  if(applyBtn) applyBtn.onclick = () => {
+    const name = ov.querySelector('#roomGeomPresetSelect').value;
+    if(!name) return;
+    if(!confirm(`Apply preset "${name}" as the default for this building?\n\nUn-customized rooms will take on this look. Per-room overrides are kept.`)) return;
+    applyPresetToBuilding(name, roomKey);
+    refreshDefaultsBox(ov, roomKey);   // defaults just changed
+  };
+  const delBtn = ov.querySelector('#roomGeomDeletePresetBtn');
+  if(delBtn) delBtn.onclick = () => {
+    const name = ov.querySelector('#roomGeomPresetSelect').value;
+    if(!name) return;
+    if(!confirm(`Delete preset "${name}"? This cannot be undone.`)) return;
+    deletePreset(name);
+    refresh();
   };
 }
 function renderRoomGeomDialog(ov, roomKey){
@@ -3534,7 +3625,7 @@ function renderRoomGeomDialog(ov, roomKey){
     </label>
   `).join('');
   ov.innerHTML = `
-    <div class="modal" style="width:min(28em,92vw)">
+    <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
       <h2>Room Geometry — ${roomKey}</h2>
       <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.7rem">
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
@@ -3550,7 +3641,8 @@ function renderRoomGeomDialog(ov, roomKey){
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
-      <div id="roomGeomDefaultsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${defaultsBoxHtml(roomKey)}</div>
+      <div id="roomGeomDefaultsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.5rem">${defaultsBoxHtml(roomKey)}</div>
+      <div id="roomGeomPresetsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${presetsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
         <input type="checkbox" id="roomGeomMakeDefault" style="margin-top:.15rem">
         <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door keeps its own style).</span>
@@ -3795,6 +3887,7 @@ function renderRoomGeomDialog(ov, roomKey){
 
   drawPlan();
   wireDefaultsBox(ov, roomKey);
+  wirePresetsBox(ov, roomKey);
   ov.querySelector('#roomGeomCancelBtn').onclick = closeRoomGeomDialog;
   ov.querySelector('#roomGeomResetBtn').onclick = () => {
     const base = ROOMS[roomKey].size;
