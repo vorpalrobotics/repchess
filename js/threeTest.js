@@ -1729,6 +1729,14 @@ const DEMO_MNEMONICS = {
     response: { to: 'f4', piece: 'bishop', san: 'Bf4' },  // white Bf4
     pos: { x: -0.1, y: 1.6, z: -1.7 }
   },
+  // the elevator car is its own tree node (placeholder demo pair, distinct from
+  // start's so it's clearly the elevator's own -- real data will come from the
+  // opening tree); its pair shows to the right of the floor-button door.
+  roomB: {
+    opponent: { to: 'e5', piece: 'pawn', san: 'e5' },
+    response: { to: 'f3', piece: 'knight', san: 'Nf3' },
+    pos: { x: -0.1, y: 1.6, z: -1.7 }
+  },
   // the three rooms behind roomB's elevator floor buttons -- each one's
   // pair is the opponent reply that floor's button is labelled with, plus
   // the response that room is built around.
@@ -1762,14 +1770,6 @@ const DEMO_MNEMONICS = {
 // keyed by slot id) just works for them with no changes elsewhere. One slot
 // per room now (the composite pair billboard), not one per move -- the pair
 // moves/scales as a single unit.
-// the room whose `type:'elevator'` exit leads into this car -- its move pair is
-// the context shown on the car's own billboard.
-function elevatorParent(carKey){
-  for(const k in ROOMS){
-    if((ROOMS[k].exits || []).some(e => e.type === 'elevator' && e.target === carKey)) return k;
-  }
-  return null;
-}
 // a spot just in front of the floor-button wall, to the RIGHT of the door (the
 // floor panel sits on the left), at eye height -- mirrors buildElevatorPanel.
 function elevatorBillboardPos(room, wall, offset){
@@ -1785,20 +1785,17 @@ function elevatorBillboardPos(room, wall, offset){
   return { x: dcx + V.rx*side + V.ix*inset, y: 1.5, z: dcz + V.rz*side + V.iz*inset };
 }
 function mnemonicSlots(roomKey){
-  let pair = DEMO_MNEMONICS[roomKey];
-  let pos = pair && pair.pos;
-  // an elevator car has no pair of its own -- show the move that LED to it (the
-  // parent room's pair) as context, to the right of the floor-button door.
-  if(!pair && isElevatorCar(roomKey)){
-    const parent = elevatorParent(roomKey);
-    pair = parent ? DEMO_MNEMONICS[parent] : null;
-    if(pair){
-      const room = mergedRoom(roomKey);
-      const fwd = (room.exits || []).find(e => !e.back);   // floors share one wall
-      pos = fwd ? elevatorBillboardPos(room, fwd.wall, fwd.offset) : null;
-    }
+  const pair = DEMO_MNEMONICS[roomKey];
+  if(!pair) return [];
+  let pos = pair.pos;
+  // an elevator car is a room with its own pair, but it's small and its floor
+  // panel sits to the left of the door -- mount its pair to the right of that
+  // door instead of the usual centre-of-room spot.
+  if(isElevatorCar(roomKey)){
+    const room = mergedRoom(roomKey);
+    const fwd = (room.exits || []).find(e => !e.back);   // floors share one wall
+    if(fwd) pos = elevatorBillboardPos(room, fwd.wall, fwd.offset);
   }
-  if(!pair || !pos) return [];
   return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair }];
 }
 
