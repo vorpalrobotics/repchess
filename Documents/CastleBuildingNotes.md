@@ -2,9 +2,15 @@
 
 Design considerations for how "rooms" in the Opening Graph / memory-palace
 castle should be structured, captured from discussion so they can be
-revisited when building room-decoration features. These are notes on
-*intent*, not a spec for already-built features — nothing here has been
-implemented yet.
+revisited when building room-decoration features.
+
+The **room model** below (hallways vs. doors, feature-vs-door classification,
+blunder marking) is still *intent* — the castle-graph generator that would
+apply it is not built yet. However, a set of room-decoration and navigation
+features **are now built and shipped** in the standalone Three.js walking
+prototype (`js/threeTest.js`); those are documented in
+"[Implemented in the walking prototype](#implemented-in-the-walking-prototype-jsthreetestjs)"
+near the end of this file.
 
 ## The core idea
 
@@ -83,6 +89,83 @@ normal reply, the associated image/feature should be visually flagged as
 such — e.g. a "dunce cap" added to the image associated with that move —
 so it's immediately recognizable as the blunder branch rather than a
 normal line.
+
+## Implemented in the walking prototype (`js/threeTest.js`)
+
+Unlike the room-model *intent* above, the following room-decoration and
+navigation features are **built and shipped** in the standalone walking
+prototype. It uses a hand-authored `ROOMS` table for structure plus a
+persisted `LAYOUT` override store (IndexedDB) for every per-room edit; the
+eventual generator will emit the same kinds of data.
+
+### Elevators
+
+An **elevator** is a special exit (`type: 'elevator'`) on a room. It targets a
+room like any exit, but that target room is rendered in **car mode**: plain
+tinted walls (not brick), a floor-button panel on the wall, and popup-based
+floor selection instead of walk-through doors.
+
+- **Purpose: compactly represent many branches.** Rather than putting, say, 7
+  doors on one room's walls, a single elevator leads to a car whose own exits
+  become floor buttons ("First Floor: …", etc.), each one an opponent reply.
+- **Reserved for high-branching positions.** In the current repertoire branches
+  are usually ≤ 4 but can be larger; the biggest is **13**, right at the start
+  where play fans out into separate buildings. Whether a node *automatically*
+  becomes an elevator past some branch-count N is **still undecided** — it may
+  remain a manual authoring choice.
+- The car is still a real **tree node/room**: it has its own move-pair
+  billboard (read from the car room's own mnemonic data, like any room),
+  mounted to the **right** of the floor-button door — the floor panel sits on
+  the left.
+- **Naming is the user's job.** The user names rooms; an elevator car would
+  typically be named "Elevator" (or "North Elevator", etc. in a large castle).
+  The app does not auto-name it.
+
+### Hints & self-test
+
+A **hints** toggle — a lightbulb button at the top-center of the walking modal,
+its on/off state persisted in `localStorage` — shows/hides memory cues so the
+palace can be walked as a recall **self-test**:
+
+- **Door hints** (forward doors only; back/exit doors keep their "EXIT" sign and
+  get none): a **name placard** for the room beyond, and — when that room has an
+  opponent move — a separate **~0.3 m square "move decoration"** of that move
+  (the higher/opponent move of the room's pair) mounted flat on the wall beside
+  the sign, facing into the room. It shows the move's image, or its algebraic
+  notation when no image has been set.
+- **Move-pair billboards**: the in-room composite billboard showing a room's
+  opponent + response move pair (including the elevator's, see above).
+- Turning hints **off** hides *both* the door hints and the move-pair
+  billboards, leaving only structure — so the user can try to recall each
+  room's moves, then toggle hints back on to check themselves.
+
+### Room names, surface defaults & presets
+
+- **Room names**: each room can carry a `name` (e.g. "Study", "Kitchen"),
+  surfaced on door hints. Data-driven (hard-coded in the demo, generator-
+  supplied later).
+- **Per-building surface defaults** (`LAYOUT.__defaults`, keyed by building id):
+  default floor / ceiling / stairs / walls / doors so un-styled rooms inherit a
+  consistent look. Resolution is layered — **room override → building default →
+  procedural fallback**. Walls are stored **relative to the entrance door** so a
+  default rotates correctly into rooms whose door is on a different wall. Two
+  door styles are kept: **`exitDoor`** (the back/exit door, so exits can be made
+  to stand out) and **`door`** (all others). Captured via a checkbox in the Room
+  dialog; a readout there shows what's set, with a Clear control.
+- **Named presets** (`LAYOUT.__presets`): reusable named style sets ("Formal",
+  "Rustic", …), made from the current room and applied either as a building's
+  defaults *or* stamped directly onto a single room.
+
+### Stairs & door skinning
+
+- **Stairs** (both in-room platform staircases and stair-exit corridors) default
+  to a wood texture and are **skinnable per room** (`stairSurface`) by clicking
+  the steps in edit mode.
+- **Doors** are skinnable per doorway, and inherit the building's
+  `door`/`exitDoor` default when not individually overridden.
+
+(See `CastleDataModel.md` for how these same concepts are expected to be keyed
+in the eventual generated-castle data model.)
 
 ## Summary of the room model (target, not yet built)
 
