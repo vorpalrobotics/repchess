@@ -356,6 +356,22 @@ function commitRoomGeomDialog(roomKey, geom, exitMoves){
     }
   });
 }
+// wipe a room's styling and placed objects back to nothing -- floors, walls,
+// ceiling, stairs and door skins, plus every placed prop and its nudge/scale.
+// The room then falls back to the building defaults (or procedural). The room's
+// size and doorway positions (geom/exits) are deliberately kept -- this clears
+// look-and-contents, not structure. It never touches LAYOUT.__defaults, so a
+// building default previously captured from this room survives the wipe.
+function clearRoomStyles(roomKey){
+  if(selectedProp && selectedProp.roomKey === roomKey) deselectProp();
+  applyEdit(() => {
+    const r = LAYOUT[roomKey];
+    if(!r) return;
+    delete r.floor; delete r.ceiling; delete r.stairSurface;
+    r.walls = {}; r.doors = {}; r.slots = {}; r.slotXform = {};
+    r.buildings = {}; r.signs = {}; r.signPos = {}; r.yards = {};   // outdoor maps; no-ops indoors
+  });
+}
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
 // overrides for fl-nw/fl-ne/fl-sw/fl-se keep working). A cell is dropped if
@@ -3459,7 +3475,10 @@ function renderRoomGeomDialog(ov, roomKey){
         <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door keeps its own style).</span>
       </label>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
-        <button id="roomGeomResetBtn">Reset</button>
+        <div style="display:flex;gap:.4rem">
+          <button id="roomGeomResetBtn">Reset size/doors</button>
+          <button id="roomGeomClearBtn" style="background:#c62828;color:#fff">Clear styles…</button>
+        </div>
         <div>
           <button id="roomGeomCancelBtn">Cancel</button>
           <button id="roomGeomApplyBtn">Apply</button>
@@ -3703,7 +3722,22 @@ function renderRoomGeomDialog(ov, roomKey){
       const sel = ov.querySelector(`[data-exit-type-for="${ex.target}"]`);
       if(sel) sel.value = stagedExits[ex.target].type;
     }
+    // resetting the geometry to the just-cleared/base room shouldn't then push it
+    // out as the building default
+    ov.querySelector('#roomGeomMakeDefault').checked = false;
     drawPlan();
+  };
+  ov.querySelector('#roomGeomClearBtn').onclick = () => {
+    // a wiped room must never be captured as the default, so drop the checkbox first
+    ov.querySelector('#roomGeomMakeDefault').checked = false;
+    if(!confirm(
+      `Clear ALL styling and placed objects in "${roomKey}"?\n\n` +
+      `The floor, walls, ceiling, stairs, door skins and every placed prop in this ` +
+      `room will be permanently removed and the room will revert to the building ` +
+      `defaults. The room's size and doorways are kept.\n\nThis cannot be undone.`
+    )) return;
+    closeRoomGeomDialog();
+    clearRoomStyles(roomKey);     // wipes this room only; LAYOUT.__defaults is untouched
   };
   ov.querySelector('#roomGeomApplyBtn').onclick = () => {
     const w2 = Math.max(ROOM_GEOM_MIN, Number(wEl.value) || room.size.w);
