@@ -363,10 +363,13 @@ function plyLabel(seq){
    now (rare in practice, e.g. doubled rooks/knights). */
 const MNEM_WORD_FOR_PIECE = {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
 function lastMoveInfo(seq){
-  const chess = new Chess();
-  let info = null;
-  for(const mv of seq) info = chess.move(mv,{sloppy:true});
-  return info;
+  if(!seq || !seq.length) return null;
+  // apply only the LAST move onto the (memoized, incremental) position after the
+  // parent seq, instead of replaying the whole line from move 1 each call. This
+  // is what the coverage walk calls per room/edge -- the old full replay made it
+  // ~O(moves^2) over the tree and was the cause of the slow coverage load.
+  const chess = new Chess(fenForSeq(seq.slice(0, -1)));
+  return chess.move(seq[seq.length - 1], { sloppy:true });
 }
 function mnemonicWordForSeq(seq, mnemonicsBySquare){
   const info = lastMoveInfo(seq);
@@ -2389,13 +2392,17 @@ async function computeMnemonicCoverage(line){
      often NOT the line picked in this dropdown. Swap in the right line's
      prefs for the traversal, then restore so the open line's in-memory
      state isn't disturbed. */
+  // PREFS already holds the open line's prefs; only swap in another line's
+  // prefs when computing coverage for a line that isn't the one open in the
+  // main tree (avoids a redundant getAllPrefs read for the common case).
+  const isOpenLine = CURRENT_LINE && line.id === CURRENT_LINE.id;
   const savedPrefs = PREFS;
   let graph;
   try {
-    PREFS = await getAllPrefs(line.id);
+    if(!isOpenLine) PREFS = await getAllPrefs(line.id);
     graph = buildCastleGraph(line, GAMES);
   } finally {
-    PREFS = savedPrefs;
+    if(!isOpenLine) PREFS = savedPrefs;
   }
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
@@ -2686,6 +2693,16 @@ function openMnemonicsEditor(sq){
 $('menuMnemonics').onclick = async ()=>{
   $('menuList').style.display='none';
   await populateMnemonicsCoverageSelect();
+  // default the coverage filter to the opening currently open in the main tree
+  // (rather than "(none selected)"), so its coverage is shown without the user
+  // having to re-pick and wait for the line they're already viewing.
+  const sel = $('mnemonicsCoverageSelect');
+  if(CURRENT_LINE && [...sel.options].some(o=>o.value===CURRENT_LINE.id)){
+    sel.value = CURRENT_LINE.id;
+    const spinner = showSpinner('Loading opening system…');
+    try { MNEM_COVERAGE = await computeMnemonicCoverage(CURRENT_LINE); }
+    finally { hideSpinner(spinner); }
+  }
   renderMnemonicsGrid();
   $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
   $('mnemonicsOverlay').style.display='flex';
