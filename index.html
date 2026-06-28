@@ -182,13 +182,13 @@
   #engineLines .pvToggle{font-size:.9em;padding:0 .3em;flex:0 0 auto}
   #engineLines .pvText{flex:1 1 auto}
 
-  #threeTestOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
-  .three-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
-  .three-header h2{margin:0}
-  .three-header-actions{display:flex;gap:.5rem}
-  #threeTestCanvasWrap{flex:1 1 auto;min-height:0;position:relative;background:#222;border-radius:4px;overflow:hidden}
+  /* full-viewport, chromeless: all controls are icon buttons overlaid on the
+     canvas (built in threeTest.js), no header strip or footer hint */
+  #threeTestOverlay{padding:0}
+  #threeTestOverlay .modal{width:100vw;height:100vh;max-width:none;padding:0;border-radius:0;
+    background:#222;display:flex;flex-direction:column;box-shadow:none}
+  #threeTestCanvasWrap{flex:1 1 auto;min-height:0;position:relative;background:#222;overflow:hidden}
   #threeTestCanvasWrap canvas{display:block;width:100%;height:100%}
-  .three-hint{margin:.4rem 0 0;font-size:.8rem;color:#666;text-align:center}
 
   #assetsOverlay{z-index:30}
   #assetsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
@@ -473,18 +473,11 @@
   </div>
 </div>
 
-<!-- three.js prototype modal -->
+<!-- three.js prototype modal (full viewport; controls are icon buttons overlaid
+     on the canvas, built in threeTest.js) -->
 <div id="threeTestOverlay" class="overlay">
   <div class="modal">
-    <div class="three-header">
-      <h2>Three.js Test</h2>
-      <div class="three-header-actions">
-        <button id="threeTestAssetsBtn">Assets</button>
-        <button id="threeTestCloseBtn">Close</button>
-      </div>
-    </div>
     <div id="threeTestCanvasWrap"></div>
-    <p class="three-hint">Arrows or W/A/S/D to walk, walk through a doorway to enter the next room. Press R to return to the start. On touch devices, use the on-screen joystick to walk and the Edit button to tap objects and move/scale them.</p>
   </div>
 </div>
 

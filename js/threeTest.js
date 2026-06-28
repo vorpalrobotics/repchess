@@ -175,20 +175,18 @@ let editHud = null;
 let joystickEl = null, joyKnob = null, joyPointerId = null;
 let joyVec = { x: 0, y: 0 };
 
-/* ---------- on-screen edit controls (mobile) ----------
-   editToggleBtn flips edit mode (the desktop 'E' key has no touch equivalent);
-   editTouchEl is the move/scale pad shown while a prop is selected. Both are
-   built on coarse-pointer devices only. */
-let editToggleBtn = null, editTouchEl = null;
-// shown alongside the edit toggle (desktop and touch) while edit mode is on;
-// opens the room-geometry dialog -- a typed-attribute form + 2D plan preview,
-// kept deliberately separate from the click-to-edit in-world flow per the
-// user's request, rather than another click target in the 3D scene itself.
-let roomGeomBtn = null;
-// "hints" toggle (top of the modal): when on, doors show the name of (and a move
-// thumbnail for) the room beyond, and the in-room move-pair billboard is shown.
-// Turning it off hides all of those so the layout can be used as a self-test.
-let hintsBtn = null;
+/* ---------- chromeless overlay controls ----------
+   The walking modal is full-viewport with no header/footer; every control is an
+   icon button in a flush-left toolbar overlaid on the canvas (built in
+   buildTopToolbar). `threeOpts` carries app-level callbacks (onClose/onAssets)
+   since closing the modal and opening the asset manager live in app.js. */
+let threeOpts = {};
+let toolbarEl = null, helpOverlay = null;
+let hintsBtn = null, editBtn = null, roomGeomBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
+let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
+// hints: when on, doors show the name of (and a move thumbnail for) the room
+// beyond, and the in-room move-pair billboard is shown. Off hides all of those
+// so the layout can be walked as a self-test.
 let hintsOn = true;
 
 /* ---------- in-world layout editor: prop selection (nudge/scale) ----------
@@ -3440,9 +3438,8 @@ function surfacePickerExtras(roomKey, kind, wall, effAsset){
 }
 
 function updateEditHud(){
-  updateEditToggle();
+  updateToolbar();
   updateEditTouchControls();
-  updateRoomGeomBtn();
   if(!editHud) return;
   if(selectedProp){
     // current resize relative to the prop's default (100%), shown so the user
@@ -3461,8 +3458,8 @@ function updateEditHud(){
   // outdoors you edit building facades; indoors floors/walls/slots
   const outdoor = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].outdoor;
   editHud.textContent = outdoor
-    ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [E] or [Esc] to exit'
-    : 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [E] or [Esc] to exit';
+    ? 'EDIT MODE — click a building’s facade, its lawn, a yard spot, or its sign to edit; [Esc] to exit'
+    : 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [Esc] to exit';
   editHud.style.display = 'block';
 }
 
@@ -3543,60 +3540,71 @@ function makeTouchBtn(label, onTap){
   return b;
 }
 
-// top-right edit-mode toggle -- the touch stand-in for the 'E' key
-function buildEditToggle(){
-  if(!isCoarsePointer()) return null;
-  const b = makeTouchBtn('Edit', () => setEditMode(!editMode));
-  b.style.position = 'absolute';
-  b.style.top = '8px';
-  b.style.right = '8px';
-  b.style.zIndex = '4';
+// ---------- top-left icon toolbar ----------
+// icon-only tap button (still won't bubble into the canvas selection handler)
+function makeIconBtn(faClass, title, onTap){
+  const b = makeTouchBtn(`<i class="fa-solid ${faClass}"></i>`, onTap);
+  b.title = title;
   return b;
 }
-function updateEditToggle(){
-  if(!editToggleBtn) return;
-  editToggleBtn.textContent = editMode ? 'Exit Edit' : 'Edit';
-  editToggleBtn.style.background = editMode ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
+// flush-left row of icon controls overlaid on the canvas; edit-only buttons
+// (room geometry, asset library) appear only in edit mode. Info (ⓘ) is last.
+function buildTopToolbar(){
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:absolute;top:8px;left:8px;display:flex;gap:6px;z-index:6;';
+  hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
+  editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
+  roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
+  assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
+  closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
+  infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
+  bar.append(hintsBtn, editBtn, roomGeomBtn, assetsBtn, closeBtn, infoBtn);
+  return bar;
 }
-
-// top-right "Room…" button, visible (desktop and touch) only in edit mode --
-// opens the room-geometry dialog for the room currently being walked through.
-function buildRoomGeomBtn(){
-  const b = makeTouchBtn('Room…', () => openRoomGeomDialog(currentRoomKey));
-  b.style.position = 'absolute';
-  b.style.zIndex = '4';
-  b.style.display = 'none';
-  if(isCoarsePointer()){ b.style.top = '56px'; b.style.right = '8px'; }
-  else { b.style.top = '8px'; b.style.right = '8px'; }
-  return b;
-}
-function updateRoomGeomBtn(){
-  if(!roomGeomBtn) return;
-  roomGeomBtn.style.display = editMode ? 'block' : 'none';
-}
-
-// top-center hints toggle, always visible -- a lit lightbulb when hints are on.
-function buildHintsToggle(){
-  const b = makeTouchBtn('<i class="fa-solid fa-lightbulb"></i>', () => setHintsOn(!hintsOn));
-  b.title = 'Show/hide hints (room names, door hints, move billboards)';
-  b.style.position = 'absolute';
-  b.style.top = '8px';
-  b.style.left = '50%';
-  b.style.transform = 'translateX(-50%)';
-  b.style.zIndex = '5';
-  return b;
-}
-function updateHintsToggle(){
-  if(!hintsBtn) return;
-  hintsBtn.style.background = hintsOn ? 'rgba(245,193,7,.92)' : 'rgba(28,38,58,.78)';
-  hintsBtn.style.color = hintsOn ? '#1a1a1a' : '#fff';
-  hintsBtn.style.opacity = hintsOn ? '1' : '.75';
+// reflect hints/edit state; show the edit-only buttons only while editing
+function updateToolbar(){
+  if(hintsBtn){
+    hintsBtn.style.background = hintsOn ? 'rgba(245,193,7,.92)' : 'rgba(28,38,58,.78)';
+    hintsBtn.style.color = hintsOn ? '#1a1a1a' : '#fff';
+  }
+  if(editBtn){
+    editBtn.style.background = editMode ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
+    editBtn.title = editMode ? 'Exit edit mode (Esc)' : 'Edit mode';
+  }
+  if(roomGeomBtn) roomGeomBtn.style.display = editMode ? '' : 'none';
+  if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
 function setHintsOn(on){
   hintsOn = on;
   try{ localStorage.setItem('threeHintsOn', on ? '1' : '0'); }catch(_){}
-  updateHintsToggle();
+  updateToolbar();
   if(scene) buildRoom(currentRoomKey);
+}
+
+// help overlay -- the walking/editing instructions that used to sit under the
+// canvas, now shown only on demand via the ⓘ button.
+function buildHelpOverlay(){
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:absolute;inset:0;z-index:8;display:none;'
+    + 'background:rgba(0,0,0,.55);align-items:center;justify-content:center;';
+  ov.innerHTML = `
+    <div style="background:#fff;color:#222;max-width:32em;width:88%;max-height:84%;overflow:auto;
+                border-radius:8px;padding:1rem 1.2rem;font:400 .9rem/1.45 sans-serif">
+      <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
+      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
+      <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
+      <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if(e.target === ov) toggleHelp(false); });
+  ov.querySelector('#threeHelpCloseBtn').addEventListener('click', () => toggleHelp(false));
+  return ov;
+}
+function toggleHelp(show){
+  if(!helpOverlay) return;
+  const on = show === undefined ? helpOverlay.style.display === 'none' : show;
+  helpOverlay.style.display = on ? 'flex' : 'none';
 }
 
 // move/scale pad shown while a prop is selected. Buttons drive the same
@@ -4176,15 +4184,17 @@ function onKeyDown(e){
     if(e.key === '>' || e.key === '.'){ rotateSelected(1); return; }
     return; // swallow everything else while a prop is selected (no walking/turning)
   }
-  if(e.key === 'e' || e.key === 'E'){ setEditMode(!editMode); return; }
+  // 'e' is intentionally NOT an edit-mode shortcut (too close to 'w'); use the
+  // pencil toolbar button. Esc still exits edit mode.
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
   if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
   keys[e.key] = true;
 }
 function onKeyUp(e){ keys[e.key] = false; }
 
-export async function openThreeTest(containerEl){
+export async function openThreeTest(containerEl, opts){
   container = containerEl;
+  threeOpts = opts || {};
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
 
@@ -4201,26 +4211,27 @@ export async function openThreeTest(containerEl){
 
   // editor HUD overlay (hidden until edit mode is on)
   editHud = document.createElement('div');
-  editHud.style.cssText = 'position:absolute;top:8px;left:8px;padding:.35rem .6rem;'
+  // sits just below the top-left icon toolbar so the two don't overlap
+  editHud.style.cssText = 'position:absolute;top:62px;left:8px;padding:.35rem .6rem;'
     + 'background:rgba(21,101,192,.85);color:#fff;font:600 .8rem sans-serif;'
-    + 'border-radius:4px;pointer-events:none;display:none;z-index:2';
-  editHud.textContent = 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [E] or [Esc] to exit';
+    + 'border-radius:4px;pointer-events:none;display:none;z-index:2;max-width:calc(100% - 16px)';
+  editHud.textContent = 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [Esc] to exit';
   container.appendChild(editHud);
 
-  // mobile controls (touch devices only): walk joystick, edit-mode toggle,
-  // and the move/scale pad shown while a prop is selected
+  // top-left icon toolbar (hints / edit / room / assets / close / help)
+  hintsOn = (() => { try{ return localStorage.getItem('threeHintsOn') !== '0'; }catch(_){ return true; } })();
+  toolbarEl = buildTopToolbar();
+  container.appendChild(toolbarEl);
+  helpOverlay = buildHelpOverlay();
+  container.appendChild(helpOverlay);
+  updateToolbar();
+
+  // mobile controls (touch devices only): walk joystick + the move/scale pad
+  // shown while a prop is selected
   joystickEl = buildJoystick();
   if(joystickEl) container.appendChild(joystickEl);
-  editToggleBtn = buildEditToggle();
-  if(editToggleBtn) container.appendChild(editToggleBtn);
   editTouchEl = buildEditTouch();
   if(editTouchEl) container.appendChild(editTouchEl);
-  roomGeomBtn = buildRoomGeomBtn();
-  container.appendChild(roomGeomBtn);
-  hintsOn = (() => { try{ return localStorage.getItem('threeHintsOn') !== '0'; }catch(_){ return true; } })();
-  hintsBtn = buildHintsToggle();
-  container.appendChild(hintsBtn);
-  updateHintsToggle();
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111317);
@@ -4278,9 +4289,10 @@ export function closeThreeTest(){
   editHud = null;
   joystickEl = null; joyKnob = null; joyPointerId = null;
   joyVec = { x: 0, y: 0 };
-  editToggleBtn = null; editTouchEl = null;
-  roomGeomBtn = null;
-  hintsBtn = null;
+  editTouchEl = null;
+  toolbarEl = null; helpOverlay = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = null;
+  threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
 }

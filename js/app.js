@@ -2323,25 +2323,23 @@ $('backupImport').addEventListener('change', async e=>{
 });
 
 /* ---------- three.js prototype ---------- */
-$('menuThreeTest').onclick = ()=>{
-  $('menuList').style.display='none';
-  $('threeTestOverlay').style.display='flex';
-  openThreeTest($('threeTestCanvasWrap'));
-};
-$('threeTestCloseBtn').onclick = ()=>{
-  $('threeTestOverlay').style.display='none';
-  closeThreeTest();
-};
-
-// Opening the asset manager from inside the walking tour: the assets modal
-// stacks on top (it sits later in the DOM and has a higher z-index) without
-// closing threeTest, so dismissing it just drops back into the tour.
+// The walking modal is chromeless — its Close and Assets controls are icon
+// buttons overlaid on the canvas (built in threeTest.js); we hand it callbacks
+// for those actions rather than wiring header buttons here.
 let assetsOpenedFromThreeTest = false;
-$('threeTestAssetsBtn').onclick = ()=>{
+function openThreeTestAssets(){
   assetsOpenedFromThreeTest = true;
   setForeignModalOpen(true);
   $('assetsOverlay').style.display='flex';
   openAssetManager($('assetsBodyWrap'));
+}
+$('menuThreeTest').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('threeTestOverlay').style.display='flex';
+  openThreeTest($('threeTestCanvasWrap'), {
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
+    onAssets: openThreeTestAssets
+  });
 };
 
 /* ---------- asset manager ---------- */
