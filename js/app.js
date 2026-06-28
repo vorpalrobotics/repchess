@@ -2131,10 +2131,26 @@ $('dlBtn').onclick = async ()=>{
 renderHome();
 
 /* ---------- hamburger menu ---------- */
+function collapseMenuSubs(){
+  document.querySelectorAll('#menuList .menu-sub.open').forEach(el=>el.classList.remove('open'));
+  document.querySelectorAll('#menuList .menu-parent.open').forEach(el=>el.classList.remove('open'));
+}
 $('menuBtn').onclick = e=>{
   e.stopPropagation();
-  $('menuList').style.display = $('menuList').style.display==='flex' ? 'none' : 'flex';
+  const open = $('menuList').style.display==='flex';
+  if(open){ $('menuList').style.display='none'; }
+  else { collapseMenuSubs(); $('menuList').style.display='flex'; }   // start with all submenus collapsed
 };
+// .menu-parent rows expand/collapse their submenu in place instead of running an action
+document.querySelectorAll('#menuList .menu-parent').forEach(parent=>{
+  parent.onclick = e=>{
+    e.stopPropagation();
+    const sub = $(parent.dataset.sub);
+    const willOpen = !sub.classList.contains('open');
+    collapseMenuSubs();                 // accordion: only one submenu open at a time
+    if(willOpen){ sub.classList.add('open'); parent.classList.add('open'); }
+  };
+});
 document.addEventListener('click', e=>{
   if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
 });
@@ -2298,6 +2314,24 @@ async function exportMnemonics(){
   log(`exported ${data.mnemonics.length} mnemonic square(s)`);
 }
 
+/* assets-only export: same bundle shape the asset manager's "Export All as
+   JSON" produces (tagged `repchessAssets` so the unified importer recognises
+   it), but callable straight from the hamburger menu without opening the asset
+   manager. Reads assets from IndexedDB rather than the manager's in-memory list. */
+async function exportAssets(){
+  const assets = await getAllAssets();
+  if(!assets.length){ log('no assets to export',true); return; }
+  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets };
+  const blob = new Blob([JSON.stringify(bundle,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `repchess-assets-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log(`exported ${assets.length} asset(s)`);
+}
+
 /* recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
    file that carries a `mnemonics` array but none of the other top-level stores
    a full backup / asset bundle would have. */
@@ -2329,6 +2363,14 @@ async function importMnemonicsBundle(data){
 $('menuExport').onclick = ()=>{
   $('menuList').style.display='none';
   exportBackup();
+};
+$('menuExportMnemonics').onclick = ()=>{
+  $('menuList').style.display='none';
+  exportMnemonics();
+};
+$('menuExportAssets').onclick = ()=>{
+  $('menuList').style.display='none';
+  exportAssets();
 };
 $('menuImport').onclick = ()=>{
   $('menuList').style.display='none';

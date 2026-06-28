@@ -121,6 +121,12 @@
   #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
   #menuList button{border:none;background:none;text-align:left;padding:.5em .9em;border-radius:0;font-weight:400}
   #menuList button:hover{background:#f0f0f0}
+  /* two-level menu: a .menu-parent toggles the .menu-sub block right below it */
+  #menuList .menu-parent::after{content:"\25B8";float:right;color:#999;transition:transform .15s}
+  #menuList .menu-parent.open::after{transform:rotate(90deg)}
+  #menuList .menu-sub{display:none;flex-direction:column}
+  #menuList .menu-sub.open{display:flex}
+  #menuList .menu-sub button{padding-left:1.9em;font-size:.95em;color:#333}
 
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:20}
   .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
@@ -372,17 +378,25 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuDownload">Import Games</button>
-      <button id="menuMnemonics">Manage Mnemonics</button>
+      <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
+      <div id="subMnemonics" class="menu-sub">
+        <button id="menuMnemonics">Manage</button>
+        <button id="menuQuiz">Test</button>
+      </div>
       <button id="menuImportMoveImages">Import Move Images</button>
-      <button id="menuQuiz">Quiz Mnemonics</button>
       <hr class="row-menu-sep">
       <button id="menuImportLine">Import Variations</button>
       <button id="menuSearchLine">Search for a Variation</button>
       <hr class="row-menu-sep">
-      <button id="menuExport">Export Backup</button>
-      <button id="menuImport">Import Backup</button>
+      <button class="menu-parent" data-sub="subExport">Export</button>
+      <div id="subExport" class="menu-sub">
+        <button id="menuExport">Backup</button>
+        <button id="menuExportMnemonics">Mnemonics</button>
+        <button id="menuExportAssets">Assets</button>
+      </div>
+      <button id="menuImport">Import</button>
       <hr class="row-menu-sep">
-      <button id="menuThreeTest">Three.js Test</button>
+      <button id="menuThreeTest">VR World Walkthrough</button>
       <button id="menuAssets">Manage Assets</button>
       <hr class="row-menu-sep">
       <button id="menuAbout">About</button>
