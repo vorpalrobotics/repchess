@@ -2989,10 +2989,13 @@ function tick(){
 
   yaw += turn * TURN_SPEED * dt;
   if(move !== 0 && !inputLocked){
-    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
-    pos.x += -Math.sin(yaw) * move * MOVE_SPEED * dt;
-    pos.z += -Math.cos(yaw) * move * MOVE_SPEED * dt;
     const room = mergedRoom(currentRoomKey);
+    // outdoors covers much more ground, so walk 50% faster out there; interiors
+    // keep the base speed.
+    const speed = room.outdoor ? MOVE_SPEED * 1.5 : MOVE_SPEED;
+    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
+    pos.x += -Math.sin(yaw) * move * speed * dt;
+    pos.z += -Math.cos(yaw) * move * speed * dt;
     let clamped = clampToRoom(room.size, pos.x, pos.z);
     if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
     pos.x = clamped.x; pos.z = clamped.z;
