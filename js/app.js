@@ -2692,20 +2692,24 @@ function openMnemonicsEditor(sq){
 
 $('menuMnemonics').onclick = async ()=>{
   $('menuList').style.display='none';
-  await populateMnemonicsCoverageSelect();
-  // default the coverage filter to the opening currently open in the main tree
-  // (rather than "(none selected)"), so its coverage is shown without the user
-  // having to re-pick and wait for the line they're already viewing.
-  const sel = $('mnemonicsCoverageSelect');
-  if(CURRENT_LINE && [...sel.options].some(o=>o.value===CURRENT_LINE.id)){
-    sel.value = CURRENT_LINE.id;
-    const spinner = showSpinner('Loading opening system…');
-    try { MNEM_COVERAGE = await computeMnemonicCoverage(CURRENT_LINE); }
-    finally { hideSpinner(spinner); }
+  const spinner = showSpinner('Loading mnemonics…');
+  try {
+    await nextPaint();   // ensure the spinner actually renders before the sync graph walk blocks the thread
+    await populateMnemonicsCoverageSelect();
+    // default the coverage filter to the opening currently open in the main tree
+    // (rather than "(none selected)"), so its coverage is shown without the user
+    // having to re-pick and wait for the line they're already viewing.
+    const sel = $('mnemonicsCoverageSelect');
+    if(CURRENT_LINE && [...sel.options].some(o=>o.value===CURRENT_LINE.id)){
+      sel.value = CURRENT_LINE.id;
+      MNEM_COVERAGE = await computeMnemonicCoverage(CURRENT_LINE);
+    }
+    await renderMnemonicsGrid();
+    $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
+    $('mnemonicsOverlay').style.display='flex';
+  } finally {
+    hideSpinner(spinner);
   }
-  renderMnemonicsGrid();
-  $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
-  $('mnemonicsOverlay').style.display='flex';
 };
 $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
 $('mnemonicsCoverageSelect').onchange = async (e)=>{
