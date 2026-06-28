@@ -3029,7 +3029,7 @@ document.addEventListener('click', (e)=>{
 });
 
 /* ---------- engine ---------- */
-const ENGINE_PV_PLIES = 8;
+const ENGINE_PV_PLIES = 7;   // 7 (not 8) so a line never wraps regardless of move-text width; expand for the full line
 const PV_COMPLETE_SLACK = 3; // expanded PV only shown in full once it's within this many plies of its reported depth
 let expandedPvLines = new Set();
 const engine = new Engine();
