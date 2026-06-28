@@ -3547,18 +3547,23 @@ function makeIconBtn(faClass, title, onTap){
   b.title = title;
   return b;
 }
-// flush-left row of icon controls overlaid on the canvas; edit-only buttons
-// (room geometry, asset library) appear only in edit mode. Info (ⓘ) is last.
+// icon controls overlaid on the canvas: a flush-left group (hints, edit, and
+// the edit-only room/asset buttons, then help) plus the close (✕) pushed flush
+// right. The bar spans the top width with the empty middle clicking through.
 function buildTopToolbar(){
   const bar = document.createElement('div');
-  bar.style.cssText = 'position:absolute;top:8px;left:8px;display:flex;gap:6px;z-index:6;';
+  bar.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;display:flex;'
+    + 'justify-content:space-between;align-items:flex-start;z-index:6;pointer-events:none;';
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
-  closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
-  bar.append(hintsBtn, editBtn, roomGeomBtn, assetsBtn, closeBtn, infoBtn);
+  closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
+  left.append(hintsBtn, editBtn, roomGeomBtn, assetsBtn, infoBtn);
+  bar.append(left, closeBtn);
   return bar;
 }
 // reflect hints/edit state; show the edit-only buttons only while editing
