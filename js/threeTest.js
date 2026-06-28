@@ -1995,12 +1995,12 @@ function makeNameSignMesh(name){
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgba(28,30,38,0.9)';
+  ctx.fillStyle = 'rgba(240,236,226,0.95)';
   ctx.fillRect(4, 4, cw - 8, ch - 8);
   ctx.strokeStyle = '#caa46a';
   ctx.lineWidth = 4;
   ctx.strokeRect(7, 7, cw - 14, ch - 14);
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = '#1a1a1a';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   let font = 56;
@@ -2020,7 +2020,9 @@ function makeMoveDecorationMesh(move, sizeM){
   const ctx = canvas.getContext('2d');
   const draw = (content) => {
     ctx.clearRect(0, 0, px, px);
-    ctx.fillStyle = 'rgba(24,26,32,0.92)';
+    // image hints keep the dark frame; word/notation hints use an off-white
+    // placard with black lettering to match the door name signs.
+    ctx.fillStyle = (content && content.image) ? 'rgba(24,26,32,0.92)' : 'rgba(240,236,226,0.95)';
     ctx.fillRect(0, 0, px, px);
     ctx.strokeStyle = '#caa46a';
     ctx.lineWidth = 10;
@@ -2031,7 +2033,7 @@ function makeMoveDecorationMesh(move, sizeM){
       const w = im.width * sc, h = im.height * sc;
       ctx.drawImage(im, (px - w) / 2, (px - h) / 2, w, h);
     } else {
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = '#1a1a1a';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const t = (content && content.text) || move.san;
