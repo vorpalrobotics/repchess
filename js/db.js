@@ -301,6 +301,19 @@ async function clearAssets(){
   });
 }
 
+/* wipes just the mnemonics store -- used by the "import mnemonics (replace)"
+   flow, which swaps the whole mnemonic set (words + images + notes are handled
+   separately) without touching games/lines/assets. */
+async function clearMnemonics(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('mnemonics','readwrite');
+    txn.objectStore('mnemonics').clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();

@@ -2266,6 +2266,66 @@ async function importAssetBundle(data){
   log(`replaced assets — imported ${data.assets.length} asset(s)`);
 }
 
+/* ---------- mnemonics-only export / import ----------
+   A standalone mnemonics bundle: every per-square word, description and image,
+   plus the free-text mnemonics notes. Distinct from a full backup (which also
+   carries `lines`/`games`) and from an asset bundle (`repchessAssets`); tagged
+   with `repchessMnemonics` so the unified import handler can recognise it. */
+async function exportMnemonics(){
+  const mnemonicsBySquare = await getAllMnemonics();
+  const data = {
+    repchessMnemonics: true,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
+      const out = {square: entry.square};
+      for(const p of MNEM_PIECES){
+        out[p] = entry[p] || '';
+        out[p+'Desc'] = entry[p+'Desc'] || '';
+        out[p+'Img'] = entry[p+'Img'] || '';
+      }
+      return out;
+    }),
+    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY)
+  };
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `repchess-mnemonics-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log(`exported ${data.mnemonics.length} mnemonic square(s)`);
+}
+
+/* recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
+   file that carries a `mnemonics` array but none of the other top-level stores
+   a full backup / asset bundle would have. */
+const isMnemonicsBundle = d =>
+  !!d && (d.repchessMnemonics != null ||
+    (Array.isArray(d.mnemonics) && !Array.isArray(d.lines) &&
+     !Array.isArray(d.assets) && d.repchessAssets == null));
+
+/* mnemonics-only REPLACE: wipes the mnemonics store (and notes) and writes the
+   bundle's entries, leaving games/lines/assets untouched. No merge. Destructive;
+   caller confirms first. */
+async function importMnemonicsBundle(data){
+  if(!Array.isArray(data.mnemonics)) throw new Error('not a valid mnemonics export file');
+  await clearMnemonics();
+  for(const entry of data.mnemonics){
+    const patch = {};
+    for(const p of MNEM_PIECES){
+      patch[p] = entry[p] || '';
+      patch[p+'Desc'] = entry[p+'Desc'] || '';
+      patch[p+'Img'] = entry[p+'Img'] || '';
+    }
+    await setMnemonicSquare(entry.square, patch);
+  }
+  if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+  MNEMONICS = await getAllMnemonics();
+  log(`replaced mnemonics — imported ${data.mnemonics.length} square(s)`);
+}
+
 $('menuExport').onclick = ()=>{
   $('menuList').style.display='none';
   exportBackup();
@@ -2304,6 +2364,32 @@ $('backupImport').addEventListener('change', async e=>{
     }catch(err){
       console.error('[import] asset import failed',err);
       log('asset import failed: '+err.message,true);
+    }
+    return;
+  }
+
+  // A mnemonics-only export gets a mnemonics-scoped replace flow.
+  if(isMnemonicsBundle(data)){
+    const n = Array.isArray(data.mnemonics) ? data.mnemonics.length : 0;
+    if(!confirm(
+      'IMPORT MNEMONICS (REPLACE)?\n\n' +
+      `This file contains ${n} mnemonic square(s).\n\n` +
+      'Importing mnemonics is a REPLACE operation: every mnemonic currently ' +
+      'stored in this browser (words, descriptions, images, and notes) will be ' +
+      'DELETED and replaced with the contents of this file. (Merge imports are ' +
+      'not supported.) Your games, opening systems, and assets are not affected.\n\n' +
+      'This cannot be undone. Continue?'
+    )) return;
+    try{
+      await importMnemonicsBundle(data);
+      // if the manage-mnemonics screen is open, refresh it in place
+      if($('mnemonicsOverlay').style.display === 'flex'){
+        await renderMnemonicsGrid();
+        $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
+      }
+    }catch(err){
+      console.error('[import] mnemonics import failed',err);
+      log('mnemonics import failed: '+err.message,true);
     }
     return;
   }
@@ -2713,6 +2799,10 @@ $('menuMnemonics').onclick = async ()=>{
   }
 };
 $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+$('mnemonicsExportBtn').onclick = ()=> exportMnemonics();
+// reuse the shared import file picker; its change handler auto-detects a
+// mnemonics bundle and runs the mnemonics-only replace flow.
+$('mnemonicsImportBtn').onclick = ()=> $('backupImport').click();
 $('mnemonicsCoverageSelect').onchange = async (e)=>{
   const id = e.target.value;
   if(!id){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
