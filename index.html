@@ -322,6 +322,23 @@
   #quizSummary{display:none}
   #quizSummary .quiz-score{font-size:1.6rem;font-weight:700;margin:.6rem 0}
   #quizEmpty{display:none;color:#666}
+  #quizSetup{display:none}
+  #quizPlay{display:none}
+  .quiz-setup-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:.6rem 0}
+  .quiz-setup-row label{font-weight:600}
+  #quizNumQuestions{font-size:1rem;width:5em;text-align:center;padding:.25rem .4rem}
+  #quizScopeSelect{font-size:1rem;padding:.25rem .4rem}
+  #quizCustomWrap{display:none;margin:.4rem 0 .8rem}
+  .quiz-custom-hint{font-size:.8rem;color:#666;margin-bottom:.4rem}
+  #quizCustomGrid{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);
+    width:min(70vw,18em);aspect-ratio:1/1;margin:0 auto;border:2px solid #333}
+  .quiz-cell{display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.6rem;color:#0007;user-select:none}
+  .quiz-cell.light{background:#f0d9b5}
+  .quiz-cell.dark{background:#b58863}
+  .quiz-cell.sel{outline:3px solid #1565c0;outline-offset:-3px;background:#90caf9;color:#0a3d62;font-weight:700}
+  .quiz-custom-actions{margin-top:.5rem;display:flex;gap:.6rem;justify-content:center}
+  #quizSetupError{color:#c62828;font-size:.85rem;min-height:1.1em;margin:.3rem 0}
+  #quizStartBtn{font-size:1.1rem;font-weight:700;padding:.4rem 1.6rem}
   .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 4px}
   .mnem-square.light{background:#f0d9b5}
   .mnem-square.dark{background:#b58863}
@@ -765,6 +782,50 @@
     </div>
 
     <div id="quizEmpty">Add some mnemonics first (Manage Mnemonics) before quizzing.</div>
+
+    <div id="quizSetup">
+      <div class="quiz-setup-row">
+        <label for="quizNumQuestions">Number of questions</label>
+        <input type="number" id="quizNumQuestions" min="1" max="999" value="10">
+      </div>
+      <div class="quiz-setup-row">
+        <label for="quizScopeSelect">Squares to quiz</label>
+        <select id="quizScopeSelect">
+          <option value="all">All squares</option>
+          <optgroup label="Files">
+            <option value="file:a">a file</option>
+            <option value="file:b">b file</option>
+            <option value="file:c">c file</option>
+            <option value="file:d">d file</option>
+            <option value="file:e">e file</option>
+            <option value="file:f">f file</option>
+            <option value="file:g">g file</option>
+            <option value="file:h">h file</option>
+          </optgroup>
+          <optgroup label="Ranks">
+            <option value="rank:1">rank 1</option>
+            <option value="rank:2">rank 2</option>
+            <option value="rank:3">rank 3</option>
+            <option value="rank:4">rank 4</option>
+            <option value="rank:5">rank 5</option>
+            <option value="rank:6">rank 6</option>
+            <option value="rank:7">rank 7</option>
+            <option value="rank:8">rank 8</option>
+          </optgroup>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+      <div id="quizCustomWrap">
+        <div class="quiz-custom-hint">Click squares to include them. <span id="quizCustomCount"></span></div>
+        <div id="quizCustomGrid"></div>
+        <div class="quiz-custom-actions">
+          <button id="quizCustomAll" type="button">Select all</button>
+          <button id="quizCustomNone" type="button">Clear</button>
+        </div>
+      </div>
+      <div id="quizSetupError"></div>
+      <button id="quizStartBtn">START</button>
+    </div>
 
     <div id="quizPlay">
       <div id="quizClock">0:00</div>

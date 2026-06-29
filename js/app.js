@@ -2896,9 +2896,11 @@ $('mnemonicsEditorSaveBtn').onclick = async ()=>{
 };
 
 /* ---------- quiz mnemonics ---------- */
-const QUIZ_TRIALS = 10;
+const QUIZ_DEFAULT_TRIALS = 10;
 const MNEM_PIECE_LETTER = {pawn:'',knight:'n',bishop:'b',rook:'r',queen:'q',king:'k'};
-let QUIZ = null; // {pool, results, idx, mode, item, expected, startTime, timerInterval}
+let QUIZ = null; // {pool, results, idx, trials, mode, item, expected, startTime, timerInterval}
+let QUIZ_FULL_POOL = [];          // every mnemonic entry, rebuilt when the setup screen opens
+let QUIZ_CUSTOM = new Set();      // squares picked in the custom 8x8 grid
 
 function buildMnemonicsPool(mnemMap){
   const pool = [];
@@ -2908,6 +2910,17 @@ function buildMnemonicsPool(mnemMap){
       if(entry[p]) pool.push({square:sq, piece:p, word:entry[p]});
     }
   }
+  return pool;
+}
+
+/* keep only pool entries whose square matches the chosen scope:
+   "all" | "file:<a-h>" | "rank:<1-8>" | "custom" (the picked-square set). */
+function filterPoolByScope(pool, scope){
+  if(scope === 'all') return pool;
+  if(scope === 'custom') return pool.filter(it => QUIZ_CUSTOM.has(it.square));
+  const [kind, val] = scope.split(':');
+  if(kind === 'file') return pool.filter(it => it.square[0] === val);
+  if(kind === 'rank') return pool.filter(it => it.square[1] === val);
   return pool;
 }
 
@@ -2924,7 +2937,7 @@ function quizLoadTrial(){
   $('quizInput').value = '';
   $('quizFeedback').innerHTML = '';
   $('quizPromptArea').classList.remove('quiz-correct','quiz-wrong');
-  $('quizTrialNum').textContent = `Trial ${QUIZ.idx+1} of ${QUIZ_TRIALS}`;
+  $('quizTrialNum').textContent = `Trial ${QUIZ.idx+1} of ${QUIZ.trials}`;
 
   const item = QUIZ.pool[Math.floor(Math.random()*QUIZ.pool.length)];
   const mode = Math.random() < 0.5 ? 'word' : 'square';
@@ -2943,7 +2956,7 @@ function quizLoadTrial(){
 
 function quizAdvance(){
   QUIZ.idx++;
-  if(QUIZ.idx >= QUIZ_TRIALS) quizFinish();
+  if(QUIZ.idx >= QUIZ.trials) quizFinish();
   else quizLoadTrial();
 }
 
@@ -2963,21 +2976,72 @@ function quizFinish(){
   const correct = QUIZ.results.filter(Boolean).length;
   $('quizPlay').style.display = 'none';
   $('quizSummary').style.display = 'block';
-  $('quizScorePct').textContent = `${correct}/${QUIZ_TRIALS} correct (${Math.round(correct/QUIZ_TRIALS*100)}%)`;
+  $('quizScorePct').textContent = `${correct}/${QUIZ.trials} correct (${Math.round(correct/QUIZ.trials*100)}%)`;
   $('quizScoreTime').textContent = `Time: ${quizFormatClock(elapsed)}`;
 }
 
-async function quizStart(){
+/* builds the clickable 8x8 custom-square grid once (rank 8 at top, like a board
+   from White's view); cells toggle membership in QUIZ_CUSTOM. */
+function quizBuildCustomGrid(){
+  const grid = $('quizCustomGrid');
+  grid.innerHTML = '';
+  for(let row=0; row<8; row++){
+    for(let col=0; col<8; col++){
+      const sq = squareName(col, row);   // row 0 = rank 8
+      const cell = document.createElement('div');
+      cell.className = 'quiz-cell ' + ((row+col)%2===0 ? 'light' : 'dark');
+      cell.textContent = sq;
+      cell.dataset.sq = sq;
+      if(QUIZ_CUSTOM.has(sq)) cell.classList.add('sel');
+      cell.onclick = ()=>{
+        if(QUIZ_CUSTOM.has(sq)){ QUIZ_CUSTOM.delete(sq); cell.classList.remove('sel'); }
+        else { QUIZ_CUSTOM.add(sq); cell.classList.add('sel'); }
+        quizUpdateCustomCount();
+      };
+      grid.appendChild(cell);
+    }
+  }
+  quizUpdateCustomCount();
+}
+function quizUpdateCustomCount(){
+  $('quizCustomCount').textContent = QUIZ_CUSTOM.size ? `${QUIZ_CUSTOM.size} selected` : '';
+}
+
+/* show the pre-quiz setup screen (question count + square scope). */
+async function quizOpenSetup(){
   $('quizSummary').style.display = 'none';
-  const pool = buildMnemonicsPool(await getAllMnemonics());
-  if(pool.length === 0){
+  $('quizPlay').style.display = 'none';
+  QUIZ_FULL_POOL = buildMnemonicsPool(await getAllMnemonics());
+  if(QUIZ_FULL_POOL.length === 0){
     $('quizEmpty').style.display = 'block';
-    $('quizPlay').style.display = 'none';
+    $('quizSetup').style.display = 'none';
     return;
   }
   $('quizEmpty').style.display = 'none';
+  $('quizSetupError').textContent = '';
+  const custom = $('quizScopeSelect').value === 'custom';
+  $('quizCustomWrap').style.display = custom ? 'block' : 'none';
+  if(custom) quizBuildCustomGrid();
+  $('quizSetup').style.display = 'block';
+}
+
+/* read the setup choices, filter the pool, and begin the trials. */
+function quizStart(){
+  const scope = $('quizScopeSelect').value;
+  let n = parseInt($('quizNumQuestions').value, 10);
+  if(!Number.isFinite(n) || n < 1){ $('quizSetupError').textContent = 'Enter a question count of 1 or more.'; return; }
+  const pool = filterPoolByScope(QUIZ_FULL_POOL, scope);
+  if(pool.length === 0){
+    $('quizSetupError').textContent = scope === 'custom'
+      ? 'No mnemonics on the selected squares. Pick different squares.'
+      : 'No mnemonics on the selected squares.';
+    return;
+  }
+  $('quizSetupError').textContent = '';
+  $('quizSetup').style.display = 'none';
+  $('quizSummary').style.display = 'none';
   $('quizPlay').style.display = 'block';
-  QUIZ = {pool, results:[], idx:0, startTime: Date.now(), finished:false};
+  QUIZ = {pool, results:[], idx:0, trials:n, startTime: Date.now(), finished:false};
   QUIZ.timerInterval = setInterval(quizTickClock, 200);
   quizTickClock();
   quizLoadTrial();
@@ -2986,14 +3050,25 @@ async function quizStart(){
 $('menuQuiz').onclick = ()=>{
   $('menuList').style.display='none';
   $('quizOverlay').style.display='flex';
-  quizStart();
+  quizOpenSetup();
 };
+$('quizScopeSelect').onchange = ()=>{
+  const custom = $('quizScopeSelect').value === 'custom';
+  $('quizCustomWrap').style.display = custom ? 'block' : 'none';
+  if(custom) quizBuildCustomGrid();
+};
+$('quizCustomAll').onclick = ()=>{
+  for(let row=0; row<8; row++) for(let col=0; col<8; col++) QUIZ_CUSTOM.add(squareName(col,row));
+  quizBuildCustomGrid();
+};
+$('quizCustomNone').onclick = ()=>{ QUIZ_CUSTOM.clear(); quizBuildCustomGrid(); };
+$('quizStartBtn').onclick = ()=> quizStart();
 $('quizCloseBtn').onclick = ()=>{
   if(QUIZ) clearInterval(QUIZ.timerInterval);
   $('quizOverlay').style.display='none';
 };
 $('quizDoneBtn').onclick = ()=>{ $('quizOverlay').style.display='none'; };
-$('quizAgainBtn').onclick = ()=>{ quizStart(); };
+$('quizAgainBtn').onclick = ()=>{ quizOpenSetup(); };
 $('quizGiveUpBtn').onclick = quizGiveUp;
 
 $('quizInput').addEventListener('input', ()=>{
