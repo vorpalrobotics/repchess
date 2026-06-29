@@ -3523,7 +3523,9 @@ function nudgeSelected(key){
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
 
-  if(kind === 'floor'){
+  if(kind === 'floor' || kind === 'moveObject'){
+    // a move-object rests on the floor like a floor prop and nudges the same way
+    // (camera-relative); a future leash will clamp it near its billboard.
     const fwd = cameraForwardVec(), right = cameraRightVec();
     let dx = xform.dx || 0, dz = xform.dz || 0;
     if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
@@ -3589,7 +3591,7 @@ function scaleSelected(factor){
 // billboards face the camera, so neither rotates.
 const ROT_STEP = Math.PI / 12;   // 15 degrees per press
 function rotateSelected(dir){
-  if(!selectedProp || selectedProp.kind !== 'floor') return;
+  if(!selectedProp || (selectedProp.kind !== 'floor' && selectedProp.kind !== 'moveObject')) return;
   const { roomKey, slotId } = selectedProp;
   const asset = slotAssetFor(roomKey, slotId);
   if(!asset || asset.type !== 'extruded') return;
@@ -3614,10 +3616,18 @@ function onCanvasClick(e){
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(scene.children, true);
+  // The selection gear renders on top (depthTest off), so a click anywhere over
+  // it should hit it even when a prop or move billboard sits in front -- scan
+  // all hits and let a gear win over the nearest ordinary target.
+  let gearUd = null, firstUd = null;
   for(const hit of hits){
     const ud = findInteractive(hit.object);
-    if(ud){ handleEditTarget(ud); return; }
+    if(!ud) continue;
+    if(!firstUd) firstUd = ud;
+    if(ud.kind === 'prop-gear' || ud.kind === 'sign-gear'){ gearUd = ud; break; }
   }
+  const ud = gearUd || firstUd;
+  if(ud){ handleEditTarget(ud); return; }
   // clicked nothing interactive (e.g. open floor/sky past everything) --
   // treat it as "click away" and drop the current selection, if any
   if(selectedProp) deselectProp();
