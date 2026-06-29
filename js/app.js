@@ -694,11 +694,16 @@ async function showTranspositionGraph(){
     });
     runs.forEach((run, i) => {
       if(consumed.has(i)) return;      // already inside a two-track box
+      // a run can END on a two-track head (out-degree 2); that head belongs to
+      // the two-track room, so drop it from this run. (Already-boxed = the head.)
+      const trimmed = run.filter(id => !boxOf.has(id));
+      if(trimmed.length < 2) return;   // only a singleton left -> its own unboxed room
       const bid = `run${i}`;
-      boxes.push({ id: bid, label: `linear ×${run.length}`, kind: 'run' });
-      run.forEach(id=>boxOf.set(id, bid));
+      boxes.push({ id: bid, label: `linear ×${trimmed.length}`, kind: 'run' });
+      trimmed.forEach(id=>boxOf.set(id, bid));
     });
-    const twoTrackCollapsed = singleCollapsed - 2 * twoTrackCount;
+    // collapsed = one room per box + one per still-unboxed room
+    const twoTrackCollapsed = boxes.length + (rooms.length - boxOf.size);
 
     $('graphStatus').textContent =
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
