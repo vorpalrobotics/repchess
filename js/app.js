@@ -602,12 +602,25 @@ async function showTranspositionGraph(){
     $('graphStatus').textContent =
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)`;
 
+    // a room's user-assigned name lives on the opponent-move row that leads into
+    // it (room.seq ends in OUR reply, so the name is keyed one ply back);
+    // truncate to 12 chars, which is almost always still unique.
+    const graphNodeName = seq => {
+      const n = (seq && seq.length) ? PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))]?.name : '';
+      if(!n) return '';
+      const t = n.trim();
+      return t.length > 12 ? t.slice(0,12) + '…' : t;
+    };
+
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-      ...rooms.map(r=>({
-        data:{id:r.id, label:r.label, fen:r.fen, seq:r.seq},
-        classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
-      })),
+      ...rooms.map(r=>{
+        const name = graphNodeName(r.seq);
+        return {
+          data:{id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq},
+          classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
+        };
+      }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
       ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label,fen:e.fen,seq:e.seq}}))
     ];
@@ -621,7 +634,7 @@ async function showTranspositionGraph(){
           'shape':'round-rectangle', 'width':'label', 'height':'label', 'padding':'6px',
           'background-color':'#1565c0', 'border-width':0,
           'label':'data(label)', 'color':'#fff', 'font-size':9, 'text-valign':'center',
-          'text-halign':'center'
+          'text-halign':'center', 'text-wrap':'wrap', 'text-justification':'center'
         }},
         { selector:'node.start', style:{
           'shape':'ellipse', 'width':10, 'height':10, 'padding':0, 'background-color':'#555'
