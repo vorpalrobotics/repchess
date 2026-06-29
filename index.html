@@ -339,6 +339,18 @@
   .quiz-custom-actions{margin-top:.5rem;display:flex;gap:.6rem;justify-content:center}
   #quizSetupError{color:#c62828;font-size:.85rem;min-height:1.1em;margin:.3rem 0}
   #quizStartBtn{font-size:1.1rem;font-weight:700;padding:.4rem 1.6rem}
+  #openingQuizOverlay .modal{min-width:min(92vw,26em);text-align:center}
+  #oqSummary{display:none}
+  #oqScoreBar{display:flex;justify-content:center;gap:1.5rem;font-weight:700;margin-bottom:.6rem}
+  #oqScoreBar #oqHits{color:#2e7d32}
+  #oqScoreBar #oqMisses{color:#c62828}
+  #oqBoardWrap{width:min(80vw,22em);margin:0 auto}
+  #oqBoard{width:100%;height:auto;aspect-ratio:1/1}
+  #oqStatus{min-height:1.4em;font-size:1rem;margin-top:.7rem;font-weight:600}
+  #oqStatus.oq-miss{color:#c62828}
+  #oqStatus.oq-hit{color:#2e7d32}
+  #oqScoreDetail{color:#555;margin-bottom:.5rem}
+  .oq-summary-actions{flex-direction:column;gap:.5rem;align-items:stretch}
   .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 4px}
   .mnem-square.light{background:#f0d9b5}
   .mnem-square.dark{background:#b58863}
@@ -844,6 +856,33 @@
       <div class="modal-actions">
         <button id="quizAgainBtn">Quiz Again</button>
         <button id="quizDoneBtn">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- opening quiz modal (play the line from a chosen node) -->
+<div id="openingQuizOverlay" class="overlay">
+  <div class="modal">
+    <div class="quiz-header">
+      <h2>Opening Quiz</h2>
+      <button id="oqCloseBtn">Close</button>
+    </div>
+    <div id="oqPlay">
+      <div id="oqScoreBar">
+        <span id="oqHits">Hits 0</span>
+        <span id="oqMisses">Misses 0</span>
+      </div>
+      <div id="oqBoardWrap"><div id="oqBoard"></div></div>
+      <div id="oqStatus"></div>
+    </div>
+    <div id="oqSummary">
+      <div class="quiz-score" id="oqScorePct"></div>
+      <div id="oqScoreDetail"></div>
+      <div class="modal-actions oq-summary-actions">
+        <button id="oqAgainSameBtn">Test again (same choices)</button>
+        <button id="oqAgainNewBtn">Test with new choices</button>
+        <button id="oqExitBtn">Exit test mode</button>
       </div>
     </div>
   </div>

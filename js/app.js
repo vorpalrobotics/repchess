@@ -1,4 +1,4 @@
-import { Chessboard, COLOR } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
+import { Chessboard, COLOR, INPUT_EVENT_TYPE } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
@@ -1136,6 +1136,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
@@ -1338,6 +1339,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(childrenSeq) showNodeStats(games,childrenSeq);
     };
+    rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openOpeningQuiz(lineSeq);
+    };
     rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -1458,6 +1464,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
@@ -1648,6 +1655,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(childrenSeq) showNodeStats(games,childrenSeq);
+  };
+  rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openOpeningQuiz(lineSeq);
   };
   rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
     e.stopPropagation();
@@ -3087,6 +3099,165 @@ $('quizInput').addEventListener('input', ()=>{
     $('quizPromptArea').classList.add('quiz-wrong');
   }
 });
+
+/* ---------- opening quiz ----------
+   Play a line forward from a chosen node: the user makes OUR standard response,
+   then one of the opponent's replies is picked at random, repeating until the
+   tree runs out (no stored response, or no opponent continuations). Each legal
+   wrong move scores a miss; each correct move scores a hit. Final score is
+   hits/(hits+misses). The opponent's random choices can be replayed verbatim
+   ("same choices") or re-rolled ("new choices").
+
+   The starting seq always ends in the OPPONENT's move (our turn to reply) — the
+   same `lineSeq` convention every tree row uses. */
+let OQ = null;     // {line, color, seq, expected, hits, misses, oppChoices, replay, replayIdx, busy, finished}
+let oqBoard = null;
+
+function oqVisibleOpps(seq){
+  const {counts} = replies(GAMES || [], seq);
+  const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
+  manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);
+}
+
+function oqEnsureBoard(){
+  if(oqBoard) return;
+  oqBoard = new Chessboard($('oqBoard'), {
+    position: new Chess().fen(),
+    orientation: COLOR.white,
+    style: { pieces: { file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg' } }
+  });
+}
+
+function oqUpdateScore(){
+  $('oqHits').textContent = `Hits ${OQ.hits}`;
+  $('oqMisses').textContent = `Misses ${OQ.misses}`;
+}
+function oqSetStatus(text, cls){
+  const el = $('oqStatus');
+  el.textContent = text;
+  el.className = cls || '';
+}
+
+/* advance OQ.seq to the next node where it is our turn, then arm the board for
+   input. If there's no stored response, the tree has ended → finish. */
+function oqLoadStep(){
+  const expected = PREFS[prefKey(OQ.line.id, OQ.seq)]?.reply;
+  if(!expected){ oqFinish(); return; }
+  OQ.expected = expected;
+  OQ.busy = false;
+  oqBoard.setPosition(fenForSeq(OQ.seq), true);
+  oqSetStatus('Your move');
+}
+
+/* cm-chessboard move-input callback: validate the dragged move against the
+   expected standard response. */
+function oqInputHandler(event){
+  if(event.type === INPUT_EVENT_TYPE.moveInputStarted) return !OQ.busy && !OQ.finished;
+  if(event.type !== INPUT_EVENT_TYPE.validateMoveInput) return true;
+  if(OQ.busy || OQ.finished) return false;
+
+  const fen = fenForSeq(OQ.seq);
+  const chess = new Chess(fen);
+  // auto-queen any pawn reaching the last rank (underpromotion lines are rare)
+  const moving = chess.get(event.squareFrom);
+  const promo = (moving && moving.type === 'p' &&
+                 (event.squareTo[1] === '8' || event.squareTo[1] === '1')) ? 'q' : undefined;
+  const mv = chess.move({ from: event.squareFrom, to: event.squareTo, promotion: promo }, { sloppy:true });
+  if(!mv) return false;   // illegal move — not scored, board snaps back
+
+  const norm = s => s.replace(/[+#]/g,'');
+  if(norm(mv.san) === norm(OQ.expected)){
+    OQ.hits++; oqUpdateScore();
+    OQ.busy = true;
+    oqSetStatus('Correct', 'oq-hit');
+    setTimeout(oqAfterCorrect, 350);   // run after this validate handler returns & the move settles
+    return true;            // let the board show our move
+  }
+  // legal but wrong: score a miss and snap back to try again
+  OQ.misses++; oqUpdateScore();
+  oqSetStatus(`${mv.san} is not the move — try again`, 'oq-miss');
+  return false;
+}
+
+/* after a correct reply: pick the opponent's next move (recorded or random),
+   animate it, then load the following step — or finish if the line ends. */
+function oqAfterCorrect(){
+  const ourSeq = [...OQ.seq, OQ.expected];
+  const opps = oqVisibleOpps(ourSeq);
+  if(opps.length === 0){
+    oqBoard.setPosition(fenForSeq(ourSeq), true);
+    setTimeout(oqFinish, 500);
+    return;
+  }
+  let oppMove;
+  if(OQ.replay && OQ.replayIdx < OQ.oppChoices.length && opps.includes(OQ.oppChoices[OQ.replayIdx])){
+    oppMove = OQ.oppChoices[OQ.replayIdx];
+  } else {
+    oppMove = opps[Math.floor(Math.random()*opps.length)];
+    OQ.oppChoices[OQ.replayIdx] = oppMove;   // (re)record for same-choices replay
+  }
+  OQ.replayIdx++;
+  const nextSeq = [...ourSeq, oppMove];
+  // show our move land, then the opponent's reply, then arm the next step
+  oqBoard.setPosition(fenForSeq(ourSeq), true);
+  setTimeout(()=>{
+    oqBoard.setPosition(fenForSeq(nextSeq), true);
+    OQ.seq = nextSeq;
+    setTimeout(oqLoadStep, 450);
+  }, 450);
+}
+
+function oqFinish(){
+  OQ.finished = true;
+  if(oqBoard) oqBoard.disableMoveInput();
+  const total = OQ.hits + OQ.misses;
+  const pct = total ? Math.round(OQ.hits / total * 100) : 0;
+  $('oqScorePct').textContent = total ? `${pct}%` : 'No moves to test';
+  $('oqScoreDetail').textContent = total ? `${OQ.hits} hit${OQ.hits===1?'':'s'}, ${OQ.misses} miss${OQ.misses===1?'':'es'}` : '';
+  $('oqPlay').style.display = 'none';
+  $('oqSummary').style.display = 'block';
+}
+
+/* (re)start a run from OQ.startSeq. replaySame=true reuses the recorded
+   opponent choices; otherwise they're re-rolled as play proceeds. */
+function oqRun(replaySame){
+  OQ.seq = OQ.startSeq.slice();
+  OQ.hits = 0; OQ.misses = 0;
+  OQ.replay = !!replaySame;
+  OQ.replayIdx = 0;
+  if(!replaySame) OQ.oppChoices = [];
+  OQ.finished = false; OQ.busy = false;
+  oqUpdateScore();
+  $('oqSummary').style.display = 'none';
+  $('oqPlay').style.display = 'block';
+  oqEnsureBoard();
+  const col = OQ.color === 'black' ? COLOR.black : COLOR.white;
+  oqBoard.setOrientation(col);
+  oqBoard.enableMoveInput(oqInputHandler, col);
+  oqLoadStep();
+}
+
+function openOpeningQuiz(startSeq){
+  if(!CURRENT_LINE) return;
+  if(!PREFS[prefKey(CURRENT_LINE.id, startSeq)]?.reply){
+    alert('Set a standard response on this move first — there is nothing to quiz yet.');
+    return;
+  }
+  OQ = { line: CURRENT_LINE, color: CURRENT_LINE.color, startSeq: startSeq.slice(),
+         oppChoices: [], hits:0, misses:0 };
+  $('openingQuizOverlay').style.display = 'flex';
+  oqRun(false);
+}
+
+$('oqCloseBtn').onclick = ()=>{
+  if(oqBoard) oqBoard.disableMoveInput();
+  if(OQ) OQ.finished = true;
+  $('openingQuizOverlay').style.display='none';
+};
+$('oqExitBtn').onclick = ()=>{ $('openingQuizOverlay').style.display='none'; };
+$('oqAgainSameBtn').onclick = ()=> oqRun(true);
+$('oqAgainNewBtn').onclick  = ()=> oqRun(false);
 
 /* ---------- analysis board ---------- */
 const board = new Chessboard($('board'), {
