@@ -415,15 +415,19 @@
   <div style="position:relative">
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
-      <button id="menuDownload">Import Games</button>
+      <button class="menu-parent" data-sub="subImport">Import</button>
+      <div id="subImport" class="menu-sub">
+        <button id="menuImport" title="Import a backup, mnemonics, or assets JSON file (auto-detected)">Backup / Data File…</button>
+        <button id="menuDownload" title="Download games from Lichess or Chess.com">Games</button>
+        <button id="menuImportLine" title="Paste variations to import">Variations</button>
+        <button id="menuImportMoveImages" title="Bulk-import move-image PNGs named like Nf6.png">Move Images</button>
+      </div>
       <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
       <div id="subMnemonics" class="menu-sub">
         <button id="menuMnemonics">Manage</button>
         <button id="menuQuiz">Test</button>
       </div>
-      <button id="menuImportMoveImages">Import Move Images</button>
       <hr class="row-menu-sep">
-      <button id="menuImportLine">Import Variations</button>
       <button id="menuSearchLine">Search for a Variation</button>
       <hr class="row-menu-sep">
       <button class="menu-parent" data-sub="subExport">Export</button>
@@ -432,7 +436,6 @@
         <button id="menuExportMnemonics">Mnemonics</button>
         <button id="menuExportAssets">Assets</button>
       </div>
-      <button id="menuImport">Import</button>
       <hr class="row-menu-sep">
       <button id="menuThreeTest">VR World Walkthrough</button>
       <button id="menuAssets">Manage Assets</button>
