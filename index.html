@@ -353,8 +353,11 @@
   #oqScoreBar{display:flex;justify-content:center;gap:1.5rem;font-weight:700;margin-bottom:.6rem}
   #oqScoreBar #oqHits{color:#2e7d32}
   #oqScoreBar #oqMisses{color:#c62828}
-  #oqBoardWrap{width:min(80vw,22em);margin:0 auto}
+  #oqBoardWrap{width:min(80vw,22em);margin:0 auto;position:relative}
   #oqBoard{width:100%;height:auto;aspect-ratio:1/1}
+  .oq-hl{position:absolute;width:12.5%;height:12.5%;box-sizing:border-box;pointer-events:none;z-index:5;border-radius:2px}
+  .oq-hl-from{border:3px solid #888}        /* move FROM square — gray */
+  .oq-hl-to{border:3px solid #6b8e23}       /* move TO square — olive green */
   #oqStatus{min-height:1.4em;font-size:1rem;margin-top:.7rem;font-weight:600}
   #oqStatus.oq-miss{color:#c62828}
   #oqStatus.oq-hit{color:#2e7d32}

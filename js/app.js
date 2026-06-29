@@ -3134,8 +3134,45 @@ function oqEnsureBoard(){
   oqBoard = new Chessboard($('oqBoard'), {
     position: new Chess().fen(),
     orientation: COLOR.white,
+    animationDuration: 375,   // ~25% slower than the 300ms default
     style: { pieces: { file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg' } }
   });
+}
+
+/* ---- square-highlight overlay ----
+   borderType is 'none', so the 8x8 grid fills the board edge-to-edge and a
+   square maps to a simple 12.5% cell. We overlay our own outline divs (rather
+   than the marker sprite, whose colors are baked in) so FROM/TO can be tinted
+   exactly: gray FROM, olive-green TO, for both the opponent's move and ours. */
+function oqSquarePct(sq){
+  const file = sq.charCodeAt(0) - 97;     // a..h -> 0..7
+  const rank = +sq[1];                    // 1..8
+  const col = OQ.color === 'black' ? 7 - file : file;
+  const row = OQ.color === 'black' ? rank - 1 : 8 - rank;
+  return { left: col * 12.5, top: row * 12.5 };
+}
+function oqClearHighlights(){
+  $('oqBoardWrap').querySelectorAll('.oq-hl').forEach(el => el.remove());
+}
+function oqHighlight(sq, kind){   // kind: 'from' (gray) | 'to' (olive)
+  const {left, top} = oqSquarePct(sq);
+  const div = document.createElement('div');
+  div.className = `oq-hl oq-hl-${kind}`;
+  div.style.left = left + '%';
+  div.style.top = top + '%';
+  $('oqBoardWrap').appendChild(div);
+}
+/* from/to squares of the last move in `seq` (used to mark the opponent's move) */
+function oqMoveSquares(seq){
+  if(!seq.length) return null;
+  const chess = new Chess(fenForSeq(seq.slice(0, -1)));
+  const mv = chess.move(seq.at(-1), { sloppy:true });
+  return mv ? { from: mv.from, to: mv.to } : null;
+}
+function oqMarkOpponentMove(seq){
+  oqClearHighlights();
+  const sq = oqMoveSquares(seq);
+  if(sq){ oqHighlight(sq.from, 'from'); oqHighlight(sq.to, 'to'); }
 }
 
 function oqUpdateScore(){
@@ -3162,7 +3199,18 @@ function oqLoadStep(){
 /* cm-chessboard move-input callback: validate the dragged move against the
    expected standard response. */
 function oqInputHandler(event){
-  if(event.type === INPUT_EVENT_TYPE.moveInputStarted) return !OQ.busy && !OQ.finished;
+  if(event.type === INPUT_EVENT_TYPE.moveInputStarted){
+    if(OQ.busy || OQ.finished) return false;
+    // only let a piece be picked up if it actually has a legal move; on pickup,
+    // clear the opponent's highlight and mark our FROM square gray.
+    const fromSq = event.squareFrom || event.square;
+    if(!fromSq) return true;                    // unknown pickup square — allow, skip highlight
+    const legal = new Chess(fenForSeq(OQ.seq)).moves({ square: fromSq, verbose:true });
+    if(!legal.length) return false;            // can't move this piece → no pickup, no highlight
+    oqClearHighlights();
+    oqHighlight(fromSq, 'from');
+    return true;
+  }
   if(event.type !== INPUT_EVENT_TYPE.validateMoveInput) return true;
   if(OQ.busy || OQ.finished) return false;
 
@@ -3173,17 +3221,18 @@ function oqInputHandler(event){
   const promo = (moving && moving.type === 'p' &&
                  (event.squareTo[1] === '8' || event.squareTo[1] === '1')) ? 'q' : undefined;
   const mv = chess.move({ from: event.squareFrom, to: event.squareTo, promotion: promo }, { sloppy:true });
-  if(!mv) return false;   // illegal move — not scored, board snaps back
+  if(!mv){ oqClearHighlights(); return false; }   // illegal target — not scored, board snaps back
 
   const norm = s => s.replace(/[+#]/g,'');
   if(norm(mv.san) === norm(OQ.expected)){
     OQ.hits++; oqUpdateScore();
     OQ.busy = true;
+    oqHighlight(event.squareTo, 'to');   // mark our TO square olive (FROM already marked)
     oqSetStatus('Correct', 'oq-hit');
-    setTimeout(oqAfterCorrect, 350);   // run after this validate handler returns & the move settles
+    setTimeout(oqAfterCorrect, 200);   // run after this validate handler returns & the move settles
     return true;            // let the board show our move
   }
-  // legal but wrong: score a miss and snap back to try again
+  // legal but wrong: score a miss and snap back; keep the FROM mark for the retry
   OQ.misses++; oqUpdateScore();
   oqSetStatus(`${mv.san} is not the move — try again`, 'oq-miss');
   return false;
@@ -3208,18 +3257,22 @@ function oqAfterCorrect(){
   }
   OQ.replayIdx++;
   const nextSeq = [...ourSeq, oppMove];
-  // show our move land, then the opponent's reply, then arm the next step
+  // reconcile our move (castling/captures), keep our FROM/TO marks showing, then
+  // after a 500ms pause play the opponent's reply (marking its FROM/TO) so it
+  // isn't disconcertingly instant; finally arm the next step.
   oqBoard.setPosition(fenForSeq(ourSeq), true);
   setTimeout(()=>{
+    oqMarkOpponentMove(nextSeq);
     oqBoard.setPosition(fenForSeq(nextSeq), true);
     OQ.seq = nextSeq;
-    setTimeout(oqLoadStep, 450);
-  }, 450);
+    setTimeout(oqLoadStep, 500);
+  }, 500);   // delay before the opponent moves
 }
 
 function oqFinish(){
   OQ.finished = true;
   if(oqBoard) oqBoard.disableMoveInput();
+  oqClearHighlights();
   const total = OQ.hits + OQ.misses;
   const pct = total ? Math.round(OQ.hits / total * 100) : 0;
   $('oqScorePct').textContent = total ? `${pct}%` : 'No moves to test';
@@ -3245,6 +3298,7 @@ function oqRun(replaySame){
   oqBoard.setOrientation(col);
   oqBoard.enableMoveInput(oqInputHandler, col);
   oqLoadStep();
+  oqMarkOpponentMove(OQ.startSeq);   // show the opponent move that led into the start position
 }
 
 function openOpeningQuiz(startSeq){
@@ -3262,6 +3316,7 @@ function openOpeningQuiz(startSeq){
 $('oqCloseBtn').onclick = ()=>{
   if(oqBoard) oqBoard.disableMoveInput();
   if(OQ) OQ.finished = true;
+  oqClearHighlights();
   $('openingQuizOverlay').style.display='none';
 };
 $('oqExitBtn').onclick = ()=>{ $('openingQuizOverlay').style.display='none'; };
