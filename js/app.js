@@ -1413,7 +1413,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
     refreshHidden();
     refreshEvalSpan(evalSpan, currentSaved()?.eval);
-    refreshBranchName(nameSpan, currentSaved()?.name);
+    refreshBranchName(nameSpan, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
 
     /* "more" menu: set standard response / add note / add mnemonic */
@@ -1495,7 +1495,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
         saveField('name', v.roomName);
-        refreshBranchName(nameSpan, v.roomName);
+        refreshBranchName(nameSpan, currentSaved());
       });
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
@@ -1724,7 +1724,7 @@ function renderBlackRoot(parent,games,trigger){
   }
   refreshHidden();
   refreshEvalSpan(evalSpan, currentSaved()?.eval);
-  refreshBranchName(nameSpan, currentSaved()?.name);
+  refreshBranchName(nameSpan, currentSaved());
   refreshBranchStats(statsSpan, games, childrenSeq);
 
   rowMenuBtn.onclick = e => {
@@ -1805,7 +1805,7 @@ function renderBlackRoot(parent,games,trigger){
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
       saveField('name', v.roomName);
-      refreshBranchName(nameSpan, v.roomName);
+      refreshBranchName(nameSpan, currentSaved());
     });
   };
 
@@ -3836,9 +3836,13 @@ function clearLiveEval(evalSpan){
   liveEvalBtn = null;
 }
 
-function refreshBranchName(nameSpan, name){
-  if(!name){ nameSpan.style.display='none'; return; }
-  nameSpan.textContent = name;
+function refreshBranchName(nameSpan, saved){
+  const name = (saved?.name || '').trim();
+  // a node that starts a new castle shows "CastleName: RoomName"
+  const castle = saved?.isCastleRoot ? (saved.castleName || '').trim() : '';
+  const text = castle ? (name ? `${castle}: ${name}` : castle) : name;
+  if(!text){ nameSpan.style.display='none'; return; }
+  nameSpan.textContent = text;
   nameSpan.style.display='';
 }
 
