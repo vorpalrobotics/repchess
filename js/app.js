@@ -1131,18 +1131,19 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
-             <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-             <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
+             <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
              <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
-             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
-             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
-             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
-             <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
-             <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
              <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
            </div>
          </div>
@@ -1324,11 +1325,6 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     };
-    rowMenu.querySelector('[data-act="mnemonic"]').onclick = e => {
-      e.stopPropagation();
-      rowMenu.classList.remove('show');
-      openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-    };
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -1459,18 +1455,19 @@ function renderBlackRoot(parent,games,trigger){
        <div class="row-menu-wrap">
          <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
          <div class="row-menu">
-           <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-           <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Line</button>
+           <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
            <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
-           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze all children</button>
-           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
-           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
+           <hr class="row-menu-sep">
+           <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
+           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
-           <button type="button" data-act="mnemonic"><i class="fa-solid fa-brain"></i>Add Mnemonic</button>
+           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+           <hr class="row-menu-sep">
+           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
          </div>
        </div>
      </td>
@@ -1640,11 +1637,6 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
-  };
-  rowMenu.querySelector('[data-act="mnemonic"]').onclick = e => {
-    e.stopPropagation();
-    rowMenu.classList.remove('show');
-    openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
   };
   rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
     e.stopPropagation();
@@ -3619,8 +3611,6 @@ function refreshRowMenuLabels(rowMenu, saved){
   if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
   const noteBtn = rowMenu.querySelector('[data-act="note"]');
   if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
-  const mnemonicBtn = rowMenu.querySelector('[data-act="mnemonic"]');
-  if(mnemonicBtn) mnemonicBtn.lastChild.textContent = saved?.mnemonic ? 'Edit Mnemonic' : 'Add Mnemonic';
 }
 
 /* only overwrite a saved eval if the engine has now searched deeper than before */
