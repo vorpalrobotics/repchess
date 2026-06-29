@@ -125,6 +125,62 @@ const TURN_SPEED = 1.8;   // rad/s
 const START_ROOM = 'mainStreet';
 const START_SPAWN = { x:0, z:18, yaw:0 };
 
+// the opening systems handed in by the app (id/name/streetName/color), used to
+// lay out Main Street and its branching side streets.
+let OPENING_SYSTEMS = [];
+
+/* Rebuild ROOMS.mainStreet from the opening systems: Main Street runs N-S, and
+   each system gets a perpendicular side street branching off it -- white (and
+   anything non-black) to the right/east (+x), black to the left/west (-x), each
+   at its own point as you walk up the street. Each branch gets a green street
+   sign. For now the test palace (the existing 'start' interior) is parked on the
+   first white street so there's something to walk into. */
+function generateMainStreet(systems){
+  const MAIN_W = 8, SIDE_LEN = 32, SIDE_W = 7, SPACING = 16, MARGIN = 10;
+  const list = (systems && systems.length)
+    ? systems
+    : [{ name:'Main', streetName:'Main Street', color:'white' }];
+  const n = list.length;
+  const startZ = -((n - 1) * SPACING) / 2;
+  const depth = (n - 1) * SPACING + 2 * MARGIN + SIDE_W + 8;
+  const width = 2 * (MAIN_W / 2 + SIDE_LEN) + 2 * MARGIN;
+
+  const roads = [{ x: 0, z: 0, sx: MAIN_W, sz: depth }];   // Main Street, full depth
+  const streetSigns = [];
+  let firstWhite = null, firstWhiteZ = 0;
+
+  list.forEach((sys, i) => {
+    const east = sys.color !== 'black';     // white / unspecified branch right (east)
+    const side = east ? 1 : -1;
+    const z = startZ + i * SPACING;
+    roads.push({ x: side * (MAIN_W / 2 + SIDE_LEN / 2), z, sx: SIDE_LEN, sz: SIDE_W });
+    streetSigns.push({
+      streetSign: true,
+      text: sys.streetName || sys.name,
+      cross: 'Main Street',
+      axis: east ? 'east' : 'west',
+      x: side * (MAIN_W / 2 + 1.2),
+      z: z + SIDE_W / 2 + 1.2
+    });
+    if(east && !firstWhite){ firstWhite = sys; firstWhiteZ = z; }
+  });
+
+  const palaceZ = firstWhite ? firstWhiteZ : 0;
+  const buildings = [{
+    target: 'start',
+    sign: firstWhite ? firstWhite.name : 'Test Palace',
+    frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
+    color: 0x6f8fb0,
+    size: { w: 25, d: 10, h: 10 },
+    // sit just north of the side street, door facing south onto it
+    origin: { x: MAIN_W / 2 + SIDE_LEN * 0.5, z: palaceZ - (SIDE_W / 2 + 5 + 1) },
+    doorWall: 'south', doorOffset: 0
+  }];
+
+  ROOMS.mainStreet = { outdoor: true, size: { w: width, d: depth, h: 7 }, exits: [], roads, streetSigns, buildings };
+  START_SPAWN.x = 0; START_SPAWN.z = depth / 2 - 4; START_SPAWN.yaw = 0;   // spawn at the south end, facing up the street
+}
+
 let renderer=null, scene=null, camera=null, clock=null;
 let container=null, animHandle=null, resizeObs=null;
 let keys = {};
@@ -2465,6 +2521,63 @@ function buildGroundSign(text, asset){
   return group;
 }
 
+// One green street-name blade: a thin green slab running along its local x with
+// white-bordered white text on both faces. Returned oriented length-along-x,
+// readable faces toward ±z; rotate the group to aim it down another street.
+function makeStreetBlade(text){
+  const L = 3.4, H = 0.55, T = 0.06;
+  const blade = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(L, H, T),
+    new THREE.MeshStandardMaterial({ color: 0x1b6b2e, roughness: 0.6 }));
+  blade.add(body);
+  // text + border drawn transparent so the green body shows through
+  const cw = 512, ch = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 6;
+  ctx.strokeRect(6, 6, cw - 12, ch - 12);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  let font = 58;
+  ctx.font = `bold ${font}px sans-serif`;
+  while(font > 18 && ctx.measureText(text).width > cw - 48){ font -= 2; ctx.font = `bold ${font}px sans-serif`; }
+  ctx.fillText(text, cw / 2, ch / 2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  for(const sign of [1, -1]){
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.94, H * 0.82),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+    face.position.z = sign * (T / 2 + 0.006);
+    if(sign < 0) face.rotation.y = Math.PI;
+    blade.add(face);
+  }
+  return blade;
+}
+
+// A typical street sign: one gray post with two perpendicular green blades near
+// the top -- the side-street name (running along the side street) and the cross
+// street ("Main Street", running along Main Street) at 90 degrees.
+function buildStreetNameSign(s){
+  const group = new THREE.Group();
+  const postH = 3.0;
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, postH, 10),
+    new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.4, roughness: 0.5 }));
+  post.position.y = postH / 2;
+  group.add(post);
+
+  const nameBlade = makeStreetBlade(s.text);          // runs along x (the side street)
+  nameBlade.position.y = postH - 0.3;
+  group.add(nameBlade);
+
+  const crossBlade = makeStreetBlade(s.cross || 'Main Street');
+  crossBlade.rotation.y = Math.PI / 2;                 // runs along z (Main Street)
+  crossBlade.position.y = postH - 0.85;
+  group.add(crossBlade);
+  return group;
+}
+
 // A 'stair'-type exit gets a real protruding corridor instead of an ordinary
 // doorway gap: the room's geometry grows a DOOR_W-wide hallway out through
 // the wall, with stairs climbing from the room's own floor (0) up to its
@@ -2734,6 +2847,14 @@ function buildRoom(roomKey){
     // sit on the street without a brick box hemming them in. Movement is still
     // bounded by clampToRoom (an invisible limit at the room's edges).
     (room.streetSigns || []).forEach((s, i) => {
+      // Generated branch-street signs: a real green street sign on a post with
+      // the cross street at 90 degrees. Not skinnable/movable (auto-laid-out).
+      if(s.streetSign){
+        const sign = buildStreetNameSign(s);
+        sign.position.set(s.x, 0, s.z);
+        scene.add(sign);
+        return;
+      }
       // Standalone street-name signs (not tied to any building) share the same
       // movable/skinnable 'sign' machinery as building lawn signs -- they just
       // need their own id namespace so they never collide with a buildingKey.
@@ -4205,6 +4326,8 @@ function onKeyUp(e){ keys[e.key] = false; }
 export async function openThreeTest(containerEl, opts){
   container = containerEl;
   threeOpts = opts || {};
+  OPENING_SYSTEMS = threeOpts.systems || [];
+  generateMainStreet(OPENING_SYSTEMS);   // lay out Main Street + one side street per opening system
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
 

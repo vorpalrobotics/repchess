@@ -804,6 +804,7 @@ function openFieldModal(field, currentValue, onSave, validate){
     field==='note' ? (has ? 'Edit Note' : 'Add Note') :
     field==='mnemonic' ? (has ? 'Edit Mnemonic' : 'Add Mnemonic') :
     field==='lineName' ? 'Rename Opening System' :
+    field==='streetName' ? 'Set Street Name' :
     field==='branchName' ? (has ? 'Edit Branch Name' : 'Add Branch Name') :
     field==='addMove' ? 'Add Opponent Response' :
     (has ? 'Edit Standard Response' : 'Set Standard Response');
@@ -1772,11 +1773,20 @@ async function renderHome(){
 }
 
 /* ---------- line screen: tree + engine for one line ---------- */
+/* the street name for an opening's 3D world; falls back to the opening name */
+function streetNameForLine(line){
+  return (line && line.streetName && line.streetName.trim()) || (line && line.name) || '';
+}
+function refreshLineStreetName(){
+  $('lineStreetName').textContent = CURRENT_LINE ? streetNameForLine(CURRENT_LINE) : '';
+}
+
 async function openLine(line){
   CURRENT_LINE = line;
   $('homeScreen').style.display='none';
   $('lineScreen').style.display='';
   $('lineTitle').textContent = `${line.name} (${line.color})`;
+  refreshLineStreetName();
 
   clr();
   clearFocus();
@@ -1846,6 +1856,14 @@ function reapplyFocus(key, seq){
 }
 
 $('backBtn').onclick = renderHome;
+$('lineStreetEditBtn').onclick = () => {
+  if(!CURRENT_LINE) return;
+  openFieldModal('streetName', CURRENT_LINE.streetName || '', async v=>{
+    await updateLine(CURRENT_LINE.id, {streetName:v});
+    CURRENT_LINE.streetName = v;
+    refreshLineStreetName();
+  });
+};
 
 /* ---------- import variations: bulk-set standard responses from pasted variations ----------
    Parses a full variation of algebraic notation (move numbers, "...", comments,
@@ -2209,7 +2227,7 @@ async function exportBackup(){
     exportedAt: new Date().toISOString(),
     games,
     lines: await Promise.all(lines.map(async line=>({
-      name: line.name, color: line.color, openingMoves: line.openingMoves,
+      name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
@@ -2257,6 +2275,7 @@ async function importBackup(data){
 
   for(const lineData of data.lines){
     const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
+    if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
@@ -2477,10 +2496,15 @@ function openThreeTestAssets(){
   $('assetsOverlay').style.display='flex';
   openAssetManager($('assetsBodyWrap'));
 }
-$('menuThreeTest').onclick = ()=>{
+$('menuThreeTest').onclick = async ()=>{
   $('menuList').style.display='none';
   $('threeTestOverlay').style.display='flex';
+  // feed the walker the opening systems so it can lay out one street per system
+  // (white branches right off Main Street, black branches left)
+  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
   openThreeTest($('threeTestCanvasWrap'), {
+    systems,
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });

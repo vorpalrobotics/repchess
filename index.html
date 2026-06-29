@@ -116,6 +116,8 @@
   .line-opening{color:#666;font-size:.85em;font-family:'Courier New',monospace}
 
   .line-header{display:flex;align-items:center;gap:.8rem;margin-bottom:.6rem}
+  .line-street{font-size:.85rem;color:#2e7d32;font-weight:600}
+  #lineStreetEditBtn{font-size:.8rem;color:#666}
   #menuBtn{font-size:1.4em;border:none;background:none;padding:.1em .4em}
 
   #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
@@ -462,6 +464,8 @@
   <div class="line-header">
     <button id="backBtn" title="Back to opening systems">&larr; Opening Systems</button>
     <h2 id="lineTitle"></h2>
+    <span id="lineStreetName" class="line-street" title="Street name used in the 3D world"></span>
+    <button id="lineStreetEditBtn" class="iconbtn" title="Set the street name for this opening"><i class="fa-solid fa-pen"></i></button>
   </div>
 
   <div class="main-layout">
