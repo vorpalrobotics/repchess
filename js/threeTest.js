@@ -962,6 +962,32 @@ function buildOutdoorGround(room){
   return group;
 }
 
+// Fluffy clouds drifting over an outdoor scene: each cloud is a cluster of
+// flattened white spheres, scattered high across the room. Purely decorative
+// (no collision); count scales with the street's footprint.
+function buildClouds(room){
+  const group = new THREE.Group();
+  const cloudMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 1, metalness: 0, emissive: 0x223044, emissiveIntensity: 0.18
+  });
+  const { w, d } = room.size;
+  const n = Math.max(6, Math.round((w * d) / 800));
+  for(let i = 0; i < n; i++){
+    const cloud = new THREE.Group();
+    const puffs = 3 + Math.floor(Math.random() * 4);
+    for(let p = 0; p < puffs; p++){
+      const r = 1.6 + Math.random() * 2.4;
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), cloudMat);
+      puff.position.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 1.4, (Math.random() - 0.5) * 3.5);
+      puff.scale.y = 0.6;
+      cloud.add(puff);
+    }
+    cloud.position.set((Math.random() - 0.5) * w, 13 + Math.random() * 7, (Math.random() - 0.5) * d);
+    group.add(cloud);
+  }
+  return group;
+}
+
 function makeTable(){
   const group = new THREE.Group();
   const topMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
@@ -2733,6 +2759,7 @@ function buildRoom(roomKey){
   const { w, d, h } = room.size;
   if(room.outdoor){
     scene.add(buildOutdoorGround(room));
+    scene.add(buildClouds(room));
   } else {
     let floorMat;
     const floorAsset = floorAssetFor(roomKey);
