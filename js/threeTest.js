@@ -580,6 +580,7 @@ function roomSlots(room, roomKey){
     ...(carMode ? [] : lowWallSlots(room)),
     ...ceilingSlots(room),
     ...mnemonicSlots(roomKey),
+    ...moveObjectSlots(roomKey),
     ...(room.slots || [])
   ];
 }
@@ -1683,6 +1684,17 @@ function buildSlots(room, roomKey, slots){
       if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
       continue;
     }
+    if(slot.kind === 'moveObject'){
+      // the object pegged to a move-pair: its chosen prop if filled, else a
+      // ghostly numbered placeholder (a to-do cue, hidden during self-test).
+      const asset = slotAssetFor(roomKey, slot.id);
+      if(asset){
+        scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
+      } else if(hintsOn){
+        scene.add(buildMoveObjectPlaceholder(slot));
+      }
+      continue;
+    }
     const asset = slotAssetFor(roomKey, slot.id);
     if(asset){
       scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
@@ -1690,6 +1702,38 @@ function buildSlots(room, roomKey, slots){
       scene.add(buildSlotMarker(room, slot));
     }
   }
+}
+
+// ghostly numbered placeholder sprite (L1/R2/...) for an unfilled move-object
+// slot. Render-only for now (non-raycastable) -- Phase 3 makes it clickable.
+function buildMoveObjectPlaceholder(slot){
+  const px = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = px; canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, px, px);
+  ctx.beginPath();
+  ctx.arc(px / 2, px / 2, px / 2 - 14, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(120,140,170,0.32)';
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.setLineDash([18, 12]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 104px sans-serif';
+  ctx.fillText(slot.tag, px / 2, px / 2 + 6);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(0.9, 0.9, 1);
+  sprite.position.set(slot.x, slot.y, slot.z);
+  sprite.raycast = () => {};   // render-only until Phase 3 wires the picker
+  sprite.userData = { kind: 'moveObjectPlaceholder', slotId: slot.id };
+  return sprite;
 }
 
 function wallSpan(size, wall){
@@ -1898,8 +1942,41 @@ function mnemOpponentMove(roomKey){
 }
 
 // layout tuning for multi-pair rooms (Phase 1): billboards stride down the
-// left/right walls at eye height, order 1 nearest the (south) entrance.
-const MNEM_WALL_INSET = 1.5, MNEM_WALL_STRIDE = 3.0, MNEM_EYE_Y = 1.6;
+// left/right walls at eye height, order 1 nearest the (south) entrance. The
+// paired object sits on the floor (MNEM_OBJ_Y) directly below its billboard.
+const MNEM_WALL_INSET = 1.5, MNEM_WALL_STRIDE = 3.0, MNEM_EYE_Y = 1.6, MNEM_OBJ_Y = 0.8;
+
+// shared wall layout for a multi-pair room: one entry per move-pair with its
+// wall position and L#/R# tag, in walk order. Both the billboard slots and the
+// paired object slots are derived from this so they always line up.
+function mnemPairLayout(roomKey){
+  const entry = DEMO_MNEMONICS[roomKey];
+  if(!entry || !entry.pairs) return [];
+  const room = mergedRoom(roomKey);
+  const out = [];
+  for(const side of ['left', 'right']){
+    const wall = side === 'left' ? 'west' : 'east';
+    const { fixed } = wallSpan(room.size, wall);   // x of the wall plane
+    const x = wall === 'west' ? fixed + MNEM_WALL_INSET : fixed - MNEM_WALL_INSET;
+    const sidePairs = entry.pairs.filter(p => (p.side || 'left') === side)
+                                 .sort((a, b) => (a.order || 0) - (b.order || 0));
+    const k = sidePairs.length;
+    sidePairs.forEach((pair, i) => {
+      const z = ((k - 1) / 2 - i) * MNEM_WALL_STRIDE;   // order 1 nearest the +z entrance
+      out.push({ tag: (side === 'left' ? 'L' : 'R') + (i + 1), side, order: i + 1, x, z, pair });
+    });
+  }
+  return out;
+}
+
+// the numbered object slot paired with each move-pair (Phase 2): empty -> a
+// ghostly L#/R# placeholder; filled -> the chosen prop (Phase 3).
+function moveObjectSlots(roomKey){
+  return mnemPairLayout(roomKey).map(L => ({
+    id: `obj-${L.tag}`, kind: 'moveObject', x: L.x, y: MNEM_OBJ_Y, z: L.z,
+    tag: L.tag, side: L.side, order: L.order
+  }));
+}
 
 function mnemonicSlots(roomKey){
   const entry = DEMO_MNEMONICS[roomKey];
@@ -1909,22 +1986,10 @@ function mnemonicSlots(roomKey){
   // the LEFT (west) and RIGHT (east) walls. Slot ids are L1/L2.../R1/R2... so
   // they read as the eventual numbered objects.
   if(entry.pairs){
-    const room = mergedRoom(roomKey);
-    const slots = [];
-    for(const side of ['left', 'right']){
-      const wall = side === 'left' ? 'west' : 'east';
-      const { fixed } = wallSpan(room.size, wall);   // x of the wall plane
-      const x = wall === 'west' ? fixed + MNEM_WALL_INSET : fixed - MNEM_WALL_INSET;
-      const sidePairs = entry.pairs.filter(p => (p.side || 'left') === side)
-                                   .sort((a, b) => (a.order || 0) - (b.order || 0));
-      const k = sidePairs.length;
-      sidePairs.forEach((pair, i) => {
-        const z = ((k - 1) / 2 - i) * MNEM_WALL_STRIDE;   // order 1 nearest the +z entrance
-        const tag = (side === 'left' ? 'L' : 'R') + (i + 1);
-        slots.push({ id: `mnem-${tag}`, kind: 'mnemonic', x, y: MNEM_EYE_Y, z, pair, side, order: i + 1 });
-      });
-    }
-    return slots;
+    return mnemPairLayout(roomKey).map(L => ({
+      id: `mnem-${L.tag}`, kind: 'mnemonic', x: L.x, y: MNEM_EYE_Y, z: L.z,
+      pair: L.pair, side: L.side, order: L.order
+    }));
   }
 
   // single-pair room (existing behavior)
