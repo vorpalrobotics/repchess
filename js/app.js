@@ -986,6 +986,15 @@ $('collapseAllBtn').onclick = () => {
     if(btn.querySelector('i')?.classList.contains('fa-caret-down')) btn.click();
   });
 };
+/* mirror of Collapse All — clicking each collapsed toggle expands it (and, like
+   Collapse All, persists collapsed:false through makeToggle's onclick). Every
+   branch row is rendered eagerly (just hidden when collapsed), so all toggles
+   already exist in the DOM and a single pass expands the whole tree. */
+$('expandAllBtn').onclick = () => {
+  $('tree').querySelectorAll('.toggle').forEach(btn=>{
+    if(btn.querySelector('i')?.classList.contains('fa-caret-right')) btn.click();
+  });
+};
 
 /* ---------- compact mode helpers ----------
    See Documents/CastleBuildingNotes.md's "hallways vs. doors" note: a forced
