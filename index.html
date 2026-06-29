@@ -648,77 +648,16 @@
   <div class="modal attr-modal">
     <h2>Set Attributes</h2>
 
-    <div class="attr-section">
-      <h3><i class="fa-solid fa-arrow-right-to-bracket"></i> Opponent Response <span id="attrOppMoveLabel" class="attr-move-label"></span></h3>
-      <div class="field">
-        <label for="attrClassification">Treat as</label>
-        <select id="attrClassification">
-          <option value="auto">Auto (let program decide)</option>
-          <option value="feature">Room feature (stays in this room)</option>
-          <option value="exit">Exit (opens a new door/staircase/etc.)</option>
-        </select>
-      </div>
-      <div class="field" id="attrExitTypeField">
-        <label for="attrExitType">Exit type</label>
-        <select id="attrExitType">
-          <option value="door">Door</option>
-          <option value="stairsUp">Staircase up</option>
-          <option value="stairsDown">Staircase down</option>
-          <option value="elevator">Elevator</option>
-          <option value="portal">Portal (transposes to another castle)</option>
-        </select>
-      </div>
-      <div class="field checkbox-field">
-        <label><input type="checkbox" id="attrBlunder"> Mark as blunder / trap trigger</label>
-      </div>
-      <div class="field asset-field">
-        <span class="asset-field-label">Feature / exit image</span>
-        <div class="asset-picker">
-          <img id="attrOppAssetThumb" class="asset-thumb" style="display:none">
-          <button type="button" class="asset-browse-btn" data-asset-target="oppAsset">...</button>
-          <span class="asset-hint">asset catalog coming soon</span>
-        </div>
-      </div>
+    <div class="field">
+      <label for="attrRoomName">Room name</label>
+      <input type="text" id="attrRoomName" placeholder="e.g. Foyer, Entrance Hall, Throne Room">
     </div>
-
-    <hr class="attr-divider">
-
-    <div class="attr-section">
-      <h3><i class="fa-solid fa-door-open"></i> Our Reply / Room <span id="attrRoomMoveLabel" class="attr-move-label"></span></h3>
-      <div class="field">
-        <label for="attrRoomName">Room name</label>
-        <input type="text" id="attrRoomName" placeholder="e.g. Throne Room">
-      </div>
-      <div class="field checkbox-field">
-        <label><input type="checkbox" id="attrIsCastleRoot"> This room starts a new Castle</label>
-      </div>
-      <div class="field" id="attrCastleNameField">
-        <label for="attrCastleName">Castle name</label>
-        <input type="text" id="attrCastleName" placeholder="e.g. Queen's Gambit Castle">
-      </div>
-      <div class="field asset-field">
-        <span class="asset-field-label">Wall texture</span>
-        <div class="asset-picker">
-          <img id="attrWallThumb" class="asset-thumb" style="display:none">
-          <button type="button" class="asset-browse-btn" data-asset-target="wall">...</button>
-          <span class="asset-hint">asset catalog coming soon</span>
-        </div>
-      </div>
-      <div class="field asset-field">
-        <span class="asset-field-label">Floor texture</span>
-        <div class="asset-picker">
-          <img id="attrFloorThumb" class="asset-thumb" style="display:none">
-          <button type="button" class="asset-browse-btn" data-asset-target="floor">...</button>
-          <span class="asset-hint">asset catalog coming soon</span>
-        </div>
-      </div>
-      <div class="field asset-field">
-        <span class="asset-field-label">Room features</span>
-        <div class="asset-picker">
-          <button type="button" id="attrAddFeatureBtn" class="asset-browse-btn">+ Add feature...</button>
-          <span class="asset-hint">asset catalog coming soon</span>
-        </div>
-      </div>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="attrIsCastleRoot"> This node starts a new Castle</label>
+    </div>
+    <div class="field" id="attrCastleNameField">
+      <label for="attrCastleName">Castle name</label>
+      <input type="text" id="attrCastleName" placeholder="e.g. Queen's Gambit Castle">
     </div>
 
     <div class="modal-actions">

@@ -846,19 +846,13 @@ $('fieldModalSaveBtn').onclick = () => {
 };
 
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------
-   Sketch of the room/castle decoration attributes from CastleDataModel.md:
-   the opponent's reply (lineSeq, top half) gets feature-vs-exit
-   classification/exit-type/blunder flag, the room we end up in after our
-   own reply (bottom half) gets a name and optional castle-root naming.
-   Everything is stored as plain pref fields for now (no real asset
-   catalog exists yet) — the "..." asset-browse buttons are placeholders. */
+   Most room decoration now happens in the VR walkthrough, so this modal is
+   down to the two things the castle generator needs: a Room name (relevant for
+   every move — even a castle's first room, which might be "Foyer"), and, only
+   when this node starts a new castle, the Castle name. Stored as plain pref
+   fields (name / isCastleRoot / castleName). */
 let attributesModalSave = null;
 function openAttributesModal(oppMove, saved, onSave){
-  $('attrOppMoveLabel').textContent = oppMove ? `(${oppMove})` : '';
-  $('attrRoomMoveLabel').textContent = saved?.reply ? `(after ...${saved.reply})` : '(no standard response set yet)';
-  $('attrClassification').value = saved?.classification || 'auto';
-  $('attrExitType').value = saved?.exitType || 'door';
-  $('attrBlunder').checked = !!saved?.blunderTrap;
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
@@ -867,24 +861,15 @@ function openAttributesModal(oppMove, saved, onSave){
   $('attributesOverlay').style.display='flex';
 }
 function refreshAttrFieldVisibility(){
-  $('attrExitTypeField').style.display = $('attrClassification').value==='exit' ? '' : 'none';
   $('attrCastleNameField').style.display = $('attrIsCastleRoot').checked ? '' : 'none';
 }
-$('attrClassification').addEventListener('change', refreshAttrFieldVisibility);
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
-document.querySelectorAll('#attributesOverlay .asset-browse-btn[data-asset-target]').forEach(btn=>{
-  btn.onclick = () => log('asset catalog coming soon');
-});
-$('attrAddFeatureBtn').onclick = () => log('asset catalog coming soon');
 $('attributesCancelBtn').onclick = () => {
   $('attributesOverlay').style.display='none';
   attributesModalSave = null;
 };
 $('attributesSaveBtn').onclick = () => {
   const v = {
-    classification: $('attrClassification').value,
-    exitType: $('attrExitType').value,
-    blunderTrap: $('attrBlunder').checked,
     roomName: $('attrRoomName').value.trim(),
     isCastleRoot: $('attrIsCastleRoot').checked,
     castleName: $('attrCastleName').value.trim()
@@ -1389,9 +1374,6 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       openAttributesModal(opp, currentSaved(), v=>{
-        saveField('classification', v.classification);
-        saveField('exitType', v.exitType);
-        saveField('blunderTrap', v.blunderTrap);
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
         saveField('name', v.roomName);
@@ -1702,9 +1684,6 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openAttributesModal(trigger, currentSaved(), v=>{
-      saveField('classification', v.classification);
-      saveField('exitType', v.exitType);
-      saveField('blunderTrap', v.blunderTrap);
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
       saveField('name', v.roomName);
