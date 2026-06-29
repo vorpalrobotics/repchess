@@ -1686,11 +1686,12 @@ function buildSlots(room, roomKey, slots){
     }
     if(slot.kind === 'moveObject'){
       // the object pegged to a move-pair: its chosen prop if filled, else a
-      // ghostly numbered placeholder (a to-do cue, hidden during self-test).
+      // ghostly numbered placeholder. Both stay visible with hints off (the
+      // object is a memory hook, and the empty placeholder stands in for it).
       const asset = slotAssetFor(roomKey, slot.id);
       if(asset){
         scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
-      } else if(hintsOn){
+      } else {
         scene.add(buildMoveObjectPlaceholder(slot));
       }
       continue;
@@ -1705,7 +1706,8 @@ function buildSlots(room, roomKey, slots){
 }
 
 // ghostly numbered placeholder sprite (L1/R2/...) for an unfilled move-object
-// slot. Render-only for now (non-raycastable) -- Phase 3 makes it clickable.
+// slot. Clickable in edit mode (kind 'slot'): opens the asset picker and fills
+// the slot, replacing the placeholder with the chosen prop.
 function buildMoveObjectPlaceholder(slot){
   const px = 256;
   const canvas = document.createElement('canvas');
@@ -1731,8 +1733,9 @@ function buildMoveObjectPlaceholder(slot){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   sprite.scale.set(0.9, 0.9, 1);
   sprite.position.set(slot.x, slot.y, slot.z);
-  sprite.raycast = () => {};   // render-only until Phase 3 wires the picker
-  sprite.userData = { kind: 'moveObjectPlaceholder', slotId: slot.id };
+  // route an edit-mode click through the existing slot picker (onCanvasClick
+  // only fires in edit mode, so this is inert during a normal walk)
+  sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
   return sprite;
 }
 
