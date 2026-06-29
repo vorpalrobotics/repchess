@@ -653,7 +653,6 @@ async function showTranspositionGraph(){
       chainNext.set(e.source, e.target);
       chainTarget.add(e.target);
     }
-    const runOf = new Map();         // room id -> run parent id
     const runs = [];
     for(const head of chainNext.keys()){
       if(chainTarget.has(head)) continue;   // walk only from a chain head
@@ -661,18 +660,50 @@ async function showTranspositionGraph(){
       const seen = new Set();
       let cur = head;
       while(cur !== undefined && !seen.has(cur)){ seen.add(cur); run.push(cur); cur = chainNext.get(cur); }
-      if(run.length >= 2){
-        const pid = `run${runs.length}`;
-        runs.push(run);
-        run.forEach(id=>runOf.set(id, pid));
-      }
+      if(run.length >= 2) runs.push(run);
     }
     const nodesInRuns = runs.reduce((a,r)=>a+r.length, 0);
-    const collapsedRooms = rooms.length - nodesInRuns + runs.length;
+    const singleCollapsed = rooms.length - nodesInRuns + runs.length;
+
+    // ---- two-track rooms ----
+    // A node H with exactly two outgoing edges, each leading to a (non-merge) run
+    // head, can host both runs as the left/right walls of ONE room: H's pair on a
+    // central billboard, then a half-wall splitting the two linear branches. So H
+    // + run A + run B collapse to a single room.
+    const runByHead = new Map();
+    runs.forEach(run => runByHead.set(run[0], run));
+    const outTargets = new Map();
+    edges.forEach(e=>{ if(!outTargets.has(e.source)) outTargets.set(e.source, []); outTargets.get(e.source).push(e.target); });
+    const boxOf = new Map();           // room id -> box id
+    const boxes = [];                  // {id, label, kind}
+    const consumed = new Set();        // run indices folded into a two-track box
+    let twoTrackCount = 0;
+    rooms.forEach(H => {
+      if(outDeg.get(H.id) !== 2) return;
+      const [t1, t2] = outTargets.get(H.id) || [];
+      if(!runByHead.has(t1) || !runByHead.has(t2) || t1 === t2) return;
+      if((indegree.get(t1)||0) !== 1 || (indegree.get(t2)||0) !== 1) return;   // both runs solely owned by H (no transposition head)
+      const runA = runByHead.get(t1), runB = runByHead.get(t2);
+      const bid = `tt${twoTrackCount++}`;
+      boxes.push({ id: bid, label: `2-track ×${1 + runA.length + runB.length}`, kind: 'two-track' });
+      boxOf.set(H.id, bid);
+      runA.forEach(id=>boxOf.set(id, bid));
+      runB.forEach(id=>boxOf.set(id, bid));
+      consumed.add(runs.indexOf(runA));
+      consumed.add(runs.indexOf(runB));
+    });
+    runs.forEach((run, i) => {
+      if(consumed.has(i)) return;      // already inside a two-track box
+      const bid = `run${i}`;
+      boxes.push({ id: bid, label: `linear ×${run.length}`, kind: 'run' });
+      run.forEach(id=>boxOf.set(id, bid));
+    });
+    const twoTrackCollapsed = singleCollapsed - 2 * twoTrackCount;
 
     $('graphStatus').textContent =
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
-      (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${collapsedRooms} room(s) after collapsing` : '');
+      (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${singleCollapsed} rooms single-track` +
+        (twoTrackCount ? `, ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '');
 
     // a room's user-assigned name lives on the opponent-move row that leads into
     // it (room.seq ends in OUR reply, so the name is keyed one ply back);
@@ -686,11 +717,11 @@ async function showTranspositionGraph(){
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-      ...runs.map((run,i)=>({ data:{id:`run${i}`, label:`linear ×${run.length}`}, classes:'run-box' })),
+      ...boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' })),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
         const data = {id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq};
-        if(runOf.has(r.id)) data.parent = runOf.get(r.id);   // box this room into its run
+        if(boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         return {
           data,
           classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
@@ -721,6 +752,12 @@ async function showTranspositionGraph(){
           'border-width':1.5, 'border-style':'dashed', 'border-color':'#e69a3c',
           'label':'data(label)', 'font-size':8, 'color':'#b35e00',
           'text-valign':'top', 'text-halign':'center', 'text-margin-y':-2, 'padding':'12px'
+        }},
+        { selector:'node.twotrack-box', style:{
+          'shape':'round-rectangle', 'background-color':'#b39ddb', 'background-opacity':0.22,
+          'border-width':2, 'border-style':'solid', 'border-color':'#7e57c2',
+          'label':'data(label)', 'font-size':8, 'color':'#4527a0',
+          'text-valign':'top', 'text-halign':'center', 'text-margin-y':-2, 'padding':'14px'
         }},
         { selector:'node.locked', style:{
           'background-color':'#c62828', 'padding':'8px', 'font-size':11
@@ -818,7 +855,7 @@ function positionHoverPreviewBesideRoomModal(){
 function attachGraphClickHandler(cy){
   cy.on('tap', 'node', evt => {
     const el = evt.target;
-    if(el.hasClass('start') || el.hasClass('locked') || el.hasClass('run-box')) return;
+    if(el.hasClass('start') || el.hasClass('locked') || el.hasClass('run-box') || el.hasClass('twotrack-box')) return;
     showRoomInfoPanel(el);
   });
 }
