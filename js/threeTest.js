@@ -1804,10 +1804,19 @@ function buildRoof(size, origin, color){
    level. You enter `start` from the south (door at z=+5) facing north, so
    left is -x and deeper into the room is -z. */
 const DEMO_MNEMONICS = {
+  // multi-pair demo room: a hard-coded stand-in for two linear sequences sharing
+  // one room -- 3 move-pairs along the LEFT (west) wall, 2 along the RIGHT
+  // (east) wall, in walk order. Each pair will get a paired numbered object slot
+  // (Phase 2). Real data will come from detected runs; see
+  // LinearSequencesAndRoomObjects.md.
   start: {
-    opponent: { to: 'c6', piece: 'knight', san: 'Nc6' },  // black Nc6
-    response: { to: 'f4', piece: 'bishop', san: 'Bf4' },  // white Bf4
-    pos: { x: -0.1, y: 1.6, z: -1.7 }
+    pairs: [
+      { side: 'left',  order: 1, opponent: { to: 'd5', piece: 'pawn',   san: 'd5'  }, response: { to: 'f4', piece: 'bishop', san: 'Bf4' } },
+      { side: 'left',  order: 2, opponent: { to: 'f6', piece: 'knight', san: 'Nf6' }, response: { to: 'e3', piece: 'pawn',   san: 'e3'  } },
+      { side: 'left',  order: 3, opponent: { to: 'e6', piece: 'pawn',   san: 'e6'  }, response: { to: 'f3', piece: 'knight', san: 'Nf3' } },
+      { side: 'right', order: 1, opponent: { to: 'c5', piece: 'pawn',   san: 'c5'  }, response: { to: 'c3', piece: 'pawn',   san: 'c3'  } },
+      { side: 'right', order: 2, opponent: { to: 'c6', piece: 'knight', san: 'Nc6' }, response: { to: 'd3', piece: 'bishop', san: 'Bd3' } }
+    ]
   },
   // the elevator car is its own tree node (placeholder demo pair, distinct from
   // start's so it's clearly the elevator's own -- real data will come from the
@@ -1864,10 +1873,49 @@ function elevatorBillboardPos(room, wall, offset){
   const side = DOOR_W/2 + 0.2, inset = 0.6;
   return { x: dcx + V.rx*side + V.ix*inset, y: 1.5, z: dcz + V.rz*side + V.iz*inset };
 }
+// the opponent (upper) move of a room's pair, used by door hints / elevator
+// floor labels. Handles both the single-pair shape and a multi-pair room (falls
+// back to the first pair).
+function mnemOpponentMove(roomKey){
+  const e = DEMO_MNEMONICS[roomKey];
+  if(!e) return null;
+  if(e.opponent) return e.opponent;
+  if(e.pairs && e.pairs[0]) return e.pairs[0].opponent;
+  return null;
+}
+
+// layout tuning for multi-pair rooms (Phase 1): billboards stride down the
+// left/right walls at eye height, order 1 nearest the (south) entrance.
+const MNEM_WALL_INSET = 0.5, MNEM_WALL_STRIDE = 3.0, MNEM_EYE_Y = 1.6;
+
 function mnemonicSlots(roomKey){
-  const pair = DEMO_MNEMONICS[roomKey];
-  if(!pair) return [];
-  let pos = pair.pos;
+  const entry = DEMO_MNEMONICS[roomKey];
+  if(!entry) return [];
+
+  // multi-pair room: one billboard per move-pair, laid out in walk order along
+  // the LEFT (west) and RIGHT (east) walls. Slot ids are L1/L2.../R1/R2... so
+  // they read as the eventual numbered objects.
+  if(entry.pairs){
+    const room = mergedRoom(roomKey);
+    const slots = [];
+    for(const side of ['left', 'right']){
+      const wall = side === 'left' ? 'west' : 'east';
+      const { fixed } = wallSpan(room.size, wall);   // x of the wall plane
+      const x = wall === 'west' ? fixed + MNEM_WALL_INSET : fixed - MNEM_WALL_INSET;
+      const sidePairs = entry.pairs.filter(p => (p.side || 'left') === side)
+                                   .sort((a, b) => (a.order || 0) - (b.order || 0));
+      const k = sidePairs.length;
+      sidePairs.forEach((pair, i) => {
+        const z = ((k - 1) / 2 - i) * MNEM_WALL_STRIDE;   // order 1 nearest the +z entrance
+        const tag = (side === 'left' ? 'L' : 'R') + (i + 1);
+        slots.push({ id: `mnem-${tag}`, kind: 'mnemonic', x, y: MNEM_EYE_Y, z, pair, side, order: i + 1 });
+      });
+    }
+    return slots;
+  }
+
+  // single-pair room (existing behavior)
+  let pos = entry.pos;
   // an elevator car is a room with its own pair, but it's small and its floor
   // panel sits to the left of the door -- mount its pair to the right of that
   // door instead of the usual centre-of-room spot.
@@ -1876,7 +1924,7 @@ function mnemonicSlots(roomKey){
     const fwd = (room.exits || []).find(e => !e.back);   // floors share one wall
     if(fwd) pos = elevatorBillboardPos(room, fwd.wall, fwd.offset);
   }
-  return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair }];
+  return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair: entry }];
 }
 
 function applySpriteContentScale(sprite){
@@ -2146,7 +2194,7 @@ function makeMoveDecorationMesh(move, sizeM){
 function buildDoorHint(size, wall, offset, targetKey){
   const group = new THREE.Group();
   const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
-  const move = (DEMO_MNEMONICS[targetKey] && DEMO_MNEMONICS[targetKey].opponent) || null;
+  const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
   const y = DOOR_H + 0.36;
@@ -2838,7 +2886,7 @@ function buildRoom(roomKey){
             const floors = wallExits.map((fe, i) => ({
               ordinal: i + 1,
               label: fe.label || fe.target,
-              move: (DEMO_MNEMONICS[fe.target] && DEMO_MNEMONICS[fe.target].opponent) || null,
+              move: mnemOpponentMove(fe.target),
               target: fe.target,
               spawn: computeSpawnForExit(roomKey, room, fe)
             }));
