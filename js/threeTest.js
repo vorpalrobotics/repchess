@@ -2561,19 +2561,23 @@ function makeStreetBlade(text){
 // street ("Main Street", running along Main Street) at 90 degrees.
 function buildStreetNameSign(s){
   const group = new THREE.Group();
-  const postH = 3.0;
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, postH, 10),
+  const BLADE_H = 0.55;            // must match makeStreetBlade's H
+  const crossY = 2.3;              // lower blade (Main Street) center height
+  const nameY = crossY + BLADE_H + 0.05;   // upper blade (side street) stacked above
+  const postTop = crossY - BLADE_H / 2;    // stop the post at the bottom of the lower blade
+
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, postTop, 10),
     new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.4, roughness: 0.5 }));
-  post.position.y = postH / 2;
+  post.position.y = postTop / 2;
   group.add(post);
 
   const nameBlade = makeStreetBlade(s.text);          // runs along x (the side street)
-  nameBlade.position.y = postH - 0.3;
+  nameBlade.position.y = nameY;
   group.add(nameBlade);
 
   const crossBlade = makeStreetBlade(s.cross || 'Main Street');
   crossBlade.rotation.y = Math.PI / 2;                 // runs along z (Main Street)
-  crossBlade.position.y = postH - 0.85;
+  crossBlade.position.y = crossY;
   group.add(crossBlade);
   return group;
 }
