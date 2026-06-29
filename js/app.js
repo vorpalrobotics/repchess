@@ -634,8 +634,45 @@ async function showTranspositionGraph(){
     const indegree = new Map();
     edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
     const mergeCount = [...indegree.values()].filter(c=>c>1).length;
+
+    // ---- linear-run detection ----
+    // A run is a maximal chain of rooms joined by "forced" edges: the source
+    // room has exactly ONE outgoing edge (counting leaf edges too), that edge
+    // targets another room (not a leaf), and the target has in-degree 1 (not a
+    // transposition merge). A merge node may be a run's HEAD (in-degree>1) but
+    // never a mid/tail member. Runs of >=2 nodes get boxed.
+    const roomIds = new Set(rooms.map(r=>r.id));
+    const outDeg = new Map();
+    edges.forEach(e=>outDeg.set(e.source,(outDeg.get(e.source)||0)+1));
+    const chainNext = new Map();     // forced edge: source room id -> target room id
+    const chainTarget = new Set();   // rooms that are the target of a forced edge
+    for(const e of edges){
+      if(!roomIds.has(e.source) || !roomIds.has(e.target)) continue;  // both ends rooms
+      if(outDeg.get(e.source) !== 1) continue;                         // source forced
+      if((indegree.get(e.target)||0) !== 1) continue;                  // target not a merge
+      chainNext.set(e.source, e.target);
+      chainTarget.add(e.target);
+    }
+    const runOf = new Map();         // room id -> run parent id
+    const runs = [];
+    for(const head of chainNext.keys()){
+      if(chainTarget.has(head)) continue;   // walk only from a chain head
+      const run = [];
+      const seen = new Set();
+      let cur = head;
+      while(cur !== undefined && !seen.has(cur)){ seen.add(cur); run.push(cur); cur = chainNext.get(cur); }
+      if(run.length >= 2){
+        const pid = `run${runs.length}`;
+        runs.push(run);
+        run.forEach(id=>runOf.set(id, pid));
+      }
+    }
+    const nodesInRuns = runs.reduce((a,r)=>a+r.length, 0);
+    const collapsedRooms = rooms.length - nodesInRuns + runs.length;
+
     $('graphStatus').textContent =
-      `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)`;
+      `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
+      (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${collapsedRooms} room(s) after collapsing` : '');
 
     // a room's user-assigned name lives on the opponent-move row that leads into
     // it (room.seq ends in OUR reply, so the name is keyed one ply back);
@@ -649,10 +686,13 @@ async function showTranspositionGraph(){
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
+      ...runs.map((run,i)=>({ data:{id:`run${i}`, label:`linear ×${run.length}`}, classes:'run-box' })),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
+        const data = {id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq};
+        if(runOf.has(r.id)) data.parent = runOf.get(r.id);   // box this room into its run
         return {
-          data:{id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq},
+          data,
           classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
         };
       }),
@@ -676,6 +716,12 @@ async function showTranspositionGraph(){
         }},
         { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
         { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
+        { selector:'node.run-box', style:{
+          'shape':'round-rectangle', 'background-color':'#ffcc80', 'background-opacity':0.18,
+          'border-width':1.5, 'border-style':'dashed', 'border-color':'#e69a3c',
+          'label':'data(label)', 'font-size':8, 'color':'#b35e00',
+          'text-valign':'top', 'text-halign':'center', 'text-margin-y':-2, 'padding':'12px'
+        }},
         { selector:'node.locked', style:{
           'background-color':'#c62828', 'padding':'8px', 'font-size':11
         }},
@@ -772,7 +818,7 @@ function positionHoverPreviewBesideRoomModal(){
 function attachGraphClickHandler(cy){
   cy.on('tap', 'node', evt => {
     const el = evt.target;
-    if(el.hasClass('start') || el.hasClass('locked')) return;
+    if(el.hasClass('start') || el.hasClass('locked') || el.hasClass('run-box')) return;
     showRoomInfoPanel(el);
   });
 }
