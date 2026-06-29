@@ -304,6 +304,15 @@
   .mnem-notes-saved{font-weight:400;font-size:.8em;color:#2e7d32;opacity:0;transition:opacity .3s}
   .mnem-notes-saved.show{opacity:1}
   #mnemonicsNotes{flex:1 1 auto;resize:none;font-family:inherit;font-size:.9rem;padding:.6rem;border:1px solid #bbb;border-radius:4px}
+  .mnem-mode-bar{display:flex;align-items:center;gap:.35rem;margin-bottom:.5rem;flex:0 0 auto;flex-wrap:wrap}
+  .mnem-mode-label{font-weight:600;color:#555;font-size:.85rem;margin-right:.2rem}
+  .mnem-mode-btn{min-width:2.2em;padding:.3rem .5rem;font-size:1rem;font-weight:700;border:1px solid #bbb;
+    background:#f7f7f7;border-radius:4px;cursor:pointer;line-height:1}
+  .mnem-mode-btn:hover{background:#ececec}
+  .mnem-mode-btn.active{background:#1565c0;border-color:#1565c0;color:#fff}
+  .mnem-square.mnem-img-mode{padding:0;align-items:center;justify-content:center}
+  .mnem-square .mnem-cell-img{width:100%;height:100%;object-fit:contain;display:block}
+  .mnem-square .mnem-cell-empty{color:#0003;font-size:1.6rem}
 
   #quizOverlay .modal{min-width:24em;text-align:center}
   .quiz-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
@@ -774,6 +783,16 @@
       <button id="mnemonicsExportBtn" title="Export all mnemonics (words + images) to a JSON file">Export</button>
       <button id="mnemonicsImportBtn" title="Import a mnemonics JSON file (replaces all current mnemonics)">Import</button>
       <button id="mnemonicsCloseBtn">Close</button>
+    </div>
+    <div class="mnem-mode-bar" id="mnemModeBar">
+      <span class="mnem-mode-label">View:</span>
+      <button class="mnem-mode-btn active" data-mode="words" title="Show words">ABC</button>
+      <button class="mnem-mode-btn" data-mode="pawn" title="Show pawn images"><i class="fa-solid fa-chess-pawn"></i></button>
+      <button class="mnem-mode-btn" data-mode="knight" title="Show knight images"><i class="fa-solid fa-chess-knight"></i></button>
+      <button class="mnem-mode-btn" data-mode="bishop" title="Show bishop images"><i class="fa-solid fa-chess-bishop"></i></button>
+      <button class="mnem-mode-btn" data-mode="rook" title="Show rook images"><i class="fa-solid fa-chess-rook"></i></button>
+      <button class="mnem-mode-btn" data-mode="queen" title="Show queen images"><i class="fa-solid fa-chess-queen"></i></button>
+      <button class="mnem-mode-btn" data-mode="king" title="Show king images"><i class="fa-solid fa-chess-king"></i></button>
     </div>
     <div class="mnem-body">
       <div id="mnemonicsGridWrap"><div id="mnemonicsGrid"></div></div>

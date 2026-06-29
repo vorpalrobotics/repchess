@@ -2514,6 +2514,7 @@ const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
 const MNEM_PIECE_ICON = {pawn:'fa-chess-pawn',knight:'fa-chess-knight',bishop:'fa-chess-bishop',rook:'fa-chess-rook',queen:'fa-chess-queen',king:'fa-chess-king'};
 let MNEMONICS = {};
 let MNEM_EDIT_SQUARE = null;
+let MNEM_VIEW_MODE = 'words';   // 'words' = show move words; else a piece name = show that piece's images
 
 function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
 
@@ -2571,6 +2572,9 @@ async function renderMnemonicsGrid(){
   MNEMONICS = await getAllMnemonics();
   const grid = $('mnemonicsGrid');
   grid.innerHTML='';
+  // image-review modes (MNEM_VIEW_MODE = a piece name) show one piece's picture
+  // per square; coverage highlighting doesn't apply there.
+  const imgMode = MNEM_VIEW_MODE !== 'words';
   let missingWords = 0, missingImages = 0;
   for(let row=0;row<8;row++){
     for(let col=0;col<8;col++){
@@ -2578,7 +2582,12 @@ async function renderMnemonicsGrid(){
       const isLight = (col+row)%2===0;
       const entry = MNEMONICS[sq] || {};
       let pieceHtml, squareIncomplete = false;
-      if(MNEM_COVERAGE){
+      if(imgMode){
+        const p = MNEM_VIEW_MODE;
+        pieceHtml = entry[p+'Img']
+          ? `<img class="mnem-cell-img" src="${entry[p+'Img']}" alt="">`
+          : `<div class="mnem-cell-empty"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i></div>`;
+      } else if(MNEM_COVERAGE){
         pieceHtml = MNEM_PIECES
           .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
           .map(p=>{
@@ -2602,7 +2611,7 @@ async function renderMnemonicsGrid(){
           .join('');
       }
       const div = document.createElement('div');
-      div.className = `mnem-square ${isLight?'light':'dark'}${squareIncomplete?' mnem-incomplete':''}`;
+      div.className = `mnem-square ${isLight?'light':'dark'}${squareIncomplete?' mnem-incomplete':''}${imgMode?' mnem-img-mode':''}`;
       div.dataset.square = sq;
       div.innerHTML =
         (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
@@ -2613,7 +2622,7 @@ async function renderMnemonicsGrid(){
     }
   }
   const counts = $('mnemonicsCoverageCounts');
-  if(MNEM_COVERAGE){
+  if(MNEM_COVERAGE && !imgMode){
     counts.innerHTML = `${MNEM_COVERAGE.size} used` +
       (missingWords ? ` · <span class="mc-missing">${missingWords} missing words</span>` : '') +
       (missingImages ? ` · <span class="mc-missing">${missingImages} missing images</span>` : '');
@@ -2853,6 +2862,14 @@ $('menuMnemonics').onclick = async ()=>{
   }
 };
 $('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+// view-mode toolbar: ABC (words) or a piece icon (that piece's images per square)
+document.querySelectorAll('#mnemModeBar .mnem-mode-btn').forEach(btn=>{
+  btn.onclick = ()=>{
+    MNEM_VIEW_MODE = btn.dataset.mode;
+    document.querySelectorAll('#mnemModeBar .mnem-mode-btn').forEach(b=>b.classList.toggle('active', b===btn));
+    renderMnemonicsGrid();
+  };
+});
 $('mnemonicsExportBtn').onclick = ()=> exportMnemonics();
 // reuse the shared import file picker; its change handler auto-detects a
 // mnemonics bundle and runs the mnemonics-only replace flow.
