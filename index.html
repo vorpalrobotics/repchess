@@ -303,6 +303,8 @@
     .mnem-notes-col{flex:1 1 auto;min-height:8em}
   }
   .mnem-notes-col label{font-weight:600;font-size:.9rem;display:flex;align-items:center;gap:.5em}
+  .mnem-disambig{display:flex;flex-direction:column;gap:.3rem;flex:0 0 auto}
+  .mnem-disambig-hint{font-weight:400;font-size:.78em;color:#888}
   .mnem-notes-saved{font-weight:400;font-size:.8em;color:#2e7d32;opacity:0;transition:opacity .3s}
   .mnem-notes-saved.show{opacity:1}
   #mnemonicsNotes{flex:1 1 auto;resize:none;font-family:inherit;font-size:.9rem;padding:.6rem;border:1px solid #bbb;border-radius:4px}
@@ -749,6 +751,15 @@
     <div class="mnem-body">
       <div id="mnemonicsGridWrap"><div id="mnemonicsGrid"></div></div>
       <div class="mnem-notes-col">
+        <div class="mnem-disambig">
+          <label>Move disambiguator <span class="mnem-disambig-hint">(older-piece beard)</span></label>
+          <div id="mnemDisambigDrop" class="mnem-img-drop" title="Image overlaid below a move when two same-type pieces could reach the square and the older one moves">
+            <img id="mnemDisambigPreview" style="display:none" alt="">
+            <button type="button" class="mnem-img-clear" id="mnemDisambigClear" title="Remove">&times;</button>
+            <button type="button" class="mnem-img-crop" id="mnemDisambigCrop" title="Crop"><i class="fa-solid fa-crop-simple"></i></button>
+          </div>
+          <input type="file" id="mnemDisambigFile" accept="image/*" style="display:none">
+        </div>
         <label for="mnemonicsNotes">Notes <span id="mnemonicsNotesSaved" class="mnem-notes-saved"></span></label>
         <textarea id="mnemonicsNotes" placeholder="Rules for piece disambiguation, underpromotion, castling, etc."></textarea>
       </div>

@@ -388,6 +388,34 @@ function mnemonicImgForSeq(seq, mnemonicsBySquare){
   if(!info) return '';
   return mnemonicsBySquare[info.to]?.[MNEM_WORD_FOR_PIECE[info.piece]+'Img'] || '';
 }
+
+/* "age" of a piece on `square` for move disambiguation (Holden's rule): scan
+   from the player's home corner filewise then rankwise -- the lower the age,
+   the "younger" (closer to the back rank, then to the a-file) the piece.
+   White measures from a1, black from a8. a=1..h=8. */
+function pieceAge(square, color){
+  const f = square.charCodeAt(0) - 96;   // 'a' -> 1
+  const r = +square[1];
+  return color === 'w' ? (r - 1) * 8 + f : (8 - r) * 8 + f;
+}
+/* number of disambiguator beards for the move that ends `seq`: when two or more
+   same-type pieces could LEGALLY move to that square, the mover's 0-based age
+   rank among them (youngest = 0 beards, next = 1, oldest = 2...). 0 when there's
+   no ambiguity (or for castling). */
+function moveDisambiguatorCount(seq){
+  if(!seq || !seq.length) return 0;
+  const parentFen = fenForSeq(seq.slice(0, -1));
+  let mv;
+  try { mv = new Chess(parentFen).move(seq[seq.length - 1], { sloppy:true }); } catch(_){ return 0; }
+  if(!mv) return 0;
+  if(mv.flags.includes('k') || mv.flags.includes('q')) return 0;   // castling is never ambiguous
+  const candidates = new Chess(parentFen).moves({ verbose:true })
+    .filter(m => m.to === mv.to && m.piece === mv.piece && m.color === mv.color);
+  if(candidates.length < 2) return 0;
+  const ages = candidates.map(m => pieceAge(m.from, mv.color)).sort((a, b) => a - b);
+  return ages.indexOf(pieceAge(mv.from, mv.color));   // youngest -> 0, older -> more beards
+}
+
 function buildCastleGraph(line, games, rootSeq=null){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
@@ -2243,6 +2271,7 @@ async function exportBackup(){
       return out;
     }),
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
+    moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
     assets: await getAllAssets()
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
@@ -2293,6 +2322,7 @@ async function importBackup(data){
     await setMnemonicSquare(entry.square, patch);
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+  if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
@@ -2333,7 +2363,8 @@ async function exportMnemonics(){
       }
       return out;
     }),
-    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY)
+    mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
+    moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY)
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -2387,6 +2418,7 @@ async function importMnemonicsBundle(data){
     await setMnemonicSquare(entry.square, patch);
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+  if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   MNEMONICS = await getAllMnemonics();
   log(`replaced mnemonics — imported ${data.mnemonics.length} square(s)`);
 }
@@ -2880,6 +2912,7 @@ $('menuMnemonics').onclick = async ()=>{
     }
     await renderMnemonicsGrid();
     $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
+    renderDisambigPreview(await getMeta(MNEM_DISAMBIG_KEY));
     $('mnemonicsOverlay').style.display='flex';
   } finally {
     hideSpinner(spinner);
@@ -2933,6 +2966,47 @@ $('mnemonicsNotes').addEventListener('input', ()=>{
 $('mnemonicsNotes').addEventListener('blur', ()=>{
   clearTimeout(mnemNotesSaveTimer);
   saveMnemonicsNotes();
+});
+
+/* ---------- move disambiguator image (one global "older-piece beard") ---------- */
+const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
+function renderDisambigPreview(dataUrl){
+  const img = $('mnemDisambigPreview'), drop = $('mnemDisambigDrop');
+  if(dataUrl){ img.src = dataUrl; img.style.display=''; drop.classList.add('has-img'); }
+  else { img.src=''; img.style.display='none'; drop.classList.remove('has-img'); }
+}
+async function setDisambigFromFile(file){
+  if(!file) return;
+  if(!file.type.startsWith('image/')){ log('that file is not an image',true); return; }
+  if(file.size > MNEM_IMG_MAX_FILE_BYTES){ log(`image too large (max ${MNEM_IMG_MAX_FILE_BYTES/1024/1024}MB)`,true); return; }
+  try{
+    const scaled = await downscaleMnemImage(await fileToDataUrl(file), MNEM_IMG_MAX_DIM);
+    await setMeta(MNEM_DISAMBIG_KEY, scaled);
+    renderDisambigPreview(scaled);
+  }catch(err){ console.error('[disambig] image failed',err); log('could not read that image',true); }
+}
+$('mnemDisambigDrop').addEventListener('click', e=>{
+  if(e.target.closest('.mnem-img-clear') || e.target.closest('.mnem-img-crop')) return;
+  $('mnemDisambigFile').click();
+});
+$('mnemDisambigFile').addEventListener('change', e=>{ setDisambigFromFile(e.target.files[0]); e.target.value=''; });
+$('mnemDisambigDrop').addEventListener('dragover', e=>{ e.preventDefault(); $('mnemDisambigDrop').classList.add('dragover'); });
+$('mnemDisambigDrop').addEventListener('dragleave', ()=> $('mnemDisambigDrop').classList.remove('dragover'));
+$('mnemDisambigDrop').addEventListener('drop', e=>{ e.preventDefault(); $('mnemDisambigDrop').classList.remove('dragover'); setDisambigFromFile(e.dataTransfer.files[0]); });
+$('mnemDisambigClear').addEventListener('click', async e=>{
+  e.stopPropagation();
+  await setMeta(MNEM_DISAMBIG_KEY, '');
+  renderDisambigPreview('');
+});
+$('mnemDisambigCrop').addEventListener('click', async e=>{
+  e.stopPropagation();
+  const cur = await getMeta(MNEM_DISAMBIG_KEY);
+  if(!cur) return;
+  const cropped = await cropImage(cur);
+  if(cropped == null) return;
+  const scaled = await downscaleMnemImage(cropped, MNEM_IMG_MAX_DIM);
+  await setMeta(MNEM_DISAMBIG_KEY, scaled);
+  renderDisambigPreview(scaled);
 });
 
 $('mnemonicsEditorCancelBtn').onclick = ()=>{ $('mnemonicsEditorOverlay').style.display='none'; };

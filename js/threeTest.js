@@ -1872,7 +1872,7 @@ const DEMO_MNEMONICS = {
   start: {
     pairs: [
       { side: 'left',  order: 1, opponent: { to: 'd5', piece: 'pawn',   san: 'd5'  }, response: { to: 'f4', piece: 'bishop', san: 'Bf4' } },
-      { side: 'left',  order: 2, opponent: { to: 'f6', piece: 'knight', san: 'Nf6' }, response: { to: 'e3', piece: 'pawn',   san: 'e3'  } },
+      { side: 'left',  order: 2, opponent: { to: 'f6', piece: 'knight', san: 'Nf6' }, response: { to: 'e3', piece: 'pawn',   san: 'e3', disambig: 1 } },
       { side: 'left',  order: 3, opponent: { to: 'e6', piece: 'pawn',   san: 'e6'  }, response: { to: 'f3', piece: 'knight', san: 'Nf3' } },
       { side: 'right', order: 1, opponent: { to: 'c5', piece: 'pawn',   san: 'c5'  }, response: { to: 'c3', piece: 'pawn',   san: 'c3'  } },
       { side: 'right', order: 2, opponent: { to: 'c6', piece: 'knight', san: 'Nc6' }, response: { to: 'd3', piece: 'bishop', san: 'Bd3' } }
@@ -2028,7 +2028,23 @@ const MNEM_PAIR_UNITS = 1.2;                              // world size of the b
 // canvas, top-left corner at (qx, qy) -- image (clipped/letterboxed to fit)
 // if one was set, else a boxed/bordered text label (mirrors the styling the
 // old per-move text sprites used).
-function drawMnemQuadrant(ctx, qx, qy, content){
+// one global "older-piece beard" image, loaded once per build from the meta
+// store. undefined = not yet loaded, null = none set, Image = loaded.
+let _beardImg = undefined;
+function loadBeardImage(){
+  if(_beardImg !== undefined) return Promise.resolve(_beardImg);
+  return getMeta('moveDisambiguatorImg').then(src => {
+    if(!src){ _beardImg = null; return null; }
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { _beardImg = img; resolve(img); };
+      img.onerror = () => { _beardImg = null; resolve(null); };
+      img.src = src;
+    });
+  });
+}
+
+function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
   const s = MNEM_QUADRANT;
   ctx.save();
   ctx.beginPath();
@@ -2059,6 +2075,18 @@ function drawMnemQuadrant(ctx, qx, qy, content){
     }
     ctx.fillText(text, qx + s / 2, qy + s / 2 + 4);
   }
+  // disambiguation beard(s) along the bottom of the move image: one per the
+  // mover's age rank (older piece = more beards).
+  const n = content.beards || 0;
+  if(n > 0 && beardImg){
+    const bh = s * 0.30;
+    const bw = bh * (beardImg.width / beardImg.height || 1);
+    const gap = bw * 0.15;
+    const totalW = n * bw + (n - 1) * gap;
+    let bx = qx + (s - totalW) / 2;
+    const by = qy + s - bh - s * 0.04;
+    for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, bw, bh); bx += bw + gap; }
+  }
   ctx.restore();
 }
 
@@ -2067,14 +2095,14 @@ function drawMnemQuadrant(ctx, qx, qy, content){
 // pegged to the bottom-right corner -- so the two overlap by half a unit each
 // way and sit close instead of a full quadrant apart. Drawn opponent-first so
 // the response laps over it in the shared corner.
-function renderMnemPairCanvas(sprite, oppContent, respContent){
+function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg){
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE;
   const ctx = canvas.getContext('2d');
   const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
-  drawMnemQuadrant(ctx, 0, 0, oppContent);        // opponent pegged top-left
-  drawMnemQuadrant(ctx, far, far, respContent);   // response pegged bottom-right
+  drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
+  drawMnemQuadrant(ctx, far, far, respContent, beardImg);   // response pegged bottom-right
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -2100,11 +2128,12 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
   const wordFallback = wordOnly
     ? (wordTrim || move.san)
     : (wordTrim ? `${wordTrim} (${move.san})` : move.san);
-  if(!imgSrc) return Promise.resolve({ text: wordFallback });
+  const beards = move.disambig || 0;
+  if(!imgSrc) return Promise.resolve({ text: wordFallback, beards });
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => resolve({ image: img });
-    img.onerror = () => resolve({ text: wordFallback });
+    img.onload = () => resolve({ image: img, beards });
+    img.onerror = () => resolve({ text: wordFallback, beards });
     img.src = imgSrc;
   });
 }
@@ -2124,14 +2153,14 @@ function placeMnemonicSlot(roomKey, slot){
   // immediate fallback (algebraic notation in both quadrants) while mnemonic data loads
   renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san });
   const myGen = buildGeneration;
-  getAllMnemonics().then((mnemonicsBySquare) => {
+  Promise.all([getAllMnemonics(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
     Promise.all([
       resolveMoveContent(pair.opponent, mnemonicsBySquare),
       resolveMoveContent(pair.response, mnemonicsBySquare)
     ]).then(([oppContent, respContent]) => {
       if(buildGeneration !== myGen) return;
-      renderMnemPairCanvas(sprite, oppContent, respContent);
+      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg);
     });
   });
   return sprite;
@@ -4506,6 +4535,7 @@ export async function openThreeTest(containerEl, opts){
   container = containerEl;
   threeOpts = opts || {};
   OPENING_SYSTEMS = threeOpts.systems || [];
+  _beardImg = undefined;                 // re-read the disambiguator image each time the walk opens
   generateMainStreet(OPENING_SYSTEMS);   // lay out Main Street + one side street per opening system
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
