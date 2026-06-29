@@ -369,7 +369,14 @@ function lastMoveInfo(seq){
   // is what the coverage walk calls per room/edge -- the old full replay made it
   // ~O(moves^2) over the tree and was the cause of the slow coverage load.
   const chess = new Chess(fenForSeq(seq.slice(0, -1)));
-  return chess.move(seq[seq.length - 1], { sloppy:true });
+  const mv = chess.move(seq[seq.length - 1], { sloppy:true });
+  // Castling mnemonic convention: the king "moves onto its rook", so key it by
+  // the rook's square (Kh1/Ka1/Kh8/Ka8) rather than chess.js's g1/c1 king
+  // landing square. chess.js flags: 'k' = kingside, 'q' = queenside.
+  if(mv && (mv.flags.includes('k') || mv.flags.includes('q'))){
+    mv.to = (mv.flags.includes('k') ? 'h' : 'a') + (mv.color === 'w' ? '1' : '8');
+  }
+  return mv;
 }
 function mnemonicWordForSeq(seq, mnemonicsBySquare){
   const info = lastMoveInfo(seq);
