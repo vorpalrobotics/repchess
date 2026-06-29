@@ -1743,26 +1743,39 @@ function buildWallGroup(size, wall, hasDoor, doorOffset, wallTexture, origin, op
     group.add(mesh);
   }
 
-  if(!hasDoor){
-    segment(-half, half);
-  } else {
-    const dHalf = DOOR_W/2;
-    segment(-half, doorOffset - dHalf);
-    segment(doorOffset + dHalf, half);
-    // lintel above the doorway
-    let geo, x, z;
+  // lintel above one doorway centered at `off`
+  function lintelAt(off){
     const lintelH = h - DOOR_H;
+    let geo, x, z;
     if(axis === 'x'){
       geo = new THREE.BoxGeometry(DOOR_W, lintelH, WALL_THICK);
-      x = doorOffset + origin.x; z = fixed + origin.z;
+      x = off + origin.x; z = fixed + origin.z;
     } else {
       geo = new THREE.BoxGeometry(WALL_THICK, lintelH, DOOR_W);
-      x = fixed + origin.x; z = doorOffset + origin.z;
+      x = fixed + origin.x; z = off + origin.z;
     }
     const lintel = new THREE.Mesh(geo, materialFor(DOOR_W, lintelH));
     lintel.position.set(x, DOOR_H + lintelH/2, z);
     if(opts.editable) lintel.userData = { kind: 'wall', wall };
     group.add(lintel);
+  }
+
+  // a wall can carry several doorways (multiple exits moved onto the same wall);
+  // cut a gap + lintel for each, with wall segments filling the runs between.
+  const offsets = (opts.doorOffsets && opts.doorOffsets.length)
+    ? opts.doorOffsets.slice().sort((a, b) => a - b)
+    : (hasDoor ? [doorOffset] : []);
+  if(offsets.length === 0){
+    segment(-half, half);
+  } else {
+    const dHalf = DOOR_W/2;
+    let cursor = -half;
+    for(const off of offsets){
+      segment(cursor, off - dHalf);
+      lintelAt(off);
+      cursor = Math.max(cursor, off + dHalf);
+    }
+    segment(cursor, half);
   }
   return group;
 }
@@ -1886,7 +1899,7 @@ function mnemOpponentMove(roomKey){
 
 // layout tuning for multi-pair rooms (Phase 1): billboards stride down the
 // left/right walls at eye height, order 1 nearest the (south) entrance.
-const MNEM_WALL_INSET = 0.5, MNEM_WALL_STRIDE = 3.0, MNEM_EYE_Y = 1.6;
+const MNEM_WALL_INSET = 1.5, MNEM_WALL_STRIDE = 3.0, MNEM_EYE_Y = 1.6;
 
 function mnemonicSlots(roomKey){
   const entry = DEMO_MNEMONICS[roomKey];
@@ -2862,26 +2875,29 @@ function buildRoom(roomKey){
   if(!room.outdoor){
     const wallTex = carMode ? makePlainWallTexture(room.color) : makeBrickTexture(room.color);
     for(const wall of ['north','south','east','west']){
-      // car rooms can have several exits sharing one physical wall (all of
-      // a floor's worth of buttons behind a single door) -- gather all of
-      // them, not just whichever currentExitsByWall last saw.
-      const wallExits = carMode ? room.exits.filter(e => e.wall === wall)
-                                 : (currentExitsByWall[wall] ? [currentExitsByWall[wall]] : []);
-      const ex = wallExits[0];
-      const group = buildWallGroup(room.size, wall, !!ex, ex ? ex.offset : 0, wallTex, null,
-        { editable: true, surfaceAsset: wallAssetFor(roomKey, wall) });
+      // gather EVERY exit on this wall. Car rooms put a floor's worth of buttons
+      // behind a single door; ordinary rooms can also now carry several doors on
+      // one wall (e.g. the user moved two exits to the same side), so each one
+      // needs its own gap + panel + trigger -- not just whichever the
+      // currentExitsByWall map last saw.
+      const wallExits = room.exits.filter(e => e.wall === wall);
+      const ex0 = wallExits[0];
+      // a car's floor buttons all share ONE physical door; ordinary rooms cut a
+      // gap per exit.
+      const doorOffsets = carMode ? (ex0 ? [ex0.offset] : []) : wallExits.map(e => e.offset);
+      const group = buildWallGroup(room.size, wall, !!ex0, ex0 ? ex0.offset : 0, wallTex, null,
+        { editable: true, surfaceAsset: wallAssetFor(roomKey, wall), doorOffsets });
       scene.add(group);
-      if(ex){
-        const isStair = ex.type === 'stair';
-        const dKey = doorKey(wall, ex.offset);
-        // room override wins, else the building's exit-door / ordinary-door default
-        const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex.back);
-        if(carMode){
-          const box = doorTriggerBox(room.size, wall, ex.offset);
+
+      if(carMode){
+        if(ex0){
+          const dKey = doorKey(wall, ex0.offset);
+          const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex0.back);
+          const box = doorTriggerBox(room.size, wall, ex0.offset);
           const thru = WALL_OUT_NORMAL[wall];
-          if(ex.back){
-            elevatorMeta.push({ box, thru, kind: 'back', target: ex.target, spawn: computeSpawnForExit(roomKey, room, ex) });
-            scene.add(buildExitSign(room.size, wall, ex.offset));
+          if(ex0.back){
+            elevatorMeta.push({ box, thru, kind: 'back', target: ex0.target, spawn: computeSpawnForExit(roomKey, room, ex0) });
+            scene.add(buildExitSign(room.size, wall, ex0.offset));
           } else {
             const floors = wallExits.map((fe, i) => ({
               ordinal: i + 1,
@@ -2891,11 +2907,17 @@ function buildRoom(roomKey){
               spawn: computeSpawnForExit(roomKey, room, fe)
             }));
             elevatorMeta.push({ box, thru, kind: 'forward', floors });
-            scene.add(buildElevatorPanel(room.size, wall, ex.offset, floors));
+            scene.add(buildElevatorPanel(room.size, wall, ex0.offset, floors));
           }
-          if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-          if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
-        } else {
+          if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex0.offset, doorAsset));
+          if(editMode) scene.add(buildDoorMarker(room.size, wall, ex0.offset, roomKey, dKey));
+        }
+      } else {
+        for(const ex of wallExits){
+          const isStair = ex.type === 'stair';
+          const dKey = doorKey(wall, ex.offset);
+          // room override wins, else the building's exit-door / ordinary-door default
+          const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex.back);
           const spawn = computeSpawnForExit(roomKey, room, ex);
           const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
           exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
