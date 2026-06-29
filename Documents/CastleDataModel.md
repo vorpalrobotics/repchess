@@ -201,6 +201,16 @@ source of truth.
 
 ## Persistence and rebuild safety
 
+> **Refinement (see `LinearSequencesAndRoomObjects.md`):** once rooms can hold a
+> whole *linear sequence* along a wall, a room spans **many** positions, so
+> "position identity" and "room identity" must split: the condensed FEN stays
+> the atomic **position** key (decorations and transposition targets hang off
+> it), while a **room** is identified by its entrance/anchor FEN plus an ordered
+> list of member FENs. Keep the condensed FEN faithful (side-to-move + castling
+> + en passant; only drop the clocks), persist the left/right packing decision
+> by anchor FEN, and treat the persisted room — not live run detection — as
+> authoritative once a castle is built.
+
 Decoration-layer data is keyed by `seq`/position-derived keys
 (`roomKey = positionKey(fen)`, edges keyed by `exitSeq`), never by the
 structural layer's `room0`/`room1`/`leaf0` ids, which are reassigned every

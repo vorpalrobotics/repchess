@@ -48,6 +48,12 @@ for several plies with no real decision point).
   in-between plies absorbed into that room's hallway/features instead of
   becoming rooms of their own.
 
+> These forced stretches are developed in detail — how they're detected on the
+> graph, how a room hosts up to two of them (left/right walls), the
+> position-vs-room identity split they force, and how late edits that break a
+> run are handled — in **`LinearSequencesAndRoomObjects.md`**, along with the
+> edit-mode UX for pegging each move-pair to a numbered object.
+
 ## Opponent blunders / deep traps
 
 Normally, obvious opponent blunders are excluded from the repertoire
