@@ -887,14 +887,21 @@ async function showTranspositionGraph(){
     // cycle-closing edges (draw-by-repetition) are excluded from the dagre
     // layout and drawn dashed, so the rest of the graph keeps its clean tree.
     const backEdges = findBackEdges(rooms, edges);
+    // dagre's compound-nesting layout corrupts ("Cannot set 'order' of
+    // undefined") when a cycle threads through compound parents -- the cycle is
+    // gone from the edge set, but the box nesting still trips it. So on a cyclic
+    // graph we drop the run/two-track boxes from the render entirely and show a
+    // plain dagre tree. (The boxes are an analysis nicety; a repetition-bearing
+    // repertoire is a rare case where a clean tree beats a crash.)
+    const cyclic = backEdges.size > 0;
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-      ...boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' })),
+      ...(cyclic ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
         const data = {id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq};
-        if(boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
+        if(!cyclic && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         return {
           data,
           classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
@@ -951,19 +958,16 @@ async function showTranspositionGraph(){
         }}
       ]
     });
-    // dagre is a DAG layout and crashes on cyclic graphs (draw-by-repetition
-    // creates real cycles once positions are merged). Rather than fall back to
-    // an ugly cycle-tolerant layout, hide the cycle FOR LAYOUT ONLY: run dagre
-    // on every element except the dashed back edges, then the back edges just
-    // connect already-positioned nodes. The crash happens inside dagre's async
-    // scheduler, so this must keep dagre from ever seeing a cycle.
-    const layoutEles = backEdges.size
+    // Lay out with dagre on the acyclic edge set only (cycle edges excluded),
+    // and with no compound boxes present on a cyclic graph -- both conditions
+    // are needed to keep dagre from crashing on repetition cycles.
+    const layoutEles = cyclic
       ? cy.elements().filter(el => !el.isEdge() || !el.hasClass('cycle-edge'))
       : cy.elements();
     layoutEles.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
-    if(backEdges.size){
+    if(cyclic){
       $('graphStatus').textContent +=
-        ` · ⟳ ${backEdges.size} repetition move(s) drawn dashed (hidden from layout)`;
+        ` · ⟳ ${backEdges.size} repetition move(s) dashed; run/two-track boxes hidden on this cyclic graph`;
     }
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
