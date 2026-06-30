@@ -1002,16 +1002,49 @@ $('fieldModalSaveBtn').onclick = () => {
    when this node starts a new castle, the Castle name. Stored as plain pref
    fields (name / isCastleRoot / castleName). */
 let attributesModalSave = null;
-function openAttributesModal(oppMove, saved, onSave){
+function openAttributesModal(saved, onSave, lineSeq){
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
+  refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
   attributesModalSave = onSave;
   $('attributesOverlay').style.display='flex';
 }
 function refreshAttrFieldVisibility(){
   $('attrCastleNameField').style.display = $('attrIsCastleRoot').checked ? '' : 'none';
+}
+
+/* every castle defined in this opening system (distinct castle names on
+   isCastleRoot nodes) */
+function definedCastles(){
+  const set = new Set();
+  for(const key in PREFS){
+    const p = PREFS[key];
+    if(p && p.isCastleRoot && p.castleName && p.castleName.trim()) set.add(p.castleName.trim());
+  }
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+/* nearest castle root on THIS seq's own lineage (the default/inherited owner) */
+function inheritedCastle(lineSeq){
+  for(let s = (lineSeq||[]).slice(); s.length; s = s.slice(0,-1)){
+    const p = PREFS[prefKey(CURRENT_LINE.id, s)];
+    if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
+  }
+  return '';
+}
+/* "Belongs to castle" override: Auto (inherit) + every defined castle. Only
+   needed to resolve a transposition shared by two castles; hidden when no
+   castles exist (and there's no stored override to preserve). */
+function refreshCastleOwnerSelect(saved, lineSeq){
+  const sel = $('attrCastleOwner');
+  const inherited = inheritedCastle(lineSeq);
+  const castles = definedCastles();
+  sel.innerHTML =
+    `<option value="">Auto${inherited ? ` (inherit: ${escapeHtml(inherited)})` : ' (no ancestor castle)'}</option>` +
+    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  sel.value = saved?.castleOwner || '';
+  $('attrCastleOwnerField').style.display = (castles.length || saved?.castleOwner) ? '' : 'none';
 }
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
 $('attributesCancelBtn').onclick = () => {
@@ -1022,7 +1055,8 @@ $('attributesSaveBtn').onclick = () => {
   const v = {
     roomName: $('attrRoomName').value.trim(),
     isCastleRoot: $('attrIsCastleRoot').checked,
-    castleName: $('attrCastleName').value.trim()
+    castleName: $('attrCastleName').value.trim(),
+    castleOwner: $('attrCastleOwner').value
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -1523,12 +1557,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      openAttributesModal(opp, currentSaved(), v=>{
+      openAttributesModal(currentSaved(), v=>{
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
+        saveField('castleOwner', v.castleOwner);
         saveField('name', v.roomName);
         refreshBranchName(nameSpan, currentSaved());
-      });
+      }, lineSeq);
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
@@ -1833,12 +1868,13 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    openAttributesModal(trigger, currentSaved(), v=>{
+    openAttributesModal(currentSaved(), v=>{
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
+      saveField('castleOwner', v.castleOwner);
       saveField('name', v.roomName);
       refreshBranchName(nameSpan, currentSaved());
-    });
+    }, lineSeq);
   };
 
   btnEval.onclick = () => {
@@ -2373,7 +2409,8 @@ async function exportBackup(){
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
-        collapsed:p.collapsed
+        collapsed:p.collapsed,
+        isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -2423,7 +2460,8 @@ async function importBackup(data){
       await setPref(line.id, pref.seq, {
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
-        eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false
+        eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false,
+        isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||''
       });
     }
   }
