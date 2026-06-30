@@ -818,6 +818,41 @@ function analyzeCastleStructure(graph){
            mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed };
 }
 
+// Detect a directed cycle in the position-merged graph. Draw-by-repetition
+// variations produce real cycles (a position repeats), which dagre cannot lay
+// out -- it throws "Cannot set 'order' of undefined" from inside its async
+// scheduler, where a try/catch around .run() can't catch it. So we detect the
+// cycle up front and pick breadthfirst (cycle-tolerant) instead of dagre.
+function graphHasCycle(rooms, edges){
+  const adj = new Map(), nodes = new Set();
+  rooms.forEach(r => nodes.add(r.id));
+  for(const e of edges){
+    nodes.add(e.source); nodes.add(e.target);
+    if(!adj.has(e.source)) adj.set(e.source, []);
+    adj.get(e.source).push(e.target);
+  }
+  const state = new Map(); // 0/undef=unvisited, 1=on-stack, 2=done
+  for(const start of nodes){
+    if(state.get(start)) continue;
+    const stack = [{node:start, i:0}];
+    state.set(start, 1);
+    while(stack.length){
+      const top = stack[stack.length-1];
+      const kids = adj.get(top.node) || [];
+      if(top.i < kids.length){
+        const child = kids[top.i++];
+        const s = state.get(child) || 0;
+        if(s === 1) return true;            // back-edge -> cycle
+        if(s === 0){ state.set(child, 1); stack.push({node:child, i:0}); }
+      } else {
+        state.set(top.node, 2);
+        stack.pop();
+      }
+    }
+  }
+  return false;
+}
+
 async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
@@ -900,16 +935,16 @@ async function showTranspositionGraph(){
         }}
       ]
     });
-    // Run dagre explicitly (not in the constructor) so its layout runs in our
-    // call stack and a failure can be caught -- cytoscape-dagre can throw
-    // ("Cannot set 'order' of undefined") on some compound/cyclic topologies.
-    // On failure, fall back to breadthfirst, which handles compounds and cycles.
-    try {
+    // dagre is a DAG layout and crashes on cyclic graphs (draw-by-repetition
+    // creates real cycles once positions are merged). Detect a cycle up front
+    // and use breadthfirst there; the crash happens inside dagre's async
+    // scheduler, so a try/catch around .run() cannot rescue it.
+    const cyclic = graphHasCycle(rooms, edges);
+    if(cyclic){
+      $('graphStatus').textContent += ' · ⟳ repetition cycle detected — using fallback layout';
+      cy.layout({name:'breadthfirst', directed:true, padding:10}).run();
+    } else {
       cy.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
-    } catch(err){
-      console.warn('[graph] dagre layout failed; falling back to breadthfirst', err);
-      try { cy.layout({name:'breadthfirst', directed:true, padding:10}).run(); }
-      catch(e2){ console.warn('[graph] fallback layout also failed', e2); }
     }
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
