@@ -141,6 +141,19 @@
   .room-info-exit{padding:.3rem .5rem;border:1px solid #ddd;border-radius:4px;font-size:.9rem;display:flex;align-items:center;flex-wrap:wrap}
   .room-info-empty{color:#888;font-style:italic;border-style:dashed}
   .room-info-img{width:50px;height:50px;object-fit:contain;margin-left:.5em;border:1px solid #ddd;border-radius:4px;vertical-align:middle}
+  .cr-room{border:1px solid #e0e0e0;border-radius:5px;padding:.45rem .6rem;margin-bottom:.5rem;font-size:.85rem}
+  .cr-id{font-weight:700;color:#1565c0}
+  .cr-type{font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;padding:.05rem .4rem;border-radius:3px;background:#eee;color:#555;margin-left:.3em}
+  .cr-type-two-track{background:#ede7f6;color:#4527a0}
+  .cr-type-corridor{background:#fff3e0;color:#b35e00}
+  .cr-type-branch{background:#e3f2fd;color:#1565c0}
+  .cr-castle{color:#2e7d32;font-weight:600;font-size:.8rem}
+  .cr-name{color:#555;font-style:italic;font-size:.82rem}
+  .cr-wall{margin-top:.25rem;color:#333;font-family:'Courier New',monospace;font-size:.82rem}
+  .cr-wall b{font-family:inherit;color:#888;font-weight:600;display:inline-block;min-width:3.4em}
+  .cr-exits{margin-top:.25rem;color:#444;font-size:.82rem}
+  .cr-exits b{color:#888;font-weight:600;margin-right:.3em}
+  .cr-empty{color:#999;font-style:italic}
 
   .attr-modal{width:min(30em, 92vw);max-height:88vh;overflow:auto}
   .attr-section h3{margin:0 0 .6rem;font-size:1rem;display:flex;align-items:center;gap:.4em}
@@ -631,6 +644,18 @@
     <!-- overflow:hidden (not auto): cytoscape does its own pan/zoom, and an auto
          scrollbar here oscillates on/off as the canvas rounds a hair past the box -->
     <div id="graphContainer" style="flex:1;min-height:0;border:1px solid #ccc;border-radius:4px;overflow:hidden"></div>
+  </div>
+</div>
+
+<!-- generated castle report (G1: room model, inspectable) -->
+<div id="castleReportOverlay" class="overlay">
+  <div class="modal" style="width:min(48em,95vw);max-height:90vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
+      <button id="castleReportCloseBtn" style="flex:0 0 auto">Close</button>
+      <h2 style="margin:0">Generated Castle</h2>
+    </div>
+    <div id="castleReportSummary" style="font-size:.82rem;color:#555;margin-bottom:.5rem"></div>
+    <div id="castleReportBody" style="flex:1;min-height:0;overflow:auto"></div>
   </div>
 </div>
 

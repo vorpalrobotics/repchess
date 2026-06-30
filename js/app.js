@@ -648,6 +648,176 @@ async function showCastleSummary(games, seq){
   );
 }
 
+/* a room's name (and castle, if it's a castle root) lives on the opponent-move
+   row that leads into it — keyed one ply back from the room's seq. */
+function genRoomMeta(seq){
+  if(!seq || !seq.length) return { name:'', castle:'' };
+  const p = PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))];
+  return { name: p?.name || '', castle: (p?.isCastleRoot && p.castleName) ? p.castleName : '' };
+}
+
+/* G1: turn a castle root's subtree into a room MODEL — corridors (linear runs),
+   two-track rooms (head + left/right walls), and branch/standalone rooms — each
+   with its contained moves and its exits (doors) to other rooms. Built on the
+   shared analyzer so it matches the network graph exactly. Data-only; the VR
+   rendering (G2) and decoration persistence (G3) come later. */
+function buildGeneratedCastle(line, games, rootSeq){
+  const graph = buildCastleGraph(line, games, rootSeq);
+  const a = analyzeCastleStructure(graph);
+  const nodeById = new Map(graph.rooms.map(r=>[r.id, r]));
+  const leafIds = new Set(graph.leaves.map(l=>l.id));
+  const genIdOf = id => a.boxOf.get(id) || ('solo:' + id);
+
+  const groups = new Map();   // genId -> { kind, members(ordered), head?, left?, right? }
+  for(const box of a.boxes){
+    if(box.kind === 'run'){
+      groups.set(box.id, { kind:'corridor', members: box.nodes.slice() });
+    } else {
+      groups.set(box.id, { kind:'two-track', head: box.head,
+        left: box.runs[0].slice(), right: box.runs[1].slice(),
+        members: [box.head, ...box.runs[0], ...box.runs[1]] });
+    }
+  }
+  for(const r of graph.rooms){
+    if(a.boxOf.has(r.id)) continue;
+    groups.set('solo:' + r.id, { kind: (a.outDeg.get(r.id)||0) >= 2 ? 'branch' : 'room', members: [r.id] });
+  }
+
+  // deterministic R1, R2, … numbering (entry room first)
+  const order = [...groups.keys()].sort((x,y)=>{
+    const ex = (graph.entryRoomIds||[]).some(id=>genIdOf(id)===x) ? 0 : 1;
+    const ey = (graph.entryRoomIds||[]).some(id=>genIdOf(id)===y) ? 0 : 1;
+    return ex - ey;
+  });
+  const labelOf = new Map(order.map((gid,i)=>[gid, 'R'+(i+1)]));
+  const moveOf = id => nodeById.get(id)?.label || '?';
+
+  const genRooms = order.map(gid => {
+    const g = groups.get(gid);
+    const anchor = nodeById.get(g.head || g.members[0]);
+    const meta = genRoomMeta(anchor.seq);
+    const memberSet = new Set(g.members);
+    const exits = [];
+    for(const e of graph.edges){
+      if(!memberSet.has(e.source)) continue;
+      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null }); continue; }
+      const tgt = genIdOf(e.target);
+      if(tgt === gid) continue;   // internal link inside a corridor / two-track
+      exits.push({ opp: e.label, to: labelOf.get(tgt) || null });
+    }
+    const walls = g.kind === 'two-track'
+      ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
+      : { center: g.members.map(moveOf) };
+    return { id: labelOf.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
+             memberCount: g.members.length, walls, exits };
+  });
+
+  return { genRooms, stats: a, graph };
+}
+
+async function showGeneratedCastleReport(games, seq){
+  if(!CURRENT_LINE) return;
+  const spinner = showSpinner('Generating castle…');
+  await nextPaint();
+  let castle;
+  try { castle = buildGeneratedCastle(CURRENT_LINE, games, seq); }
+  finally { hideSpinner(spinner); }
+  console.log('[generated castle]', castle);
+
+  const s = castle.stats;
+  const typeCounts = {};
+  castle.genRooms.forEach(r => typeCounts[r.type] = (typeCounts[r.type]||0)+1);
+  $('castleReportSummary').textContent =
+    `${castle.genRooms.length} rooms (` +
+    Object.entries(typeCounts).map(([t,n])=>`${n} ${t}`).join(', ') + ') · ' +
+    `graph: ${s.runs.length} run(s), ${s.twoTrackCount} two-track pair(s), ${s.mergeCount} transposition merge(s)`;
+
+  $('castleReportBody').innerHTML = castle.genRooms.map(r => {
+    const title = `<span class="cr-id">${r.id}</span> <span class="cr-type cr-type-${r.type}">${r.type}</span>` +
+      (r.castle ? ` <span class="cr-castle">⟨${escapeHtml(r.castle)}⟩</span>` : '') +
+      (r.name ? ` <span class="cr-name">${escapeHtml(r.name)}</span>` : '');
+    const walls = r.type === 'two-track'
+      ? `<div class="cr-wall"><b>center</b> ${escapeHtml(r.walls.center.join(' '))}</div>` +
+        `<div class="cr-wall"><b>left</b> ${escapeHtml(r.walls.left.join(' · '))}</div>` +
+        `<div class="cr-wall"><b>right</b> ${escapeHtml(r.walls.right.join(' · '))}</div>`
+      : `<div class="cr-wall"><b>moves</b> ${escapeHtml(r.walls.center.join(' · '))}</div>`;
+    const exits = r.exits.length
+      ? `<div class="cr-exits"><b>exits</b> ${r.exits.map(x=>`${escapeHtml(x.opp)} → ${x.to || '(unbuilt)'}`).join(' · ')}</div>`
+      : `<div class="cr-exits cr-empty">terminal (no exits)</div>`;
+    return `<div class="cr-room">${title}${walls}${exits}</div>`;
+  }).join('');
+  $('castleReportOverlay').style.display = 'flex';
+}
+
+/* ---------- shared castle-structure analysis ----------
+   Given a buildCastleGraph result, detect linear runs and two-track rooms and
+   assign every room node to a box (or leave it standalone). Used by both the
+   network graph (boxing + collapsed-room stats) and the castle generator (G1),
+   so the two always agree. See LinearSequencesAndRoomObjects.md. */
+function analyzeCastleStructure(graph){
+  const { rooms, edges } = graph;
+  const indegree = new Map();
+  edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
+  const mergeCount = [...indegree.values()].filter(c=>c>1).length;
+  const roomIds = new Set(rooms.map(r=>r.id));
+  const outDeg = new Map();
+  edges.forEach(e=>outDeg.set(e.source,(outDeg.get(e.source)||0)+1));
+  const outTargets = new Map();
+  edges.forEach(e=>{ if(!outTargets.has(e.source)) outTargets.set(e.source, []); outTargets.get(e.source).push(e.target); });
+
+  // forced-chain edges -> linear runs
+  const chainNext = new Map(), chainTarget = new Set();
+  for(const e of edges){
+    if(!roomIds.has(e.source) || !roomIds.has(e.target)) continue;
+    if(outDeg.get(e.source) !== 1) continue;
+    if((indegree.get(e.target)||0) !== 1) continue;
+    chainNext.set(e.source, e.target);
+    chainTarget.add(e.target);
+  }
+  const runs = [];
+  for(const head of chainNext.keys()){
+    if(chainTarget.has(head)) continue;
+    const run = [], seen = new Set(); let cur = head;
+    while(cur !== undefined && !seen.has(cur)){ seen.add(cur); run.push(cur); cur = chainNext.get(cur); }
+    if(run.length >= 2) runs.push(run);
+  }
+  const nodesInRuns = runs.reduce((a,r)=>a+r.length, 0);
+  const singleCollapsed = rooms.length - nodesInRuns + runs.length;
+
+  // two-track rooms: a node with exactly two children, each a non-merge run head
+  const runByHead = new Map();
+  runs.forEach(run => runByHead.set(run[0], run));
+  const boxOf = new Map(), boxes = [], consumed = new Set();
+  let twoTrackCount = 0;
+  rooms.forEach(H => {
+    if(outDeg.get(H.id) !== 2) return;
+    const [t1, t2] = outTargets.get(H.id) || [];
+    if(!runByHead.has(t1) || !runByHead.has(t2) || t1 === t2) return;
+    if((indegree.get(t1)||0) !== 1 || (indegree.get(t2)||0) !== 1) return;
+    const runA = runByHead.get(t1), runB = runByHead.get(t2);
+    const bid = `tt${twoTrackCount++}`;
+    boxes.push({ id: bid, kind: 'two-track', head: H.id, runs: [runA.slice(), runB.slice()],
+      label: `2-track ×${1 + runA.length + runB.length}` });
+    boxOf.set(H.id, bid);
+    runA.forEach(id=>boxOf.set(id, bid));
+    runB.forEach(id=>boxOf.set(id, bid));
+    consumed.add(runs.indexOf(runA));
+    consumed.add(runs.indexOf(runB));
+  });
+  runs.forEach((run, i) => {
+    if(consumed.has(i)) return;
+    const trimmed = run.filter(id => !boxOf.has(id));   // drop a tail that became a two-track head
+    if(trimmed.length < 2) return;
+    const bid = `run${i}`;
+    boxes.push({ id: bid, kind: 'run', nodes: trimmed, label: `linear ×${trimmed.length}` });
+    trimmed.forEach(id=>boxOf.set(id, bid));
+  });
+  const twoTrackCollapsed = boxes.length + (rooms.length - boxOf.size);
+
+  return { indegree, outDeg, outTargets, runs, boxes, boxOf,
+           mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed };
+}
+
 async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
@@ -656,81 +826,10 @@ async function showTranspositionGraph(){
   const spinner = showSpinner('Building graph…');
   await nextPaint();
   try {
-    const {rooms, leaves, edges, entryRoomIds, needsStartNode} = buildCastleGraph(CURRENT_LINE, GAMES, FOCUSED_SEQ);
-
-    const indegree = new Map();
-    edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
-    const mergeCount = [...indegree.values()].filter(c=>c>1).length;
-
-    // ---- linear-run detection ----
-    // A run is a maximal chain of rooms joined by "forced" edges: the source
-    // room has exactly ONE outgoing edge (counting leaf edges too), that edge
-    // targets another room (not a leaf), and the target has in-degree 1 (not a
-    // transposition merge). A merge node may be a run's HEAD (in-degree>1) but
-    // never a mid/tail member. Runs of >=2 nodes get boxed.
-    const roomIds = new Set(rooms.map(r=>r.id));
-    const outDeg = new Map();
-    edges.forEach(e=>outDeg.set(e.source,(outDeg.get(e.source)||0)+1));
-    const chainNext = new Map();     // forced edge: source room id -> target room id
-    const chainTarget = new Set();   // rooms that are the target of a forced edge
-    for(const e of edges){
-      if(!roomIds.has(e.source) || !roomIds.has(e.target)) continue;  // both ends rooms
-      if(outDeg.get(e.source) !== 1) continue;                         // source forced
-      if((indegree.get(e.target)||0) !== 1) continue;                  // target not a merge
-      chainNext.set(e.source, e.target);
-      chainTarget.add(e.target);
-    }
-    const runs = [];
-    for(const head of chainNext.keys()){
-      if(chainTarget.has(head)) continue;   // walk only from a chain head
-      const run = [];
-      const seen = new Set();
-      let cur = head;
-      while(cur !== undefined && !seen.has(cur)){ seen.add(cur); run.push(cur); cur = chainNext.get(cur); }
-      if(run.length >= 2) runs.push(run);
-    }
-    const nodesInRuns = runs.reduce((a,r)=>a+r.length, 0);
-    const singleCollapsed = rooms.length - nodesInRuns + runs.length;
-
-    // ---- two-track rooms ----
-    // A node H with exactly two outgoing edges, each leading to a (non-merge) run
-    // head, can host both runs as the left/right walls of ONE room: H's pair on a
-    // central billboard, then a half-wall splitting the two linear branches. So H
-    // + run A + run B collapse to a single room.
-    const runByHead = new Map();
-    runs.forEach(run => runByHead.set(run[0], run));
-    const outTargets = new Map();
-    edges.forEach(e=>{ if(!outTargets.has(e.source)) outTargets.set(e.source, []); outTargets.get(e.source).push(e.target); });
-    const boxOf = new Map();           // room id -> box id
-    const boxes = [];                  // {id, label, kind}
-    const consumed = new Set();        // run indices folded into a two-track box
-    let twoTrackCount = 0;
-    rooms.forEach(H => {
-      if(outDeg.get(H.id) !== 2) return;
-      const [t1, t2] = outTargets.get(H.id) || [];
-      if(!runByHead.has(t1) || !runByHead.has(t2) || t1 === t2) return;
-      if((indegree.get(t1)||0) !== 1 || (indegree.get(t2)||0) !== 1) return;   // both runs solely owned by H (no transposition head)
-      const runA = runByHead.get(t1), runB = runByHead.get(t2);
-      const bid = `tt${twoTrackCount++}`;
-      boxes.push({ id: bid, label: `2-track ×${1 + runA.length + runB.length}`, kind: 'two-track' });
-      boxOf.set(H.id, bid);
-      runA.forEach(id=>boxOf.set(id, bid));
-      runB.forEach(id=>boxOf.set(id, bid));
-      consumed.add(runs.indexOf(runA));
-      consumed.add(runs.indexOf(runB));
-    });
-    runs.forEach((run, i) => {
-      if(consumed.has(i)) return;      // already inside a two-track box
-      // a run can END on a two-track head (out-degree 2); that head belongs to
-      // the two-track room, so drop it from this run. (Already-boxed = the head.)
-      const trimmed = run.filter(id => !boxOf.has(id));
-      if(trimmed.length < 2) return;   // only a singleton left -> its own unboxed room
-      const bid = `run${i}`;
-      boxes.push({ id: bid, label: `linear ×${trimmed.length}`, kind: 'run' });
-      trimmed.forEach(id=>boxOf.set(id, bid));
-    });
-    // collapsed = one room per box + one per still-unboxed room
-    const twoTrackCollapsed = boxes.length + (rooms.length - boxOf.size);
+    const graph = buildCastleGraph(CURRENT_LINE, GAMES, FOCUSED_SEQ);
+    const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
+    const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed }
+      = analyzeCastleStructure(graph);
 
     $('graphStatus').textContent =
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
@@ -917,6 +1016,7 @@ async function showRoomInfoPanel(roomEl){
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
+$('castleReportCloseBtn').onclick = () => { $('castleReportOverlay').style.display='none'; };
 
 /* ---------- toggle helper ----------
    `seq`, when given, is this row's own pref seq (ends in the opponent's
@@ -1535,7 +1635,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      if(childrenSeq) showCastleSummary(games,childrenSeq);
+      if(childrenSeq) showGeneratedCastleReport(games,childrenSeq);
     };
     rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
       e.stopPropagation();
@@ -1846,7 +1946,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    if(childrenSeq) showCastleSummary(games,childrenSeq);
+    if(childrenSeq) showGeneratedCastleReport(games,childrenSeq);
   };
   rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
     e.stopPropagation();
