@@ -2676,7 +2676,7 @@ async function exportBackup(){
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);
   const data = {
-    version: 4,
+    version: 5,   // v5 adds threeLayout (VR memory-palace layout)
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
     games,
@@ -2700,6 +2700,7 @@ async function exportBackup(){
     }),
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
+    threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
     assets: await getAllAssets()
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
@@ -2752,6 +2753,7 @@ async function importBackup(data){
   }
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
+  if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
