@@ -208,8 +208,10 @@ function registerGeneratedCastle(castle){
       : { w: 9, d: 9, h: 6 };
     const halfW = sz.w / 2 - 1.5;
     const exits = [];
-    // back door (south) → parent room, or out to the street for the entry room
-    exits.push({ wall: 'south', offset: 0, target: parent[r.id] ? keyOf(parent[r.id]) : 'mainStreet', back: true });
+    // back door (south) → parent room. The entry room has no parent, so it gets
+    // no back door (you leave the walk via the Close button); wiring it to the
+    // outdoor street would need a matching street building and is deferred.
+    if(parent[r.id]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.id]), back: true });
     // forward doors → built exits, spread across north/east/west; extras stack on north
     const fwd = r.exits.filter(ex => ex.to);
     const walls = ['north', 'east', 'west'];
