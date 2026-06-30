@@ -884,39 +884,24 @@ async function showTranspositionGraph(){
       return t.length > 12 ? t.slice(0,12) + '…' : t;
     };
 
-    // --- decide whether this is a "hard" graph that dagre can't lay out with
-    // compound boxes. dagre's compound-nesting layout throws "Cannot set 'order'
-    // of undefined" on (a) cycles threading through boxes AND (b) disconnected
-    // components (e.g. an unconnected start node or several entry trees) combined
-    // with boxes. London is one connected acyclic component, so it's fine; other
-    // openings hit one of these. For any hard graph we lay out FLAT -- no compound
-    // boxes given to dagre at all -- then re-wrap the boxes afterward, which never
-    // crashes because dagre only ever sees a plain (optionally disconnected) DAG.
+    // dagre's compound-nesting layout intermittently throws "Cannot set 'order'
+    // of undefined" on the run/two-track BOXES -- it's triggered by certain box
+    // shapes (e.g. a short run-box with edges crossing its boundary to a start
+    // node / dead-end leaf), not by cycles or disconnection as first suspected
+    // (a fully connected, acyclic focused line crashes too). The only reliable
+    // cure is to never hand dagre a compound graph: we ALWAYS lay out FLAT -- a
+    // plain DAG, no boxes -- then re-wrap the boxes afterward with pure cytoscape
+    // reparenting (no dagre involved, so it cannot crash).
     const backEdges = findBackEdges(rooms, edges);
     const cyclic = backEdges.size > 0;
+    const flat = true;   // always flat -- see comment above
 
-    // weakly-connected component count over every rendered node
-    const compNodes = new Set(rooms.map(r=>r.id));
-    leaves.forEach(l=>compNodes.add(l.id));
-    if(needsStartNode) compNodes.add('start');
-    const parentOf = new Map();
-    const find = x => { while(parentOf.get(x)!==x){ parentOf.set(x, parentOf.get(parentOf.get(x))); x = parentOf.get(x); } return x; };
-    compNodes.forEach(n=>parentOf.set(n,n));
-    for(const e of edges){
-      if(!parentOf.has(e.source)) parentOf.set(e.source, e.source);
-      if(!parentOf.has(e.target)) parentOf.set(e.target, e.target);
-      parentOf.set(find(e.source), find(e.target));
-    }
-    const roots = new Set(); [...parentOf.keys()].forEach(n=>roots.add(find(n)));
-    const componentCount = roots.size;
-
-    const flat = cyclic || componentCount > 1;
-    console.log(`[graph] nodes=${rooms.length+leaves.length+(needsStartNode?1:0)} edges=${edges.length} boxes=${boxes.length} components=${componentCount} cyclic=${cyclic} → ${flat?'FLAT layout':'compound layout'}`);
+    console.log(`[graph] nodes=${rooms.length+leaves.length+(needsStartNode?1:0)} edges=${edges.length} boxes=${boxes.length} cyclic=${cyclic} → flat layout, boxes re-wrapped after`);
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-      // box compound parents are added during layout only for easy graphs;
-      // hard graphs add them AFTER layout (see flat re-wrap below).
+      // box compound parents are NEVER given to dagre (they crash it); they are
+      // added AFTER layout and children reparented into them (see flat re-wrap).
       ...(flat ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
