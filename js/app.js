@@ -3771,9 +3771,11 @@ $('engineStopBtn').onclick = () => {
 };
 
 engine.init().then(() => {
-  // surface the engine mode as soon as it's ready, if nothing is analysing yet
+  // surface the engine mode as soon as it's ready, if nothing is analysing yet.
+  // Without the board widget there's no live board to analyse on, so report the
+  // engine as not available rather than "ready".
   if(!$('engineDepth').textContent){
-    $('engineDepth').textContent = `Engine ready${engineModeTag()}`;
+    $('engineDepth').textContent = Chessboard ? `Engine ready${engineModeTag()}` : 'Engine not available';
   }
 }).catch(err => {
   console.error('[engine] init failed', err);
@@ -4169,6 +4171,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
 }
 
 function showPosition(fen, onEvalUpdate, onComplete){
+  if(!Chessboard) return;   // no board widget -> live board analysis is unavailable
   console.debug(`[showPosition] fen=${fen}`);
   board?.setPosition(fen);
   runEngine(fen, onEvalUpdate, onComplete);
