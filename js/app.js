@@ -818,20 +818,23 @@ function analyzeCastleStructure(graph){
            mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed };
 }
 
-// Detect a directed cycle in the position-merged graph. Draw-by-repetition
-// variations produce real cycles (a position repeats), which dagre cannot lay
-// out -- it throws "Cannot set 'order' of undefined" from inside its async
-// scheduler, where a try/catch around .run() can't catch it. So we detect the
-// cycle up front and pick breadthfirst (cycle-tolerant) instead of dagre.
-function graphHasCycle(rooms, edges){
+// Find the cycle-closing "back edges" in the position-merged graph. Draw-by-
+// repetition variations produce real cycles (a position repeats), which dagre
+// cannot lay out -- it throws "Cannot set 'order' of undefined" from inside its
+// async scheduler, where a try/catch around .run() can't catch it. Removing a
+// DFS's back edges always yields a DAG, so we exclude exactly those edges from
+// the layout (drawing them dashed instead) and keep dagre's clean tree shape.
+// Returns a Set of indices into the `edges` array.
+function findBackEdges(rooms, edges){
   const adj = new Map(), nodes = new Set();
   rooms.forEach(r => nodes.add(r.id));
-  for(const e of edges){
+  edges.forEach((e, idx) => {
     nodes.add(e.source); nodes.add(e.target);
     if(!adj.has(e.source)) adj.set(e.source, []);
-    adj.get(e.source).push(e.target);
-  }
-  const state = new Map(); // 0/undef=unvisited, 1=on-stack, 2=done
+    adj.get(e.source).push({to:e.target, idx});
+  });
+  const state = new Map();      // 0/undef=unvisited, 1=on-stack, 2=done
+  const back = new Set();
   for(const start of nodes){
     if(state.get(start)) continue;
     const stack = [{node:start, i:0}];
@@ -840,17 +843,17 @@ function graphHasCycle(rooms, edges){
       const top = stack[stack.length-1];
       const kids = adj.get(top.node) || [];
       if(top.i < kids.length){
-        const child = kids[top.i++];
-        const s = state.get(child) || 0;
-        if(s === 1) return true;            // back-edge -> cycle
-        if(s === 0){ state.set(child, 1); stack.push({node:child, i:0}); }
+        const {to, idx} = kids[top.i++];
+        const s = state.get(to) || 0;
+        if(s === 1) back.add(idx);          // edge into a node still on the stack -> closes a cycle
+        else if(s === 0){ state.set(to, 1); stack.push({node:to, i:0}); }
       } else {
         state.set(top.node, 2);
         stack.pop();
       }
     }
   }
-  return false;
+  return back;
 }
 
 async function showTranspositionGraph(){
@@ -881,6 +884,10 @@ async function showTranspositionGraph(){
       return t.length > 12 ? t.slice(0,12) + '…' : t;
     };
 
+    // cycle-closing edges (draw-by-repetition) are excluded from the dagre
+    // layout and drawn dashed, so the rest of the graph keeps its clean tree.
+    const backEdges = findBackEdges(rooms, edges);
+
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       ...boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' })),
@@ -894,7 +901,10 @@ async function showTranspositionGraph(){
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
-      ...edges.map(e=>({data:{source:e.source,target:e.target,label:e.label,fen:e.fen,seq:e.seq}}))
+      ...edges.map((e,i)=>({
+        data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq},
+        classes: backEdges.has(i) ? 'cycle-edge' : ''
+      }))
     ];
 
     const cy = cytoscape({
@@ -932,19 +942,28 @@ async function showTranspositionGraph(){
           'target-arrow-shape':'triangle', 'curve-style':'bezier',
           'label':'data(label)', 'font-size':9, 'color':'#333',
           'text-background-color':'#fff', 'text-background-opacity':0.8
+        }},
+        { selector:'edge.cycle-edge', style:{
+          'line-color':'#8e24aa', 'target-arrow-color':'#8e24aa',
+          'line-style':'dashed', 'width':1.5, 'opacity':0.7,
+          'curve-style':'unbundled-bezier', 'control-point-distances':'40',
+          'control-point-weights':'0.5', 'color':'#6a1b9a'
         }}
       ]
     });
     // dagre is a DAG layout and crashes on cyclic graphs (draw-by-repetition
-    // creates real cycles once positions are merged). Detect a cycle up front
-    // and use breadthfirst there; the crash happens inside dagre's async
-    // scheduler, so a try/catch around .run() cannot rescue it.
-    const cyclic = graphHasCycle(rooms, edges);
-    if(cyclic){
-      $('graphStatus').textContent += ' · ⟳ repetition cycle detected — using fallback layout';
-      cy.layout({name:'breadthfirst', directed:true, padding:10}).run();
-    } else {
-      cy.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+    // creates real cycles once positions are merged). Rather than fall back to
+    // an ugly cycle-tolerant layout, hide the cycle FOR LAYOUT ONLY: run dagre
+    // on every element except the dashed back edges, then the back edges just
+    // connect already-positioned nodes. The crash happens inside dagre's async
+    // scheduler, so this must keep dagre from ever seeing a cycle.
+    const layoutEles = backEdges.size
+      ? cy.elements().filter(el => !el.isEdge() || !el.hasClass('cycle-edge'))
+      : cy.elements();
+    layoutEles.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+    if(backEdges.size){
+      $('graphStatus').textContent +=
+        ` · ⟳ ${backEdges.size} repetition move(s) drawn dashed (hidden from layout)`;
     }
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
