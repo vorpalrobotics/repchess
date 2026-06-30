@@ -948,6 +948,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
 <script src="js/db.js"></script>
+<!-- boot watchdog: if app.js never runs (e.g. a CDN serving cm-chessboard is
+     down, so its ES-module import fails), the default-visible spinner would spin
+     forever. After 15s with no boot, replace it with an actionable message. -->
+<script>
+  setTimeout(function(){
+    if(window.__APP_BOOTED) return;
+    var ov = document.getElementById('spinnerOverlay');
+    if(!ov) return;
+    ov.innerHTML = '<div style="max-width:26em;text-align:center;background:#fff;padding:1.1em 1.3em;border-radius:6px;box-shadow:0 2px 12px rgba(0,0,0,.3);color:#333">' +
+      '<p style="margin:0 0 .5em;font-weight:600">Couldn’t finish loading.</p>' +
+      '<p style="margin:0 0 .9em;font-size:.9em;line-height:1.4">A required resource (a CDN) may be temporarily unavailable. This usually clears up on a reload.</p>' +
+      '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
+  }, 15000);
+</script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

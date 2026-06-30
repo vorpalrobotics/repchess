@@ -6,6 +6,10 @@ import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen }
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
+// Reaching here means the module's CDN imports above all loaded; clears the
+// boot watchdog in index.html so it doesn't show the "failed to load" message.
+window.__APP_BOOTED = true;
+
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
    Displayed in the visitor's local timezone so it matches their wall clock. */
 function formatBuildStamp(utcStamp){
