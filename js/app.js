@@ -443,7 +443,12 @@ function moveDisambiguatorCount(seq){
   return ages.indexOf(pieceAge(mv.from, mv.color));   // youngest -> 0, older -> more beards
 }
 
-function buildCastleGraph(line, games, rootSeq=null){
+/* leadIn (default true): when scoped to a rootSeq, also include the chain of
+   ancestor rooms leading down to it (context for the network graph). Pass
+   leadIn=false to begin exactly AT rootSeq with no ancestors — the castle
+   generator wants the mansion to start at its own root room, not show the
+   opening moves that lead into it as a corridor. */
+function buildCastleGraph(line, games, rootSeq=null, leadIn=true){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
   const edges = [];
@@ -495,6 +500,14 @@ function buildCastleGraph(line, games, rootSeq=null){
   }
 
   const entryRoomIds = [];
+  if(rootSeq && !leadIn){
+    /* generator mode: the mansion begins at its own root room. No ancestor
+       chain, no start node — just this room and its subtree. */
+    const room = getRoom(rootSeq);
+    entryRoomIds.push(room.id);
+    walk(rootSeq, room.id);
+    return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode:false };
+  }
   if(rootSeq){
     /* scoped to a focused room, but still show the chain of ancestor rooms
        (and the single move connecting each) leading down to it, so the
@@ -662,7 +675,9 @@ function genRoomMeta(seq){
    shared analyzer so it matches the network graph exactly. Data-only; the VR
    rendering (G2) and decoration persistence (G3) come later. */
 function buildGeneratedCastle(line, games, rootSeq){
-  const graph = buildCastleGraph(line, games, rootSeq);
+  // leadIn=false: start the mansion at its root room, not at the opening moves
+  // that lead into it (those would otherwise show as a lead-in corridor).
+  const graph = buildCastleGraph(line, games, rootSeq, false);
   const a = analyzeCastleStructure(graph);
   const nodeById = new Map(graph.rooms.map(r=>[r.id, r]));
   const leafIds = new Set(graph.leaves.map(l=>l.id));
