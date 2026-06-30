@@ -181,6 +181,58 @@ function generateMainStreet(systems){
   START_SPAWN.x = 0; START_SPAWN.z = depth / 2 - 4; START_SPAWN.yaw = 0;   // spawn at the south end, facing up the street
 }
 
+/* ---------- G2a: walk a GENERATED castle ----------
+   Turn the app's buildGeneratedCastle output (genRooms with walls + exits) into
+   navigable ROOMS, one per generated room, wired room-to-room by doors. This is
+   the structural skeleton: doors + back-links + a wall sign listing each room's
+   moves. Rich move-pair billboards, two-track object slots, and per-position
+   decoration persistence come in later phases. Returns {entryKey, spawn}. */
+let CASTLE_ENTRY = null;
+function clearGeneratedCastle(){
+  for(const k of Object.keys(ROOMS)) if(k.startsWith('cas:')) delete ROOMS[k];
+  CASTLE_ENTRY = null;
+}
+function registerGeneratedCastle(castle){
+  clearGeneratedCastle();
+  const genRooms = (castle && castle.genRooms) || [];
+  if(!genRooms.length) return null;
+  const keyOf = id => 'cas:' + id;
+  // back-link: the room that holds a built forward exit to this one is its parent
+  const parent = {};
+  for(const r of genRooms) for(const ex of r.exits) if(ex.to && !(ex.to in parent)) parent[ex.to] = r.id;
+  const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
+  CASTLE_ENTRY = keyOf(entry.id);
+  for(const r of genRooms){
+    const sz = r.type === 'corridor'
+      ? { w: 7, d: Math.max(8, Math.min(40, (r.memberCount || 1) * 5)), h: 6 }
+      : { w: 9, d: 9, h: 6 };
+    const halfW = sz.w / 2 - 1.5;
+    const exits = [];
+    // back door (south) → parent room, or out to the street for the entry room
+    exits.push({ wall: 'south', offset: 0, target: parent[r.id] ? keyOf(parent[r.id]) : 'mainStreet', back: true });
+    // forward doors → built exits, spread across north/east/west; extras stack on north
+    const fwd = r.exits.filter(ex => ex.to);
+    const walls = ['north', 'east', 'west'];
+    fwd.forEach((ex, i) => {
+      const wall = walls[i] || 'north';
+      let offset = walls[i] ? 0 : (i - 2) * 2.5;
+      offset = Math.max(-halfW, Math.min(halfW, offset));
+      exits.push({ wall, offset, target: keyOf(ex.to), label: ex.opp });
+    });
+    const moves = (r.walls.center || []).slice()
+      .concat((r.walls.left || []).map(m => '⟸ ' + m))
+      .concat((r.walls.right || []).map(m => '⟹ ' + m));
+    const doors = fwd.map(ex => `${ex.opp} → ${ex.to}`);
+    const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
+    ROOMS[keyOf(r.id)] = {
+      size: sz, color: 0x6f5f8e, exits,
+      castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
+    };
+  }
+  const s = ROOMS[CASTLE_ENTRY].size;
+  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - 3.5, yaw: 0 } };
+}
+
 let renderer=null, scene=null, camera=null, clock=null;
 let container=null, animHandle=null, resizeObs=null;
 let keys = {};
@@ -2900,6 +2952,43 @@ function computeSpawnForExit(fromKey, room, ex){
   return doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true);
 }
 
+/* G2a: a freestanding placard in a generated-castle room, listing the room's
+   moves (and any unbuilt exits). Faces south, toward the entering player. The
+   rich move-pair billboards replace this in a later phase. */
+function buildCastleRoomSign(room){
+  const sign = room.castleSign;
+  const cw = 512, ch = 440;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(244,240,230,0.96)'; ctx.fillRect(0, 0, cw, ch);
+  ctx.strokeStyle = '#8a6d3b'; ctx.lineWidth = 8; ctx.strokeRect(6, 6, cw - 12, ch - 12);
+  ctx.fillStyle = '#3a2c12'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  let tf = 42; ctx.font = `bold ${tf}px serif`;
+  while(tf > 18 && ctx.measureText(sign.title).width > cw - 48){ tf -= 2; ctx.font = `bold ${tf}px serif`; }
+  ctx.fillText(sign.title, cw / 2, 18);
+  let y = 18 + tf + 8;
+  ctx.fillStyle = '#6a5a3a'; ctx.font = 'italic 22px serif';
+  ctx.fillText(sign.type, cw / 2, y); y += 38;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#1a1a1a'; ctx.font = '26px sans-serif';
+  for(const m of (sign.moves || [])){ if(y > ch - 96) break; ctx.fillText('• ' + m, 40, y); y += 32; }
+  if(sign.doors && sign.doors.length){
+    ctx.fillStyle = '#2c5a3b'; ctx.font = '22px sans-serif';
+    for(const d of sign.doors){ if(y > ch - 64) break; ctx.fillText('🚪 ' + d, 40, y); y += 28; }
+  }
+  if(sign.unbuilt && sign.unbuilt.length && y <= ch - 40){
+    ctx.fillStyle = '#9a3b2c'; ctx.font = 'italic 22px sans-serif';
+    ctx.fillText('unbuilt: ' + sign.unbuilt.join(' '), 40, y);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const W = 2.2, H = W * (ch / cw);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, H),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
+  mesh.position.set(0, 1.7, -room.size.d * 0.18);
+  return mesh;
+}
 function buildRoom(roomKey){
   const room = mergedRoom(roomKey);
   buildGeneration++;
@@ -2952,6 +3041,9 @@ function buildRoom(roomKey){
   }
 
   const carMode = isElevatorCar(roomKey);
+
+  // G2a: generated-castle rooms carry a freestanding sign listing their moves
+  if(room.castleSign) scene.add(buildCastleRoomSign(room));
 
   currentExitsByWall = {};
   currentStairCorridors = {};
@@ -4588,7 +4680,11 @@ export async function openThreeTest(containerEl, opts){
   window.addEventListener('keyup', onKeyUp);
   renderer.domElement.addEventListener('click', onCanvasClick);
 
-  enterRoom(START_ROOM, START_SPAWN);
+  // a generated castle (G2a): synthesize its rooms and spawn at the entry;
+  // otherwise start on Main Street as usual.
+  const cas = threeOpts.castle ? registerGeneratedCastle(threeOpts.castle) : null;
+  if(cas) enterRoom(cas.entryKey, cas.spawn);
+  else enterRoom(START_ROOM, START_SPAWN);
   tick();
 
   // test-only hook (off unless the debug flag is set) so the layout editor can
@@ -4621,6 +4717,7 @@ export function closeThreeTest(){
     renderer = null;
   }
   if(container){ container.innerHTML = ''; }
+  clearGeneratedCastle();   // drop synthesized cas:* rooms so a later normal walk is clean
   editMode = false;
   inputLocked = false;
   billboards = [];

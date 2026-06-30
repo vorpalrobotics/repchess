@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-11';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -730,6 +730,7 @@ function buildGeneratedCastle(line, games, rootSeq){
   return { genRooms, stats: a, graph };
 }
 
+let LAST_GENERATED_CASTLE = null;   // stashed so "Walk in VR" can hand it to the VR engine
 async function showGeneratedCastleReport(games, seq){
   if(!CURRENT_LINE) return;
   const spinner = showSpinner('Generating castle…');
@@ -737,6 +738,7 @@ async function showGeneratedCastleReport(games, seq){
   let castle;
   try { castle = buildGeneratedCastle(CURRENT_LINE, games, seq); }
   finally { hideSpinner(spinner); }
+  LAST_GENERATED_CASTLE = castle;
   console.log('[generated castle]', castle);
 
   const s = castle.stats;
@@ -1234,6 +1236,21 @@ async function showRoomInfoPanel(roomEl){
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
 $('castleReportCloseBtn').onclick = () => { $('castleReportOverlay').style.display='none'; };
+/* G2a: walk the generated castle in VR — hand its room/exit structure to the
+   three.js engine, which synthesizes navigable rooms and spawns us at the entry. */
+$('castleWalkBtn').onclick = async () => {
+  if(!LAST_GENERATED_CASTLE){ return; }
+  $('castleReportOverlay').style.display='none';
+  $('threeTestOverlay').style.display='flex';
+  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
+  openThreeTest($('threeTestCanvasWrap'), {
+    systems,
+    castle: LAST_GENERATED_CASTLE,
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
+    onAssets: openThreeTestAssets
+  });
+};
 
 /* ---------- toggle helper ----------
    `seq`, when given, is this row's own pref seq (ends in the opponent's
