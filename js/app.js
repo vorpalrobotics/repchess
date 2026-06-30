@@ -11,19 +11,27 @@ window.__APP_BOOTED = true;
 
 /* cm-chessboard (the 2D board widget) is loaded DYNAMICALLY and tolerantly: it's
    only needed for the four board widgets (analysis board, hover preview, PV
-   float, opening quiz). If its CDN is down, the import fails but the rest of the
-   app — home, import, mnemonics, assets, the VR world, the graph, FEN/move
-   logic (chess.js, loaded separately) — keeps working. COLOR/INPUT_EVENT_TYPE
-   get safe defaults so non-board code never trips on them. */
+   float, opening quiz). It's tried from unpkg first, then jsdelivr as a fallback
+   (independent CDNs, so one provider's outage doesn't sink the board); if BOTH
+   fail, the import fails but the rest of the app — home, import, mnemonics,
+   assets, the VR world, the graph, FEN/move logic (chess.js, loaded
+   separately) — keeps working. COLOR/INPUT_EVENT_TYPE get safe defaults so
+   non-board code never trips on them. */
+const CM_CHESSBOARD_HOSTS = ['https://unpkg.com', 'https://cdn.jsdelivr.net/npm'];
+const PIECES_FILE = `${CM_CHESSBOARD_HOSTS[0]}/cm-chessboard@8/assets/pieces/standard.svg`;
 let Chessboard = null;
 let COLOR = { white: 'w', black: 'b' };
 let INPUT_EVENT_TYPE = {};
-try {
-  const cm = await import('https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js');
-  Chessboard = cm.Chessboard; COLOR = cm.COLOR; INPUT_EVENT_TYPE = cm.INPUT_EVENT_TYPE;
-} catch(err){
-  console.warn('[repchess] chessboard library failed to load — board widgets disabled, rest of app still works', err);
+for(const host of CM_CHESSBOARD_HOSTS){
+  try {
+    const cm = await import(`${host}/cm-chessboard@8/src/Chessboard.js`);
+    Chessboard = cm.Chessboard; COLOR = cm.COLOR; INPUT_EVENT_TYPE = cm.INPUT_EVENT_TYPE;
+    break;
+  } catch(err){
+    console.warn(`[repchess] chessboard load failed from ${host}`, err);
+  }
 }
+if(!Chessboard) console.warn('[repchess] chessboard unavailable — board widgets disabled, rest of app still works');
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
    Displayed in the visitor's local timezone so it matches their wall clock. */
@@ -3348,7 +3356,7 @@ function oqEnsureBoard(){
     position: new Chess().fen(),
     orientation: COLOR.white,
     animationDuration: 375,   // ~25% slower than the 300ms default
-    style: { pieces: { file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg' } }
+    style: { pieces: { file: PIECES_FILE } }
   });
 }
 
@@ -3542,8 +3550,8 @@ $('oqAgainNewBtn').onclick  = ()=> oqRun(false);
 
 /* ---------- analysis board ----------
    null when the chessboard library failed to load; every call site uses ?. so
-   the board features simply no-op in that (degraded) case. */
-const PIECES_FILE = 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg';
+   the board features simply no-op in that (degraded) case. (PIECES_FILE is
+   defined up top alongside the dynamic import.) */
 const board = Chessboard ? new Chessboard($('board'), {
   position: new Chess().fen(),
   orientation: COLOR.white,
