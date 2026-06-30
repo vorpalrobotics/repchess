@@ -884,24 +884,44 @@ async function showTranspositionGraph(){
       return t.length > 12 ? t.slice(0,12) + '…' : t;
     };
 
-    // cycle-closing edges (draw-by-repetition) are excluded from the dagre
-    // layout and drawn dashed, so the rest of the graph keeps its clean tree.
+    // --- decide whether this is a "hard" graph that dagre can't lay out with
+    // compound boxes. dagre's compound-nesting layout throws "Cannot set 'order'
+    // of undefined" on (a) cycles threading through boxes AND (b) disconnected
+    // components (e.g. an unconnected start node or several entry trees) combined
+    // with boxes. London is one connected acyclic component, so it's fine; other
+    // openings hit one of these. For any hard graph we lay out FLAT -- no compound
+    // boxes given to dagre at all -- then re-wrap the boxes afterward, which never
+    // crashes because dagre only ever sees a plain (optionally disconnected) DAG.
     const backEdges = findBackEdges(rooms, edges);
-    // dagre's compound-nesting layout corrupts ("Cannot set 'order' of
-    // undefined") when a cycle threads through compound parents -- the cycle is
-    // gone from the edge set, but the box nesting still trips it. So on a cyclic
-    // graph we drop the run/two-track boxes from the render entirely and show a
-    // plain dagre tree. (The boxes are an analysis nicety; a repetition-bearing
-    // repertoire is a rare case where a clean tree beats a crash.)
     const cyclic = backEdges.size > 0;
+
+    // weakly-connected component count over every rendered node
+    const compNodes = new Set(rooms.map(r=>r.id));
+    leaves.forEach(l=>compNodes.add(l.id));
+    if(needsStartNode) compNodes.add('start');
+    const parentOf = new Map();
+    const find = x => { while(parentOf.get(x)!==x){ parentOf.set(x, parentOf.get(parentOf.get(x))); x = parentOf.get(x); } return x; };
+    compNodes.forEach(n=>parentOf.set(n,n));
+    for(const e of edges){
+      if(!parentOf.has(e.source)) parentOf.set(e.source, e.source);
+      if(!parentOf.has(e.target)) parentOf.set(e.target, e.target);
+      parentOf.set(find(e.source), find(e.target));
+    }
+    const roots = new Set(); [...parentOf.keys()].forEach(n=>roots.add(find(n)));
+    const componentCount = roots.size;
+
+    const flat = cyclic || componentCount > 1;
+    console.log(`[graph] nodes=${rooms.length+leaves.length+(needsStartNode?1:0)} edges=${edges.length} boxes=${boxes.length} components=${componentCount} cyclic=${cyclic} → ${flat?'FLAT layout':'compound layout'}`);
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
-      ...(cyclic ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
+      // box compound parents are added during layout only for easy graphs;
+      // hard graphs add them AFTER layout (see flat re-wrap below).
+      ...(flat ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
         const data = {id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq};
-        if(!cyclic && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
+        if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         return {
           data,
           classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
@@ -915,9 +935,6 @@ async function showTranspositionGraph(){
       }])
     ];
     // The dashed repetition edges, added to the graph only AFTER dagre has run.
-    // Filtering them out of a layout sub-collection isn't enough: cytoscape-dagre
-    // re-derives its edge list from the node set, so any cycle edge still in the
-    // graph reaches dagre and crashes it ("Cannot set 'order' of undefined").
     const deferredEdgeEls = edges.flatMap((e,i)=> backEdges.has(i) ? [{
       data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq},
       classes:'cycle-edge'
@@ -967,16 +984,27 @@ async function showTranspositionGraph(){
         }}
       ]
     });
-    // dagre lays out a pure DAG (cycle edges absent, and no compound boxes on a
-    // cyclic graph). Then drop the dashed repetition edges back in -- they just
-    // connect already-positioned nodes and never touch the layout.
+    // dagre lays out the DAG (cycle edges absent; on a hard graph no compound
+    // boxes either, so dagre only ever sees a plain, possibly-disconnected DAG).
     cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+
+    // Re-wrap boxes AFTER layout on hard graphs: add the box compound parents and
+    // move each child into its box. Reparenting keeps each child at its laid-out
+    // position; the compound parent just resizes to bound them. dagre never sees
+    // the compounds, so it can't crash on them.
+    if(flat && boxes.length){
+      try {
+        cy.add(boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' })));
+        rooms.forEach(r=>{ if(boxOf.has(r.id)){ const n = cy.getElementById(r.id); if(n.nonempty()) n.move({parent: boxOf.get(r.id)}); } });
+      } catch(err){ console.warn('[graph] box re-wrap skipped', err); }
+    }
+    // Drop the dashed repetition edges back in -- they connect already-positioned
+    // nodes and never touch the layout.
     if(deferredEdgeEls.length){
       cy.add(deferredEdgeEls);
-      cy.fit(cy.elements(), 30);
-      $('graphStatus').textContent +=
-        ` · ⟳ ${backEdges.size} repetition move(s) dashed; run/two-track boxes hidden on this cyclic graph`;
+      $('graphStatus').textContent += ` · ⟳ ${backEdges.size} repetition move(s) drawn dashed`;
     }
+    if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
   } finally {
