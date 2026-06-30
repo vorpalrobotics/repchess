@@ -642,6 +642,10 @@
     <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
       <button id="graphCloseBtn" style="flex:0 0 auto">Close</button>
       <h2 style="margin:0">Opening Graph</h2>
+      <span id="graphCastleWrap" style="display:none;margin-left:auto;font-size:.9rem">
+        <label for="graphCastleSelect">Show Castle:</label>
+        <select id="graphCastleSelect" style="font-size:.9rem;padding:.15rem .3rem"></select>
+      </span>
     </div>
     <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em"></div>
     <!-- overflow:hidden (not auto): cytoscape does its own pan/zoom, and an auto
@@ -1003,6 +1007,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-8"></script>
+<script type="module" src="js/app.js?v=20260630-9"></script>
 </body>
 </html>

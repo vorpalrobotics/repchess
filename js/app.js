@@ -879,14 +879,17 @@ async function showTranspositionGraph(){
       (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${singleCollapsed} rooms single-track` +
         (twoTrackCount ? `, ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '');
 
+    populateGraphCastleSelect();
+
     // a room's user-assigned name lives on the opponent-move row that leads into
     // it (room.seq ends in OUR reply, so the name is keyed one ply back);
-    // truncate to 12 chars, which is almost always still unique.
+    // truncate to 12 chars, which is almost always still unique. When the room
+    // is a castle root, prefix its castle name → "CastleName: RoomName".
+    const trunc12 = s => { const t = (s||'').trim(); return t.length > 12 ? t.slice(0,12) + '…' : t; };
     const graphNodeName = seq => {
-      const n = (seq && seq.length) ? PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))]?.name : '';
-      if(!n) return '';
-      const t = n.trim();
-      return t.length > 12 ? t.slice(0,12) + '…' : t;
+      const meta = genRoomMeta(seq);            // {name, castle} keyed one ply back
+      const nm = trunc12(meta.name), cn = trunc12(meta.castle);
+      return cn ? (nm ? `${cn}: ${nm}` : cn) : nm;
     };
 
     // dagre's compound-nesting layout intermittently throws "Cannot set 'order'
@@ -1010,6 +1013,30 @@ $('graphCloseBtn').onclick = () => {
   hideGraphHoverPreview();
   hideGraphCtxMenu();
   GRAPH_FOCUS_SEQ = null;   // each fresh open starts at the move-table scope
+};
+
+/* "Show Castle:" dropdown — fast-focus the graph on a defined castle's subtree
+   without hunting through the tree. Hidden entirely when no castles are defined.
+   Its value mirrors GRAPH_FOCUS_SEQ so right-click focus/clear keeps it in sync. */
+function populateGraphCastleSelect(){
+  const wrap = $('graphCastleWrap'), sel = $('graphCastleSelect');
+  const castles = definedCastles();
+  if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
+  wrap.style.display = '';
+  sel.innerHTML = '<option value="">All</option>' +
+    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  let cur = '';
+  if(GRAPH_FOCUS_SEQ){
+    const key = GRAPH_FOCUS_SEQ.join(',');
+    for(const c of castles){ const rs = castleRootRoomSeq(c); if(rs && rs.join(',') === key){ cur = c; break; } }
+  }
+  sel.value = cur;
+}
+$('graphCastleSelect').onchange = () => {
+  const name = $('graphCastleSelect').value;
+  if(!name){ GRAPH_FOCUS_SEQ = null; }
+  else { const rs = castleRootRoomSeq(name); GRAPH_FOCUS_SEQ = rs || null; }
+  showTranspositionGraph();
 };
 
 /* ---------- graph right-click context menu ----------
@@ -1300,6 +1327,20 @@ function definedCastles(){
     if(p && p.isCastleRoot && p.castleName && p.castleName.trim()) set.add(p.castleName.trim());
   }
   return [...set].sort((a,b)=>a.localeCompare(b));
+}
+/* the focusable ROOM seq (ends in OUR move) for a castle's root: the root flag
+   lives on the opponent-move row (p.seq), so the room is one reply deeper. Picks
+   the shallowest root if a name somehow tags more than one. */
+function castleRootRoomSeq(castleName){
+  let best = null;
+  for(const key in PREFS){
+    const p = PREFS[key];
+    if(p?.isCastleRoot && p.castleName?.trim() === castleName && p.reply && Array.isArray(p.seq)){
+      const roomSeq = [...p.seq, p.reply];
+      if(!best || roomSeq.length < best.length) best = roomSeq;
+    }
+  }
+  return best;
 }
 /* nearest castle root on THIS seq's own lineage (the default/inherited owner) */
 function inheritedCastle(lineSeq){
