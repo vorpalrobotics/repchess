@@ -865,7 +865,6 @@ async function showTranspositionGraph(){
     const cy = cytoscape({
       container: $('graphContainer'),
       elements,
-      layout: {name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55},
       style: [
         { selector:'node', style:{
           'shape':'round-rectangle', 'width':'label', 'height':'label', 'padding':'6px',
@@ -901,6 +900,17 @@ async function showTranspositionGraph(){
         }}
       ]
     });
+    // Run dagre explicitly (not in the constructor) so its layout runs in our
+    // call stack and a failure can be caught -- cytoscape-dagre can throw
+    // ("Cannot set 'order' of undefined") on some compound/cyclic topologies.
+    // On failure, fall back to breadthfirst, which handles compounds and cycles.
+    try {
+      cy.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+    } catch(err){
+      console.warn('[graph] dagre layout failed; falling back to breadthfirst', err);
+      try { cy.layout({name:'breadthfirst', directed:true, padding:10}).run(); }
+      catch(e2){ console.warn('[graph] fallback layout also failed', e2); }
+    }
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
   } finally {
