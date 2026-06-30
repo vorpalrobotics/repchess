@@ -1113,9 +1113,10 @@ $('castleReportCloseBtn').onclick = () => { $('castleReportOverlay').style.displ
    so a single row's expand/collapse choice sticks across reloads the same
    way Collapse All's does, instead of only the bulk action being sticky. */
 function makeToggle(btn, branchRow, startExpanded=true, seq=null){
-  // the placeholder starts display:none (so leaf rows don't reserve the toggle's
-  // width and their move aligns under tree siblings' triangles); reveal it now
-  // that this row actually has a sub-tree.
+  // the button renders by default as a greyed, non-clickable placeholder
+  // (.toggle-empty) so every row reserves the triangle's width and moves stay
+  // aligned; this row actually has a sub-tree, so promote it to a live triangle.
+  btn.classList.remove('toggle-empty');
   btn.style.display='';
   if(!startExpanded) branchRow.style.display='none';
   btn.innerHTML = startExpanded            // reflects branchRow's actual initial state
@@ -1354,7 +1355,7 @@ $('compactModeBtn').onclick = async () => {
    persists collapsed:true for that row, so the collapse sticks across a
    page refresh instead of just being a one-off visual toggle. */
 $('collapseAllBtn').onclick = () => {
-  $('tree').querySelectorAll('.toggle').forEach(btn=>{
+  $('tree').querySelectorAll('.toggle:not(.toggle-empty)').forEach(btn=>{
     if(btn.querySelector('i')?.classList.contains('fa-caret-down')) btn.click();
   });
 };
@@ -1363,7 +1364,7 @@ $('collapseAllBtn').onclick = () => {
    branch row is rendered eagerly (just hidden when collapsed), so all toggles
    already exist in the DOM and a single pass expands the whole tree. */
 $('expandAllBtn').onclick = () => {
-  $('tree').querySelectorAll('.toggle').forEach(btn=>{
+  $('tree').querySelectorAll('.toggle:not(.toggle-empty)').forEach(btn=>{
     if(btn.querySelector('i')?.classList.contains('fa-caret-right')) btn.click();
   });
 };
@@ -1432,7 +1433,7 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
        <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
      </td>
      <td class="move" style="padding-left:${indentLevel}em">
-       <button class="iconbtn toggle" style="display:none"><i class="fa-solid fa-caret-right"></i></button>
+       <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
        ${compactRunLabel(runMoves,flip)}
      </td>
      <td class="cnt-col"></td>
@@ -1530,7 +1531,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
          </div>
        </td>
        <td class="move" style="padding-left:${indentLevel}em">
-         <button class="iconbtn toggle" style="display:none"><i class="fa-solid fa-caret-right"></i></button>
+         <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
          ${moveHtml}
        </td>
        <td class="cnt-col" style="padding-left:${indentLevel}em">
@@ -1795,7 +1796,7 @@ function appendAddMoveControl(tb,parent,games,seq,depth,flip){
   tr.innerHTML=
     `<td class="resp"></td>
      <td class="move" colspan="4" style="padding-left:${depth}em">
-       <button class="iconbtn toggle" style="display:none"><i class="fa-solid fa-caret-right"></i></button>
+       <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
        <button class="iconbtn addMoveBtn" title="Add an opponent response that doesn't occur in your games"><i class="fa-solid fa-plus"></i></button>
      </td>`;
   tb.appendChild(tr);
@@ -1851,7 +1852,7 @@ function renderBlackRoot(parent,games,trigger){
        </div>
      </td>
      <td class="move">
-       <button class="iconbtn toggle" style="display:none"><i class="fa-solid fa-caret-right"></i></button>
+       <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
        1. ${trigger} <span class="ourReply">...</span>
      </td>
      <td class="cnt-col"></td>

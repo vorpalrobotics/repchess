@@ -65,6 +65,9 @@
   .iconbtn{background:none;border:none;font-size:1.1em;padding:0 .4em;cursor:pointer}
   .iconbtn.btnEval-onBoard{border:2px solid #000;border-radius:4px}
   .toggle {font-size:1.15em;vertical-align:middle}
+  /* leaf rows (no sub-variations) show a greyed, non-clickable caret placeholder
+     so the move text lines up with siblings that have a real expand triangle. */
+  .toggle.toggle-empty{opacity:.22;pointer-events:none;cursor:default}
 
   #compactModeBtn.active{background:#1565c0;color:#fff;border-radius:4px}
   tr.compact-run td.move{font-style:italic}
@@ -994,6 +997,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-4"></script>
+<script type="module" src="js/app.js?v=20260630-5"></script>
 </body>
 </html>
