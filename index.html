@@ -948,9 +948,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
 <script src="js/db.js"></script>
-<!-- boot watchdog: if app.js never runs (e.g. a CDN serving cm-chessboard is
-     down, so its ES-module import fails), the default-visible spinner would spin
-     forever. After 15s with no boot, replace it with an actionable message. -->
+<!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
+     dependency like three.js/cytoscape is down so its import fails), the
+     default-visible spinner would spin forever. After 15s with no boot, replace
+     it with an actionable message. (cm-chessboard is loaded tolerantly inside
+     app.js, so its outage degrades gracefully rather than blocking boot.) -->
 <script>
   setTimeout(function(){
     if(window.__APP_BOOTED) return;

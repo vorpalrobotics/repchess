@@ -1,4 +1,3 @@
-import { Chessboard, COLOR, INPUT_EVENT_TYPE } from 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js';
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
@@ -6,9 +5,25 @@ import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen }
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
-// Reaching here means the module's CDN imports above all loaded; clears the
+// Reaching here means the module's static imports above all loaded; clears the
 // boot watchdog in index.html so it doesn't show the "failed to load" message.
 window.__APP_BOOTED = true;
+
+/* cm-chessboard (the 2D board widget) is loaded DYNAMICALLY and tolerantly: it's
+   only needed for the four board widgets (analysis board, hover preview, PV
+   float, opening quiz). If its CDN is down, the import fails but the rest of the
+   app — home, import, mnemonics, assets, the VR world, the graph, FEN/move
+   logic (chess.js, loaded separately) — keeps working. COLOR/INPUT_EVENT_TYPE
+   get safe defaults so non-board code never trips on them. */
+let Chessboard = null;
+let COLOR = { white: 'w', black: 'b' };
+let INPUT_EVENT_TYPE = {};
+try {
+  const cm = await import('https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js');
+  Chessboard = cm.Chessboard; COLOR = cm.COLOR; INPUT_EVENT_TYPE = cm.INPUT_EVENT_TYPE;
+} catch(err){
+  console.warn('[repchess] chessboard library failed to load — board widgets disabled, rest of app still works', err);
+}
 
 /* ---------- version (injected at deploy time as UTC ISO, see workflow) ----------
    Displayed in the visitor's local timezone so it matches their wall clock. */
@@ -809,8 +824,8 @@ function attachGraphHoverPreview(cy){
     if(!fen) return;
     clearTimeout(graphHoverTimer);
     graphHoverTimer = setTimeout(() => {
-      hoverPreviewBoard.setPosition(fen);
-      hoverPreviewBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+      hoverPreviewBoard?.setPosition(fen);
+      hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
       const containerRect = $('graphContainer').getBoundingClientRect();
       let pos;
       if(el.isEdge()){
@@ -1926,7 +1941,7 @@ async function openLine(line){
 
     PREFS = await getAllPrefs(line.id);
 
-    board.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
+    board?.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
 
     renderTreeBody(line);
   } finally {
@@ -3501,6 +3516,10 @@ function oqRun(replaySame){
 
 function openOpeningQuiz(startSeq){
   if(!CURRENT_LINE) return;
+  if(!Chessboard){
+    alert('The chessboard could not be loaded (a CDN may be down), so the board-based quiz is unavailable. Reload to retry.');
+    return;
+  }
   if(!PREFS[prefKey(CURRENT_LINE.id, startSeq)]?.reply){
     alert('Set a standard response on this move first — there is nothing to quiz yet.');
     return;
@@ -3521,27 +3540,22 @@ $('oqExitBtn').onclick = ()=>{ $('openingQuizOverlay').style.display='none'; };
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
 $('oqAgainNewBtn').onclick  = ()=> oqRun(false);
 
-/* ---------- analysis board ---------- */
-const board = new Chessboard($('board'), {
+/* ---------- analysis board ----------
+   null when the chessboard library failed to load; every call site uses ?. so
+   the board features simply no-op in that (degraded) case. */
+const PIECES_FILE = 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg';
+const board = Chessboard ? new Chessboard($('board'), {
   position: new Chess().fen(),
   orientation: COLOR.white,
-  style: {
-    pieces: {
-      file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg'
-    }
-  }
-});
+  style: { pieces: { file: PIECES_FILE } }
+}) : null;
 
 /* ---------- hover preview mini-board ---------- */
-const hoverPreviewBoard = new Chessboard($('hoverPreviewBoard'), {
+const hoverPreviewBoard = Chessboard ? new Chessboard($('hoverPreviewBoard'), {
   position: new Chess().fen(),
   orientation: COLOR.white,
-  style: {
-    pieces: {
-      file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg'
-    }
-  }
-});
+  style: { pieces: { file: PIECES_FILE } }
+}) : null;
 let hoverPreviewTimer = null;
 let hoverPreviewIcon = null;
 function hideHoverPreview(){
@@ -3558,8 +3572,8 @@ function attachHoverPreview(icon, seq){
     clearTimeout(hoverPreviewTimer);
     hoverPreviewTimer = setTimeout(() => {
       const fen = fenForSeq(seq);
-      hoverPreviewBoard.setPosition(fen);
-      hoverPreviewBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+      hoverPreviewBoard?.setPosition(fen);
+      hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
       const r = icon.getBoundingClientRect();
       const preview = $('hoverPreview');
       preview.style.display = 'block';
@@ -3580,11 +3594,11 @@ function attachHoverPreview(icon, seq){
    Shared by the saved-eval continuation lines in the move table and the live
    engine lines under the board; each rendered move chip carries the FEN of the
    position right after it (data-fen). */
-const pvFloatBoard = new Chessboard($('pvFloatBoard'), {
+const pvFloatBoard = Chessboard ? new Chessboard($('pvFloatBoard'), {
   position: new Chess().fen(),
   orientation: COLOR.white,
-  style: { pieces: { file: 'https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/pieces/standard.svg' } }
-});
+  style: { pieces: { file: PIECES_FILE } }
+}) : null;
 let pvFloatEl = null;
 function hidePvFloat(){
   $('pvFloat').style.display = 'none';
@@ -3633,8 +3647,8 @@ function showPvFloat(el){
   const f = $('pvFloat');
   f.style.display = 'block';
   try {
-    pvFloatBoard.setPosition(fen);
-    pvFloatBoard.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+    pvFloatBoard?.setPosition(fen);
+    pvFloatBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
   } catch(err){
     console.warn('pvFloat: failed to render position', fen, err);
   }
@@ -4156,7 +4170,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
 
 function showPosition(fen, onEvalUpdate, onComplete){
   console.debug(`[showPosition] fen=${fen}`);
-  board.setPosition(fen);
+  board?.setPosition(fen);
   runEngine(fen, onEvalUpdate, onComplete);
 }
 
