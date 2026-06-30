@@ -356,7 +356,7 @@
   .quiz-setup-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:.6rem 0}
   .quiz-setup-row label{font-weight:600}
   #quizNumQuestions{font-size:1rem;width:5em;text-align:center;padding:.25rem .4rem}
-  #quizScopeSelect{font-size:1rem;padding:.25rem .4rem}
+  #quizScopeSelect,#quizCoverageSelect{font-size:1rem;padding:.25rem .4rem}
   #quizCustomWrap{display:none;margin:.4rem 0 .8rem}
   .quiz-custom-hint{font-size:.8rem;color:#666;margin-bottom:.4rem}
   #quizCustomGrid{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);
@@ -850,6 +850,12 @@
           <button id="quizCustomNone" type="button">Clear</button>
         </div>
       </div>
+      <div class="quiz-setup-row">
+        <label for="quizCoverageSelect">Restrict items to Opening Coverage</label>
+        <select id="quizCoverageSelect">
+          <option value="">None: All items quizzed</option>
+        </select>
+      </div>
       <div id="quizSetupError"></div>
       <button id="quizStartBtn">START</button>
     </div>
@@ -997,6 +1003,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-6"></script>
+<script type="module" src="js/app.js?v=20260630-7"></script>
 </body>
 </html>

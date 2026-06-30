@@ -976,10 +976,10 @@ async function showTranspositionGraph(){
     });
     // dagre lays out the DAG (cycle edges absent; on a hard graph no compound
     // boxes either, so dagre only ever sees a plain, possibly-disconnected DAG).
-    // nodeSep bumped (~50%) because the run/two-track boxes are added AFTER
-    // layout and their padding/border extend past the bare nodes dagre spaced,
-    // so siblings need extra lateral room or adjacent boxes collide.
-    cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:28, rankSep:60}).run();
+    // generous nodeSep because the run/two-track boxes are added AFTER layout and
+    // their padding/border extend past the bare nodes dagre spaced, so siblings
+    // need lots of extra lateral room or adjacent boxes collide.
+    cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:56, rankSep:60}).run();
 
     // Re-wrap boxes AFTER layout on hard graphs: add the box compound parents and
     // move each child into its box. Reparenting keeps each child at its laid-out
@@ -998,7 +998,6 @@ async function showTranspositionGraph(){
       $('graphStatus').textContent += ` · ⟳ ${backEdges.size} repetition move(s) drawn dashed`;
     }
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
-    attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
     attachGraphContextMenu(cy);
   } finally {
@@ -1048,76 +1047,79 @@ function showGraphCtxMenu(x, y, items){
   if(r.right > innerWidth)  m.style.left = Math.max(0, x - r.width)+'px';
   if(r.bottom > innerHeight) m.style.top  = Math.max(0, y - r.height)+'px';
 }
+// the menu items for a right-clicked / tapped node (shared by mouse cxttap and
+// touch tap). Rooms get Focus + Show position + Room details; leaves get just
+// Show position; Clear focus appears whenever the graph is focused.
+function graphNodeMenuItems(cy, el){
+  const seq = el.data('seq');
+  const focusable = seq && !el.hasClass('start') && !el.hasClass('locked')
+    && !el.hasClass('run-box') && !el.hasClass('twotrack-box');
+  const items = [];
+  if(focusable) items.push({ label:'🎯 Focus on this variation',
+    onClick:()=>{ GRAPH_FOCUS_SEQ = seq.slice(); showTranspositionGraph(); } });
+  if(el.data('fen')) items.push({ label:'♟ Show position',
+    onClick:()=>showGraphNodePosition(cy, el) });
+  if(focusable) items.push({ label:'🚪 Room details',
+    onClick:()=>showRoomInfoPanel(el) });
+  if(GRAPH_FOCUS_SEQ) items.push({ label:'⤺ Clear focus',
+    onClick:()=>{ GRAPH_FOCUS_SEQ = null; showTranspositionGraph(); } });
+  return items;
+}
 function attachGraphContextMenu(cy){
   cy.container().addEventListener('contextmenu', e=>e.preventDefault());
-  const focusItem = seq => ({ label:'🎯 Focus on this variation',
-    onClick:()=>{ GRAPH_FOCUS_SEQ = seq.slice(); showTranspositionGraph(); } });
-  const clearItem = () => ({ label:'⤺ Clear focus',
-    onClick:()=>{ GRAPH_FOCUS_SEQ = null; showTranspositionGraph(); } });
   cy.on('cxttap', 'node', evt=>{
-    const el = evt.target, seq = el.data('seq');
-    const focusable = seq && !el.hasClass('start') && !el.hasClass('locked')
-      && !el.hasClass('run-box') && !el.hasClass('twotrack-box');
-    const items = [];
-    if(focusable) items.push(focusItem(seq));
-    if(GRAPH_FOCUS_SEQ) items.push(clearItem());
+    const items = graphNodeMenuItems(cy, evt.target);
     const oe = evt.originalEvent || {};
     if(items.length) showGraphCtxMenu(oe.clientX||0, oe.clientY||0, items);
   });
   cy.on('cxttap', evt=>{                    // background right-click: offer Clear when focused
     if(evt.target !== cy || !GRAPH_FOCUS_SEQ) return;
     const oe = evt.originalEvent || {};
-    showGraphCtxMenu(oe.clientX||0, oe.clientY||0, [clearItem()]);
+    showGraphCtxMenu(oe.clientX||0, oe.clientY||0,
+      [{ label:'⤺ Clear focus', onClick:()=>{ GRAPH_FOCUS_SEQ = null; showTranspositionGraph(); } }]);
   });
 }
 
-/* ---------- opening graph hover preview ----------
-   Reuses the mini chessboard / #hoverPreview div defined later in this
-   file (shared with attachHoverPreview's icon tooltips) to show the
-   board position for whichever node or edge the mouse is currently over.
-   The virtual 'start' node has no fen and is skipped. */
-let graphHoverTimer = null;
+/* ---------- opening graph position preview ----------
+   Shows the mini chessboard / #hoverPreview div (shared with attachHoverPreview's
+   icon tooltips) for a node/edge on demand via the right-click / tap "Show
+   position" menu item (hover was too easy to trigger by accident). The virtual
+   'start' node has no fen and is skipped. Dismissed by tapping the board, tapping
+   empty graph space, or closing the graph. */
 function hideGraphHoverPreview(){
-  clearTimeout(graphHoverTimer);
-  graphHoverTimer = null;
   $('hoverPreview').style.display = 'none';
 }
-function attachGraphHoverPreview(cy){
-  cy.on('mouseover', 'node, edge', evt => {
-    const el = evt.target;
-    const fen = el.data('fen');
-    if(!fen) return;
-    clearTimeout(graphHoverTimer);
-    graphHoverTimer = setTimeout(() => {
-      hoverPreviewBoard?.setPosition(fen);
-      hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
-      const containerRect = $('graphContainer').getBoundingClientRect();
-      let pos;
-      if(el.isEdge()){
-        // edges have no renderedPosition() of their own — project their
-        // model-space midpoint through the current pan/zoom by hand
-        const mid = el.midpoint();
-        const pan = cy.pan(), zoom = cy.zoom();
-        pos = { x: mid.x*zoom + pan.x, y: mid.y*zoom + pan.y };
-      } else {
-        pos = el.renderedPosition();
-      }
-      const preview = $('hoverPreview');
-      preview.style.display = 'block';
-      if($('roomInfoOverlay').style.display === 'flex'){
-        positionHoverPreviewBesideRoomModal();
-        return;
-      }
-      const cx = containerRect.left + pos.x;
-      const cyy = containerRect.top + pos.y;
-      const size = 252; // preview box incl. border/padding (240 board + padding/border)
-      const left = Math.min(Math.max(8, cx - size/2), window.innerWidth - size - 8);
-      const top = cyy + size + 20 <= window.innerHeight ? cyy + 20 : cyy - size - 20;
-      preview.style.left = `${Math.round(left)}px`;
-      preview.style.top = `${Math.round(Math.max(8,top))}px`;
-    }, 300);
-  });
-  cy.on('mouseout', 'node, edge', hideGraphHoverPreview);
+function showGraphNodePosition(cy, el){
+  const fen = el.data('fen');
+  if(!fen) return;
+  hoverPreviewBoard?.setPosition(fen);
+  hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+  const containerRect = $('graphContainer').getBoundingClientRect();
+  let pos;
+  if(el.isEdge()){
+    // edges have no renderedPosition() of their own — project their
+    // model-space midpoint through the current pan/zoom by hand
+    const mid = el.midpoint();
+    const pan = cy.pan(), zoom = cy.zoom();
+    pos = { x: mid.x*zoom + pan.x, y: mid.y*zoom + pan.y };
+  } else {
+    pos = el.renderedPosition();
+  }
+  const preview = $('hoverPreview');
+  preview.style.display = 'block';
+  preview.style.cursor = 'pointer';
+  preview.onclick = hideGraphHoverPreview;       // tap the board to dismiss
+  if($('roomInfoOverlay').style.display === 'flex'){
+    positionHoverPreviewBesideRoomModal();
+    return;
+  }
+  const cx = containerRect.left + pos.x;
+  const cyy = containerRect.top + pos.y;
+  const size = 252; // preview box incl. border/padding (240 board + padding/border)
+  const left = Math.min(Math.max(8, cx - size/2), window.innerWidth - size - 8);
+  const top = cyy + size + 20 <= window.innerHeight ? cyy + 20 : cyy - size - 20;
+  preview.style.left = `${Math.round(left)}px`;
+  preview.style.top = `${Math.round(Math.max(8,top))}px`;
 }
 /* keeps the hover-preview board from covering the room info modal: parks it
    just outside the modal's right edge (or left, if there's no room on the
@@ -1144,9 +1146,24 @@ function positionHoverPreviewBesideRoomModal(){
 function attachGraphClickHandler(cy){
   cy.on('tap', 'node', evt => {
     const el = evt.target;
+    const oe = evt.originalEvent;
+    // touch devices have no right-click, so a tap brings up the same menu the
+    // desktop right-click shows; a mouse tap keeps the quick Room-details panel.
+    const isTouch = oe && (oe.pointerType === 'touch'
+      || (typeof TouchEvent !== 'undefined' && oe instanceof TouchEvent)
+      || /^touch/.test(oe.type || ''));
+    if(isTouch){
+      const items = graphNodeMenuItems(cy, el);
+      if(items.length){
+        const t = (oe.touches && oe.touches[0]) || (oe.changedTouches && oe.changedTouches[0]) || oe;
+        showGraphCtxMenu(t.clientX||0, t.clientY||0, items);
+      }
+      return;
+    }
     if(el.hasClass('start') || el.hasClass('locked') || el.hasClass('run-box') || el.hasClass('twotrack-box')) return;
     showRoomInfoPanel(el);
   });
+  cy.on('tap', evt => { if(evt.target === cy) hideGraphHoverPreview(); });  // tap empty space dismisses the position preview
 }
 const mnemThumbHtml = img => img ? `<img class="room-info-img" src="${img}">` : '';
 async function showRoomInfoPanel(roomEl){
@@ -3561,19 +3578,44 @@ async function quizOpenSetup(){
   const custom = $('quizScopeSelect').value === 'custom';
   $('quizCustomWrap').style.display = custom ? 'block' : 'none';
   if(custom) quizBuildCustomGrid();
+  await populateQuizCoverageSelect();
   $('quizSetup').style.display = 'block';
 }
 
+/* fill the "Restrict items to Opening Coverage" dropdown with the user's opening
+   systems (lines); "" = no restriction. Mirrors populateMnemonicsCoverageSelect. */
+async function populateQuizCoverageSelect(){
+  const sel = $('quizCoverageSelect');
+  const prev = sel.value;
+  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  sel.innerHTML = '<option value="">None: All items quizzed</option>' +
+    lines.map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('');
+  if(lines.some(l=>l.id===prev)) sel.value = prev;
+}
+
 /* read the setup choices, filter the pool, and begin the trials. */
-function quizStart(){
+async function quizStart(){
   const scope = $('quizScopeSelect').value;
   let n = parseInt($('quizNumQuestions').value, 10);
   if(!Number.isFinite(n) || n < 1){ $('quizSetupError').textContent = 'Enter a question count of 1 or more.'; return; }
-  const pool = filterPoolByScope(QUIZ_FULL_POOL, scope);
+  let pool = filterPoolByScope(QUIZ_FULL_POOL, scope);
+  // optional restriction to the square+piece combos actually played in a chosen
+  // opening system (its repertoire coverage).
+  const coverageLineId = $('quizCoverageSelect').value;
+  if(coverageLineId){
+    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const line = lines.find(l=>l.id === coverageLineId);
+    if(line){
+      const coverage = await computeMnemonicCoverage(line);
+      pool = pool.filter(it => coverage.has(`${it.square}|${it.piece}`));
+    }
+  }
   if(pool.length === 0){
-    $('quizSetupError').textContent = scope === 'custom'
-      ? 'No mnemonics on the selected squares. Pick different squares.'
-      : 'No mnemonics on the selected squares.';
+    $('quizSetupError').textContent = coverageLineId
+      ? 'No mnemonics match that opening’s coverage and square scope. Loosen one of them.'
+      : (scope === 'custom'
+        ? 'No mnemonics on the selected squares. Pick different squares.'
+        : 'No mnemonics on the selected squares.');
     return;
   }
   $('quizSetupError').textContent = '';
