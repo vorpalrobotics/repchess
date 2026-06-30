@@ -908,11 +908,20 @@ async function showTranspositionGraph(){
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
-      ...edges.map((e,i)=>({
-        data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq},
-        classes: backEdges.has(i) ? 'cycle-edge' : ''
-      }))
+      // NON-cycle edges only -- the cycle (back) edges are deliberately kept OUT
+      // of the graph during layout and added back afterward (see below).
+      ...edges.flatMap((e,i)=> backEdges.has(i) ? [] : [{
+        data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq}
+      }])
     ];
+    // The dashed repetition edges, added to the graph only AFTER dagre has run.
+    // Filtering them out of a layout sub-collection isn't enough: cytoscape-dagre
+    // re-derives its edge list from the node set, so any cycle edge still in the
+    // graph reaches dagre and crashes it ("Cannot set 'order' of undefined").
+    const deferredEdgeEls = edges.flatMap((e,i)=> backEdges.has(i) ? [{
+      data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq},
+      classes:'cycle-edge'
+    }] : []);
 
     const cy = cytoscape({
       container: $('graphContainer'),
@@ -958,14 +967,13 @@ async function showTranspositionGraph(){
         }}
       ]
     });
-    // Lay out with dagre on the acyclic edge set only (cycle edges excluded),
-    // and with no compound boxes present on a cyclic graph -- both conditions
-    // are needed to keep dagre from crashing on repetition cycles.
-    const layoutEles = cyclic
-      ? cy.elements().filter(el => !el.isEdge() || !el.hasClass('cycle-edge'))
-      : cy.elements();
-    layoutEles.layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
-    if(cyclic){
+    // dagre lays out a pure DAG (cycle edges absent, and no compound boxes on a
+    // cyclic graph). Then drop the dashed repetition edges back in -- they just
+    // connect already-positioned nodes and never touch the layout.
+    cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+    if(deferredEdgeEls.length){
+      cy.add(deferredEdgeEls);
+      cy.fit(cy.elements(), 30);
       $('graphStatus').textContent +=
         ` · ⟳ ${backEdges.size} repetition move(s) dashed; run/two-track boxes hidden on this cyclic graph`;
     }
