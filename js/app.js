@@ -856,6 +856,9 @@ function findBackEdges(rooms, edges){
   return back;
 }
 
+// graph-local focus seq (set by right-click "Focus on this variation" inside the
+// graph overlay); overrides the move-table FOCUSED_SEQ while the overlay is open.
+let GRAPH_FOCUS_SEQ = null;
 async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
@@ -864,12 +867,14 @@ async function showTranspositionGraph(){
   const spinner = showSpinner('Building graph…');
   await nextPaint();
   try {
-    const graph = buildCastleGraph(CURRENT_LINE, GAMES, FOCUSED_SEQ);
+    const rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;   // graph-local focus (right-click) overrides the move-table focus
+    const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed }
       = analyzeCastleStructure(graph);
 
     $('graphStatus').textContent =
+      (GRAPH_FOCUS_SEQ ? '🎯 focused (right-click → Clear focus) · ' : '') +
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
       (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${singleCollapsed} rooms single-track` +
         (twoTrackCount ? `, ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '');
@@ -971,7 +976,10 @@ async function showTranspositionGraph(){
     });
     // dagre lays out the DAG (cycle edges absent; on a hard graph no compound
     // boxes either, so dagre only ever sees a plain, possibly-disconnected DAG).
-    cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:18, rankSep:55}).run();
+    // nodeSep bumped (~50%) because the run/two-track boxes are added AFTER
+    // layout and their padding/border extend past the bare nodes dagre spaced,
+    // so siblings need extra lateral room or adjacent boxes collide.
+    cy.elements().layout({name:'dagre', rankDir:'TB', nodeSep:28, rankSep:60}).run();
 
     // Re-wrap boxes AFTER layout on hard graphs: add the box compound parents and
     // move each child into its box. Reparenting keeps each child at its laid-out
@@ -992,6 +1000,7 @@ async function showTranspositionGraph(){
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphHoverPreview(cy);
     attachGraphClickHandler(cy);
+    attachGraphContextMenu(cy);
   } finally {
     hideSpinner(spinner);
   }
@@ -1000,7 +1009,67 @@ $('buildGraphBtn').onclick = showTranspositionGraph;
 $('graphCloseBtn').onclick = () => {
   $('graphOverlay').style.display='none';
   hideGraphHoverPreview();
+  hideGraphCtxMenu();
+  GRAPH_FOCUS_SEQ = null;   // each fresh open starts at the move-table scope
 };
+
+/* ---------- graph right-click context menu ----------
+   Lets you re-scope the graph to a single variation's subtree without leaving
+   the overlay: right-click a room → "Focus on this variation"; right-click
+   anywhere → "Clear focus" when focused. Rebuilds the graph via GRAPH_FOCUS_SEQ. */
+let graphCtxMenuEl = null;
+function hideGraphCtxMenu(){ if(graphCtxMenuEl) graphCtxMenuEl.style.display='none'; }
+function graphCtxMenu(){
+  if(graphCtxMenuEl) return graphCtxMenuEl;
+  const m = document.createElement('div');
+  m.id = 'graphCtxMenu';
+  m.style.cssText = 'position:fixed;z-index:10000;display:none;background:#fff;border:1px solid #bbb;'+
+    'border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.25);font-size:.85rem;overflow:hidden';
+  document.body.appendChild(m);
+  document.addEventListener('click', hideGraphCtxMenu);
+  document.addEventListener('scroll', hideGraphCtxMenu, true);
+  graphCtxMenuEl = m;
+  return m;
+}
+function showGraphCtxMenu(x, y, items){
+  const m = graphCtxMenu();
+  m.innerHTML = '';
+  items.forEach(it=>{
+    const b = document.createElement('div');
+    b.textContent = it.label;
+    b.style.cssText = 'padding:.45rem .85rem;cursor:pointer;white-space:nowrap';
+    b.onmouseenter = ()=>{ b.style.background='#eef'; };
+    b.onmouseleave = ()=>{ b.style.background=''; };
+    b.onclick = e=>{ e.stopPropagation(); hideGraphCtxMenu(); it.onClick(); };
+    m.appendChild(b);
+  });
+  m.style.left = x+'px'; m.style.top = y+'px'; m.style.display = 'block';
+  const r = m.getBoundingClientRect();              // keep on-screen
+  if(r.right > innerWidth)  m.style.left = Math.max(0, x - r.width)+'px';
+  if(r.bottom > innerHeight) m.style.top  = Math.max(0, y - r.height)+'px';
+}
+function attachGraphContextMenu(cy){
+  cy.container().addEventListener('contextmenu', e=>e.preventDefault());
+  const focusItem = seq => ({ label:'🎯 Focus on this variation',
+    onClick:()=>{ GRAPH_FOCUS_SEQ = seq.slice(); showTranspositionGraph(); } });
+  const clearItem = () => ({ label:'⤺ Clear focus',
+    onClick:()=>{ GRAPH_FOCUS_SEQ = null; showTranspositionGraph(); } });
+  cy.on('cxttap', 'node', evt=>{
+    const el = evt.target, seq = el.data('seq');
+    const focusable = seq && !el.hasClass('start') && !el.hasClass('locked')
+      && !el.hasClass('run-box') && !el.hasClass('twotrack-box');
+    const items = [];
+    if(focusable) items.push(focusItem(seq));
+    if(GRAPH_FOCUS_SEQ) items.push(clearItem());
+    const oe = evt.originalEvent || {};
+    if(items.length) showGraphCtxMenu(oe.clientX||0, oe.clientY||0, items);
+  });
+  cy.on('cxttap', evt=>{                    // background right-click: offer Clear when focused
+    if(evt.target !== cy || !GRAPH_FOCUS_SEQ) return;
+    const oe = evt.originalEvent || {};
+    showGraphCtxMenu(oe.clientX||0, oe.clientY||0, [clearItem()]);
+  });
+}
 
 /* ---------- opening graph hover preview ----------
    Reuses the mini chessboard / #hoverPreview div defined later in this
