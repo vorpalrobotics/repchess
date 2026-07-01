@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-23';
+const BUILD_TAG = '-24';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -781,6 +781,47 @@ function buildGeneratedCastle(line, games, rootSeq){
 
   return { genRooms, stats: a, graph };
 }
+
+/* ---------- generate-castle options modal ----------
+   A pre-step before generating, so you can regenerate fresh while testing.
+   For now the only option is to wipe this castle's prior VR decorations. */
+let PENDING_CASTLE_GEN = null;
+// must match threeTest.js's keyOf(): 'cas:' + posKey with non-alphanumerics → '_'
+const castleRoomKey = posKey => 'cas:' + String(posKey || '').replace(/[^a-zA-Z0-9]/g, '_');
+function openCastleGenModal(games, seq){
+  PENDING_CASTLE_GEN = { games, seq };
+  $('castleGenWipe').checked = false;
+  $('castleGenOverlay').style.display = 'flex';
+}
+// delete the persisted VR layout (object placements + surfaces) for every room of
+// this castle, so a regenerate starts from a clean slate. Rooms are keyed by
+// position (G3), so this clears exactly the positions this castle occupies.
+async function wipeCastleDecorations(games, seq){
+  const castle = buildGeneratedCastle(CURRENT_LINE, games, seq);
+  const raw = await getMeta('threeLayout');
+  if(!raw) return 0;
+  let layout;
+  try { layout = JSON.parse(raw); } catch { return 0; }
+  let removed = 0;
+  for(const r of castle.genRooms){
+    const k = castleRoomKey(r.posKey);
+    if(k in layout){ delete layout[k]; removed++; }
+  }
+  await setMeta('threeLayout', JSON.stringify(layout));
+  return removed;
+}
+$('castleGenCancelBtn').onclick = () => { $('castleGenOverlay').style.display = 'none'; PENDING_CASTLE_GEN = null; };
+$('castleGenGoBtn').onclick = async () => {
+  const ctx = PENDING_CASTLE_GEN;
+  $('castleGenOverlay').style.display = 'none';
+  PENDING_CASTLE_GEN = null;
+  if(!ctx) return;
+  if($('castleGenWipe').checked){
+    const n = await wipeCastleDecorations(ctx.games, ctx.seq);
+    log(`wiped VR decorations for ${n} room(s)`);
+  }
+  showGeneratedCastleReport(ctx.games, ctx.seq);
+};
 
 let LAST_GENERATED_CASTLE = null;   // stashed so "Walk in VR" can hand it to the VR engine
 async function showGeneratedCastleReport(games, seq){
@@ -1936,7 +1977,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      if(childrenSeq) showGeneratedCastleReport(games,childrenSeq);
+      if(childrenSeq) openCastleGenModal(games,childrenSeq);
     };
     rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
       e.stopPropagation();
@@ -2247,7 +2288,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="generateCastle"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    if(childrenSeq) showGeneratedCastleReport(games,childrenSeq);
+    if(childrenSeq) openCastleGenModal(games,childrenSeq);
   };
   rowMenu.querySelector('[data-act="addMove"]').onclick = e => {
     e.stopPropagation();

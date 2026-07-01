@@ -667,6 +667,21 @@
   </div>
 </div>
 
+<!-- generate-castle options (shown before generating) -->
+<div id="castleGenOverlay" class="overlay">
+  <div class="modal" style="max-width:28em">
+    <h2 style="margin-top:0">Generate Castle</h2>
+    <label style="display:flex;gap:.5rem;align-items:flex-start;margin:.6rem 0;cursor:pointer">
+      <input type="checkbox" id="castleGenWipe" style="margin-top:.2rem">
+      <span>Regenerate fresh — <b>wipe all prior VR decorations</b> for this castle's rooms (object placements &amp; surfaces). Use while testing, before you commit to memorizing it.</span>
+    </label>
+    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:1rem">
+      <button id="castleGenCancelBtn">Cancel</button>
+      <button id="castleGenGoBtn"><i class="fa-solid fa-dungeon"></i> Generate</button>
+    </div>
+  </div>
+</div>
+
 <!-- room info modal (click a graph node) -->
 <div id="roomInfoOverlay" class="overlay">
   <div class="modal" style="min-width:20em;max-width:28em">
@@ -1008,6 +1023,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-23"></script>
+<script type="module" src="js/app.js?v=20260630-24"></script>
 </body>
 </html>
