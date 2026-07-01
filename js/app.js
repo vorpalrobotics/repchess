@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-24';
+const BUILD_TAG = '-25';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3179,26 +3179,31 @@ function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
    "destination square + piece" combos actually played. */
 let MNEM_COVERAGE = null; // null = no system selected; else a Set of "sq|pieceField"
 
-async function computeMnemonicCoverage(line){
-  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
-  /* buildCastleGraph/walk/processExit all read the global PREFS map keyed by
-     line.id to find each branch's saved reply; PREFS only ever holds the
-     prefs of whichever line is currently open in the main tree, which is
-     often NOT the line picked in this dropdown. Swap in the right line's
-     prefs for the traversal, then restore so the open line's in-memory
-     state isn't disturbed. */
-  // PREFS already holds the open line's prefs; only swap in another line's
-  // prefs when computing coverage for a line that isn't the one open in the
-  // main tree (avoids a redundant getAllPrefs read for the common case).
+/* buildCastleGraph/walk/processExit, definedCastles, and castleRootRoomSeq all
+   read the global PREFS map keyed by line.id; PREFS only ever holds the prefs
+   of whichever line is currently open in the main tree, which is often NOT the
+   line picked in the coverage dropdown. Swap in the given line's prefs for the
+   duration of fn(), then restore so the open line's in-memory state isn't
+   disturbed. (Sequential use only -- concurrent calls would race on PREFS.) */
+async function withLinePrefs(line, fn){
   const isOpenLine = CURRENT_LINE && line.id === CURRENT_LINE.id;
   const savedPrefs = PREFS;
-  let graph;
   try {
     if(!isOpenLine) PREFS = await getAllPrefs(line.id);
-    graph = buildCastleGraph(line, GAMES);
+    return fn();
   } finally {
     if(!isOpenLine) PREFS = savedPrefs;
   }
+}
+const castlesForLine = line => withLinePrefs(line, definedCastles);
+const findCastleRootSeq = (line, castleName) => withLinePrefs(line, () => castleRootRoomSeq(castleName));
+
+/* rootSeq, when given, scopes coverage to a single castle's subtree (leadIn:false
+   so the lead-in moves above the castle root aren't counted as "in" the castle,
+   matching the generator's own scoping — see buildGeneratedCastle). */
+async function computeMnemonicCoverage(line, rootSeq=null){
+  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  const graph = await withLinePrefs(line, () => buildCastleGraph(line, GAMES, rootSeq, false));
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
   for(const seq of seqs){
@@ -3212,13 +3217,30 @@ async function computeMnemonicCoverage(line){
   return set;
 }
 
+// castle options in the dropdown are addressed by index into this array (not by
+// embedding lineId/castleName in the option value) since line ids themselves
+// contain colons, which would make any colon-delimited encoding ambiguous.
+let MNEM_CASTLE_OPTIONS = []; // [{lineId, castleName}]
 async function populateMnemonicsCoverageSelect(){
   const sel = $('mnemonicsCoverageSelect');
   const prevValue = sel.value;
   const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-  sel.innerHTML = '<option value="">(none selected)</option>' +
-    lines.map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('');
-  if(lines.some(l=>l.id===prevValue)) sel.value = prevValue;
+  MNEM_CASTLE_OPTIONS = [];
+  const groups = [];
+  for(const line of lines){
+    // sequential (not Promise.all): castlesForLine swaps the shared PREFS map
+    const castles = await castlesForLine(line);
+    const castleOpts = castles.map(c => {
+      const idx = MNEM_CASTLE_OPTIONS.push({ lineId: line.id, castleName: c }) - 1;
+      return `<option value="castle:${idx}">↳ ${escapeHtml(c)}</option>`;
+    }).join('');
+    groups.push(`<optgroup label="${escapeHtml(line.name)}">` +
+      `<option value="${escapeHtml(line.id)}">(whole system)</option>` +
+      castleOpts +
+      `</optgroup>`);
+  }
+  sel.innerHTML = '<option value="">(none selected)</option>' + groups.join('');
+  if([...sel.options].some(o=>o.value===prevValue)) sel.value = prevValue;
 }
 
 async function renderMnemonicsGrid(){
@@ -3529,14 +3551,22 @@ $('mnemonicsExportBtn').onclick = ()=> exportMnemonics();
 // mnemonics bundle and runs the mnemonics-only replace flow.
 $('mnemonicsImportBtn').onclick = ()=> $('backupImport').click();
 $('mnemonicsCoverageSelect').onchange = async (e)=>{
-  const id = e.target.value;
-  if(!id){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
-  const lines = await getLines(CURRENT_USER);
-  const line = lines.find(l=>l.id===id);
-  if(!line){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
+  const val = e.target.value;
+  if(!val){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
   const spinner = showSpinner('Loading opening system…');
   try {
-    MNEM_COVERAGE = await computeMnemonicCoverage(line);
+    const lines = await getLines(CURRENT_USER);
+    if(val.startsWith('castle:')){
+      const opt = MNEM_CASTLE_OPTIONS[+val.slice('castle:'.length)];
+      const line = opt && lines.find(l=>l.id===opt.lineId);
+      const rootSeq = line ? await findCastleRootSeq(line, opt.castleName) : null;
+      // no rootSeq means the castle root has no reply set yet (no room built) --
+      // show empty coverage rather than silently falling back to the whole system
+      MNEM_COVERAGE = line ? (rootSeq ? await computeMnemonicCoverage(line, rootSeq) : new Set()) : null;
+    } else {
+      const line = lines.find(l=>l.id===val);
+      MNEM_COVERAGE = line ? await computeMnemonicCoverage(line) : null;
+    }
   } finally {
     hideSpinner(spinner);
   }
