@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-21';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-22';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-21';
+const BUILD_TAG = '-22';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -709,6 +709,14 @@ function buildGeneratedCastle(line, games, rootSeq){
   });
   const labelOf = new Map(order.map((gid,i)=>[gid, 'R'+(i+1)]));
   const moveOf = id => nodeById.get(id)?.label || '?';
+  // a STABLE identity per generated room, independent of R# numbering: the
+  // position (positionKey) reached at the room's anchor. Used to key VR
+  // decorations so they survive regeneration when the R# order shifts (G3).
+  const anchorNode = gid => { const g = groups.get(gid); return nodeById.get(g.head || g.members[0]); };
+  const posKeyByGid = new Map(order.map(gid => {
+    const n = anchorNode(gid);
+    return [gid, n && n.fen ? positionKey(n.fen) : ('R#' + labelOf.get(gid))];
+  }));
 
   // a member room's move-pair for the VR billboards: the opponent move that led
   // in (the ply before) plus OUR reply (the room's own move). Both derived from
@@ -744,7 +752,9 @@ function buildGeneratedCastle(line, games, rootSeq){
       if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track }); continue; }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
-      exits.push({ opp: e.label, to: labelOf.get(tgt) || null, track });
+      // `to` is the R# label (for the readable report); `toKey` is the stable
+      // position identity the VR uses to wire doors + persist decorations.
+      exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null, track });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
@@ -765,7 +775,7 @@ function buildGeneratedCastle(line, games, rootSeq){
       let o = 1;
       for(let m = 1; m < g.members.length; m++){ const p = pairFor(g.members[m], 'left', o); if(p){ pairs.push(p); o++; } }
     }
-    return { id: labelOf.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
+    return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
              memberCount: g.members.length, walls, exits, pairs };
   });
 

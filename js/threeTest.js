@@ -207,12 +207,16 @@ function registerGeneratedCastle(castle){
   clearGeneratedCastle();
   const genRooms = (castle && castle.genRooms) || [];
   if(!genRooms.length) return null;
-  const keyOf = id => 'cas:' + id;
+  // key each room by its STABLE position (posKey), not the R# order, so LAYOUT
+  // decorations persist across regeneration (G3). Doors target the same stable
+  // key (ex.toKey). Sanitize to a safe id; fall back to R# if no posKey.
+  const keyOf = posKey => 'cas:' + String(posKey || '').replace(/[^a-zA-Z0-9]/g, '_');
+  const roomKeyFor = r => keyOf(r.posKey || r.id);
   // back-link: the room that holds a built forward exit to this one is its parent
-  const parent = {};
-  for(const r of genRooms) for(const ex of r.exits) if(ex.to && !(ex.to in parent)) parent[ex.to] = r.id;
+  const parent = {};   // child posKey -> parent posKey
+  for(const r of genRooms) for(const ex of r.exits) if(ex.toKey && !(ex.toKey in parent)) parent[ex.toKey] = r.posKey;
   const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
-  CASTLE_ENTRY = keyOf(entry.id);
+  CASTLE_ENTRY = roomKeyFor(entry);
   const DOOR_SPACING = 3.6;      // center-to-center; DOOR_W is 2.2, leaves a clear gap + room for hints
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
   const EW_SETBACK = 2;          // east/west door groups sit this far north of center
@@ -269,9 +273,9 @@ function registerGeneratedCastle(castle){
     // back door (south) → parent room. The entry room has no parent, so it gets
     // no back door (you leave the walk via the Close button); wiring it to the
     // outdoor street would need a matching street building and is deferred.
-    if(parent[r.id]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.id]), back: true });
-    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.to), label: dp.ex.opp });
-    const key = keyOf(r.id);
+    if(parent[r.posKey]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.posKey]), back: true });
+    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.toKey), label: dp.ex.opp });
+    const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
     // sign drops its (now redundant) move list and just carries the name/exits.
