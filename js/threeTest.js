@@ -203,6 +203,17 @@ const CAS_LAYOUT = {
   sideStride:   3.0,   // each subsequent side pair this much farther north
   northMargin:  2.0    // clearance kept between the farthest pair and the north wall
 };
+// Stable door ordering (navigation memory): a door's wall is derived from its
+// own target position, not its index among the current doors, so adding/removing
+// a variation never makes an existing door jump walls. `doorCmp` then orders the
+// doors on a wall by move, an intrinsic, regeneration-invariant key.
+function doorWallFor(key){
+  let h = 0; const s = String(key || '');
+  for(let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return ['north', 'east', 'west'][((h % 3) + 3) % 3];
+}
+const doorCmp = (a, b) =>
+  (a.opp || '').localeCompare(b.opp || '') || String(a.toKey || '').localeCompare(String(b.toKey || ''));
 function registerGeneratedCastle(castle){
   clearGeneratedCastle();
   const genRooms = (castle && castle.genRooms) || [];
@@ -241,9 +252,10 @@ function registerGeneratedCastle(castle){
     const doorPlacements = [];   // {wall, offset, ex}
     if(isTwoTrack){
       // two-track: a half-wall splits the room into a left and right lane, so each
-      // track's exits leave through doors on the NORTH wall within its own half.
-      const leftDoors = fwd.filter(ex => ex.track !== 'right');
-      const rightDoors = fwd.filter(ex => ex.track === 'right');
+      // track's exits leave through doors on the NORTH wall within its own half,
+      // ordered by move so their relative order is stable across regenerations.
+      const leftDoors = fwd.filter(ex => ex.track !== 'right').sort(doorCmp);
+      const rightDoors = fwd.filter(ex => ex.track === 'right').sort(doorCmp);
       const maxSpan = Math.max(span(leftDoors.length), span(rightDoors.length));
       sz = { w: Math.max(base.w, 2 * maxSpan + 8), d: Math.max(base.d, pairDepth), h: base.h };
       const quarter = sz.w / 4;   // center of each half of the north wall
@@ -252,12 +264,14 @@ function registerGeneratedCastle(castle){
       placeHalf(leftDoors, -quarter);
       placeHalf(rightDoors, quarter);
     } else {
-      // balanced round-robin across the three non-entrance walls so no wall is
-      // overloaded; grow the room so doors never collide. East/west groups keep
-      // a north setback from the entrance.
+      // STABLE door layout for navigation memory: a door's wall is a hash of its
+      // target position (intrinsic, so it never migrates when other doors are
+      // added or removed), and doors on a wall are sorted by move — so existing
+      // doors keep their wall AND relative order across regenerations; only a
+      // genuinely new variation slots in. Room grows so doors never collide.
       const byWall = { north: [], east: [], west: [] };
-      const wallOrder = ['north', 'east', 'west'];
-      fwd.forEach((ex, i) => byWall[wallOrder[i % 3]].push(ex));
+      for(const ex of fwd) byWall[doorWallFor(ex.toKey || ex.opp)].push(ex);
+      for(const w of ['north', 'east', 'west']) byWall[w].sort(doorCmp);
       sz = {
         w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
         d: Math.max(base.d, pairDepth, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
