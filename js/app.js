@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-14';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-15';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-14';
+const BUILD_TAG = '-15';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -743,18 +743,21 @@ function buildGeneratedCastle(line, games, rootSeq){
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
       : { center: g.members.map(moveOf) };
-    // move-pair billboards: two-track splits head+left down the west wall and the
-    // right run down the east wall; every other room files its members west.
+    // move-pair billboards: the room's anchor move-pair (the head, or the first
+    // member) sits front-and-center, the first thing you see on entering. The
+    // rest file down the walls — two-track splits left (west) / right (east);
+    // every other room files its remaining members down the west wall.
     const pairs = [];
     if(g.kind === 'two-track'){
+      const hp = pairFor(g.head, 'center', 1); if(hp) pairs.push(hp);
       let lo = 1;
-      const hp = pairFor(g.head, 'left', lo); if(hp){ pairs.push(hp); lo++; }
       for(const id of g.left){ const p = pairFor(id, 'left', lo); if(p){ pairs.push(p); lo++; } }
       let ro = 1;
       for(const id of g.right){ const p = pairFor(id, 'right', ro); if(p){ pairs.push(p); ro++; } }
     } else {
+      const ap = pairFor(g.members[0], 'center', 1); if(ap) pairs.push(ap);
       let o = 1;
-      for(const id of g.members){ const p = pairFor(id, 'left', o); if(p){ pairs.push(p); o++; } }
+      for(let m = 1; m < g.members.length; m++){ const p = pairFor(g.members[m], 'left', o); if(p){ pairs.push(p); o++; } }
     }
     return { id: labelOf.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
              memberCount: g.members.length, walls, exits, pairs };

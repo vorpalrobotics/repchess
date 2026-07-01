@@ -205,21 +205,24 @@ function registerGeneratedCastle(castle){
   CASTLE_ENTRY = keyOf(entry.id);
   for(const r of genRooms){
     const sz = r.type === 'corridor'
-      ? { w: 7, d: Math.max(8, Math.min(40, (r.memberCount || 1) * 5)), h: 6 }
-      : { w: 9, d: 9, h: 6 };
-    const halfW = sz.w / 2 - 1.5;
+      ? { w: 8, d: Math.max(12, Math.min(44, (r.memberCount || 1) * 5)), h: 6 }
+      : { w: 11, d: 13, h: 6 };
+    const halfW = sz.w / 2 - 1.5, halfD = sz.d / 2 - 1.5;
     const exits = [];
     // back door (south) → parent room. The entry room has no parent, so it gets
     // no back door (you leave the walk via the Close button); wiring it to the
     // outdoor street would need a matching street building and is deferred.
     if(parent[r.id]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.id]), back: true });
-    // forward doors → built exits, spread across north/east/west; extras stack on north
+    // forward doors → built exits, spread across north/east/west; extras stack on
+    // north. East/west doors sit ~2 m north of center so they're set back from the
+    // south entrance and you can take them in at a glance on entering.
     const fwd = r.exits.filter(ex => ex.to);
     const walls = ['north', 'east', 'west'];
     fwd.forEach((ex, i) => {
       const wall = walls[i] || 'north';
-      let offset = walls[i] ? 0 : (i - 2) * 2.5;
-      offset = Math.max(-halfW, Math.min(halfW, offset));
+      let offset;
+      if(wall === 'north'){ offset = walls[i] ? 0 : (i - 2) * 2.5; offset = Math.max(-halfW, Math.min(halfW, offset)); }
+      else { offset = -Math.min(2, halfD); }   // 2 m toward the north (away from the entrance)
       exits.push({ wall, offset, target: keyOf(ex.to), label: ex.opp });
     });
     const key = keyOf(r.id);
@@ -2030,6 +2033,14 @@ function mnemPairLayout(roomKey){
       out.push({ tag: (side === 'left' ? 'L' : 'R') + (i + 1), side, order: i + 1, x, z, pair });
     });
   }
+  // center pairs march down the room's central axis, the first one a couple
+  // meters in front of the south-edge entrance so it's the first thing you see.
+  const centerPairs = entry.pairs.filter(p => p.side === 'center')
+                                 .sort((a, b) => (a.order || 0) - (b.order || 0));
+  const startZ = room.size.d / 2 - 6;   // ~2.5 m ahead of the spawn (d/2 - 3.5)
+  centerPairs.forEach((pair, i) => {
+    out.push({ tag: 'C' + (i + 1), side: 'center', order: i + 1, x: 0, z: startZ - i * MNEM_WALL_STRIDE, pair });
+  });
   return out;
 }
 
@@ -2368,7 +2379,7 @@ function buildDoorHint(size, wall, offset, targetKey){
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
-  const y = DOOR_H + 0.36;
+  const y = DOOR_H + 0.66;   // raised to clear the now-2x-larger signs
   // mount a mesh flat on this wall at `along` (the wall-axis coordinate), facing in
   const mount = (mesh, along) => {
     if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
@@ -2377,8 +2388,9 @@ function buildDoorHint(size, wall, offset, targetKey){
     if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
     group.add(mesh);
   };
-  if(name) mount(makeNameSignMesh(name), offset - (move ? 0.24 : 0));
-  if(move) mount(makeMoveDecorationMesh(move, 0.3), offset + (name ? 0.56 : 0));
+  // 2x larger so door hints read from across the room
+  if(name){ const m = makeNameSignMesh(name); m.scale.set(2, 2, 1); mount(m, offset - (move ? 0.5 : 0)); }
+  if(move) mount(makeMoveDecorationMesh(move, 0.6), offset + (name ? 1.1 : 0));
   return group;
 }
 
@@ -3050,9 +3062,6 @@ function buildRoom(roomKey){
   }
 
   const carMode = isElevatorCar(roomKey);
-
-  // G2a: generated-castle rooms carry a freestanding sign listing their moves
-  if(room.castleSign) scene.add(buildCastleRoomSign(room));
 
   currentExitsByWall = {};
   currentStairCorridors = {};
