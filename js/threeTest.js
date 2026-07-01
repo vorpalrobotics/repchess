@@ -198,7 +198,7 @@ function clearGeneratedCastle(){
 // measured from room center; the south entrance is at +d/2, north wall at -d/2.
 const CAS_LAYOUT = {
   entrySetback: 1.5,   // spawn/viewpoint this far in from the south wall
-  centerAhead:  2.5,   // center (anchor) pair this far north of the viewpoint
+  centerAhead:  4.5,   // center (anchor) pair this far north of the viewpoint — a few meters of runway from the door
   sideFirst:    2.0,   // first left/right pair this far north of the center pair
   sideStride:   3.0,   // each subsequent side pair this much farther north
   northMargin:  2.0    // clearance kept between the farthest pair and the north wall
