@@ -190,6 +190,7 @@ function generateMainStreet(systems){
 let CASTLE_ENTRY = null;
 function clearGeneratedCastle(){
   for(const k of Object.keys(ROOMS)) if(k.startsWith('cas:')) delete ROOMS[k];
+  for(const k of Object.keys(DEMO_MNEMONICS)) if(k.startsWith('cas:')) delete DEMO_MNEMONICS[k];
   CASTLE_ENTRY = null;
 }
 function registerGeneratedCastle(castle){
@@ -221,12 +222,18 @@ function registerGeneratedCastle(castle){
       offset = Math.max(-halfW, Math.min(halfW, offset));
       exits.push({ wall, offset, target: keyOf(ex.to), label: ex.opp });
     });
-    const moves = (r.walls.center || []).slice()
+    const key = keyOf(r.id);
+    // move-pair billboards + numbered object slots: reuse the existing mnemonic
+    // machinery by registering the room's pairs under its key. When present, the
+    // sign drops its (now redundant) move list and just carries the name/exits.
+    const hasPairs = r.pairs && r.pairs.length;
+    if(hasPairs) DEMO_MNEMONICS[key] = { pairs: r.pairs };
+    const moves = hasPairs ? [] : (r.walls.center || []).slice()
       .concat((r.walls.left || []).map(m => '⟸ ' + m))
       .concat((r.walls.right || []).map(m => '⟹ ' + m));
     const doors = fwd.map(ex => `${ex.opp} → ${ex.to}`);
     const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
-    ROOMS[keyOf(r.id)] = {
+    ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };

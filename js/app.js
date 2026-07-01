@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-12';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-13';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -707,6 +707,23 @@ function buildGeneratedCastle(line, games, rootSeq){
   const labelOf = new Map(order.map((gid,i)=>[gid, 'R'+(i+1)]));
   const moveOf = id => nodeById.get(id)?.label || '?';
 
+  // a member room's move-pair for the VR billboards: the opponent move that led
+  // in (the ply before) plus OUR reply (the room's own move). Both derived from
+  // the room's seq via lastMoveInfo (which also remaps castling to the rook
+  // square). Returns null when there's no preceding opponent ply (a ply-1 root).
+  const CONV = mv => ({ to: mv.to, piece: MNEM_WORD_FOR_PIECE[mv.piece] || 'pawn', san: mv.san });
+  const pairFor = (roomId, side, order) => {
+    const node = nodeById.get(roomId);
+    if(!node || !node.seq || node.seq.length < 2) return null;
+    const resp = lastMoveInfo(node.seq);
+    const opp = lastMoveInfo(node.seq.slice(0, -1));
+    if(!resp || !opp) return null;
+    const p = { side, order, opponent: CONV(opp), response: CONV(resp) };
+    const beards = moveDisambiguatorCount(node.seq);
+    if(beards) p.response.disambig = beards;
+    return p;
+  };
+
   const genRooms = order.map(gid => {
     const g = groups.get(gid);
     const anchor = nodeById.get(g.head || g.members[0]);
@@ -723,8 +740,21 @@ function buildGeneratedCastle(line, games, rootSeq){
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
       : { center: g.members.map(moveOf) };
+    // move-pair billboards: two-track splits head+left down the west wall and the
+    // right run down the east wall; every other room files its members west.
+    const pairs = [];
+    if(g.kind === 'two-track'){
+      let lo = 1;
+      const hp = pairFor(g.head, 'left', lo); if(hp){ pairs.push(hp); lo++; }
+      for(const id of g.left){ const p = pairFor(id, 'left', lo); if(p){ pairs.push(p); lo++; } }
+      let ro = 1;
+      for(const id of g.right){ const p = pairFor(id, 'right', ro); if(p){ pairs.push(p); ro++; } }
+    } else {
+      let o = 1;
+      for(const id of g.members){ const p = pairFor(id, 'left', o); if(p){ pairs.push(p); o++; } }
+    }
     return { id: labelOf.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             memberCount: g.members.length, walls, exits };
+             memberCount: g.members.length, walls, exits, pairs };
   });
 
   return { genRooms, stats: a, graph };
