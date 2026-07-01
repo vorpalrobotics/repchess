@@ -259,7 +259,9 @@ function registerGeneratedCastle(castle){
     };
   }
   const s = ROOMS[CASTLE_ENTRY].size;
-  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - 3.5, yaw: 0 } };
+  // spawn close to the south wall (the entry room has no back door there) so you
+  // face the whole room and can take it in at a glance.
+  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - 1.5, yaw: 0 } };
 }
 
 let renderer=null, scene=null, camera=null, clock=null;
