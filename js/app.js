@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-19';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-20';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js';
 cytoscape.use(cytoscapeDagre);
 
@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-19';
+const BUILD_TAG = '-20';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -732,13 +732,19 @@ function buildGeneratedCastle(line, games, rootSeq){
     const anchor = nodeById.get(g.head || g.members[0]);
     const meta = genRoomMeta(anchor.seq);
     const memberSet = new Set(g.members);
+    // for two-track rooms, tag each exit with the track (left/right) it leaves
+    // from, so the VR can route its door into the matching lane of the half-wall.
+    const leftSet = g.kind === 'two-track' ? new Set(g.left) : null;
+    const rightSet = g.kind === 'two-track' ? new Set(g.right) : null;
+    const trackOf = src => !leftSet ? undefined : (rightSet.has(src) ? 'right' : 'left');
     const exits = [];
     for(const e of graph.edges){
       if(!memberSet.has(e.source)) continue;
-      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null }); continue; }
+      const track = trackOf(e.source);
+      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track }); continue; }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
-      exits.push({ opp: e.label, to: labelOf.get(tgt) || null });
+      exits.push({ opp: e.label, to: labelOf.get(tgt) || null, track });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }

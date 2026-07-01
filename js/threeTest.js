@@ -227,41 +227,50 @@ function registerGeneratedCastle(castle){
       ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
         + (sideMax - 1) * CAS_LAYOUT.sideStride + CAS_LAYOUT.northMargin
       : 0;
-    // forward doors → built exits, balanced round-robin across the three
-    // non-entrance walls so no single wall gets overloaded.
     const fwd = r.exits.filter(ex => ex.to);
-    const byWall = { north: [], east: [], west: [] };
-    const wallOrder = ['north', 'east', 'west'];
-    fwd.forEach((ex, i) => byWall[wallOrder[i % 3]].push(ex));
-    // size the room so every wall fits its doors DOOR_SPACING apart without
-    // colliding, growing the wall (even past the base size) when needed. North/
-    // south doors span the width (x); east/west doors span the depth (z), plus
-    // the EW_SETBACK shift that keeps them north of the entrance.
     const span = c => (c > 1 ? (c - 1) * DOOR_SPACING : 0);
     const base = r.type === 'corridor'
       ? { w: 8, d: Math.max(12, Math.min(44, (r.memberCount || 1) * 5)), h: 6 }
       : { w: 11, d: 13, h: 6 };
-    const sz = {
-      w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
-      d: Math.max(base.d, pairDepth, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
-      h: base.h
-    };
+    const isTwoTrack = r.type === 'two-track';
+    let sz;
+    const doorPlacements = [];   // {wall, offset, ex}
+    if(isTwoTrack){
+      // two-track: a half-wall splits the room into a left and right lane, so each
+      // track's exits leave through doors on the NORTH wall within its own half.
+      const leftDoors = fwd.filter(ex => ex.track !== 'right');
+      const rightDoors = fwd.filter(ex => ex.track === 'right');
+      const maxSpan = Math.max(span(leftDoors.length), span(rightDoors.length));
+      sz = { w: Math.max(base.w, 2 * maxSpan + 8), d: Math.max(base.d, pairDepth), h: base.h };
+      const quarter = sz.w / 4;   // center of each half of the north wall
+      const placeHalf = (list, cx) => list.forEach((ex, j) =>
+        doorPlacements.push({ wall: 'north', offset: cx + (j - (list.length - 1) / 2) * DOOR_SPACING, ex }));
+      placeHalf(leftDoors, -quarter);
+      placeHalf(rightDoors, quarter);
+    } else {
+      // balanced round-robin across the three non-entrance walls so no wall is
+      // overloaded; grow the room so doors never collide. East/west groups keep
+      // a north setback from the entrance.
+      const byWall = { north: [], east: [], west: [] };
+      const wallOrder = ['north', 'east', 'west'];
+      fwd.forEach((ex, i) => byWall[wallOrder[i % 3]].push(ex));
+      sz = {
+        w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
+        d: Math.max(base.d, pairDepth, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
+        h: base.h
+      };
+      const place = (wall, list, center) => list.forEach((ex, j) =>
+        doorPlacements.push({ wall, offset: center + (j - (list.length - 1) / 2) * DOOR_SPACING, ex }));
+      place('north', byWall.north, 0);
+      place('east', byWall.east, -EW_SETBACK);
+      place('west', byWall.west, -EW_SETBACK);
+    }
     const exits = [];
     // back door (south) → parent room. The entry room has no parent, so it gets
     // no back door (you leave the walk via the Close button); wiring it to the
     // outdoor street would need a matching street building and is deferred.
     if(parent[r.id]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.id]), back: true });
-    // place each wall's doors, evenly spaced and centered (east/west groups
-    // shifted north of center so they sit back from the south entrance).
-    const placeWall = (wall, list, center) => {
-      const c = list.length;
-      list.forEach((ex, j) => {
-        exits.push({ wall, offset: center + (j - (c - 1) / 2) * DOOR_SPACING, target: keyOf(ex.to), label: ex.opp });
-      });
-    };
-    placeWall('north', byWall.north, 0);
-    placeWall('east', byWall.east, -EW_SETBACK);
-    placeWall('west', byWall.west, -EW_SETBACK);
+    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.to), label: dp.ex.opp });
     const key = keyOf(r.id);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -274,7 +283,7 @@ function registerGeneratedCastle(castle){
     const doors = fwd.map(ex => `${ex.opp} → ${ex.to}`);
     const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
     ROOMS[key] = {
-      size: sz, color: 0x6f5f8e, exits,
+      size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -3056,6 +3065,27 @@ function buildCastleRoomSign(room){
   mesh.position.set(0, 1.7, -room.size.d * 0.18);
   return mesh;
 }
+/* two-track castle room: a chest-high half-wall down the central axis, from just
+   north of the center (anchor) pair to the north wall, dividing the room into a
+   left lane and a right lane so the two run-tracks read as separate paths. Low
+   enough (1.4 m) to see over and take in both tracks at a glance. */
+function buildTwoTrackDivider(room){
+  const { d, h } = room.size;
+  const centerZ = d / 2 - CAS_LAYOUT.entrySetback - CAS_LAYOUT.centerAhead;
+  const zSouth = centerZ - 1.0;      // start just north of the center pair
+  const zNorth = -d / 2 + 0.3;       // run to (nearly) the north wall
+  const len = Math.max(1, zSouth - zNorth);
+  const wallH = Math.min(1.4, h - 0.2);
+  const tex = makeBrickTexture(0x8a7f6a);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(Math.max(1, len / 2), 1);
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, wallH, len),
+    new THREE.MeshStandardMaterial({ map: tex }));
+  mesh.position.set(0, wallH / 2, (zSouth + zNorth) / 2);
+  mesh.userData = { kind: 'divider' };
+  return mesh;
+}
 function buildRoom(roomKey){
   const room = mergedRoom(roomKey);
   buildGeneration++;
@@ -3108,6 +3138,9 @@ function buildRoom(roomKey){
   }
 
   const carMode = isElevatorCar(roomKey);
+
+  // two-track castle rooms get a half-wall dividing the left and right lanes
+  if(room.twoTrack) scene.add(buildTwoTrackDivider(room));
 
   currentExitsByWall = {};
   currentStairCorridors = {};
