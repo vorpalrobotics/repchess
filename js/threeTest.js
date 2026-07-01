@@ -193,6 +193,16 @@ function clearGeneratedCastle(){
   for(const k of Object.keys(DEMO_MNEMONICS)) if(k.startsWith('cas:')) delete DEMO_MNEMONICS[k];
   CASTLE_ENTRY = null;
 }
+// shared layout metrics for generated-castle rooms, used both to size a room's
+// depth and to place its move-pair billboards, so the two always agree. z is
+// measured from room center; the south entrance is at +d/2, north wall at -d/2.
+const CAS_LAYOUT = {
+  entrySetback: 1.5,   // spawn/viewpoint this far in from the south wall
+  centerAhead:  2.5,   // center (anchor) pair this far north of the viewpoint
+  sideFirst:    2.0,   // first left/right pair this far north of the center pair
+  sideStride:   3.0,   // each subsequent side pair this much farther north
+  northMargin:  2.0    // clearance kept between the farthest pair and the north wall
+};
 function registerGeneratedCastle(castle){
   clearGeneratedCastle();
   const genRooms = (castle && castle.genRooms) || [];
@@ -207,6 +217,16 @@ function registerGeneratedCastle(castle){
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
   const EW_SETBACK = 2;          // east/west door groups sit this far north of center
   for(const r of genRooms){
+    // depth needed for the wall move-pairs: the center pair sits near the
+    // entrance and each left/right pair marches ~3 m farther north, so the room
+    // grows ~3 m per side pair (of whichever wall has the most). See CAS_LAYOUT.
+    const sideMax = Math.max(
+      (r.pairs || []).filter(p => p.side === 'left').length,
+      (r.pairs || []).filter(p => p.side === 'right').length);
+    const pairDepth = sideMax >= 1
+      ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
+        + (sideMax - 1) * CAS_LAYOUT.sideStride + CAS_LAYOUT.northMargin
+      : 0;
     // forward doors → built exits, balanced round-robin across the three
     // non-entrance walls so no single wall gets overloaded.
     const fwd = r.exits.filter(ex => ex.to);
@@ -223,7 +243,7 @@ function registerGeneratedCastle(castle){
       : { w: 11, d: 13, h: 6 };
     const sz = {
       w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
-      d: Math.max(base.d, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
+      d: Math.max(base.d, pairDepth, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
       h: base.h
     };
     const exits = [];
@@ -261,7 +281,7 @@ function registerGeneratedCastle(castle){
   const s = ROOMS[CASTLE_ENTRY].size;
   // spawn close to the south wall (the entry room has no back door there) so you
   // face the whole room and can take it in at a glance.
-  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - 1.5, yaw: 0 } };
+  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 } };
 }
 
 let renderer=null, scene=null, camera=null, clock=null;
@@ -2040,6 +2060,14 @@ function mnemPairLayout(roomKey){
   if(!entry || !entry.pairs) return [];
   const room = mergedRoom(roomKey);
   const out = [];
+  // generated-castle rooms use the depth-aware scheme: viewpoint near the south
+  // entrance, the center (anchor) pair just ahead of it (closest to you), and
+  // each left/right pair marching farther north so center reads as nearer than
+  // the first side item. The hard-coded demo room keeps its original centered
+  // layout (it's only 10 m deep and would push billboards through the wall).
+  const isCastle = roomKey.startsWith('cas:');
+  const viewZ = room.size.d / 2 - CAS_LAYOUT.entrySetback;
+  const centerZ = viewZ - CAS_LAYOUT.centerAhead;
   for(const side of ['left', 'right']){
     const wall = side === 'left' ? 'west' : 'east';
     const { fixed } = wallSpan(room.size, wall);   // x of the wall plane
@@ -2048,17 +2076,16 @@ function mnemPairLayout(roomKey){
                                  .sort((a, b) => (a.order || 0) - (b.order || 0));
     const k = sidePairs.length;
     sidePairs.forEach((pair, i) => {
-      const z = ((k - 1) / 2 - i) * MNEM_WALL_STRIDE;   // order 1 nearest the +z entrance
+      const z = isCastle
+        ? centerZ - CAS_LAYOUT.sideFirst - i * CAS_LAYOUT.sideStride   // first side pair ~2 m north of center, then march north
+        : ((k - 1) / 2 - i) * MNEM_WALL_STRIDE;                        // demo: centered on the wall
       out.push({ tag: (side === 'left' ? 'L' : 'R') + (i + 1), side, order: i + 1, x, z, pair });
     });
   }
-  // center pairs march down the room's central axis, the first one a couple
-  // meters in front of the south-edge entrance so it's the first thing you see.
   const centerPairs = entry.pairs.filter(p => p.side === 'center')
                                  .sort((a, b) => (a.order || 0) - (b.order || 0));
-  const startZ = room.size.d / 2 - 6;   // ~2.5 m ahead of the spawn (d/2 - 3.5)
   centerPairs.forEach((pair, i) => {
-    out.push({ tag: 'C' + (i + 1), side: 'center', order: i + 1, x: 0, z: startZ - i * MNEM_WALL_STRIDE, pair });
+    out.push({ tag: 'C' + (i + 1), side: 'center', order: i + 1, x: 0, z: centerZ - i * CAS_LAYOUT.sideStride, pair });
   });
   return out;
 }
@@ -2398,7 +2425,7 @@ function buildDoorHint(size, wall, offset, targetKey){
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
-  const y = DOOR_H + 0.95;   // raised to clear the now-3x-larger signs
+  const y = DOOR_H + 1.25;   // raised to clear the now-~4x-larger signs
   // mount a mesh flat on this wall at `along` (the wall-axis coordinate), facing in
   const mount = (mesh, along) => {
     if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
@@ -2407,9 +2434,9 @@ function buildDoorHint(size, wall, offset, targetKey){
     if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
     group.add(mesh);
   };
-  // 3x larger so door hints read from across the room
-  if(name){ const m = makeNameSignMesh(name); m.scale.set(3, 3, 1); mount(m, offset - (move ? 0.75 : 0)); }
-  if(move) mount(makeMoveDecorationMesh(move, 0.9), offset + (name ? 1.65 : 0));
+  // ~4x larger (another 30% over the previous 3x) so door hints read from afar
+  if(name){ const m = makeNameSignMesh(name); m.scale.set(3.9, 3.9, 1); mount(m, offset - (move ? 1.0 : 0)); }
+  if(move) mount(makeMoveDecorationMesh(move, 1.17), offset + (name ? 2.15 : 0));
   return group;
 }
 
