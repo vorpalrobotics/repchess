@@ -3065,24 +3065,47 @@ function buildCastleRoomSign(room){
   mesh.position.set(0, 1.7, -room.size.d * 0.18);
   return mesh;
 }
+/* the two-track half-wall's footprint (x/z axis-aligned box), shared by the
+   geometry and the collision test so they always agree. Runs down the central
+   axis (x=0) from just north of the center pair to (nearly) the north wall. */
+const DIVIDER_THICK = 0.3;
+function twoTrackDividerBox(room){
+  const d = room.size.d;
+  const centerZ = d / 2 - CAS_LAYOUT.entrySetback - CAS_LAYOUT.centerAhead;
+  return {
+    xMin: -DIVIDER_THICK / 2, xMax: DIVIDER_THICK / 2,
+    zMin: -d / 2 + 0.3,          // to (nearly) the north wall
+    zMax: centerZ - 1.0          // start just north of the center pair
+  };
+}
+// push the player out of the half-wall (inflated by their radius), along the
+// shallowest axis, so they can't walk through it. South of the wall's south end
+// stays open, so you can still cross between lanes near the entrance.
+function clampOutOfDivider(room, x, z){
+  const b = twoTrackDividerBox(room), r = PLAYER_RADIUS;
+  const xMin = b.xMin - r, xMax = b.xMax + r, zMin = b.zMin - r, zMax = b.zMax + r;
+  if(x <= xMin || x >= xMax || z <= zMin || z >= zMax) return { x, z };   // clear of the wall
+  const dLeft = x - xMin, dRight = xMax - x, dSouth = zMax - z, dNorth = z - zMin;
+  const m = Math.min(dLeft, dRight, dSouth, dNorth);
+  if(m === dLeft) x = xMin; else if(m === dRight) x = xMax;
+  else if(m === dSouth) z = zMax; else z = zMin;
+  return { x, z };
+}
 /* two-track castle room: a chest-high half-wall down the central axis, from just
    north of the center (anchor) pair to the north wall, dividing the room into a
    left lane and a right lane so the two run-tracks read as separate paths. Low
    enough (1.4 m) to see over and take in both tracks at a glance. */
 function buildTwoTrackDivider(room){
-  const { d, h } = room.size;
-  const centerZ = d / 2 - CAS_LAYOUT.entrySetback - CAS_LAYOUT.centerAhead;
-  const zSouth = centerZ - 1.0;      // start just north of the center pair
-  const zNorth = -d / 2 + 0.3;       // run to (nearly) the north wall
-  const len = Math.max(1, zSouth - zNorth);
-  const wallH = Math.min(1.4, h - 0.2);
+  const b = twoTrackDividerBox(room);
+  const len = Math.max(1, b.zMax - b.zMin);
+  const wallH = Math.min(1.4, room.size.h - 0.2);
   const tex = makeBrickTexture(0x8a7f6a);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(Math.max(1, len / 2), 1);
   const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.3, wallH, len),
+    new THREE.BoxGeometry(DIVIDER_THICK, wallH, len),
     new THREE.MeshStandardMaterial({ map: tex }));
-  mesh.position.set(0, wallH / 2, (zSouth + zNorth) / 2);
+  mesh.position.set(0, wallH / 2, (b.zMax + b.zMin) / 2);
   mesh.userData = { kind: 'divider' };
   return mesh;
 }
@@ -3506,6 +3529,7 @@ function tick(){
     pos.z += -Math.cos(yaw) * move * speed * dt;
     let clamped = clampToRoom(room.size, pos.x, pos.z);
     if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
+    if(room.twoTrack) clamped = clampOutOfDivider(room, clamped.x, clamped.z);
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
