@@ -203,28 +203,45 @@ function registerGeneratedCastle(castle){
   for(const r of genRooms) for(const ex of r.exits) if(ex.to && !(ex.to in parent)) parent[ex.to] = r.id;
   const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
   CASTLE_ENTRY = keyOf(entry.id);
+  const DOOR_SPACING = 3.6;      // center-to-center; DOOR_W is 2.2, leaves a clear gap + room for hints
+  const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
+  const EW_SETBACK = 2;          // east/west door groups sit this far north of center
   for(const r of genRooms){
-    const sz = r.type === 'corridor'
+    // forward doors → built exits, balanced round-robin across the three
+    // non-entrance walls so no single wall gets overloaded.
+    const fwd = r.exits.filter(ex => ex.to);
+    const byWall = { north: [], east: [], west: [] };
+    const wallOrder = ['north', 'east', 'west'];
+    fwd.forEach((ex, i) => byWall[wallOrder[i % 3]].push(ex));
+    // size the room so every wall fits its doors DOOR_SPACING apart without
+    // colliding, growing the wall (even past the base size) when needed. North/
+    // south doors span the width (x); east/west doors span the depth (z), plus
+    // the EW_SETBACK shift that keeps them north of the entrance.
+    const span = c => (c > 1 ? (c - 1) * DOOR_SPACING : 0);
+    const base = r.type === 'corridor'
       ? { w: 8, d: Math.max(12, Math.min(44, (r.memberCount || 1) * 5)), h: 6 }
       : { w: 11, d: 13, h: 6 };
-    const halfW = sz.w / 2 - 1.5, halfD = sz.d / 2 - 1.5;
+    const sz = {
+      w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
+      d: Math.max(base.d, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
+      h: base.h
+    };
     const exits = [];
     // back door (south) → parent room. The entry room has no parent, so it gets
     // no back door (you leave the walk via the Close button); wiring it to the
     // outdoor street would need a matching street building and is deferred.
     if(parent[r.id]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.id]), back: true });
-    // forward doors → built exits, spread across north/east/west; extras stack on
-    // north. East/west doors sit ~2 m north of center so they're set back from the
-    // south entrance and you can take them in at a glance on entering.
-    const fwd = r.exits.filter(ex => ex.to);
-    const walls = ['north', 'east', 'west'];
-    fwd.forEach((ex, i) => {
-      const wall = walls[i] || 'north';
-      let offset;
-      if(wall === 'north'){ offset = walls[i] ? 0 : (i - 2) * 2.5; offset = Math.max(-halfW, Math.min(halfW, offset)); }
-      else { offset = -Math.min(2, halfD); }   // 2 m toward the north (away from the entrance)
-      exits.push({ wall, offset, target: keyOf(ex.to), label: ex.opp });
-    });
+    // place each wall's doors, evenly spaced and centered (east/west groups
+    // shifted north of center so they sit back from the south entrance).
+    const placeWall = (wall, list, center) => {
+      const c = list.length;
+      list.forEach((ex, j) => {
+        exits.push({ wall, offset: center + (j - (c - 1) / 2) * DOOR_SPACING, target: keyOf(ex.to), label: ex.opp });
+      });
+    };
+    placeWall('north', byWall.north, 0);
+    placeWall('east', byWall.east, -EW_SETBACK);
+    placeWall('west', byWall.west, -EW_SETBACK);
     const key = keyOf(r.id);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -2379,7 +2396,7 @@ function buildDoorHint(size, wall, offset, targetKey){
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
-  const y = DOOR_H + 0.66;   // raised to clear the now-2x-larger signs
+  const y = DOOR_H + 0.95;   // raised to clear the now-3x-larger signs
   // mount a mesh flat on this wall at `along` (the wall-axis coordinate), facing in
   const mount = (mesh, along) => {
     if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
@@ -2388,9 +2405,9 @@ function buildDoorHint(size, wall, offset, targetKey){
     if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
     group.add(mesh);
   };
-  // 2x larger so door hints read from across the room
-  if(name){ const m = makeNameSignMesh(name); m.scale.set(2, 2, 1); mount(m, offset - (move ? 0.5 : 0)); }
-  if(move) mount(makeMoveDecorationMesh(move, 0.6), offset + (name ? 1.1 : 0));
+  // 3x larger so door hints read from across the room
+  if(name){ const m = makeNameSignMesh(name); m.scale.set(3, 3, 1); mount(m, offset - (move ? 0.75 : 0)); }
+  if(move) mount(makeMoveDecorationMesh(move, 0.9), offset + (name ? 1.65 : 0));
   return group;
 }
 
