@@ -682,11 +682,17 @@
 <div id="castleGenOverlay" class="overlay">
   <div class="modal" style="max-width:28em">
     <h2 style="margin-top:0">Generate Castle</h2>
+    <div class="field" id="castleGenStreetField" style="display:none">
+      <label for="castleGenStreetNumber">Street number</label>
+      <input type="number" id="castleGenStreetNumber" min="1" step="1" style="width:6em">
+      <div style="font-size:.72rem;color:#888;margin-top:.2rem">Position on the opening system's street — lower numbers sit closer to Main Street. Auto-filled when unset; must be unique within this system.</div>
+    </div>
     <label style="display:flex;gap:.5rem;align-items:flex-start;margin:.6rem 0;cursor:pointer">
       <input type="checkbox" id="castleGenWipe" style="margin-top:.2rem">
       <span>Regenerate fresh — <b>wipe all prior VR decorations</b> for this castle's rooms (object placements &amp; surfaces). Use while testing, before you commit to memorizing it.</span>
     </label>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:1rem">
+    <div id="castleGenError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
+    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
       <button id="castleGenCancelBtn">Cancel</button>
       <button id="castleGenGoBtn"><i class="fa-solid fa-dungeon"></i> Generate</button>
     </div>
@@ -720,11 +726,17 @@
       <label for="attrCastleName">Castle name</label>
       <input type="text" id="attrCastleName" placeholder="e.g. Queen's Gambit Castle">
     </div>
+    <div class="field" id="attrStreetNumberField">
+      <label for="attrStreetNumber">Street number</label>
+      <input type="number" id="attrStreetNumber" min="1" step="1" style="width:6em" placeholder="auto">
+      <div style="font-size:.72rem;color:#888;margin-top:.2rem">Position on the opening system's street — lower numbers sit closer to Main Street. Leave blank to auto-assign at Generate time.</div>
+    </div>
     <div class="field" id="attrCastleOwnerField">
       <label for="attrCastleOwner">Belongs to castle</label>
       <select id="attrCastleOwner"></select>
       <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only needed to resolve a transposition shared by two castles; otherwise leave on Auto.</div>
     </div>
+    <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
     <div class="modal-actions">
       <button id="attributesCancelBtn">Cancel</button>
@@ -1034,6 +1046,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-27"></script>
+<script type="module" src="js/app.js?v=20260630-28"></script>
 </body>
 </html>

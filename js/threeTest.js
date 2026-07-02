@@ -135,25 +135,49 @@ let OPENING_SYSTEMS = [];
    at its own point as you walk up the street. Each branch gets a green street
    sign. For now the test palace (the existing 'start' interior) is parked on the
    first white street so there's something to walk into. */
-function generateMainStreet(systems){
-  const MAIN_W = 8, SIDE_LEN = 32, SIDE_W = 7, SPACING = 16, MARGIN = 10;
+/* streetCastles: [{lineId, castleName, streetNumber, entryKey}] — every BUILT
+   castle (root move has a reply), already registered as cas:* rooms. Each one
+   becomes a building on its opening system's side street, ordered by street
+   number (lower = closer to Main Street; unnumbered follow, alphabetical). */
+function generateMainStreet(systems, streetCastles){
+  const MAIN_W = 8, SIDE_W = 7, SPACING = 24, MARGIN = 10;
+  const BW = 14, BD = 8, BH = 9, BGAP = 6, FIRST_X = 6;   // castle-building slots along a side street
   const list = (systems && systems.length)
     ? systems
     : [{ name:'Main', streetName:'Main Street', color:'white' }];
   const n = list.length;
   const startZ = -((n - 1) * SPACING) / 2;
   const depth = (n - 1) * SPACING + 2 * MARGIN + SIDE_W + 8;
-  const width = 2 * (MAIN_W / 2 + SIDE_LEN) + 2 * MARGIN;
+
+  // group built castles by system, ordered by street number
+  const bySystem = new Map();
+  for(const c of (streetCastles || [])){
+    if(!bySystem.has(c.lineId)) bySystem.set(c.lineId, []);
+    bySystem.get(c.lineId).push(c);
+  }
+  for(const arr of bySystem.values()){
+    arr.sort((a, b) => {
+      const an = a.streetNumber ?? Infinity, bn = b.streetNumber ?? Infinity;
+      return (an - bn) || String(a.castleName).localeCompare(String(b.castleName));
+    });
+  }
+
+  // every side street is long enough for the biggest street's buildings
+  let sideLen = 32;
+  for(const arr of bySystem.values()){
+    sideLen = Math.max(sideLen, FIRST_X + arr.length * (BW + BGAP) + MARGIN);
+  }
+  const width = 2 * (MAIN_W / 2 + sideLen) + 2 * MARGIN;
 
   const roads = [{ x: 0, z: 0, sx: MAIN_W, sz: depth }];   // Main Street, full depth
   const streetSigns = [];
-  let firstWhite = null, firstWhiteZ = 0;
+  const buildings = [];
 
   list.forEach((sys, i) => {
     const east = sys.color !== 'black';     // white / unspecified branch right (east)
     const side = east ? 1 : -1;
     const z = startZ + i * SPACING;
-    roads.push({ x: side * (MAIN_W / 2 + SIDE_LEN / 2), z, sx: SIDE_LEN, sz: SIDE_W });
+    roads.push({ x: side * (MAIN_W / 2 + sideLen / 2), z, sx: sideLen, sz: SIDE_W });
     streetSigns.push({
       streetSign: true,
       text: sys.streetName || sys.name,
@@ -162,20 +186,20 @@ function generateMainStreet(systems){
       x: side * (MAIN_W / 2 + 1.2),
       z: z + SIDE_W / 2 + 1.2
     });
-    if(east && !firstWhite){ firstWhite = sys; firstWhiteZ = z; }
+    // this system's built castles: one building each on the north side of its
+    // street, door facing south onto it; lower street number = closer to Main St.
+    (bySystem.get(sys.id) || []).forEach((c, k) => {
+      const xInner = MAIN_W / 2 + FIRST_X + k * (BW + BGAP) + BW / 2;
+      buildings.push({
+        target: c.entryKey,
+        sign: c.castleName,
+        color: 0x6f8fb0,
+        size: { w: BW, d: BD, h: BH },
+        origin: { x: side * xInner, z: z - (SIDE_W / 2 + BD / 2 + 1) },
+        doorWall: 'south', doorOffset: 0
+      });
+    });
   });
-
-  const palaceZ = firstWhite ? firstWhiteZ : 0;
-  const buildings = [{
-    target: 'start',
-    sign: firstWhite ? firstWhite.name : 'Test Palace',
-    frontTexture: 'assets/three/textures/chigorin_mansion_front.jpg',
-    color: 0x6f8fb0,
-    size: { w: 25, d: 10, h: 10 },
-    // sit just north of the side street, door facing south onto it
-    origin: { x: MAIN_W / 2 + SIDE_LEN * 0.5, z: palaceZ - (SIDE_W / 2 + 5 + 1) },
-    doorWall: 'south', doorOffset: 0
-  }];
 
   ROOMS.mainStreet = { outdoor: true, size: { w: width, d: depth, h: 7 }, exits: [], roads, streetSigns, buildings };
   START_SPAWN.x = 0; START_SPAWN.z = depth / 2 - 4; START_SPAWN.yaw = 0;   // spawn at the south end, facing up the street
@@ -214,20 +238,28 @@ function doorWallFor(key){
 }
 const doorCmp = (a, b) =>
   (a.opp || '').localeCompare(b.opp || '') || String(a.toKey || '').localeCompare(String(b.toKey || ''));
-function registerGeneratedCastle(castle){
-  clearGeneratedCastle();
+/* Register ONE generated castle's rooms under a namespace. instanceId is a
+   stable id derived from lineId+castleName (or 'preview' for the report's
+   ephemeral Walk in VR), so two castles that transpose into the same chess
+   position still get separate rooms/decorations — cross-castle sharing is a
+   deliberate future choice, not an accident. opts.backToStreet gives the entry
+   room a south back door out to mainStreet (used when a matching street
+   building exists to spawn in front of). Returns {entryKey, spawn}. */
+function registerOneCastle(castle, instanceId, opts = {}){
   const genRooms = (castle && castle.genRooms) || [];
   if(!genRooms.length) return null;
-  // key each room by its STABLE position (posKey), not the R# order, so LAYOUT
-  // decorations persist across regeneration (G3). Doors target the same stable
-  // key (ex.toKey). Sanitize to a safe id; fall back to R# if no posKey.
-  const keyOf = posKey => 'cas:' + String(posKey || '').replace(/[^a-zA-Z0-9]/g, '_');
+  // key each room by instance + its STABLE position (posKey), not the R# order,
+  // so LAYOUT decorations persist across regeneration (G3). Doors target the
+  // same stable key (ex.toKey). Sanitize to a safe id; fall back to R#.
+  const inst = String(instanceId || 'preview').replace(/[^a-zA-Z0-9_]/g, '_');
+  const keyOf = posKey => `cas:${inst}:` + String(posKey || '').replace(/[^a-zA-Z0-9]/g, '_');
   const roomKeyFor = r => keyOf(r.posKey || r.id);
   // back-link: the room that holds a built forward exit to this one is its parent
   const parent = {};   // child posKey -> parent posKey
   for(const r of genRooms) for(const ex of r.exits) if(ex.toKey && !(ex.toKey in parent)) parent[ex.toKey] = r.posKey;
   const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
-  CASTLE_ENTRY = roomKeyFor(entry);
+  const entryKey = roomKeyFor(entry);
+  CASTLE_ENTRY = entryKey;
   const DOOR_SPACING = 3.6;      // center-to-center; DOOR_W is 2.2, leaves a clear gap + room for hints
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
   const EW_SETBACK = 2;          // east/west door groups sit this far north of center
@@ -284,10 +316,12 @@ function registerGeneratedCastle(castle){
       place('west', byWall.west, -EW_SETBACK);
     }
     const exits = [];
-    // back door (south) → parent room. The entry room has no parent, so it gets
-    // no back door (you leave the walk via the Close button); wiring it to the
-    // outdoor street would need a matching street building and is deferred.
+    // back door (south) → parent room. The entry room instead exits to the
+    // street when a matching street building exists (opts.backToStreet); in the
+    // ephemeral report-preview walk there is no building, so no back door
+    // (leave via the Close button).
     if(parent[r.posKey]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.posKey]), back: true });
+    else if(r === entry && opts.backToStreet) exits.push({ wall: 'south', offset: 0, target: 'mainStreet', back: true });
     for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.toKey), label: dp.ex.opp });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
@@ -305,10 +339,10 @@ function registerGeneratedCastle(castle){
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
-  const s = ROOMS[CASTLE_ENTRY].size;
-  // spawn close to the south wall (the entry room has no back door there) so you
-  // face the whole room and can take it in at a glance.
-  return { entryKey: CASTLE_ENTRY, spawn: { x: 0, z: s.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 } };
+  const s = ROOMS[entryKey].size;
+  // spawn close to the south wall so you face the whole room and can take it
+  // in at a glance.
+  return { entryKey, spawn: { x: 0, z: s.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 } };
 }
 
 let renderer=null, scene=null, camera=null, clock=null;
@@ -936,14 +970,23 @@ function sealBehindBuilding(collider, roomSize){
   const { origin, size, doorWall, doorOffset } = collider;
   const o = { x: origin.x, z: origin.z };
   const s = { w: size.w, d: size.d, h: size.h };
+  // seal a few meters behind the box rather than clear to the room edge: with
+  // castles on several parallel side streets, an edge-length seal from one
+  // street's buildings would wall off the streets behind them.
+  const BACK_PAD = 4;
+  const clampBack = (back, edge) => (edge < 0 ? Math.max(back, edge) : Math.min(back, edge));
   if(doorWall === 'south' || doorWall === 'north'){
     const front = doorWall === 'south' ? origin.z + size.d/2 : origin.z - size.d/2;
-    const back  = doorWall === 'south' ? -roomSize.d/2 : roomSize.d/2;
+    const back  = doorWall === 'south'
+      ? clampBack(origin.z - size.d/2 - BACK_PAD, -roomSize.d/2)
+      : clampBack(origin.z + size.d/2 + BACK_PAD, roomSize.d/2);
     s.d = Math.abs(front - back);
     o.z = (front + back) / 2;
   } else {
     const front = doorWall === 'east' ? origin.x + size.w/2 : origin.x - size.w/2;
-    const back  = doorWall === 'east' ? -roomSize.w/2 : roomSize.w/2;
+    const back  = doorWall === 'east'
+      ? clampBack(origin.x - size.w/2 - BACK_PAD, -roomSize.w/2)
+      : clampBack(origin.x + size.w/2 + BACK_PAD, roomSize.w/2);
     s.w = Math.abs(front - back);
     o.x = (front + back) / 2;
   }
@@ -4767,7 +4810,17 @@ export async function openThreeTest(containerEl, opts){
   threeOpts = opts || {};
   OPENING_SYSTEMS = threeOpts.systems || [];
   _beardImg = undefined;                 // re-read the disambiguator image each time the walk opens
-  generateMainStreet(OPENING_SYSTEMS);   // lay out Main Street + one side street per opening system
+  // register every BUILT castle's rooms first (each namespaced by its instance
+  // id), then lay out the streets with a building per castle wired to its entry
+  // room — walking in the front door enters the castle, and its entry room's
+  // back door leads back out to the street.
+  clearGeneratedCastle();
+  const streetCastles = [];
+  for(const c of (threeOpts.castles || [])){
+    const reg = registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { backToStreet: true });
+    if(reg) streetCastles.push({ ...c, entryKey: reg.entryKey });
+  }
+  generateMainStreet(OPENING_SYSTEMS, streetCastles);   // Main Street + one side street per opening system
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
 
@@ -4819,9 +4872,11 @@ export async function openThreeTest(containerEl, opts){
   window.addEventListener('keyup', onKeyUp);
   renderer.domElement.addEventListener('click', onCanvasClick);
 
-  // a generated castle (G2a): synthesize its rooms and spawn at the entry;
-  // otherwise start on Main Street as usual.
-  const cas = threeOpts.castle ? registerGeneratedCastle(threeOpts.castle) : null;
+  // a single generated castle (the report's Walk in VR): register its rooms and
+  // spawn straight into the entry; otherwise start on Main Street as usual.
+  const cas = threeOpts.castle
+    ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, {})
+    : null;
   if(cas) enterRoom(cas.entryKey, cas.spawn);
   else enterRoom(START_ROOM, START_SPAWN);
   tick();

@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-23';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-28';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-27';
 cytoscape.use(cytoscapeDagre);
 
@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-27';
+const BUILD_TAG = '-28';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -665,10 +665,12 @@ async function showCastleSummary(games, seq){
 }
 
 /* a room's name (and castle, if it's a castle root) lives on the opponent-move
-   row that leads into it — keyed one ply back from the room's seq. */
-function genRoomMeta(seq){
-  if(!seq || !seq.length) return { name:'', castle:'' };
-  const p = PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))];
+   row that leads into it — keyed one ply back from the room's seq. `line`
+   defaults to the open line but can be any line whose prefs are currently
+   swapped in (see withLinePrefs), so castles from other systems build too. */
+function genRoomMeta(seq, line = CURRENT_LINE){
+  if(!seq || !seq.length || !line) return { name:'', castle:'' };
+  const p = PREFS[prefKey(line.id, seq.slice(0,-1))];
   return { name: p?.name || '', castle: (p?.isCastleRoot && p.castleName) ? p.castleName : '' };
 }
 
@@ -738,7 +740,7 @@ function buildGeneratedCastle(line, games, rootSeq){
   const genRooms = order.map(gid => {
     const g = groups.get(gid);
     const anchor = nodeById.get(g.head || g.members[0]);
-    const meta = genRoomMeta(anchor.seq);
+    const meta = genRoomMeta(anchor.seq, line);
     const memberSet = new Set(g.members);
     // for two-track rooms, tag each exit with the track (left/right) it leaves
     // from, so the VR can route its door into the matching lane of the half-wall.
@@ -783,29 +785,50 @@ function buildGeneratedCastle(line, games, rootSeq){
 }
 
 /* ---------- generate-castle options modal ----------
-   A pre-step before generating, so you can regenerate fresh while testing.
-   For now the only option is to wipe this castle's prior VR decorations. */
+   A pre-step before generating: assign/confirm the castle's street number
+   (auto-filled when unset) and optionally wipe its prior VR decorations. */
 let PENDING_CASTLE_GEN = null;
-// must match threeTest.js's keyOf(): 'cas:' + posKey with non-alphanumerics → '_'
-const castleRoomKey = posKey => 'cas:' + String(posKey || '').replace(/[^a-zA-Z0-9]/g, '_');
+// VR room-key conventions — must match threeTest.js's registerOneCastle keyOf():
+// 'cas:<instanceId>:<posKey>' with non-alphanumerics sanitized to '_'. The
+// instance id namespaces a castle by line + castle name so two castles that
+// transpose into the same position keep separate rooms/decorations.
+const sanitizeKeyPart = s => String(s || '').replace(/[^a-zA-Z0-9]/g, '_');
+const castleInstanceId = (lineId, castleName) =>
+  castleName ? `${sanitizeKeyPart(lineId)}_${sanitizeKeyPart(castleName)}` : 'preview';
+const castleRoomKey = (instanceId, posKey) => `cas:${instanceId}:${sanitizeKeyPart(posKey)}`;
 function openCastleGenModal(games, seq){
   PENDING_CASTLE_GEN = { games, seq };
   $('castleGenWipe').checked = false;
+  $('castleGenError').textContent = '';
+  // street-number step: only when this node is a defined castle root (the flag
+  // lives on the opponent-move pref one ply back from the room seq)
+  const rootPref = (seq && seq.length >= 2) ? PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))] : null;
+  const isRoot = !!(rootPref?.isCastleRoot && rootPref.castleName?.trim());
+  PENDING_CASTLE_GEN.rootPref = isRoot ? rootPref : null;
+  $('castleGenStreetField').style.display = isRoot ? '' : 'none';
+  if(isRoot){
+    const saved = parseInt(rootPref.castleStreetNumber, 10);
+    $('castleGenStreetNumber').value = (Number.isFinite(saved) && saved >= 1)
+      ? saved
+      : nextStreetNumber(rootPref.castleName);
+  }
   $('castleGenOverlay').style.display = 'flex';
 }
 // delete the persisted VR layout (object placements + surfaces) for every room of
 // this castle, so a regenerate starts from a clean slate. Rooms are keyed by
-// position (G3), so this clears exactly the positions this castle occupies.
+// instance + position (G3); legacy un-namespaced keys are cleared too.
 async function wipeCastleDecorations(games, seq){
   const castle = buildGeneratedCastle(CURRENT_LINE, games, seq);
+  const inst = castleInstanceId(CURRENT_LINE.id, castle.genRooms[0]?.castle || '');
   const raw = await getMeta('threeLayout');
   if(!raw) return 0;
   let layout;
   try { layout = JSON.parse(raw); } catch { return 0; }
   let removed = 0;
   for(const r of castle.genRooms){
-    const k = castleRoomKey(r.posKey);
-    if(k in layout){ delete layout[k]; removed++; }
+    for(const k of [castleRoomKey(inst, r.posKey), 'cas:' + sanitizeKeyPart(r.posKey)]){
+      if(k in layout){ delete layout[k]; removed++; }
+    }
   }
   await setMeta('threeLayout', JSON.stringify(layout));
   return removed;
@@ -813,9 +836,26 @@ async function wipeCastleDecorations(games, seq){
 $('castleGenCancelBtn').onclick = () => { $('castleGenOverlay').style.display = 'none'; PENDING_CASTLE_GEN = null; };
 $('castleGenGoBtn').onclick = async () => {
   const ctx = PENDING_CASTLE_GEN;
+  if(!ctx){ $('castleGenOverlay').style.display = 'none'; return; }
+  // street number: required for a castle root; must be unique among the other
+  // castles in this opening system (validation errors keep the modal open)
+  if(ctx.rootPref){
+    const num = parseInt($('castleGenStreetNumber').value, 10);
+    if(!Number.isFinite(num) || num < 1){
+      $('castleGenError').textContent = 'Street number must be a positive whole number.';
+      return;
+    }
+    const clash = streetNumberConflict(num, ctx.rootPref.castleName);
+    if(clash){
+      $('castleGenError').textContent = `Street number ${num} is already used by "${clash}" in this opening system.`;
+      return;
+    }
+    if(parseInt(ctx.rootPref.castleStreetNumber, 10) !== num){
+      await savePrefField(ctx.seq.slice(0,-1), 'castleStreetNumber', num);
+    }
+  }
   $('castleGenOverlay').style.display = 'none';
   PENDING_CASTLE_GEN = null;
-  if(!ctx) return;
   if($('castleGenWipe').checked){
     const n = await wipeCastleDecorations(ctx.games, ctx.seq);
     log(`wiped VR decorations for ${n} room(s)`);
@@ -1340,6 +1380,9 @@ $('castleWalkBtn').onclick = async () => {
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
+    // same instance id the street flow uses, so decorations made during this
+    // preview land in (and load from) the same per-castle rooms
+    castleInstanceId: castleInstanceId(CURRENT_LINE?.id, LAST_GENERATED_CASTLE.genRooms[0]?.castle || ''),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });
@@ -1434,13 +1477,18 @@ function openAttributesModal(saved, onSave, lineSeq){
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
+  const savedNum = parseInt(saved?.castleStreetNumber, 10);
+  $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
+  $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
   attributesModalSave = onSave;
   $('attributesOverlay').style.display='flex';
 }
 function refreshAttrFieldVisibility(){
-  $('attrCastleNameField').style.display = $('attrIsCastleRoot').checked ? '' : 'none';
+  const isRoot = $('attrIsCastleRoot').checked;
+  $('attrCastleNameField').style.display = isRoot ? '' : 'none';
+  $('attrStreetNumberField').style.display = isRoot ? '' : 'none';
 }
 
 /* every castle defined in this opening system (distinct castle names on
@@ -1452,6 +1500,33 @@ function definedCastles(){
     if(p && p.isCastleRoot && p.castleName && p.castleName.trim()) set.add(p.castleName.trim());
   }
   return [...set].sort((a,b)=>a.localeCompare(b));
+}
+/* street numbers claimed by castles in this opening system (castleName ->
+   number), excluding `exceptCastleName` (the castle being edited). Lower
+   numbers sit closer to Main Street on the system's VR side street. */
+function usedStreetNumbers(exceptCastleName){
+  const used = new Map();
+  const except = (exceptCastleName || '').trim();
+  for(const key in PREFS){
+    const p = PREFS[key];
+    if(!p?.isCastleRoot || !p.castleName?.trim()) continue;
+    const name = p.castleName.trim();
+    if(name === except) continue;
+    const n = parseInt(p.castleStreetNumber, 10);
+    if(Number.isFinite(n) && n >= 1 && !used.has(name)) used.set(name, n);
+  }
+  return used;
+}
+/* the castle (if any) already holding this street number in this system */
+function streetNumberConflict(num, exceptCastleName){
+  for(const [name, n] of usedStreetNumbers(exceptCastleName)) if(n === num) return name;
+  return null;
+}
+/* default for a new castle: one past the highest number in use */
+function nextStreetNumber(exceptCastleName){
+  let max = 0;
+  for(const n of usedStreetNumbers(exceptCastleName).values()) max = Math.max(max, n);
+  return max + 1;
 }
 /* the focusable ROOM seq (ends in OUR move) for a castle's root: the root flag
    lives on the opponent-move row (p.seq), so the room is one reply deeper. Picks
@@ -1494,11 +1569,32 @@ $('attributesCancelBtn').onclick = () => {
   attributesModalSave = null;
 };
 $('attributesSaveBtn').onclick = () => {
+  const isRoot = $('attrIsCastleRoot').checked;
+  const castleName = $('attrCastleName').value.trim();
+  // street number: optional here (Generate Castle fills it in if left blank),
+  // but when given it must be a positive integer unique among this system's
+  // other castles — same rule Generate Castle enforces.
+  let streetNumber = '';
+  const rawNum = $('attrStreetNumber').value.trim();
+  if(isRoot && rawNum !== ''){
+    const num = parseInt(rawNum, 10);
+    if(!Number.isFinite(num) || num < 1){
+      $('attrError').textContent = 'Street number must be a positive whole number.';
+      return;
+    }
+    const clash = streetNumberConflict(num, castleName);
+    if(clash){
+      $('attrError').textContent = `Street number ${num} is already used by "${clash}" in this opening system.`;
+      return;
+    }
+    streetNumber = num;
+  }
   const v = {
     roomName: $('attrRoomName').value.trim(),
-    isCastleRoot: $('attrIsCastleRoot').checked,
-    castleName: $('attrCastleName').value.trim(),
-    castleOwner: $('attrCastleOwner').value
+    isCastleRoot: isRoot,
+    castleName,
+    castleOwner: $('attrCastleOwner').value,
+    castleStreetNumber: streetNumber
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -2003,6 +2099,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
         saveField('castleOwner', v.castleOwner);
+        saveField('castleStreetNumber', v.castleStreetNumber);
         saveField('name', v.roomName);
         refreshBranchName(nameSpan, currentSaved());
       }, lineSeq);
@@ -2314,6 +2411,7 @@ function renderBlackRoot(parent,games,trigger){
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
       saveField('castleOwner', v.castleOwner);
+      saveField('castleStreetNumber', v.castleStreetNumber);
       saveField('name', v.roomName);
       refreshBranchName(nameSpan, currentSaved());
     }, lineSeq);
@@ -2852,7 +2950,8 @@ async function exportBackup(){
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
         collapsed:p.collapsed,
-        isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner
+        isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
+        castleStreetNumber:p.castleStreetNumber
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -2904,7 +3003,8 @@ async function importBackup(data){
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
         eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false,
-        isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||''
+        isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
+        castleStreetNumber:pref.castleStreetNumber??''
       });
     }
   }
@@ -3124,15 +3224,58 @@ function openThreeTestAssets(){
   $('assetsOverlay').style.display='flex';
   openAssetManager($('assetsBodyWrap'));
 }
+/* every BUILT castle across all opening systems (a castle is built once its
+   root move has a configured reply — an entry room exists). Returns
+   {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout. */
+async function gatherBuiltCastles(lines){
+  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  const out = [];
+  for(const line of lines){
+    // one prefs swap per line: enumerate its castles, resolve each built root,
+    // read its street number, and generate its room model — all synchronous
+    // against that line's PREFS.
+    const built = await withLinePrefs(line, () =>
+      definedCastles().map(name => {
+        const rootSeq = castleRootRoomSeq(name);
+        if(!rootSeq) return null;   // named but not built yet — skip
+        let streetNumber = null;
+        for(const key in PREFS){
+          const p = PREFS[key];
+          if(p?.isCastleRoot && p.castleName?.trim() === name){
+            const n = parseInt(p.castleStreetNumber, 10);
+            if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
+          }
+        }
+        return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq).genRooms };
+      }).filter(Boolean)
+    );
+    for(const c of built){
+      out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber,
+                 instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
+    }
+  }
+  return out;
+}
+
 $('menuThreeTest').onclick = async ()=>{
   $('menuList').style.display='none';
+  const spinner = showSpinner('Building world…');
+  let systems = [], castles = [];
+  try {
+    await nextPaint();
+    // feed the walker the opening systems so it can lay out one street per system
+    // (white branches right off Main Street, black branches left), plus every
+    // built castle so each one appears as a building on its system's street.
+    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
+    castles = await gatherBuiltCastles(lines);
+  } finally {
+    hideSpinner(spinner);
+  }
   $('threeTestOverlay').style.display='flex';
-  // feed the walker the opening systems so it can lay out one street per system
-  // (white branches right off Main Street, black branches left)
-  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-  const systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
+    castles,
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });
