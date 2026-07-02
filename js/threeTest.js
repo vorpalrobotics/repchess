@@ -141,7 +141,7 @@ let OPENING_SYSTEMS = [];
    number (lower = closer to Main Street; unnumbered follow, alphabetical). */
 function generateMainStreet(systems, streetCastles){
   const MAIN_W = 8, SIDE_W = 7, SPACING = 24, MARGIN = 10;
-  const BW = 14, BD = 8, BH = 9, BGAP = 6, FIRST_X = 6;   // castle-building slots along a side street
+  const BW = 14, BD = 8, BH = 9, BGAP = 11, FIRST_X = 6;   // castle-building slots along a side street (BGAP: gap between buildings; wide so skinned facades don't touch)
   const list = (systems && systems.length)
     ? systems
     : [{ name:'Main', streetName:'Main Street', color:'white' }];
