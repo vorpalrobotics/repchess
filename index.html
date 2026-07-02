@@ -383,18 +383,21 @@
   #oqStatus.oq-hit{color:#2e7d32}
   #oqScoreDetail{color:#555;margin-bottom:.5rem}
   .oq-summary-actions{flex-direction:column;gap:.5rem;align-items:stretch}
-  .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 4px}
+  .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 2px}
   .mnem-square.light{background:#f0d9b5}
   .mnem-square.dark{background:#b58863}
   .mnem-square:hover{outline:2px solid #1565c0;outline-offset:-2px}
-  .mnem-square .mnem-word{font-weight:600;color:#222;white-space:nowrap;padding-left:1.5ch}
-  .mnem-square .mnem-word i{width:1.1em;text-align:center;margin-right:.25em;color:#0009}
-  .mnem-square .mnem-word.mnem-occurs{color:#2e7d32}
-  .mnem-square .mnem-word.mnem-occurs i{color:#2e7d32}
-  .mnem-square .mnem-icon-only{padding-left:1.5ch;color:#0009}
+  /* three-state coverage coloring: not needed by the selected scope (default,
+     no status class) = black; needed and fully present = green; needed but
+     missing a word or image = red. */
+  .mnem-square .mnem-word{font-weight:600;color:#222;white-space:nowrap}
+  .mnem-square .mnem-word i{width:1.1em;text-align:center;margin-right:.25em;color:inherit}
+  .mnem-square .mnem-word.mnem-ok{color:#2e7d32}
+  .mnem-square .mnem-word.mnem-missing{color:#c62828}
+  .mnem-square .mnem-icon-only{color:#222}
   .mnem-square .mnem-icon-only i{width:1.1em;text-align:center;margin-right:.25em;color:inherit}
-  .mnem-square .mnem-icon-only.mnem-occurs{color:#2e7d32}
-  .mnem-square.mnem-incomplete{outline:3px solid #c62828;outline-offset:-3px}
+  .mnem-square .mnem-icon-only.mnem-ok{color:#2e7d32}
+  .mnem-square .mnem-icon-only.mnem-missing{color:#c62828}
   .mnem-editor-table td i.mnem-icon-in-coverage{color:#2e7d32}
   .mnem-coord-file,.mnem-coord-rank{position:absolute;font-size:.65rem;font-weight:700;color:#0006}
   .mnem-coord-file{left:2px;bottom:1px}
@@ -1023,6 +1026,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-25"></script>
+<script type="module" src="js/app.js?v=20260630-26"></script>
 </body>
 </html>

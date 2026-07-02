@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-25';
+const BUILD_TAG = '-26';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3256,27 +3256,31 @@ async function renderMnemonicsGrid(){
       const sq = squareName(col,row);
       const isLight = (col+row)%2===0;
       const entry = MNEMONICS[sq] || {};
-      let pieceHtml, squareIncomplete = false;
+      let pieceHtml;
       if(imgMode){
         const p = MNEM_VIEW_MODE;
         pieceHtml = entry[p+'Img']
           ? `<img class="mnem-cell-img" src="${entry[p+'Img']}" alt="">`
           : `<div class="mnem-cell-empty"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i></div>`;
       } else if(MNEM_COVERAGE){
+        // three-state coloring: not needed by the selected scope -> black
+        // (default, no status class); needed and fully present (word AND
+        // image) -> green; needed but missing either one -> red.
         pieceHtml = MNEM_PIECES
           .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
           .map(p=>{
             const occurs = MNEM_COVERAGE.has(`${sq}|${p}`);
+            let statusCls = '';
             if(occurs){
               const missingWord = !entry[p], missingImg = !entry[p+'Img'];
               if(missingWord) missingWords++;
               if(missingImg) missingImages++;
-              if(missingWord || missingImg) squareIncomplete = true;
+              statusCls = (missingWord || missingImg) ? ' mnem-missing' : ' mnem-ok';
             }
-            const cls = `mnem-word${occurs?' mnem-occurs':''}`;
+            const cls = `mnem-word${statusCls}`;
             return entry[p]
               ? `<div class="${cls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`
-              : `<div class="mnem-icon-only${occurs?' mnem-occurs':''}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>(none)</div>`;
+              : `<div class="mnem-icon-only${statusCls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>(none)</div>`;
           })
           .join('');
       } else {
@@ -3286,7 +3290,7 @@ async function renderMnemonicsGrid(){
           .join('');
       }
       const div = document.createElement('div');
-      div.className = `mnem-square ${isLight?'light':'dark'}${squareIncomplete?' mnem-incomplete':''}${imgMode?' mnem-img-mode':''}`;
+      div.className = `mnem-square ${isLight?'light':'dark'}${imgMode?' mnem-img-mode':''}`;
       div.dataset.square = sq;
       div.innerHTML =
         (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
