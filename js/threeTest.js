@@ -3393,16 +3393,20 @@ function buildRoom(roomKey){
       }
       scene.add(buildRoof(size, b.origin, 0x3a3a3a));
       if(b.sign){
-        // Out on the lawn to the right of the front door (as seen walking
-        // up to it), like a museum or apartment-complex entrance sign --
-        // not mounted on the facade itself. The skin (if any) is an
-        // override image stretched behind the name text -- see signAssetFor.
+        // Out on the lawn by the front door, like a museum / apartment-complex
+        // entrance sign -- not mounted on the facade. Placed on the building's
+        // Main-Street-facing side (toward x=0) so you reach it first walking up
+        // the side street, and yawed partway toward Main so it greets you as you
+        // approach. bSide: +1 white (east of Main), -1 black (west). The skin (if
+        // any) is an override image stretched behind the name text -- see signAssetFor.
         const signAsset = signAssetFor(roomKey, buildingKey);
         const off = signPosFor(roomKey, buildingKey) || {};
-        const signBase = { x: b.origin.x + 6, z: b.origin.z + size.d/2 + 1.6 };
+        const bSide = Math.sign(b.origin.x) || 1;
+        const signBase = { x: b.origin.x - bSide * (size.w/2 + 1.5), z: b.origin.z + size.d/2 + 1.6 };
         const signPos = { x: signBase.x + (off.dx || 0), z: signBase.z + (off.dz || 0) };
         const signGroup = buildGroundSign(b.sign, signAsset);
         signGroup.position.set(signPos.x, 0, signPos.z);
+        signGroup.rotation.y = -bSide * Math.PI / 6;   // ~30°, partially facing Main Street
         // tag the whole sign so clicking any part of it selects the sign for
         // nudging (arrows) -- the gear icon then opens the skin picker.
         signGroup.userData = { kind: 'sign', roomKey, buildingKey, basePos: signBase };
