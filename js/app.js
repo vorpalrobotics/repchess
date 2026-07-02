@@ -43,7 +43,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-28';
+const BUILD_TAG = '-29';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3656,8 +3656,14 @@ function openMnemonicsEditor(sq){
     MNEM_EDIT_IMAGES[p] = entry[p+'Img'] || '';
     MNEM_EDIT_IMAGES_ORIG[p] = '';   // no full-res original until a fresh upload this session
     renderMnemImgDrop(p);
-    const inCoverage = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
-    mnemPieceIconEl(p).classList.toggle('mnem-icon-in-coverage', inCoverage);
+    // match the grid's three-state coloring: needed by the selected scope and
+    // fully present (word + image) = green, needed but missing either = red,
+    // not needed = default gray.
+    const needed = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
+    const present = !!(entry[p] && entry[p+'Img']);
+    const icon = mnemPieceIconEl(p);
+    icon.classList.toggle('mnem-icon-needed-ok', needed && present);
+    icon.classList.toggle('mnem-icon-needed-missing', needed && !present);
   }
   $('mnemonicsEditorOverlay').style.display='flex';
 }
