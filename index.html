@@ -441,6 +441,14 @@
   <div style="position:relative">
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
+      <button id="menuThreeTest">Run VR</button>
+      <button id="menuAssets">Manage VR Assets</button>
+      <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
+      <div id="subMnemonics" class="menu-sub">
+        <button id="menuMnemonics">Manage</button>
+        <button id="menuQuiz">Test</button>
+      </div>
+      <hr class="row-menu-sep">
       <button class="menu-parent" data-sub="subImport">Import</button>
       <div id="subImport" class="menu-sub">
         <button id="menuImport" title="Import a backup, mnemonics, or assets JSON file (auto-detected)">Backup / Data File…</button>
@@ -448,14 +456,6 @@
         <button id="menuImportLine" title="Paste variations to import">Variations</button>
         <button id="menuImportMoveImages" title="Bulk-import move-image PNGs named like Nf6.png">Move Images</button>
       </div>
-      <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
-      <div id="subMnemonics" class="menu-sub">
-        <button id="menuMnemonics">Manage</button>
-        <button id="menuQuiz">Test</button>
-      </div>
-      <hr class="row-menu-sep">
-      <button id="menuSearchLine">Search for a Variation</button>
-      <hr class="row-menu-sep">
       <button class="menu-parent" data-sub="subExport">Export</button>
       <div id="subExport" class="menu-sub">
         <button id="menuExport">Full Backup</button>
@@ -463,8 +463,7 @@
         <button id="menuExportAssets">Assets</button>
       </div>
       <hr class="row-menu-sep">
-      <button id="menuThreeTest">VR World Walkthrough</button>
-      <button id="menuAssets">Manage Assets</button>
+      <button id="menuSearchLine">Search for a Variation</button>
       <hr class="row-menu-sep">
       <button id="menuAbout">About</button>
     </div>
@@ -571,7 +570,7 @@
 <div id="assetsOverlay" class="overlay">
   <div class="modal">
     <div class="assets-header">
-      <h2>Manage Assets</h2>
+      <h2>Manage VR Assets</h2>
       <button id="assetsCloseBtn">Close</button>
     </div>
     <div id="assetsBodyWrap"></div>
@@ -580,10 +579,19 @@
 
 <!-- about modal -->
 <div id="aboutOverlay" class="overlay">
-  <div class="modal">
+  <div class="modal" style="max-width:32em;max-height:85vh;overflow:auto">
     <h2>About REPchess</h2>
     <p>Version 0.1</p>
     <p>Copyright (C) 2026 Vorpal Robotics, LLC</p>
+    <h3 style="margin-bottom:.3em">Open Source Attributions</h3>
+    <p style="font-size:.85em;color:#555;margin-top:0">REPchess is built on these open-source projects:</p>
+    <ul style="font-size:.82em;color:#333;padding-left:1.3em;line-height:1.5">
+      <li><b>cm-chessboard</b> — 2D chessboard widget (MIT License). Piece images (standard set) &copy; Colin M.L. Burnett, used under CC BY-SA 3.0.</li>
+      <li><b>chess.js</b> — chess move generation and rules engine (BSD License).</li>
+      <li><b>cytoscape.js</b> and <b>cytoscape-dagre</b> — network graph rendering and layout (MIT License).</li>
+      <li><b>three.js</b> — 3D/WebGL rendering for the VR memory-palace walkthrough (MIT License).</li>
+      <li><b>Font Awesome Free</b> — icons (icons: CC BY 4.0; fonts: SIL OFL 1.1; code: MIT License).</li>
+    </ul>
     <div class="modal-actions">
       <button id="aboutCloseBtn">Close</button>
     </div>
@@ -1026,6 +1034,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-26"></script>
+<script type="module" src="js/app.js?v=20260630-27"></script>
 </body>
 </html>

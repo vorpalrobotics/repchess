@@ -1060,7 +1060,7 @@ async function renderPicker(ov){
   `;
   const grid = ov.querySelector('#pickerGrid');
   if(!list.length){
-    grid.innerHTML = '<p class="assets-empty">No matching assets yet. Use "Upload new…" or add some via menu → Manage Assets.</p>';
+    grid.innerHTML = '<p class="assets-empty">No matching assets yet. Use "Upload new…" or add some via menu → Manage VR Assets.</p>';
   } else {
     for(const a of list){
       const card = document.createElement('div');
