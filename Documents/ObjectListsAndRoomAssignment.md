@@ -4,10 +4,9 @@ Design for incorporating **ordered object lists** (the memory-palace mnemonic
 lists — see `MnemonicListDesignPrinciples.html` and
 `json/memory_palace_room_database.json`) into the castle VR app.
 
-Status: **Phases 1–3 built; Phase 4 (plaque) and true cross-room extension
-pending.** Read alongside `LinearSequencesAndRoomObjects.md` (the run/corridor +
-move-pair↔object model this builds on) and `CastleDataModel.md` (position-keyed
-persistence).
+Status: **Phases 1–4 built; true cross-room extension pending.** Read alongside
+`LinearSequencesAndRoomObjects.md` (the run/corridor + move-pair↔object model
+this builds on) and `CastleDataModel.md` (position-keyed persistence).
 
 ---
 
@@ -148,10 +147,12 @@ existing `assetId` bindings** by matching on immutable item `name`.
 - A manual per-slot asset override still wins over the list, letting a single
   item be swapped without touching the shared list.
 
-### Phase 4 — Mnemonic phrase plaque  (pending)
-- Wall-mounted plaque near entrance shows the applied list's mnemonic phrase
-  (one per wall if two lists). Ordering rule in smaller text beneath.
-- Respects hints toggle.
+### Phase 4 — Mnemonic phrase plaque  ✅ built
+- Wall-mounted parchment plaque near the (south) entrance shows the applied
+  list's name + mnemonic phrase (large) with the ordering rule in small italic
+  beneath — one per assigned wall (left/all → west wall, right → east wall).
+- Hint-gated (hidden during self-test). Decorative (no userData.kind) so it is
+  never an edit-mode click target.
 
 ---
 

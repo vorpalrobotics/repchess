@@ -2685,6 +2685,88 @@ function buildDoorHint(size, wall, offset, targetKey){
   return group;
 }
 
+// Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
+// phrase (large) with its ordering rule beneath (small italic) — the seventh
+// retrieval cue (see Documents/MnemonicListDesignPrinciples.html) made visible
+// in the room. Hint-gated by the caller.
+function drawWrappedCentered(ctx, text, cx, top, maxW, lineH){
+  const words = String(text).split(/\s+/);
+  let line = '', y = top;
+  for(const w of words){
+    const test = line ? line + ' ' + w : w;
+    if(ctx.measureText(test).width > maxW && line){ ctx.fillText(line, cx, y); y += lineH; line = w; }
+    else line = test;
+  }
+  if(line){ ctx.fillText(line, cx, y); y += lineH; }
+  return y;
+}
+function makeMnemonicPlaqueMesh(list){
+  const cw = 560, ch = 320;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  // parchment board + frame (matches the door name signs)
+  ctx.fillStyle = 'rgba(240,236,226,0.96)';
+  ctx.fillRect(6, 6, cw - 12, ch - 12);
+  ctx.strokeStyle = '#caa46a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(12, 12, cw - 24, ch - 24);
+  const cx = cw / 2, maxW = cw - 72;
+  // list name (small header)
+  ctx.fillStyle = '#6a5a3a';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 26px serif';
+  let y = 34;
+  y = drawWrappedCentered(ctx, list.name || '', cx, y, maxW, 30) + 8;
+  // the mnemonic phrase (main text)
+  ctx.fillStyle = '#1a1a1a';
+  const phrase = (list.mnemonic && list.mnemonic.phrase) || '';
+  let font = 46;
+  ctx.font = `bold ${font}px serif`;
+  // shrink so the phrase fits in at most ~3 lines
+  while(font > 24){
+    ctx.font = `bold ${font}px serif`;
+    // rough line-count estimate
+    const words = phrase.split(/\s+/); let line = '', lines = 1;
+    for(const w of words){ const t = line ? line+' '+w : w; if(ctx.measureText(t).width > maxW && line){ lines++; line = w; } else line = t; }
+    if(lines <= 3) break;
+    font -= 3;
+  }
+  y = drawWrappedCentered(ctx, phrase, cx, y, maxW, font + 8) + 10;
+  // ordering rule (small italic footer)
+  if(list.orderingRule){
+    ctx.fillStyle = '#5a5348';
+    ctx.font = 'italic 22px serif';
+    drawWrappedCentered(ctx, list.orderingRule, cx, Math.min(y, ch - 74), maxW, 26);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const wM = 1.7, hM = wM * ch / cw;
+  return new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+}
+// mount a mnemonic plaque on each assigned wall bucket, near the (south)
+// entrance end so it greets you as you enter and reads while you face the wall's
+// objects. left/all -> west wall, right -> east wall.
+function buildWallListPlaques(room, roomKey){
+  for(const bucket of roomWallBuckets(roomKey)){
+    const id = wallListId(roomKey, bucket);
+    if(!id) continue;
+    const list = OBJECT_LISTS[id];
+    if(!list || !list.mnemonic || !list.mnemonic.phrase) continue;
+    const wall = bucket === 'right' ? 'east' : 'west';
+    const { fixed, half } = wallSpan(room.size, wall);
+    const clearance = WALL_THICK / 2 + 0.03;
+    const along = half - 1.3;                 // near the south (entrance) end
+    const y = 2.15;
+    const mesh = makeMnemonicPlaqueMesh(list);
+    if(wall === 'west'){ mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI / 2; }
+    else               { mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI / 2; }
+    mesh.userData = { decorative: true };
+    scene.add(mesh);
+  }
+}
+
 // "1st", "2nd", "3rd", "4th"... for floor button labels.
 function ordinal(n){
   const v = n % 100;
@@ -3488,6 +3570,7 @@ function buildRoom(roomKey){
     const furniture = placeFurniture(room);
     if(furniture) scene.add(furniture);
     buildSlots(room, roomKey, roomSlots(room, roomKey));
+    if(hintsOn) buildWallListPlaques(room, roomKey);   // Phase 4: mnemonic-phrase plaques
   } else {
     // No surrounding wall: the outdoor area is open so multiple buildings can
     // sit on the street without a brick box hemming them in. Movement is still
