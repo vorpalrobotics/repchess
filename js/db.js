@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -61,6 +61,9 @@ function openDB(){
       }
       if(!db.objectStoreNames.contains('assets')){
         db.createObjectStore('assets', {keyPath:'id'});
+      }
+      if(!db.objectStoreNames.contains('objectLists')){
+        db.createObjectStore('objectLists', {keyPath:'id'});
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -269,6 +272,66 @@ async function deleteAsset(id){
   });
 }
 
+/* ---------- object lists (ordered mnemonic object lists for castle room walls) ----------
+   See Documents/ObjectListsAndRoomAssignment.md. Each list is a named, ordered
+   set of items with a justified ordering rule and an optional mnemonic. Each
+   item has an immutable `name` (the stable key an asset binding hangs off) and
+   an optional `assetId` referencing the 'assets' store — null means the item
+   shows just its word as a text label in VR until an asset is bound.
+*/
+const BLANK_OBJECT_LIST = {
+  id:'', name:'', roomName:'', category:'',
+  orderingType:'generated_mnemonic', orderingRule:'',
+  items:[],   // [{ name, assetId }] — name is the immutable binding key
+  mnemonic:{ type:'generated_phrase', initialism:'', phrase:'', source:'' },
+  createdAt:0, updatedAt:0
+};
+
+async function getAllObjectLists(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('objectLists','readonly').objectStore('objectLists').getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function setObjectList(id, patch){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('objectLists','readwrite');
+    const store = txn.objectStore('objectLists');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const now = Date.now();
+      const existing = getReq.result || {...BLANK_OBJECT_LIST, id, createdAt:now};
+      store.put({...existing, ...patch, id, updatedAt:now});
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+async function deleteObjectList(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('objectLists','readwrite');
+    txn.objectStore('objectLists').delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+async function clearObjectLists(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('objectLists','readwrite');
+    txn.objectStore('objectLists').clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- meta (small flat key/value settings, e.g. mnemonics notes) ---------- */
 async function getMeta(key){
   const db = await openDB();
@@ -317,7 +380,7 @@ async function clearMnemonics(){
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();
-  const stores = ['games','lines','prefs','mnemonics','meta','assets'];
+  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists'];
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();

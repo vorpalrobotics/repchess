@@ -268,6 +268,44 @@
   .eyedropper-btn{flex:0 0 auto;width:2.1rem;height:1.95rem;display:flex;align-items:center;justify-content:center;
     cursor:pointer;border:1px solid #bbb;border-radius:4px;background:#f3f3f3;color:#555}
   .eyedropper-btn:hover{color:#1565c0;border-color:#1565c0;background:#e8f1fb}
+  /* ---- object list manager (reuses .assets-* toolbar/grid/editor classes) ---- */
+  #objectListsOverlay{z-index:30}
+  #objectListsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
+  #objectListsBodyWrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  .objlist-card{align-items:stretch}
+  .objlist-card-name{font-size:.9rem;font-weight:600}
+  .objlist-card-meta{font-size:.72rem;color:#666}
+  .objlist-card-items{font-size:.75rem;color:#333;line-height:1.3}
+  .objlist-card-mnem{font-size:.72rem;color:#1565c0;font-style:italic}
+  .objlist-card-count{font-size:.68rem;color:#888;margin-top:.15rem}
+  .objlist-field-row{display:flex;gap:.9rem;flex-wrap:wrap}
+  .objlist-field-row .field{flex:1 1 12em;margin-bottom:.7rem}
+  .objlist-grow{flex:2 1 20em}
+  .objlist-h3{margin:.9rem 0 .2rem;font-size:1rem;color:#1f4e79}
+  .objlist-hint{font-size:.76rem;color:#777;margin:.1rem 0 .5rem}
+  .objlist-items{border-collapse:collapse;width:100%;max-width:48em;font-size:.85rem}
+  .objlist-items th,.objlist-items td{border:1px solid #ddd;padding:.3rem .45rem;text-align:left;vertical-align:middle}
+  .objlist-items th{background:#f2f2f2;font-size:.78rem}
+  .objlist-num{width:2em;text-align:center;color:#888}
+  .objlist-name{font-weight:600}
+  .objlist-empty-row{color:#888;font-style:italic;text-align:center}
+  .objlist-asset-cell{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  .objlist-thumb{width:34px;height:34px;flex:0 0 auto;border:1px solid #ccc;border-radius:4px;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;background:#eee repeating-conic-gradient(#e0e0e0 0% 25%,#fafafa 0% 50%) 50%/10px 10px}
+  .objlist-thumb img{max-width:100%;max-height:100%;object-fit:contain}
+  .objlist-noimg{font-size:.6rem;color:#999;text-align:center;line-height:1}
+  .objlist-asset-id{font-size:.75rem;color:#555;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .objlist-rowtools{white-space:nowrap;width:1%}
+  .objlist-mini{font-size:.72rem;padding:.12rem .4rem;cursor:pointer}
+  .objlist-del{color:#c62828}
+  .objlist-additem{display:flex;gap:.5rem;margin:.5rem 0;max-width:48em}
+  .objlist-additem input{flex:1 1 auto;padding:.3rem .4rem;font-size:.9rem}
+  #ol_delete{background:#c62828;color:#fff}
+  .objlist-pick-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
+  .objlist-pick-modal{background:#fff;border-radius:6px;padding:1rem;width:90vw;height:86vh;max-width:none;display:flex;flex-direction:column;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+  .objlist-pick-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.6rem;flex-wrap:wrap}
+  .objlist-pick-head strong{font-size:1rem}
+  #objlistPickGrid{flex:1 1 auto;min-height:0;overflow:auto}
   #colorPickerOverlay{z-index:70;background:rgba(0,0,0,.7)}
   #colorPickerOverlay .modal{width:96vw;height:94vh;max-width:none;display:flex;flex-direction:column;padding:.8rem}
   .cp-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
@@ -444,6 +482,7 @@
     <div id="menuList">
       <button id="menuThreeTest">Run VR</button>
       <button id="menuAssets">Manage VR Assets</button>
+      <button id="menuObjectLists">Manage Object Lists</button>
       <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
       <div id="subMnemonics" class="menu-sub">
         <button id="menuMnemonics">Manage</button>
@@ -575,6 +614,17 @@
       <button id="assetsCloseBtn">Close</button>
     </div>
     <div id="assetsBodyWrap"></div>
+  </div>
+</div>
+
+<!-- object list manager modal -->
+<div id="objectListsOverlay" class="overlay">
+  <div class="modal">
+    <div class="assets-header">
+      <h2>Manage Object Lists</h2>
+      <button id="objectListsCloseBtn">Close</button>
+    </div>
+    <div id="objectListsBodyWrap"></div>
   </div>
 </div>
 
@@ -1047,6 +1097,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-32"></script>
+<script type="module" src="js/app.js?v=20260630-33"></script>
 </body>
 </html>

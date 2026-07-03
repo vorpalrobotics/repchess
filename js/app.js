@@ -3,6 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-32';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-27';
+import { openObjectListManager, closeObjectListManager } from './objectLists.js?v=20260630-33';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -43,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-32';
+const BUILD_TAG = '-33';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2940,7 +2941,7 @@ async function exportBackup(){
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);
   const data = {
-    version: 5,   // v5 adds threeLayout (VR memory-palace layout)
+    version: 6,   // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
     games,
@@ -2966,7 +2967,8 @@ async function exportBackup(){
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
-    assets: await getAllAssets()
+    assets: await getAllAssets(),
+    objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
   const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -3021,6 +3023,7 @@ async function importBackup(data){
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
+  for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
 }
@@ -3296,6 +3299,17 @@ $('assetsCloseBtn').onclick = ()=>{
     setForeignModalOpen(false);
     refreshAssetsLive();
   }
+};
+
+/* ---------- object list manager ---------- */
+$('menuObjectLists').onclick = ()=>{
+  $('menuList').style.display='none';
+  $('objectListsOverlay').style.display='flex';
+  openObjectListManager($('objectListsBodyWrap'));
+};
+$('objectListsCloseBtn').onclick = ()=>{
+  $('objectListsOverlay').style.display='none';
+  closeObjectListManager();
 };
 
 /* ---------- about modal ---------- */
