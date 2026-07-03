@@ -3,7 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-37';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-27';
-import { openObjectListManager, closeObjectListManager } from './objectLists.js?v=20260630-33';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-39';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-38';
+const BUILD_TAG = '-39';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3199,6 +3199,24 @@ $('backupImport').addEventListener('change', async e=>{
     }catch(err){
       console.error('[import] mnemonics import failed',err);
       log('mnemonics import failed: '+err.message,true);
+    }
+    return;
+  }
+
+  // An object-list / room-database JSON (the memory_palace_room_database.json
+  // shape, a standalone objectLists array, or a bare list array). Merge import:
+  // lists are upserted and existing per-item image bindings are preserved, so it
+  // is non-destructive to games / opening systems / assets / mnemonics.
+  if(isObjectListFile(data)){
+    try{
+      const res = await importObjectListsData(data);
+      if(!res.total){ log('no object lists found in that file', true); return; }
+      log(`imported object lists: ${res.added} added, ${res.updated} updated (image bindings preserved)`);
+      // if the Manage Object Lists modal is open, refresh it in place
+      if($('objectListsOverlay').style.display === 'flex') openObjectListManager($('objectListsBodyWrap'));
+    }catch(err){
+      console.error('[import] object list import failed',err);
+      log('object list import failed: '+err.message,true);
     }
     return;
   }

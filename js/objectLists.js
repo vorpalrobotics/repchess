@@ -392,27 +392,36 @@ async function deleteEditor(){
    already-shaped objectLists records (our own export shape). Each list is
    upserted; existing per-item assetId bindings are preserved by matching the
    immutable item name. */
-async function onImportFile(e){
-  const file = e.target.files[0];
-  e.target.value = '';
-  if(!file) return;
-  let data;
-  try { data = JSON.parse(await file.text()); }
-  catch(err){ alert('Could not parse JSON: ' + err.message); return; }
 
+// True if `data` looks like an importable object-list file (room-database, a
+// standalone objectLists array, or a bare array of list records). Deliberately
+// false for a FULL backup (which carries `lines` + its own objectLists and is
+// restored by the backup path) so the auto-detecting importer routes correctly.
+export function isObjectListFile(data){
+  if(!data || typeof data !== 'object') return false;
+  if(Array.isArray(data.rooms)) return true;
+  if(Array.isArray(data.objectLists) && !Array.isArray(data.lines)) return true;
+  if(Array.isArray(data) && data.length &&
+     data.every(l => l && typeof l === 'object' && l.id && Array.isArray(l.items))) return true;
+  return false;
+}
+
+// Upserts the file's lists into the objectLists store, preserving existing
+// per-item asset bindings by immutable item name. Reads the store directly (not
+// the module cache) so it works whether or not the manager UI is open — the
+// menu-level importer in app.js reuses this. Returns {added, updated, total}.
+export async function importObjectListsData(data){
   const incoming = normalizeImport(data);
-  if(!incoming.length){ alert('No lists found in that file.'); return; }
-
-  // preserve existing asset bindings by (listId, itemName)
+  if(!incoming.length) return { added: 0, updated: 0, total: 0 };
   const existingById = {};
-  for(const l of LISTS) existingById[l.id] = l;
+  for(const l of await getAllObjectLists()) existingById[l.id] = l;
 
   let added = 0, updated = 0;
   for(const inc of incoming){
     const prev = existingById[inc.id];
     if(prev) updated++; else added++;
     const prevAssetByName = {};
-    if(prev) for(const it of (prev.items||[])) if(it.assetId) prevAssetByName[it.name] = it.assetId;
+    if(prev) for(const it of (prev.items || [])) if(it.assetId) prevAssetByName[it.name] = it.assetId;
     const items = inc.items.map(it => ({
       name: it.name,
       assetId: (it.assetId || prevAssetByName[it.name] || null)
@@ -423,8 +432,21 @@ async function onImportFile(e){
       items, mnemonic: inc.mnemonic
     });
   }
+  return { added, updated, total: incoming.length };
+}
+
+async function onImportFile(e){
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); }
+  catch(err){ alert('Could not parse JSON: ' + err.message); return; }
+
+  const res = await importObjectListsData(data);
+  if(!res.total){ alert('No lists found in that file.'); return; }
   await refresh();
-  alert(`Import complete: ${added} added, ${updated} updated.\nExisting image bindings were preserved by item name.`);
+  alert(`Import complete: ${res.added} added, ${res.updated} updated.\nExisting image bindings were preserved by item name.`);
 }
 
 function normalizeImport(data){
