@@ -413,7 +413,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, roomGeomBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
+let hintsBtn = null, editBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -772,6 +772,16 @@ function slotById(room, roomKey, slotId){
 async function refreshAssetMap(){
   ASSET_BY_ID = {};
   for(const a of await getAllAssets()) ASSET_BY_ID[a.id] = a;
+}
+
+// Phase 2: cache of every object list (id -> record from the 'objectLists'
+// store) so a room's wall-list assignment can be resolved synchronously while
+// building slots. Loaded alongside the asset map at tour open and refreshed
+// live when the asset library / lists change.
+let OBJECT_LISTS = {};
+async function refreshObjectLists(){
+  OBJECT_LISTS = {};
+  for(const l of await getAllObjectLists()) OBJECT_LISTS[l.id] = l;
 }
 async function loadLayout(){
   const raw = await getMeta(LAYOUT_KEY);
@@ -1869,15 +1879,28 @@ function buildSlots(room, roomKey, slots){
       continue;
     }
     if(slot.kind === 'moveObject'){
-      // the object pegged to a move-pair: its chosen prop if filled, else a
-      // ghostly numbered placeholder. Both stay visible with hints off (the
-      // object is a memory hook, and the empty placeholder stands in for it).
-      const asset = slotAssetFor(roomKey, slot.id);
-      if(asset){
-        scene.add(placeSlotAccessory(room, slot, asset, slotXformFor(roomKey, slot.id)));
-      } else {
-        scene.add(buildMoveObjectPlaceholder(slot));
+      // the object pegged to a move-pair. Resolution order:
+      //  1. a manual per-slot asset override (LAYOUT.slots[slotId]) — wins so a
+      //     single item can be overridden without touching the list;
+      //  2. the wall list assigned to this slot's bucket (Phase 2): its item's
+      //     image if bound, else the item's word as a text label;
+      //  3. a ghostly numbered L#/R# placeholder when no list drives the slot.
+      // All three stay visible with hints off — the object is the memory hook.
+      const override = slotAssetFor(roomKey, slot.id);
+      if(override){
+        scene.add(placeSlotAccessory(room, slot, override, slotXformFor(roomKey, slot.id)));
+        continue;
       }
+      const resolved = moveObjectListResolved(roomKey, slot);
+      if(resolved){
+        if(resolved.asset){
+          scene.add(placeSlotAccessory(room, slot, resolved.asset, slotXformFor(roomKey, slot.id)));
+        } else {
+          scene.add(buildMoveObjectWordLabel(slot, resolved.word));
+        }
+        continue;
+      }
+      scene.add(buildMoveObjectPlaceholder(slot));
       continue;
     }
     const asset = slotAssetFor(roomKey, slot.id);
@@ -1919,6 +1942,51 @@ function buildMoveObjectPlaceholder(slot){
   sprite.position.set(slot.x, slot.y, slot.z);
   // route an edit-mode click through the existing slot picker (onCanvasClick
   // only fires in edit mode, so this is inert during a normal walk)
+  sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
+  return sprite;
+}
+
+// Phase 2: a move-object slot driven by a wall list but whose list item has no
+// image asset yet shows the item's WORD (e.g. "Oven") as a solid plaque — the
+// stand-in object until an image is bound. Like the placeholder it routes an
+// edit-mode click to the asset picker (which sets a per-slot override), and it
+// stays visible with hints off (the word is the memory hook, not the move).
+function buildMoveObjectWordLabel(slot, word){
+  const W = 512, H = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  // rounded plaque
+  const pad = 16, r = 34;
+  const x0 = pad, y0 = pad, x1 = W - pad, y1 = H - pad;
+  ctx.beginPath();
+  ctx.moveTo(x0 + r, y0);
+  ctx.arcTo(x1, y0, x1, y1, r);
+  ctx.arcTo(x1, y1, x0, y1, r);
+  ctx.arcTo(x0, y1, x0, y0, r);
+  ctx.arcTo(x0, y0, x1, y0, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(24,28,38,0.9)';
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(127,176,255,0.95)';
+  ctx.stroke();
+  // word text, shrunk to fit
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let font = 96;
+  const maxW = (x1 - x0) - 40;
+  ctx.font = `bold ${font}px sans-serif`;
+  while(font > 24 && ctx.measureText(word).width > maxW){ font -= 4; ctx.font = `bold ${font}px sans-serif`; }
+  ctx.fillText(word, W / 2, H / 2 + 4);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  // 2:1 canvas -> keep aspect; ~1.1 m wide plaque hovering at the object spot
+  sprite.scale.set(1.1, 0.55, 1);
+  sprite.position.set(slot.x, slot.y + 0.15, slot.z);
   sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
   return sprite;
 }
@@ -2178,6 +2246,65 @@ function moveObjectSlots(roomKey){
     id: `obj-${L.tag}`, kind: 'moveObject', x: L.x, y: MNEM_OBJ_Y, z: L.z,
     tag: L.tag, side: L.side, order: L.order
   }));
+}
+
+/* ---------- Phase 2: applying object lists to room walls ----------
+   A room exposes one or two "wall buckets": a two-track (divided) room has a
+   'left' and 'right' bucket; every other room has a single 'all' bucket. An
+   object list assigned to a bucket fills that wall's move-object slots in order
+   — item[0] on the first pair, item[1] on the second, and so on. If the item
+   has an image asset it renders as a prop; otherwise its word shows as a text
+   label until an asset is assigned. See Documents/ObjectListsAndRoomAssignment.md.
+*/
+function roomWallBuckets(roomKey){
+  const room = mergedRoom(roomKey);
+  return (room && room.twoTrack) ? ['left', 'right'] : ['all'];
+}
+function wallListId(roomKey, bucket){
+  const wl = LAYOUT[roomKey] && LAYOUT[roomKey].wallLists;
+  return (wl && wl[bucket] && wl[bucket].listId) || null;
+}
+// how many move-object slots a bucket holds — the "run length" a list is
+// matched against in the assignment dialog.
+function bucketSlotCount(roomKey, bucket){
+  const slots = moveObjectSlots(roomKey);
+  if(bucket === 'left')  return slots.filter(s => s.side === 'left').length;
+  if(bucket === 'right') return slots.filter(s => s.side === 'right').length;
+  return slots.filter(s => s.side !== 'center' || true).length;   // 'all' = every slot
+}
+// which (bucket, index) a given move-object slot maps to, or null if the slot
+// is not list-driven (the shared center/head slot of a two-track room). For a
+// single-run room the walk order is the center (anchor) pair first, then the
+// left-wall pairs, so the anchor gets item[0].
+const SIDE_WALK_RANK = { center: 0, left: 1, right: 2 };
+function slotListContext(roomKey, slot){
+  const room = mergedRoom(roomKey);
+  if(room && room.twoTrack){
+    if(slot.side === 'center') return null;        // shared head — not part of either wall list
+    const bucket = slot.side === 'right' ? 'right' : 'left';
+    return { bucket, index: (slot.order || 1) - 1 };
+  }
+  // single 'all' bucket: index = position in the room's walk order (center pairs
+  // first, then left, then right — each by order). Computed from the actual slot
+  // set so a room with any mix of sides gets a unique, collision-free index.
+  const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
+    ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
+  const index = ordered.findIndex(s => s.id === slot.id);
+  return { bucket: 'all', index: index < 0 ? 0 : index };
+}
+// resolve a move-object slot to its list-driven content: { word, asset } where
+// asset may be null (render the word), or null if no list drives this slot.
+function moveObjectListResolved(roomKey, slot){
+  const ctx = slotListContext(roomKey, slot);
+  if(!ctx) return null;
+  const id = wallListId(roomKey, ctx.bucket);
+  if(!id) return null;
+  const list = OBJECT_LISTS[id];
+  if(!list || !Array.isArray(list.items) || ctx.index >= list.items.length) return null;
+  const item = list.items[ctx.index];
+  if(!item) return null;
+  const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
+  return { word: item.name, asset };
 }
 
 function mnemonicSlots(roomKey){
@@ -3489,6 +3616,7 @@ function buildRoom(roomKey){
 
   currentRoomKey = roomKey;
   if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
+  updateToolbar();   // wall-lists button visibility depends on the room having pairs
 }
 
 // Called after the asset manager is closed while the walking tour is still
@@ -3497,6 +3625,7 @@ function buildRoom(roomKey){
 export async function refreshAssetsLive(){
   if(!scene) return; // tour isn't open
   await refreshAssetMap();
+  await refreshObjectLists();
   buildRoom(currentRoomKey);
 }
 
@@ -4182,10 +4311,11 @@ function buildTopToolbar(){
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
+  wallListsBtn = makeIconBtn('fa-list-ol',        'Wall object lists', () => openWallListsDialog(currentRoomKey));
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
-  left.append(hintsBtn, editBtn, roomGeomBtn, assetsBtn, infoBtn);
+  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
   bar.append(left, closeBtn);
   return bar;
 }
@@ -4200,6 +4330,11 @@ function updateToolbar(){
     editBtn.title = editMode ? 'Exit edit mode (Esc)' : 'Edit mode';
   }
   if(roomGeomBtn) roomGeomBtn.style.display = editMode ? '' : 'none';
+  // wall-lists button only when this room actually has move-object slots to fill
+  if(wallListsBtn){
+    const hasPairs = moveObjectSlots(currentRoomKey).length > 0;
+    wallListsBtn.style.display = (editMode && hasPairs) ? '' : 'none';
+  }
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
 function setHintsOn(on){
@@ -4221,7 +4356,7 @@ function buildHelpOverlay(){
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
-      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
     </div>`;
@@ -4324,6 +4459,122 @@ function closeRoomGeomDialog(){
   if(ov) ov.style.display = 'none';
   setForeignModalOpen(false);
 }
+
+/* ---------- wall object-list dialog (Phase 2) ----------
+   Assigns an object list to each of the current room's wall buckets (left/right
+   for a two-track room, else a single 'all' bucket). Stored as
+   LAYOUT[roomKey].wallLists[bucket] = { listId } and folded in at render time by
+   moveObjectListResolved(). Same document.body overlay pattern as the room
+   geometry dialog. */
+function openWallListsDialog(roomKey){
+  setForeignModalOpen(true);
+  let ov = document.getElementById('wallListsOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'wallListsOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '70';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  renderWallListsDialog(ov, roomKey);
+}
+function closeWallListsDialog(){
+  const ov = document.getElementById('wallListsOverlay');
+  if(ov) ov.style.display = 'none';
+  setForeignModalOpen(false);
+}
+const WALL_BUCKET_LABEL = { left: 'Left wall', right: 'Right wall', all: 'Room (single sequence)' };
+// list <option>s for a bucket, best run-length match first (exact match flagged).
+function wallListOptionsHtml(roomKey, bucket){
+  const need = bucketSlotCount(roomKey, bucket);
+  const cur = wallListId(roomKey, bucket);
+  const lists = Object.values(OBJECT_LISTS).slice().sort((a, b) => {
+    const na = (a.items || []).length, nb = (b.items || []).length;
+    const da = Math.abs(na - need), db = Math.abs(nb - need);
+    return (da - db) || (na - nb) || String(a.name).localeCompare(String(b.name));
+  });
+  const opts = [`<option value="">— none —</option>`];
+  for(const l of lists){
+    const n = (l.items || []).length;
+    const fit = n === need ? ' ✓ exact' : ` (${n} item${n === 1 ? '' : 's'})`;
+    opts.push(`<option value="${escHtml(l.id)}" ${l.id === cur ? 'selected' : ''}>${escHtml(l.name)}${fit}</option>`);
+  }
+  return opts.join('');
+}
+// preview of how the chosen list's items land on this bucket's slots, in order.
+function wallListPreviewHtml(roomKey, bucket){
+  const id = wallListId(roomKey, bucket);
+  const need = bucketSlotCount(roomKey, bucket);
+  if(!id) return `<span style="color:#999">No list — slots show numbered placeholders.</span>`;
+  const list = OBJECT_LISTS[id];
+  if(!list) return `<span style="color:#c62828">List no longer exists.</span>`;
+  const items = list.items || [];
+  const rows = [];
+  for(let i = 0; i < need; i++){
+    const it = items[i];
+    const label = it ? (it.assetId && ASSET_BY_ID[it.assetId] ? `🖼 ${escHtml(it.name)}` : escHtml(it.name)) : '<span style="color:#c62828">(list too short)</span>';
+    rows.push(`<div>${i + 1}. ${label}</div>`);
+  }
+  let extra = '';
+  if(items.length > need) extra = `<div style="color:#999">+${items.length - need} more item(s) unused here</div>`;
+  if(list.mnemonic && list.mnemonic.phrase) extra += `<div style="margin-top:.3rem;font-style:italic;color:#1565c0">“${escHtml(list.mnemonic.phrase)}”</div>`;
+  return rows.join('') + extra;
+}
+function renderWallListsDialog(ov, roomKey){
+  const room = mergedRoom(roomKey);
+  const roomName = (room && room.name) || 'Room';
+  const buckets = roomWallBuckets(roomKey);
+  const nLists = Object.keys(OBJECT_LISTS).length;
+  const bucketBlocks = buckets.map(bucket => {
+    const need = bucketSlotCount(roomKey, bucket);
+    return `
+      <div class="wl-bucket" data-bucket="${bucket}" style="margin:.7rem 0;padding:.6rem .7rem;border:1px solid #ddd;border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap">
+          <strong>${WALL_BUCKET_LABEL[bucket] || bucket}</strong>
+          <span style="font-size:.78rem;color:#666">${need} move-pair slot${need === 1 ? '' : 's'}</span>
+        </div>
+        <select class="wl-select" data-bucket="${bucket}" style="margin-top:.4rem;width:100%;font-size:.85rem;padding:.3rem">
+          ${wallListOptionsHtml(roomKey, bucket)}
+        </select>
+        <div class="wl-preview" data-bucket="${bucket}" style="margin-top:.45rem;font-size:.8rem;line-height:1.5">
+          ${wallListPreviewHtml(roomKey, bucket)}
+        </div>
+      </div>`;
+  }).join('');
+  ov.innerHTML = `
+    <div class="modal" style="max-width:30em;width:92%;max-height:86vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+        <h2 style="margin:0;font-size:1.15rem">Wall object lists</h2>
+        <button id="wlCloseBtn">Close</button>
+      </div>
+      <p style="margin:.2rem 0 .6rem;font-size:.82rem;color:#555">
+        Assign an ordered object list to <strong>${escHtml(roomName)}</strong>. Each item fills one
+        move-pair in order; items with no image show their word until you assign one.
+      </p>
+      ${nLists === 0
+        ? `<p style="color:#c62828;font-size:.85rem">No object lists yet. Create them in the menu → <em>Manage Object Lists</em>, then reopen the tour.</p>`
+        : bucketBlocks}
+    </div>`;
+  ov.querySelector('#wlCloseBtn').onclick = closeWallListsDialog;
+  ov.addEventListener('click', e => { if(e.target === ov) closeWallListsDialog(); }, { once: true });
+  ov.querySelectorAll('.wl-select').forEach(sel => {
+    sel.onchange = () => {
+      const bucket = sel.dataset.bucket;
+      const val = sel.value;
+      const r = ensureRoomLayout(roomKey);
+      if(!r.wallLists) r.wallLists = {};
+      if(val) r.wallLists[bucket] = { listId: val };
+      else delete r.wallLists[bucket];
+      persistLayout();
+      // refresh this bucket's preview and rebuild the room live
+      const pv = ov.querySelector(`.wl-preview[data-bucket="${bucket}"]`);
+      if(pv) pv.innerHTML = wallListPreviewHtml(roomKey, bucket);
+      buildRoom(currentRoomKey);
+    };
+  });
+}
+
 const ROOM_GEOM_MIN = 2;
 // summary of the building's captured defaults, shown in the Room dialog, with a
 // Clear control when any are set.
@@ -4845,6 +5096,7 @@ export async function openThreeTest(containerEl, opts){
   pointer = new THREE.Vector2();
   await loadLayout();
   await refreshAssetMap();
+  await refreshObjectLists();
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
