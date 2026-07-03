@@ -141,7 +141,7 @@ let OPENING_SYSTEMS = [];
    number (lower = closer to Main Street; unnumbered follow, alphabetical). */
 function generateMainStreet(systems, streetCastles){
   const MAIN_W = 8, SIDE_W = 7, SPACING = 24, MARGIN = 10;
-  const BW = 14, BD = 8, BH = 9, BGAP = 11, FIRST_X = 6;   // castle-building slots along a side street (BGAP: gap between buildings; wide so skinned facades don't touch)
+  const BW = 14, BD = 8, BH = 9, BGAP = 15, FIRST_X = 6;   // castle-building slots along a side street (BGAP: gap between buildings; wide so skinned facades don't touch)
   const list = (systems && systems.length)
     ? systems
     : [{ name:'Main', streetName:'Main Street', color:'white' }];
@@ -262,7 +262,7 @@ function registerOneCastle(castle, instanceId, opts = {}){
   CASTLE_ENTRY = entryKey;
   const DOOR_SPACING = 3.6;      // center-to-center; DOOR_W is 2.2, leaves a clear gap + room for hints
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
-  const EW_SETBACK = 2;          // east/west door groups sit this far north of center
+  const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
   for(const r of genRooms){
     // depth needed for the wall move-pairs: the center pair sits near the
     // entrance and each left/right pair marches ~3 m farther north, so the room
@@ -304,16 +304,27 @@ function registerOneCastle(castle, instanceId, opts = {}){
       const byWall = { north: [], east: [], west: [] };
       for(const ex of fwd) byWall[doorWallFor(ex.toKey || ex.opp)].push(ex);
       for(const w of ['north', 'east', 'west']) byWall[w].sort(doorCmp);
+      // east/west ("left/right") doors sit at least EW_BEHIND_HEAD metres north
+      // of the head mnemonic (center anchor pair) so it's clearly the first
+      // thing you look at; grow the room deep enough to fit them behind it.
+      const maxEW = Math.max(byWall.east.length, byWall.west.length);
+      const ewDepth = maxEW >= 1
+        ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + EW_BEHIND_HEAD
+          + (maxEW - 1) * DOOR_SPACING + EDGE_MARGIN
+        : 0;
       sz = {
         w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
-        d: Math.max(base.d, pairDepth, 2 * EW_SETBACK + span(Math.max(byWall.east.length, byWall.west.length)) + 2 * EDGE_MARGIN),
+        d: Math.max(base.d, pairDepth, ewDepth),
         h: base.h
       };
-      const place = (wall, list, center) => list.forEach((ex, j) =>
-        doorPlacements.push({ wall, offset: center + (j - (list.length - 1) / 2) * DOOR_SPACING, ex }));
-      place('north', byWall.north, 0);
-      place('east', byWall.east, -EW_SETBACK);
-      place('west', byWall.west, -EW_SETBACK);
+      const centerZ = sz.d / 2 - CAS_LAYOUT.entrySetback - CAS_LAYOUT.centerAhead;   // head mnemonic z
+      const ewSouth = centerZ - EW_BEHIND_HEAD;   // closest (southernmost) left/right door
+      // north doors centered on the wall (x); east/west doors march north from
+      // ewSouth (sorted[0] closest to the entrance, then farther in)
+      byWall.north.forEach((ex, j) =>
+        doorPlacements.push({ wall: 'north', offset: (j - (byWall.north.length - 1) / 2) * DOOR_SPACING, ex }));
+      for(const wall of ['east', 'west'])
+        byWall[wall].forEach((ex, j) => doorPlacements.push({ wall, offset: ewSouth - j * DOOR_SPACING, ex }));
     }
     const exits = [];
     // back door (south) → parent room. The entry room instead exits to the
