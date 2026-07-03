@@ -8,7 +8,7 @@ The **room model** below (hallways vs. doors, feature-vs-door classification,
 blunder marking) is still *intent* — the castle-graph generator that would
 apply it is not built yet. However, a set of room-decoration and navigation
 features **are now built and shipped** in the standalone Three.js walking
-prototype (`js/threeTest.js`); those are documented in
+prototype (`js/threeVR.js`); those are documented in
 "[Implemented in the walking prototype](#implemented-in-the-walking-prototype-jsthreetestjs)"
 near the end of this file.
 
@@ -96,7 +96,7 @@ such — e.g. a "dunce cap" added to the image associated with that move —
 so it's immediately recognizable as the blunder branch rather than a
 normal line.
 
-## Implemented in the walking prototype (`js/threeTest.js`)
+## Implemented in the walking prototype (`js/threeVR.js`)
 
 Unlike the room-model *intent* above, the following room-decoration and
 navigation features are **built and shipped** in the standalone walking

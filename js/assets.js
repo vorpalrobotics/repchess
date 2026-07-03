@@ -6,7 +6,7 @@
    <id>.png + <id>.json download pair to commit under assets/three/.
 
    This module owns its own DOM (built once into the container element
-   handed to openAssetManager, same pattern as js/threeTest.js) so it
+   handed to openAssetManager, same pattern as js/threeVR.js) so it
    never needs to reach into app.js's module scope.
 */
 
@@ -982,7 +982,7 @@ async function exportAllAsFiles(){
 /* ---------- asset picker ----------
    A lightweight modal for choosing an existing asset (filtered to a set of
    types) from somewhere other than the full manager — e.g. the in-world
-   layout editor in threeTest.js. Builds its own overlay on document.body
+   layout editor in threeVR.js. Builds its own overlay on document.body
    (above whatever is open) so it has no static-markup dependency.
 
    opts = {

@@ -109,7 +109,7 @@ existing `assetId` bindings** by matching on immutable item `name`.
 |---|---|
 | Manage Assets modal | Unchanged. Still the source of VR object images. |
 | **New:** Manage Object Lists modal | Owns `objectLists`. Reuses the asset picker to bind assetId per item. |
-| Castle VR room (`threeTest.js`) | Reads `wallLists`; per slot renders asset, or text-label prop if `assetId` null. |
+| Castle VR room (`threeVR.js`) | Reads `wallLists`; per slot renders asset, or text-label prop if `assetId` null. |
 | Room decoration edit mode | New "Apply list to this wall" picker (decision 4). |
 | Full Backup | `objectLists` added (backup version bump). |
 | Hints toggle | Mnemonic-phrase plaque hidden in self-test, shown when hints on. |

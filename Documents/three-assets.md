@@ -1,7 +1,7 @@
 # Three.js Asset Pipeline (PNG skin + JSON spec)
 
 Design for how art assets get into the Three.js walking prototype
-(`js/threeTest.js`) without hand-coding primitive geometry per object, the
+(`js/threeVR.js`) without hand-coding primitive geometry per object, the
 way `FURNITURE_BUILDERS` (table/chair/chest) does today. Nothing in this
 file is implemented yet — it's the agreed plan so a future agent can pick
 it up without re-deriving it.
@@ -22,7 +22,7 @@ color the parts of the shape the image doesn't cover should be.
 
 This keeps geometry code generic and pushes all the per-object decisions
 (size, which faces are visible, billboard vs. solid) into data, so adding
-a new prop or texture never requires touching `threeTest.js` itself.
+a new prop or texture never requires touching `threeVR.js` itself.
 
 ## Two asset categories
 

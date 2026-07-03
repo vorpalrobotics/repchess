@@ -13,7 +13,7 @@
    fallback in VR.
 
    Self-contained DOM (built once into the container handed to
-   openObjectListManager), same pattern as js/assets.js and js/threeTest.js.
+   openObjectListManager), same pattern as js/assets.js and js/threeVR.js.
 */
 
 const ORDERING_TYPES = {

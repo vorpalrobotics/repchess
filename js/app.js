@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeTest.js?v=20260630-36';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-37';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-27';
 import { openObjectListManager, closeObjectListManager } from './objectLists.js?v=20260630-33';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-36';
+const BUILD_TAG = '-37';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -789,7 +789,7 @@ function buildGeneratedCastle(line, games, rootSeq){
    A pre-step before generating: assign/confirm the castle's street number
    (auto-filled when unset) and optionally wipe its prior VR decorations. */
 let PENDING_CASTLE_GEN = null;
-// VR room-key conventions — must match threeTest.js's registerOneCastle keyOf():
+// VR room-key conventions — must match threeVR.js's registerOneCastle keyOf():
 // 'cas:<instanceId>:<posKey>' with non-alphanumerics sanitized to '_'. The
 // instance id namespaces a castle by line + castle name so two castles that
 // transpose into the same position keep separate rooms/decorations.
@@ -3218,7 +3218,7 @@ $('backupImport').addEventListener('change', async e=>{
 
 /* ---------- three.js prototype ---------- */
 // The walking modal is chromeless — its Close and Assets controls are icon
-// buttons overlaid on the canvas (built in threeTest.js); we hand it callbacks
+// buttons overlaid on the canvas (built in threeVR.js); we hand it callbacks
 // for those actions rather than wiring header buttons here.
 let assetsOpenedFromThreeTest = false;
 function openThreeTestAssets(){

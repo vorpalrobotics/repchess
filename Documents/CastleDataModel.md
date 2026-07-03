@@ -7,7 +7,7 @@ for the underlying mnemonic-design considerations this builds on). Nothing here
 changes `buildCastleGraph`, the room-info click panel, or any other shipped
 behavior yet — this is the target schema to implement against.
 
-> **Note:** the standalone Three.js walking prototype (`js/threeTest.js`)
+> **Note:** the standalone Three.js walking prototype (`js/threeVR.js`)
 > already implements several of these concepts — room names, per-building
 > surface defaults, named presets, elevators, stairs/door skinning, and a
 > hints/self-test toggle — against its own `ROOMS`/`LAYOUT` structures. Their
@@ -219,7 +219,7 @@ time `buildCastleGraph` runs. This mirrors how `prefs` (keyed by
 survive line edits and new game imports — the decoration layer should live
 in IndexedDB alongside them, not be recomputed.
 
-## Already implemented in the walking prototype (`js/threeTest.js`)
+## Already implemented in the walking prototype (`js/threeVR.js`)
 
 The standalone walking prototype implements several concepts above ahead of the
 generator, but against its own structures — a hand-authored `ROOMS` table
