@@ -106,10 +106,14 @@ async function getGames(user){
 }
 
 /* ---------- lines (named repertoire roots) ---------- */
-async function createLine(user, {name, color, openingMoves}){
+// `id` may be supplied to recreate a line under its original id (e.g. restoring
+// a backup) — VR decoration keys embed the line id via castleInstanceId(), so a
+// regenerated id would orphan every castle room + building facade/sign in
+// threeLayout. Left unset, a fresh unique id is minted as before.
+async function createLine(user, {name, color, openingMoves, id}){
   const db = await openDB();
-  const id = `${user}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
-  const line = {id, user, name, color, openingMoves: openingMoves || [], createdAt: Date.now()};
+  const lineId = id || `${user}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
+  const line = {id: lineId, user, name, color, openingMoves: openingMoves || [], createdAt: Date.now()};
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('lines','readwrite');
     txn.objectStore('lines').put(line);

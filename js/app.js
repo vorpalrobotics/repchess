@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-37';
+const BUILD_TAG = '-38';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2946,6 +2946,7 @@ async function exportBackup(){
     exportedAt: new Date().toISOString(),
     games,
     lines: await Promise.all(lines.map(async line=>({
+      id: line.id,   // preserve the line id: VR decoration keys (cas:<instanceId>:…) embed it
       name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
@@ -2998,7 +2999,10 @@ async function importBackup(data){
   GAMES = data.games || [];
 
   for(const lineData of data.lines){
-    const line = await createLine(CURRENT_USER, {name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
+    // reuse the original line id when present (older backups omit it) so VR
+    // decoration keys that embed it — castle rooms, building facades/signs —
+    // still resolve against the restored threeLayout.
+    const line = await createLine(CURRENT_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
     if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {
