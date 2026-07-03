@@ -1895,6 +1895,8 @@ function buildSlots(room, roomKey, slots){
       if(resolved){
         if(resolved.asset){
           scene.add(placeSlotAccessory(room, slot, resolved.asset, slotXformFor(roomKey, slot.id)));
+          // caption the image with its word (hint-gated) so picture ↔ concept read together
+          if(hintsOn) scene.add(buildMoveObjectSubtitle(slot, resolved.word, slotXformFor(roomKey, slot.id)));
         } else {
           scene.add(buildMoveObjectWordLabel(slot, resolved.word));
         }
@@ -1988,6 +1990,41 @@ function buildMoveObjectWordLabel(slot, word){
   sprite.scale.set(1.1, 0.55, 1);
   sprite.position.set(slot.x, slot.y + 0.15, slot.z);
   sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
+  return sprite;
+}
+
+// Phase 3: a small caption sprite with the list item's word, sat at the base of
+// an image-backed move object so the picture and the concept it stands for read
+// together. Shown only with hints on (a learning aid); with hints off you get
+// the bare image and must recall the word/move yourself. Follows the object's
+// nudge (xform dx/dz) so the caption stays under it. Not a click target — the
+// object above it owns the edit-mode picker.
+function buildMoveObjectSubtitle(slot, word, xform){
+  xform = xform || {};
+  const W = 512, H = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let font = 74;
+  ctx.font = `600 ${font}px sans-serif`;
+  while(font > 20 && ctx.measureText(word).width > W - 40){ font -= 4; ctx.font = `600 ${font}px sans-serif`; }
+  // soft dark outline for legibility over any backdrop, then white fill
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(10,12,18,0.85)';
+  ctx.strokeText(word, W / 2, H / 2 + 2);
+  ctx.fillStyle = '#f2f6ff';
+  ctx.fillText(word, W / 2, H / 2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(0.95, 0.24, 1);
+  sprite.position.set(slot.x + (xform.dx || 0), 0.28, slot.z + (xform.dz || 0));
+  // no userData.kind -> findInteractive() skips it, so it never intercepts an
+  // edit-mode click meant for the object above it (purely decorative caption).
+  sprite.userData = { decorative: true };
   return sprite;
 }
 

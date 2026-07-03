@@ -4,9 +4,10 @@ Design for incorporating **ordered object lists** (the memory-palace mnemonic
 lists — see `MnemonicListDesignPrinciples.html` and
 `json/memory_palace_room_database.json`) into the castle VR app.
 
-Status: **design agreed, not yet built.** Read alongside
-`LinearSequencesAndRoomObjects.md` (the run/corridor + move-pair↔object model
-this builds on) and `CastleDataModel.md` (position-keyed persistence).
+Status: **Phases 1–3 built; Phase 4 (plaque) and true cross-room extension
+pending.** Read alongside `LinearSequencesAndRoomObjects.md` (the run/corridor +
+move-pair↔object model this builds on) and `CastleDataModel.md` (position-keyed
+persistence).
 
 ---
 
@@ -118,7 +119,7 @@ existing `assetId` bindings** by matching on immutable item `name`.
 
 ## Phasing
 
-### Phase 1 — List database (no VR)
+### Phase 1 — List database (no VR)  ✅ built
 - **Manage Object Lists** modal: list index (left) + selected-list detail (right).
 - Item table: position · object name · assigned asset thumbnail / "None" · [Pick Asset].
 - **[Import JSON]**: parse the room-database JSON, upsert into `objectLists`,
@@ -126,19 +127,28 @@ existing `assetId` bindings** by matching on immutable item `name`.
 - [New List] / [Edit] / [Delete] manual authoring; asset picker reused.
 - Fully independent; immediately useful. No VR changes.
 
-### Phase 2 — Apply lists to walls (text labels in VR)
-- Wall-list picker in room decoration: Left / Right / Whole room per room type;
-  lists sorted by how well item count matches the run length (exact match highlighted).
-- Store `wallLists` in room decoration.
-- VR: for each slot on an assigned wall, if `assetId` null render a **text-label
-  billboard** (canvas-text, same as street signs / move tags). Walkable immediately.
+### Phase 2 — Apply lists to walls (text labels in VR)  ✅ built
+- Wall-list picker in room decoration (in-VR 📋 toolbar button → Wall object
+  lists dialog): Left / Right for two-track rooms, else a single Room bucket;
+  lists sorted by how well item count matches the run length (exact match flagged).
+- Store `wallLists` in room decoration (`LAYOUT[roomKey].wallLists`, carried by
+  the existing threeLayout backup).
+- VR: for each slot on an assigned wall, if `assetId` null render a **word plaque**
+  (canvas-text). Walkable immediately. A slot's item index is its position in the
+  room's walk order (center → left → right); the two-track shared head is not
+  list-driven.
 
-### Phase 3 — Image assets render in VR
-- `assetId` non-null → load asset from `assets`, render as prop at the slot
-  (reusing existing placement / leash / rotate). Text name as subtitle.
-- Editing a binding in Manage Object Lists propagates everywhere the list is applied.
+### Phase 3 — Image assets render in VR  ✅ built
+- `assetId` non-null → render the bound asset as a prop at the slot (reuses the
+  existing placement / nudge / scale). The item's word shows as a **hint-gated
+  subtitle** at the object's base (hidden with hints off for pure self-test).
+- Editing a binding in Manage Object Lists propagates on the next tour open
+  (rendering resolves from the live OBJECT_LISTS cache); asset-image edits made
+  from the in-VR asset library propagate immediately via refreshAssetsLive.
+- A manual per-slot asset override still wins over the list, letting a single
+  item be swapped without touching the shared list.
 
-### Phase 4 — Mnemonic phrase plaque
+### Phase 4 — Mnemonic phrase plaque  (pending)
 - Wall-mounted plaque near entrance shows the applied list's mnemonic phrase
   (one per wall if two lists). Ordering rule in smaller text beneath.
 - Respects hints toggle.
@@ -155,3 +165,10 @@ existing `assetId` bindings** by matching on immutable item `name`.
 - **Immutable-name consequence:** the Manage Object Lists editor should not offer
   a rename control — only add / remove / reorder — to avoid silently orphaning
   asset bindings.
+- **Cross-room implicit extension (decision 1) not yet built.** Phases 2–3 apply
+  a list per room (a wall's slots, in order, `startIndex` 0). A list flowing
+  across a multi-room forced line — room 2 picking up where room 1's items ran
+  out — waits on the run-chaining infrastructure that lays a run out across
+  rooms (see `LinearSequencesAndRoomObjects.md`), which doesn't exist yet. A
+  single room already holds a multi-pair sequence (up to ~7 deep), so per-room
+  application is the useful shippable piece.
