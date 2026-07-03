@@ -1,0 +1,210 @@
+{
+  "schemaVersion": "1.1",
+  "rooms": [
+    {
+      "id": "kitchen",
+      "name": "Kitchen",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Major Fixtures",
+          "orderingType": "procedural",
+          "orderingRule": "Food lifecycle: retrieve → prep → cook → hand-wash → machine-clean",
+          "items": [
+            "Refrigerator",
+            "Countertop",
+            "Oven",
+            "Sink",
+            "Dishwasher"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RCOSD",
+            "phrase": "Raw Chicken, Oven-baked. Soapy Dish.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Raw → Refrigerator (raw/refrigerated); Oven-baked → Oven (direct); Soapy → Sink (soap at sink); Dish → Dishwasher (dish-)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "herb_garden",
+      "name": "Herb Garden",
+      "category": "Botanical Garden",
+      "lists": [
+        {
+          "name": "Core Culinary Herbs",
+          "orderingType": "adapted_cultural",
+          "orderingRule": "Adapted to leverage a well-known lyric; Basil and Oregano prepended (no intrinsic ordering between them), Parsley–Thyme fixed by the song",
+          "items": [
+            "Basil",
+            "Oregano",
+            "Parsley",
+            "Sage",
+            "Rosemary",
+            "Thyme"
+          ],
+          "mnemonic": {
+            "type": "adapted_existing_phrase",
+            "initialism": "BOPSRT",
+            "phrase": "Basic Original Parsley, Sage, Rosemary, Thyme.",
+            "source": "Adapted from Scarborough Fair lyric",
+            "phoneticNotes": "Basic → Basil; Original → Oregano; remainder verbatim from lyric"
+          }
+        }
+      ]
+    },
+    {
+      "id": "planetarium",
+      "name": "Planetarium",
+      "category": "Science",
+      "lists": [
+        {
+          "name": "Planets",
+          "orderingType": "canonical_sequence",
+          "orderingRule": "Distance from the Sun (astronomical)",
+          "items": [
+            "Mercury",
+            "Venus",
+            "Earth",
+            "Mars",
+            "Jupiter",
+            "Saturn",
+            "Uranus",
+            "Neptune"
+          ],
+          "mnemonic": {
+            "type": "existing_phrase",
+            "initialism": "MVEMJSUN",
+            "phrase": "My Very Educated Mother Just Served Us Noodles.",
+            "source": "Traditional planets mnemonic (modern form)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "music_room",
+      "name": "Music Room",
+      "category": "Music",
+      "lists": [
+        {
+          "name": "Solfège",
+          "orderingType": "canonical_sequence",
+          "orderingRule": "Ascending scale",
+          "items": [
+            "Do",
+            "Re",
+            "Mi",
+            "Fa",
+            "Sol",
+            "La",
+            "Ti"
+          ],
+          "mnemonic": {
+            "type": "existing_song",
+            "initialism": "DRMFSLT",
+            "phrase": "Do-Re-Mi",
+            "source": "The Sound of Music"
+          }
+        }
+      ]
+    },
+    {
+      "id": "great_lakes_room",
+      "name": "Great Lakes Room",
+      "category": "Geography",
+      "lists": [
+        {
+          "name": "Great Lakes",
+          "orderingType": "canonical_sequence",
+          "orderingRule": "Traditional mnemonic order (order IS the mnemonic — HOMES)",
+          "items": [
+            "Huron",
+            "Ontario",
+            "Michigan",
+            "Erie",
+            "Superior"
+          ],
+          "mnemonic": {
+            "type": "existing_acronym",
+            "initialism": "HOMES",
+            "phrase": "HOMES",
+            "source": "Traditional Great Lakes mnemonic"
+          }
+        }
+      ]
+    },
+    {
+      "id": "taxonomy_room",
+      "name": "Taxonomy Room",
+      "category": "Science",
+      "lists": [
+        {
+          "name": "Taxonomic Ranks",
+          "orderingType": "canonical_sequence",
+          "orderingRule": "Biological classification hierarchy (broadest to most specific)",
+          "items": [
+            "Kingdom",
+            "Phylum",
+            "Class",
+            "Order",
+            "Family",
+            "Genus",
+            "Species"
+          ],
+          "mnemonic": {
+            "type": "existing_phrase",
+            "initialism": "KPCOFGS",
+            "phrase": "King Philip Came Over For Good Soup.",
+            "source": "Traditional biology mnemonic"
+          }
+        }
+      ]
+    }
+  ],
+  "designNotes": {
+    "schemaChanges": {
+      "1.1": [
+        "Kitchen ordering corrected to procedural food-lifecycle order (Refrigerator first); phrase updated to RCOSD.",
+        "Added phoneticNotes field to mnemonic objects where reinforcement is documented.",
+        "Added existing_acronym as a valid mnemonic type (used by HOMES).",
+        "orderingType values standardised: canonical_sequence | adapted_cultural | procedural | natural_ordering | generated_mnemonic.",
+        "orderingRule for Great Lakes clarified that the order is the mnemonic, not a geographic ordering."
+      ]
+    },
+    "mnemonicTypes": [
+      "existing_phrase",
+      "existing_acronym",
+      "existing_song",
+      "adapted_existing_phrase",
+      "generated_phrase"
+    ],
+    "orderingTypes": [
+      "canonical_sequence",
+      "adapted_cultural",
+      "procedural",
+      "natural_ordering",
+      "generated_mnemonic"
+    ],
+    "orderingPriority": [
+      "existing cultural mnemonic (existing_phrase / existing_acronym / existing_song)",
+      "adapted cultural mnemonic (adapted_cultural)",
+      "canonical sequence (canonical_sequence)",
+      "strong natural ordering (natural_ordering / procedural)",
+      "generated mnemonic (generated_mnemonic)"
+    ],
+    "naturalOrderings": [
+      "alphabetical",
+      "chronological",
+      "size",
+      "weight",
+      "height",
+      "distance",
+      "age",
+      "life cycle",
+      "taxonomy",
+      "workflow",
+      "scientific classification"
+    ]
+  }
+}

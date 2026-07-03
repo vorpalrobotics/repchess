@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mnemonic List Design Principles v1.1</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:900px;margin:40px auto;line-height:1.6;padding:0 20px}
+h1,h2,h3{color:#1f4e79}
+code{background:#f3f3f3;padding:2px 4px}
+table{border-collapse:collapse;width:100%;margin:1em 0}
+th,td{border:1px solid #999;padding:8px;text-align:left}
+th{background:#eee}
+blockquote{background:#f9f9f9;border-left:4px solid #888;padding:8px 16px}
+.flag{background:#fff3cd;border-left:4px solid #f0a500;padding:8px 16px;margin:1em 0}
+</style>
+</head>
+<body>
+<h1>Mnemonic List Design Principles</h1>
+<p><strong>Version 1.1</strong></p>
+
+<h2>Context</h2>
+<p>This document defines the design philosophy for building ordered object lists used
+in the chess opening memory palace. Each castle <strong>room</strong> holds a set of
+<strong>objects</strong> (e.g., refrigerator, countertop, sink). Each object is the
+mnemonic anchor for one <strong>move-pair</strong> (opponent move + our response). When
+a room holds N move-pairs, the user sees N objects and must recall which object maps to
+which move-pair in order.</p>
+
+<p>The primary challenge is <strong>order</strong>. If the ordering must be memorized
+separately from the objects themselves, it adds cognitive load. These principles ensure
+that the ordering is <em>self-recovering</em> — derivable from the objects' real-world
+relationships, not from rote memorization. This matters most for <strong>long forced
+lines</strong>: chains of 4–7 positions where every move is essentially forced and a
+single room hosts the full sequence along one or both walls.</p>
+
+<h2>Goals</h2>
+<ul>
+<li>Maximize long-term recall of move-pair order.</li>
+<li>Minimize rote memorization of which object = which position.</li>
+<li>Use existing cultural knowledge whenever possible.</li>
+<li>Create multiple independent retrieval paths for every sequence.</li>
+<li>Build a reusable, expandable database of environments and ordered lists.</li>
+</ul>
+
+<h2>Core Philosophy: 7 Independent Retrieval Paths</h2>
+<p>Ideally, the full move sequence can be reconstructed through any of these independently:</p>
+<table>
+<tr><th>#</th><th>Cue</th><th>Castle room example</th></tr>
+<tr><td>1</td><td>Environment (room theme)</td><td>"This is the kitchen"</td></tr>
+<tr><td>2</td><td>Object category</td><td>"Kitchen fixtures, in workflow order"</td></tr>
+<tr><td>3</td><td>Natural ordering rule</td><td>"Storage → prep → cook → clean"</td></tr>
+<tr><td>4</td><td>Mnemonic phrase</td><td>"Raw Chicken, Oven-baked. Soapy Dish."</td></tr>
+<tr><td>5</td><td>Phonetic reinforcement</td><td>"Oven-baked" sounds like "Oven"; "Dish" sounds like "Dishwasher"</td></tr>
+<tr><td>6</td><td>Semantic reinforcement</td><td>"Soapy" evokes the sink; "Raw" evokes the fridge</td></tr>
+<tr><td>7</td><td>Vivid visual imagery</td><td>The specific scene placed in the room</td></tr>
+</table>
+<p>If you have all 7, losing any one doesn't break recall. If you only have the mnemonic
+phrase, one forgotten word loses the whole sequence. Design target: always have cues
+1–3 plus at least one of 4–6 before accepting a category for a room.</p>
+
+<h2>Hierarchy of Ordering Mechanisms</h2>
+<ol>
+<li><strong>Existing cultural mnemonic</strong> — a well-known phrase, acronym, or song
+already in common use (planets, rainbow, musical scale, HOMES). Strongest because the
+ordering is already in long-term memory.</li>
+<li><strong>Adapted cultural mnemonic</strong> — a familiar phrase lightly modified to
+cover the category. Preserve as much of the original as possible.</li>
+<li><strong>Canonical sequence</strong> — a fixed cultural sequence without a popular
+acronym: months, days of the week, periodic table, taxonomic ranks.</li>
+<li><strong>Strong natural ordering</strong> — an objective ordering rule inherent to
+the objects: size, weight, age, brightness, temperature, procedural workflow, etc.</li>
+<li><strong>Generated mnemonic</strong> — when none of the above fits, invent a phrase
+whose initials match the objects in a defensible order. Weakest tier.</li>
+</ol>
+
+<h2>Natural Ordering Rules</h2>
+
+<h3>Very Strong</h3>
+<ul>
+<li>Alphabetical</li>
+<li>Numerical</li>
+<li>Chronological</li>
+<li>Size</li>
+<li>Weight</li>
+<li>Height</li>
+<li>Distance</li>
+<li>Age</li>
+<li>Brightness</li>
+<li>Temperature</li>
+<li>Hardness</li>
+</ul>
+
+<h3>Scientific</h3>
+<ul>
+<li>Taxonomic hierarchy</li>
+<li>Evolutionary progression</li>
+<li>Life cycle</li>
+<li>Geological timeline</li>
+<li>Astronomical distance</li>
+<li>Atomic number</li>
+</ul>
+
+<h3>Procedural</h3>
+<ul>
+<li>Recipe / cooking steps</li>
+<li>Airport passenger journey</li>
+<li>Laundry process</li>
+<li>Manufacturing / assembly sequence</li>
+<li>Medical procedure</li>
+</ul>
+
+<h3>Functional</h3>
+<ul>
+<li>Complexity</li>
+<li>Value</li>
+<li>Frequency of use</li>
+<li>Capacity</li>
+<li>Speed</li>
+<li>Power</li>
+</ul>
+
+<h3>Weak — Use Only if Nothing Stronger Exists</h3>
+<ul>
+<li>Left to right</li>
+<li>Front to back</li>
+<li>Clockwise</li>
+<li>Walking path</li>
+<li>Top to bottom</li>
+</ul>
+<p>Spatial orderings are the weakest: they are arbitrary from the user's perspective
+and provide no retrieval path other than "I chose this direction."</p>
+
+<h2>Design Rules</h2>
+<ul>
+<li><strong>Never weaken a strong ordering to improve initials.</strong> The category
+order takes precedence over mnemonic cleverness. Do not rearrange objects just to
+produce a better acronym.</li>
+<li><strong>Canonical sequences must never be reordered.</strong> Planets, rainbow
+colors, musical notes, and similar sequences are fixed. Accept the initialism they
+produce.</li>
+<li><strong>Only optimize initials when the ordering is naturally flexible.</strong>
+If two objects have no intrinsic ordering between them (e.g., Basil and Oregano),
+choosing whichever order produces better initials is acceptable. If there is a natural
+order, it is not.</li>
+<li><strong>Prefer culturally familiar sequences over invented ones.</strong> A
+generated mnemonic requires the user to also memorize the phrase. A cultural sequence
+is already in memory.</li>
+<li><strong>Match category length to sequence length.</strong> A category with exactly
+N objects avoids having to remember which N of K items were used.</li>
+</ul>
+
+<h2>Category Selection by Sequence Length</h2>
+<table>
+<tr><th>N</th><th>Candidate categories (strong ordering)</th></tr>
+<tr><td>8</td><td>Planets (MVEMJSUN); musical notes A–G + octave</td></tr>
+<tr><td>7</td><td>Do–Re–Mi–Fa–Sol–La–Ti; days of the week; deadly sins; Snow White's dwarfs; taxonomic ranks (KPCOFGS)</td></tr>
+<tr><td>5</td><td>Senses; fingers; Great Lakes (HOMES); kitchen major fixtures (RCOSD)</td></tr>
+<tr><td>4</td><td>Seasons; cardinal directions; playing card suits</td></tr>
+<tr><td>3</td><td>Traffic light colors; gold/silver/bronze; past/present/future</td></tr>
+<tr><td>2</td><td>Salt &amp; pepper; lock &amp; key; hammer &amp; nail</td></tr>
+</table>
+
+<h2>Existing Cultural Mnemonics</h2>
+<table>
+<tr><th>Sequence</th><th>Mnemonic</th><th>Type</th></tr>
+<tr><td>Planets</td><td>My Very Educated Mother Just Served Us Noodles</td><td>existing_phrase</td></tr>
+<tr><td>Great Lakes</td><td>HOMES</td><td>existing_acronym</td></tr>
+<tr><td>Rainbow</td><td>ROYGBIV</td><td>existing_acronym</td></tr>
+<tr><td>Treble Clef Lines</td><td>Every Good Boy Does Fine</td><td>existing_phrase</td></tr>
+<tr><td>Treble Clef Spaces</td><td>FACE</td><td>existing_acronym</td></tr>
+<tr><td>Taxonomic Ranks</td><td>King Philip Came Over For Good Soup</td><td>existing_phrase</td></tr>
+<tr><td>Order of Operations</td><td>Please Excuse My Dear Aunt Sally (PEMDAS)</td><td>existing_phrase</td></tr>
+<tr><td>Solfège</td><td>Do-Re-Mi (The Sound of Music)</td><td>existing_song</td></tr>
+</table>
+
+<h2>Adapted Cultural Mnemonics</h2>
+<p>Preserve as much of a familiar phrase as possible and minimally adapt it.</p>
+
+<h3>Example: Herb Garden</h3>
+<p>Objects:</p>
+<ul>
+<li>Basil</li>
+<li>Oregano</li>
+<li>Parsley</li>
+<li>Sage</li>
+<li>Rosemary</li>
+<li>Thyme</li>
+</ul>
+<blockquote><strong>Basic Original Parsley, Sage, Rosemary, Thyme.</strong></blockquote>
+<ul>
+<li>"Basic" reinforces <em>Basil</em> (phonetic).</li>
+<li>"Original" reinforces <em>Oregano</em> (phonetic).</li>
+<li>Parsley–Thyme is verbatim from the Scarborough Fair lyric — already fixed in memory.</li>
+<li>Basil and Oregano have no intrinsic ordering between them, so choosing their order
+to improve initials is acceptable (design rule 3).</li>
+</ul>
+
+<h2>Generated Mnemonics</h2>
+<p>When no cultural mnemonic or strong natural ordering exists, create a thematic
+phrase. Use this tier only as a last resort.</p>
+
+<h3>Example: Kitchen Major Fixtures</h3>
+<p>Objects in workflow order (retrieve → prep → cook → hand-wash → machine-clean):</p>
+<p><strong>Refrigerator, Countertop, Oven, Sink, Dishwasher</strong></p>
+<blockquote><strong>Raw Chicken, Oven-baked. Soapy Dish.</strong></blockquote>
+<p>Ordering justification: the <em>food lifecycle</em> is a procedural (tier 4) ordering
+rule — you retrieve from the fridge, prep on the counter, cook in the oven, hand-wash
+at the sink, then run the dishwasher. This ordering must not be rearranged to improve
+the initials.</p>
+<p class="flag"><strong>Anti-pattern (v1.0 error):</strong> The original version listed
+Countertop, Oven, Refrigerator, Dishwasher, Sink (CORDS) — reordered to produce a
+cleaner acronym. This violated the rule "never weaken a strong ordering to improve
+initials." The refrigerator must come first because it is the start of the food
+lifecycle.</p>
+
+<h2>Phonetic Reinforcement</h2>
+<p>Prefer mnemonic words that share sounds as well as initials with the target object.
+This creates a second, sound-based retrieval path from phrase to object.</p>
+<table>
+<tr><th>Mnemonic word</th><th>Target object</th><th>Link type</th></tr>
+<tr><td>Basic</td><td>Basil</td><td>Phonetic</td></tr>
+<tr><td>Original</td><td>Oregano</td><td>Phonetic</td></tr>
+<tr><td>Oven-baked</td><td>Oven</td><td>Phonetic (direct)</td></tr>
+<tr><td>Soapy</td><td>Sink</td><td>Semantic (soap at sink)</td></tr>
+<tr><td>Dish</td><td>Dishwasher</td><td>Phonetic (dish-)</td></tr>
+<tr><td>Raw</td><td>Refrigerator</td><td>Semantic (raw = refrigerated)</td></tr>
+</table>
+
+<h2>JSON Schema</h2>
+<pre>{
+  "id": "room_id",
+  "name": "Room Name",
+  "category": "Category",
+  "lists": [
+    {
+      "name": "List name",
+      "orderingType": "canonical_sequence | adapted_cultural | procedural | natural_ordering | generated_mnemonic",
+      "orderingRule": "Human-readable description of the ordering logic",
+      "items": ["Object1", "Object2", "..."],
+      "mnemonic": {
+        "type": "existing_phrase | existing_acronym | existing_song | adapted_existing_phrase | generated_phrase",
+        "initialism": "...",
+        "phrase": "...",
+        "source": "...",
+        "phoneticNotes": "Word → Object (link type); ..."
+      }
+    }
+  ]
+}</pre>
+
+<h3>orderingType values (maps to hierarchy tier)</h3>
+<table>
+<tr><th>Value</th><th>Tier</th><th>Description</th></tr>
+<tr><td><code>canonical_sequence</code></td><td>1–3</td><td>Culturally fixed sequence (planets, scale, HOMES)</td></tr>
+<tr><td><code>adapted_cultural</code></td><td>2</td><td>Well-known sequence lightly modified</td></tr>
+<tr><td><code>procedural</code></td><td>4</td><td>Process / workflow order (recipe steps, assembly)</td></tr>
+<tr><td><code>natural_ordering</code></td><td>4</td><td>Objective physical or scientific ordering (size, age, distance)</td></tr>
+<tr><td><code>generated_mnemonic</code></td><td>5</td><td>Order chosen to produce a usable acronym; use only when no stronger ordering exists</td></tr>
+</table>
+
+<h3>mnemonic.type values</h3>
+<table>
+<tr><th>Value</th><th>Description</th></tr>
+<tr><td><code>existing_phrase</code></td><td>A sentence mnemonic already in widespread cultural use</td></tr>
+<tr><td><code>existing_acronym</code></td><td>An acronym already in widespread cultural use (HOMES, ROYGBIV, FACE); the acronym itself is the ordering device</td></tr>
+<tr><td><code>existing_song</code></td><td>A song lyric that encodes the sequence (Do-Re-Mi)</td></tr>
+<tr><td><code>adapted_existing_phrase</code></td><td>A familiar phrase minimally modified to cover the category</td></tr>
+<tr><td><code>generated_phrase</code></td><td>A newly invented phrase; weakest type — documents that this list needed a generated mnemonic</td></tr>
+</table>
+
+<h2>Guiding Principle</h2>
+<blockquote><strong>Do not optimize one retrieval cue at the expense of a stronger one.</strong></blockquote>
+<p>Canonical order takes precedence over a clever acronym. Existing cultural knowledge
+takes precedence over a freshly invented phrase. The ordering rule is the foundation;
+the mnemonic phrase is a supplement.</p>
+
+</body>
+</html>
