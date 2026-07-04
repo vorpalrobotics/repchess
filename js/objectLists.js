@@ -350,9 +350,10 @@ async function saveEditor(){
   const l = EDIT;
   l.id = (l.id||'').trim();
   if(!l.id){ setError('List id is required.'); return; }
-  // lowercase alnum + underscores; double underscore is allowed (import uses it
-  // as the room__list namespace separator). Must start with an alphanumeric.
-  if(!/^[a-z0-9][a-z0-9_]*$/.test(l.id)){ setError('List id must be lowercase letters, numbers and underscores, starting with a letter or number.'); return; }
+  // lowercase alnum + underscores and/or dashes; double underscore is allowed
+  // (import uses it as the room__list namespace separator). Must start with an
+  // alphanumeric.
+  if(!/^[a-z0-9][a-z0-9_-]*$/.test(l.id)){ setError('List id must be lowercase letters, numbers, underscores and dashes, starting with a letter or number.'); return; }
   if(EDIT_IS_NEW && LISTS.some(x => x.id === l.id)){ setError(`A list with id "${l.id}" already exists.`); return; }
   if(!l.name.trim()){ setError('List name is required.'); return; }
   setError('');
