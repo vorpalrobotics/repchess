@@ -278,9 +278,11 @@
   .objlist-card-items{font-size:.75rem;color:#333;line-height:1.3}
   .objlist-card-mnem{font-size:.72rem;color:#1565c0;font-style:italic}
   .objlist-card-count{font-size:.68rem;color:#888;margin-top:.15rem}
-  .objlist-field-row{display:flex;gap:.9rem;flex-wrap:wrap}
-  .objlist-field-row .field{flex:1 1 12em;margin-bottom:.7rem}
-  .objlist-grow{flex:2 1 20em}
+  /* single-column editor: each field is an inline "label: input" row */
+  #objlistEditor .field{display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem}
+  #objlistEditor .field > label{flex:0 0 8.5em;margin:0;text-align:right;font-weight:600;font-size:.82rem;white-space:normal}
+  #objlistEditor .field > label::after{content:':'}
+  #objlistEditor .field > input[type=text],#objlistEditor .field > select{flex:1 1 auto;max-width:34em;margin:0}
   .objlist-h3{margin:.9rem 0 .2rem;font-size:1rem;color:#1f4e79}
   .objlist-hint{font-size:.76rem;color:#777;margin:.1rem 0 .5rem}
   .objlist-items{border-collapse:collapse;width:100%;max-width:48em;font-size:.85rem}
@@ -1097,6 +1099,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-39"></script>
+<script type="module" src="js/app.js?v=20260630-40"></script>
 </body>
 </html>

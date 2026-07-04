@@ -160,34 +160,30 @@ function renderEditor(){
   const editor = $('objlistEditor');
   editor.innerHTML = `
     <div class="field">
-      <label>List id (lowercase-with-underscores, unique)</label>
-      <input type="text" id="ol_id" placeholder="kitchen_major_fixtures" value="${esc(l.id)}" ${EDIT_IS_NEW ? '' : 'disabled'}>
+      <label>List id</label>
+      <input type="text" id="ol_id" placeholder="kitchen_major_fixtures (lowercase, unique)" value="${esc(l.id)}" ${EDIT_IS_NEW ? '' : 'disabled'}>
     </div>
-    <div class="objlist-field-row">
-      <div class="field">
-        <label>List name</label>
-        <input type="text" id="ol_name" placeholder="Major Fixtures" value="${esc(l.name)}">
-      </div>
-      <div class="field">
-        <label>Room name (theme)</label>
-        <input type="text" id="ol_room" placeholder="Kitchen" value="${esc(l.roomName)}">
-      </div>
-      <div class="field">
-        <label>Category</label>
-        <input type="text" id="ol_cat" placeholder="Home" value="${esc(l.category)}">
-      </div>
+    <div class="field">
+      <label>List name</label>
+      <input type="text" id="ol_name" placeholder="Major Fixtures" value="${esc(l.name)}">
     </div>
-    <div class="objlist-field-row">
-      <div class="field">
-        <label>Ordering type</label>
-        <select id="ol_otype">
-          ${Object.entries(ORDERING_TYPES).map(([t,lab]) => `<option value="${t}" ${t===l.orderingType?'selected':''}>${esc(lab)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field objlist-grow">
-        <label>Ordering rule (why the items are in this order)</label>
-        <input type="text" id="ol_orule" placeholder="Food lifecycle: retrieve → prep → cook → clean" value="${esc(l.orderingRule)}">
-      </div>
+    <div class="field">
+      <label>Room name</label>
+      <input type="text" id="ol_room" placeholder="Kitchen" value="${esc(l.roomName)}">
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <input type="text" id="ol_cat" placeholder="Home" value="${esc(l.category)}">
+    </div>
+    <div class="field">
+      <label>Ordering type</label>
+      <select id="ol_otype">
+        ${Object.entries(ORDERING_TYPES).map(([t,lab]) => `<option value="${t}" ${t===l.orderingType?'selected':''}>${esc(lab)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Ordering rule</label>
+      <input type="text" id="ol_orule" placeholder="Food lifecycle: retrieve → prep → cook → clean" value="${esc(l.orderingRule)}">
     </div>
 
     <h3 class="objlist-h3">Items (in order — each anchors one move-pair)</h3>
@@ -202,17 +198,15 @@ function renderEditor(){
     </div>
 
     <h3 class="objlist-h3">Mnemonic (optional)</h3>
-    <div class="objlist-field-row">
-      <div class="field">
-        <label>Type</label>
-        <select id="ol_mtype">
-          ${Object.entries(MNEMONIC_TYPES).map(([t,lab]) => `<option value="${t}" ${t===l.mnemonic.type?'selected':''}>${esc(lab)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>Initialism</label>
-        <input type="text" id="ol_minit" placeholder="RCOSD" value="${esc(l.mnemonic.initialism||'')}">
-      </div>
+    <div class="field">
+      <label>Type</label>
+      <select id="ol_mtype">
+        ${Object.entries(MNEMONIC_TYPES).map(([t,lab]) => `<option value="${t}" ${t===l.mnemonic.type?'selected':''}>${esc(lab)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Initialism</label>
+      <input type="text" id="ol_minit" placeholder="RCOSD" value="${esc(l.mnemonic.initialism||'')}">
     </div>
     <div class="field">
       <label>Phrase</label>
