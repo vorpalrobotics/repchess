@@ -3861,20 +3861,27 @@ function tick(){
   if(keys['ArrowUp']   || keys['w'] || keys['W']) move += 1;
   if(keys['ArrowDown'] || keys['s'] || keys['S']) move -= 1;
 
+  // strafe (sidestep without turning): q left, e right
+  let strafe = 0;
+  if(keys['q'] || keys['Q']) strafe -= 1;
+  if(keys['e'] || keys['E']) strafe += 1;
+
   // touch joystick (mobile): x turns, y walks -- same axes as the keys above
   if(!inputLocked){ turn -= joyVec.x; move += joyVec.y; }
   turn = Math.max(-1, Math.min(1, turn));
   move = Math.max(-1, Math.min(1, move));
+  strafe = Math.max(-1, Math.min(1, strafe));
 
   yaw += turn * TURN_SPEED * dt;
-  if(move !== 0 && !inputLocked){
+  if((move !== 0 || strafe !== 0) && !inputLocked){
     const room = mergedRoom(currentRoomKey);
     // outdoors covers much more ground, so walk 50% faster out there; interiors
     // keep the base speed.
     const speed = room.outdoor ? MOVE_SPEED * 1.5 : MOVE_SPEED;
-    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
-    pos.x += -Math.sin(yaw) * move * speed * dt;
-    pos.z += -Math.cos(yaw) * move * speed * dt;
+    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw)); the
+    // right vector (for q/e strafing) is (cos(yaw), -sin(yaw)).
+    pos.x += (-Math.sin(yaw) * move + Math.cos(yaw) * strafe) * speed * dt;
+    pos.z += (-Math.cos(yaw) * move - Math.sin(yaw) * strafe) * speed * dt;
     let clamped = clampToRoom(room.size, pos.x, pos.z);
     if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
     if(room.twoTrack) clamped = clampOutOfDivider(room, clamped.x, clamped.z);
@@ -4504,7 +4511,7 @@ function buildHelpOverlay(){
     <div style="background:#fff;color:#222;max-width:32em;width:88%;max-height:84%;overflow:auto;
                 border-radius:8px;padding:1rem 1.2rem;font:400 .9rem/1.45 sans-serif">
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
-      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
+      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
@@ -5263,8 +5270,9 @@ function onKeyDown(e){
     if(e.key === '>' || e.key === '.'){ rotateSelected(1); return; }
     return; // swallow everything else while a prop is selected (no walking/turning)
   }
-  // 'e' is intentionally NOT an edit-mode shortcut (too close to 'w'); use the
-  // pencil toolbar button. Esc still exits edit mode.
+  // 'e' strafes right (q/e sidestep, handled via the keys map in tick), so it's
+  // deliberately NOT an edit-mode shortcut; use the pencil toolbar button. Esc
+  // still exits edit mode.
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
   if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
   keys[e.key] = true;
