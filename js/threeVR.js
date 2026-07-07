@@ -4821,6 +4821,22 @@ function renderRoomGeomDialog(ov, roomKey){
   const stairs = staticRoom.stairs || null;
   const buildings = staticRoom.buildings || [];
 
+  // The compound room keys (cas:<instance>:<FEN>) are far too long to read as a
+  // title or as door labels -- they overran the plan and the exit list. Collapse
+  // them to something human: the modal title uses the room's own sign title, and
+  // a doorway is labelled by the move that opens it (ex.label = the opponent
+  // reply), falling back to the target room's title or a truncated tail.
+  const roomTitle = (ROOMS[roomKey] && ROOMS[roomKey].castleSign && ROOMS[roomKey].castleSign.title) || roomKey;
+  const exitShortLabel = ex => {
+    if(ex.label) return ex.label;                     // the move behind this door
+    if(ex.target === 'mainStreet') return 'Street';
+    if(ex.back) return 'Back';
+    const t = ROOMS[ex.target] && ROOMS[ex.target].castleSign && ROOMS[ex.target].castleSign.title;
+    if(t) return t;
+    const tail = String(ex.target).split(':').pop();
+    return tail.length > 12 ? tail.slice(0, 12) + '…' : tail;
+  };
+
   // staged door state: target room -> {wall, offset, type}, seeded from any
   // existing override (or the static position/type) and only committed on
   // Apply. Single-sided by construction -- this only ever edits roomKey's
@@ -4838,7 +4854,7 @@ function renderRoomGeomDialog(ov, roomKey){
   }
   const exitTypeRows = staticExits.map(ex => `
     <label style="display:flex;align-items:center;justify-content:space-between;font-size:.78rem;gap:.5rem;padding:.15rem 0">
-      <span>${ex.target}${ex.back ? ' ↩' : ''}</span>
+      <span title="${escHtml(ex.target)}">${escHtml(exitShortLabel(ex))}${ex.back ? ' ↩' : ''}</span>
       <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
         <option value="door" ${stagedExits[ex.target].type === 'door' ? 'selected' : ''}>Door</option>
         <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase</option>
@@ -4848,7 +4864,7 @@ function renderRoomGeomDialog(ov, roomKey){
   `).join('');
   ov.innerHTML = `
     <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
-      <h2>Room Geometry — ${roomKey}</h2>
+      <h2 title="${escHtml(roomKey)}">Room Geometry — ${escHtml(roomTitle)}</h2>
       <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.7rem">
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
           <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomW" value="${w}" style="width:6em">
@@ -4996,7 +5012,7 @@ function renderRoomGeomDialog(ov, roomKey){
       if(pos.wall === 'east'){  const cz = pz(pos.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
       ctx.stroke();
       ctx.setLineDash([]);
-      const label = ex.target + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
+      const label = exitShortLabel(ex) + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
       ctx.fillStyle = dragging ? '#7a4a00' : labelColor;
       ctx.fillText(label, lx, ly);
     }
