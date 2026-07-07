@@ -1703,14 +1703,17 @@ function applyAccessoryTransform(obj, room, slot, asset, xform){
     // one on the floor means raising it by half its height
     const x = slot.x + (xform.dx || 0), z = slot.z + (xform.dz || 0);
     const floorY = floorHeightAt(room, z);
+    // a move-object can be lifted off the floor (xform.dy); ordinary floor props
+    // rest on the floor and simply carry dy === 0.
+    const lift = xform.dy || 0;
     const flat = asset.type === 'extruded' && asset.orientation === 'flat';
     if(flat){
       // a flat floor covering rests on its thickness, not its (now-horizontal) height
       const d = ((asset.size && asset.size.d) || 0.3) * scale;
-      obj.position.set(x, floorY + d/2, z);
+      obj.position.set(x, floorY + d/2 + lift, z);
     } else {
       const h = ((asset.size && asset.size.h) || 1) * scale;
-      obj.position.set(x, floorY + h/2, z);
+      obj.position.set(x, floorY + h/2 + lift, z);
     }
     // Extruded props face a FIXED default -- the entrance wall (image side is
     // local -z), so they greet you on the way in without swinging to track
@@ -2021,7 +2024,9 @@ function buildMoveObjectSubtitle(slot, word, xform){
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   sprite.scale.set(0.95, 0.24, 1);
-  sprite.position.set(slot.x + (xform.dx || 0), 0.28, slot.z + (xform.dz || 0));
+  // follow the object's nudge (dx/dz) and any lift (dy) so the caption stays a
+  // fixed gap beneath the picture even when the object is raised off the floor.
+  sprite.position.set(slot.x + (xform.dx || 0), 0.28 + (xform.dy || 0), slot.z + (xform.dz || 0));
   // no userData.kind -> findInteractive() skips it, so it never intercepts an
   // edit-mode click meant for the object above it (purely decorative caption).
   sprite.userData = { decorative: true };
@@ -4093,15 +4098,20 @@ function nudgeSelected(key){
   if(kind === 'floor' || kind === 'moveObject'){
     // a move-object rests on the floor like a floor prop and nudges the same way
     // (camera-relative); a future leash will clamp it near its billboard.
+    // A move-object can also be lifted off the floor with h/l (or PageUp/PageDown)
+    // -- same vertical convention as a mnemonic billboard.
     const fwd = cameraForwardVec(), right = cameraRightVec();
-    let dx = xform.dx || 0, dz = xform.dz || 0;
+    let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
     if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
     if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
     if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
     if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
+    if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
+    if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
     const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
     xform.dx = clamped.x - slot.x;
     xform.dz = clamped.z - slot.z;
+    xform.dy = Math.max(0, dy);   // can't sink below the floor
   } else if(kind === 'wall'){
     let dOffset = xform.dOffset || 0, dY = xform.dY || 0;
     if(key === 'ArrowRight') dOffset += NUDGE_STEP;
@@ -4320,9 +4330,11 @@ function updateEditHud(){
     const resize = pct != null ? `  ·  Resize: ${pct}%` : '';
     editHud.textContent = (selectedProp.kind === 'mnemonic'
       ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
-      : selectedProp.kind === 'sign'
-        ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
-        : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect') + resize;
+      : selectedProp.kind === 'moveObject'
+        ? 'SELECTED — arrows: nudge · h/l or PageUp/PageDown: height · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect'
+        : selectedProp.kind === 'sign'
+          ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
+          : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect') + resize;
     editHud.style.display = 'block';
     return;
   }
@@ -4512,6 +4524,7 @@ function updateEditTouchControls(){
   editTouchEl.style.display = 'block';
   const mnem = selectedProp.kind === 'mnemonic';
   const sign = selectedProp.kind === 'sign';
+  const moveObj = selectedProp.kind === 'moveObject';
 
   // directional pad, bottom-right (a + arrangement with empty corners)
   const pad = document.createElement('div');
@@ -4525,7 +4538,7 @@ function updateEditTouchControls(){
   );
   editTouchEl.appendChild(pad);
 
-  // left cluster: scale, height (mnemonic only), change (assets only), done
+  // left cluster: scale, height (mnemonic + move-object), change (assets), done
   const col = document.createElement('div');
   col.style.cssText = 'position:absolute;left:10px;bottom:14px;display:flex;flex-direction:column;gap:6px;';
   const rowOf = (...els) => { const r = document.createElement('div'); r.style.cssText = 'display:flex;gap:6px'; r.append(...els); return r; };
@@ -4533,11 +4546,14 @@ function updateEditTouchControls(){
     makeTouchBtn('Bigger', () => scaleSelected(SCALE_STEP)),
     makeTouchBtn('Smaller', () => scaleSelected(1 / SCALE_STEP))
   ));
-  if(mnem) col.appendChild(rowOf(
+  // height controls: mnemonic billboards and move-objects can both be raised/lowered
+  if(mnem || moveObj) col.appendChild(rowOf(
     makeTouchBtn('Higher', () => nudgeSelected('PageUp')),
     makeTouchBtn('Lower', () => nudgeSelected('PageDown'))
   ));
-  else col.appendChild(rowOf(
+  // "Change" swaps the asset/skin -- available for everything except the
+  // asset-less mnemonic billboard (move-objects and signs included).
+  if(!mnem) col.appendChild(rowOf(
     makeTouchBtn('Change', () => openManagerForSelection())
   ));
   // rotate controls for a free-standing extruded floor prop (only this kind has
@@ -5171,7 +5187,9 @@ function onKeyDown(e){
       nudgeSelected(e.key);
       return;
     }
-    if(selectedProp.kind === 'mnemonic' &&
+    // h/l (or PageUp/PageDown) raise/lower the height: mnemonic billboards float
+    // free, and a move-object can be lifted off the floor the same way.
+    if((selectedProp.kind === 'mnemonic' || selectedProp.kind === 'moveObject') &&
        (e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'h' || e.key === 'H' || e.key === 'l' || e.key === 'L')){
       nudgeSelected(e.key);
       return;
