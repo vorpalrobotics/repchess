@@ -556,6 +556,24 @@ function setRoomGeom(roomKey, geom){
     r.geom = geom;
   });
 }
+// A user-assigned display name for a room (persisted per stable room key).
+// Falls back to any static ROOMS[key].name, else '' -- callers treat '' as
+// "unnamed" and use the move/title instead.
+function roomNameFor(roomKey){
+  const n = LAYOUT[roomKey] && LAYOUT[roomKey].name;
+  return (n && String(n).trim()) || (ROOMS[roomKey] && ROOMS[roomKey].name) || '';
+}
+// Name (or rename) a room. Naming is a label-only edit -- no assets change --
+// so we skip the asset refresh applyEdit() does and just persist, then rebuild
+// the current room so its forward-door nameplates (buildDoorHint reads the
+// beyond-room's name) update immediately.
+function setRoomName(roomKey, name){
+  const r = ensureRoomLayout(roomKey);
+  name = (name || '').trim();
+  if(name) r.name = name; else delete r.name;
+  persistLayout();
+  if(scene) buildRoom(currentRoomKey);
+}
 // commits a room-geometry-dialog session in one rebuild: the width/depth/
 // height patch plus any door moves and/or type changes (keyed by target
 // room). `exitMoves` is a { [target]: {wall, offset, type} } map of the
@@ -2671,7 +2689,7 @@ function makeMoveDecorationMesh(move, sizeM){
 // toggle for self-test.
 function buildDoorHint(size, wall, offset, targetKey){
   const group = new THREE.Group();
-  const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
+  const name = roomNameFor(targetKey);
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
@@ -4826,9 +4844,11 @@ function renderRoomGeomDialog(ov, roomKey){
   // them to something human: the modal title uses the room's own sign title, and
   // a doorway is labelled by the move that opens it (ex.label = the opponent
   // reply), falling back to the target room's title or a truncated tail.
-  const roomTitle = (ROOMS[roomKey] && ROOMS[roomKey].castleSign && ROOMS[roomKey].castleSign.title) || roomKey;
+  const roomTitle = roomNameFor(roomKey) || (ROOMS[roomKey] && ROOMS[roomKey].castleSign && ROOMS[roomKey].castleSign.title) || roomKey;
   const exitShortLabel = ex => {
-    if(ex.label) return ex.label;                     // the move behind this door
+    const named = roomNameFor(ex.target);
+    if(named) return named;                           // a name the user gave the room
+    if(ex.label) return ex.label;                     // else the move behind this door
     if(ex.target === 'mainStreet') return 'Street';
     if(ex.back) return 'Back';
     const t = ROOMS[ex.target] && ROOMS[ex.target].castleSign && ROOMS[ex.target].castleSign.title;
@@ -4862,6 +4882,19 @@ function renderRoomGeomDialog(ov, roomKey){
       </select>
     </label>
   `).join('');
+  // "Room names" section: name THIS room and, more usefully, the room behind
+  // each forward door (back/exit doors are excluded). Naming a target room sets
+  // LAYOUT[target].name, which surfaces as the door's in-world nameplate
+  // (buildDoorHint), on the plan, and as that room's own title -- so the walk
+  // can be laid out logically and each room themed to its name.
+  const nameRow = (target, chip, chipColor) => `
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;padding:.15rem 0">
+      <span title="${escHtml(target)}" style="min-width:3.6em;color:${chipColor};font-weight:600;text-align:right">${escHtml(chip)}</span>
+      <input type="text" data-room-name-for="${escHtml(target)}" value="${escHtml(roomNameFor(target))}" placeholder="name this room" style="flex:1;min-width:0;font-size:.78rem">
+    </label>`;
+  const forwardExits = staticExits.filter(ex => !ex.back);
+  const roomNameRows = nameRow(roomKey, 'This', '#555')
+    + forwardExits.map(ex => nameRow(ex.target, ex.label || 'door', '#2e7d32')).join('');
   ov.innerHTML = `
     <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
       <h2 title="${escHtml(roomKey)}">Room Geometry — ${escHtml(roomTitle)}</h2>
@@ -4879,6 +4912,10 @@ function renderRoomGeomDialog(ov, roomKey){
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
+      <div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">
+        <div style="font-size:.72rem;color:#888;margin-bottom:.15rem">Room names — label the room behind each door to plan the walk and theme its decor.</div>
+        ${roomNameRows}
+      </div>
       <div id="roomGeomDefaultsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.5rem">${defaultsBoxHtml(roomKey)}</div>
       <div id="roomGeomPresetsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${presetsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
@@ -4902,6 +4939,15 @@ function renderRoomGeomDialog(ov, roomKey){
   for(const sel of ov.querySelectorAll('[data-exit-type-for]')){
     sel.addEventListener('change', () => {
       stagedExits[sel.dataset.exitTypeFor].type = sel.value;
+      drawPlan();
+    });
+  }
+  // room-name inputs: persist on commit (blur/Enter) and redraw the plan so the
+  // door's label updates to the new name straight away. setRoomName rebuilds the
+  // current room too, refreshing the in-world door nameplates.
+  for(const inp of ov.querySelectorAll('[data-room-name-for]')){
+    inp.addEventListener('change', () => {
+      setRoomName(inp.dataset.roomNameFor, inp.value);
       drawPlan();
     });
   }
