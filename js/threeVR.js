@@ -347,6 +347,10 @@ function registerOneCastle(castle, instanceId, opts = {}){
     const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
     ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack,
+      // the node's "Room Name" attribute (r.name), the same value edited in the
+      // tree's Attributes modal -- seeded here so the VR walk shows it and, when
+      // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
+      name: r.name || '',
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -556,22 +560,22 @@ function setRoomGeom(roomKey, geom){
     r.geom = geom;
   });
 }
-// A user-assigned display name for a room (persisted per stable room key).
-// Falls back to any static ROOMS[key].name, else '' -- callers treat '' as
-// "unnamed" and use the move/title instead.
+// A room's display name: the node's "Room Name" attribute, held live on
+// ROOMS[key].name (seeded from r.name at registration, updated in place on an
+// in-world rename). '' means unnamed -- callers fall back to the move/title.
 function roomNameFor(roomKey){
-  const n = LAYOUT[roomKey] && LAYOUT[roomKey].name;
-  return (n && String(n).trim()) || (ROOMS[roomKey] && ROOMS[roomKey].name) || '';
+  const n = ROOMS[roomKey] && ROOMS[roomKey].name;
+  return (n && String(n).trim()) || '';
 }
-// Name (or rename) a room. Naming is a label-only edit -- no assets change --
-// so we skip the asset refresh applyEdit() does and just persist, then rebuild
-// the current room so its forward-door nameplates (buildDoorHint reads the
-// beyond-room's name) update immediately.
+// Name (or rename) a room from the VR walk. This edits the SAME item as the
+// tree's Attributes → Room Name: we update the live ROOMS entry and hand the
+// change to threeOpts.onRoomRename (wired by app.js) to persist it onto the
+// room's pref. Then rebuild the current room so its forward-door nameplates
+// (buildDoorHint reads the beyond-room's name) update immediately.
 function setRoomName(roomKey, name){
-  const r = ensureRoomLayout(roomKey);
   name = (name || '').trim();
-  if(name) r.name = name; else delete r.name;
-  persistLayout();
+  if(ROOMS[roomKey]) ROOMS[roomKey].name = name;
+  if(typeof threeOpts.onRoomRename === 'function') threeOpts.onRoomRename(roomKey, name);
   if(scene) buildRoom(currentRoomKey);
 }
 // commits a room-geometry-dialog session in one rebuild: the width/depth/
@@ -4890,10 +4894,11 @@ function renderRoomGeomDialog(ov, roomKey){
     </label>
   `).join('');
   // "Room names" section: name THIS room and, more usefully, the room behind
-  // each forward door (back/exit doors are excluded). Naming a target room sets
-  // LAYOUT[target].name, which surfaces as the door's in-world nameplate
-  // (buildDoorHint), on the plan, and as that room's own title -- so the walk
-  // can be laid out logically and each room themed to its name.
+  // each forward door (back/exit doors are excluded). Naming a room edits the
+  // same "Room Name" pref the tree's Attributes modal does (via setRoomName ->
+  // onRoomRename), and surfaces as the door's in-world nameplate (buildDoorHint),
+  // on the plan, and as that room's own title -- so the walk can be laid out
+  // logically and each room themed to its name.
   const nameRow = (target, chip, chipColor) => `
     <label style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;padding:.15rem 0">
       <span title="${escHtml(target)}" style="min-width:3.6em;color:${chipColor};font-weight:600;text-align:right">${escHtml(chip)}</span>
