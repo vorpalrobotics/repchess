@@ -3384,7 +3384,13 @@ function doorSpawn(size, wall, offset, origin, inside){
   // you out past its opposite wall (normal 10m rooms are unaffected: their
   // half-depth comfortably clears the 2.5m default).
   const depthDim = (wall === 'north' || wall === 'south') ? size.d : size.w;
-  const inset = Math.min(2.5, Math.max(0.6, depthDim/2 - 0.3));
+  // stand just inside the doorway you came through -- close enough that the door
+  // is right behind you (the old 2.5 m left you marooned mid-room). Backing into
+  // the door never teleports (backward motion isn't an exit), and the forward-
+  // only trigger + 0.6 s spawn grace mean sitting in its box here is harmless.
+  // The mirrored "outside" spawn keeps the larger step-back onto the street.
+  const cap = inside ? 0.8 : 2.5;
+  const inset = Math.min(cap, Math.max(0.6, depthDim/2 - 0.3));
   let x, z, yaw;
   if(wall === 'north'){ x = offset; z = inside ? fixed+inset : fixed-inset; yaw = inside ? Math.PI : 0; }
   if(wall === 'south'){ x = offset; z = inside ? fixed-inset : fixed+inset; yaw = inside ? 0 : Math.PI; }
@@ -4082,11 +4088,13 @@ function removeSelectionVisuals(){
 function selectProp(roomKey, slotId){
   const slot = slotById(mergedRoom(roomKey), roomKey, slotId);
   if(!slot) return;
+  removeSelectionVisuals();   // clear a prior selection's outline/gear before re-highlighting
   selectedProp = { roomKey, slotId, kind: slot.kind, ground: !!slot.ground };
   attachSelectionVisuals();
   updateEditHud();
 }
 function selectSign(roomKey, buildingKey){
+  removeSelectionVisuals();   // clear a prior selection's outline/gear before re-highlighting
   selectedProp = { roomKey, kind: 'sign', buildingKey };
   attachSelectionVisuals();
   updateEditHud();
