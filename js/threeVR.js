@@ -2708,9 +2708,11 @@ function makeMoveDecorationMesh(move, sizeM){
   return new THREE.Mesh(new THREE.PlaneGeometry(sizeM, sizeM), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
 }
 
-// Hint over a forward door: a name placard for the room beyond, and -- when that
-// room has an opponent move -- a ~0.3m square decoration of that move mounted
-// beside the sign, flat on the wall facing into the room. Hidden by the hints
+// Hint over a forward door, stacked and centered on the doorway: a small name
+// plaque for the room beyond immediately above the lintel, and -- when the room
+// has an opponent move -- that move's mnemonic square above the plaque. The
+// plaque's vertical slot is reserved even when the room is unnamed, so the
+// mnemonic sits at a consistent height over every door. Hidden by the hints
 // toggle for self-test.
 function buildDoorHint(size, wall, offset, targetKey){
   const group = new THREE.Group();
@@ -2718,18 +2720,28 @@ function buildDoorHint(size, wall, offset, targetKey){
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
-  const y = DOOR_H + 1.25;   // raised to clear the now-~4x-larger signs
-  // mount a mesh flat on this wall at `along` (the wall-axis coordinate), facing in
-  const mount = (mesh, along) => {
-    if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
-    if(wall === 'south'){ mesh.position.set(along, y, fixed - clearance); mesh.rotation.y = Math.PI; }
-    if(wall === 'west'){  mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI/2; }
-    if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
+  // stacked layout, all centered horizontally on the door (`offset`):
+  const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
+  const NAME_H = NAME_W * 0.33 / 0.9;     // keep makeNameSignMesh's plane aspect
+  const MOVE_SIZE = 1.17;                 // mnemonic square (unchanged size)
+  const GAP = 0.12;                       // door↔plaque and plaque↔mnemonic gap
+  const nameY = DOOR_H + GAP + NAME_H / 2;                         // just above the door
+  const moveY = DOOR_H + GAP + NAME_H + GAP + MOVE_SIZE / 2;       // above the plaque's slot
+  // mount a mesh flat on this wall at wall-axis `along`, height `my`, facing in
+  const mount = (mesh, along, my) => {
+    if(wall === 'north'){ mesh.position.set(along, my, fixed + clearance); mesh.rotation.y = 0; }
+    if(wall === 'south'){ mesh.position.set(along, my, fixed - clearance); mesh.rotation.y = Math.PI; }
+    if(wall === 'west'){  mesh.position.set(fixed + clearance, my, along); mesh.rotation.y = Math.PI/2; }
+    if(wall === 'east'){  mesh.position.set(fixed - clearance, my, along); mesh.rotation.y = -Math.PI/2; }
     group.add(mesh);
   };
-  // ~4x larger (another 30% over the previous 3x) so door hints read from afar
-  if(name){ const m = makeNameSignMesh(name); m.scale.set(3.9, 3.9, 1); mount(m, offset - (move ? 1.0 : 0)); }
-  if(move) mount(makeMoveDecorationMesh(move, 1.17), offset + (name ? 2.15 : 0));
+  if(name){
+    const m = makeNameSignMesh(name);
+    const s = NAME_W / 0.9;               // scale the 0.9x0.33 plane to NAME_W wide
+    m.scale.set(s, s, 1);
+    mount(m, offset, nameY);
+  }
+  if(move) mount(makeMoveDecorationMesh(move, MOVE_SIZE), offset, moveY);
   return group;
 }
 
