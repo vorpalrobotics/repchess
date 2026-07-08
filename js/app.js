@@ -778,8 +778,12 @@ function buildGeneratedCastle(line, games, rootSeq){
       let o = 1;
       for(let m = 1; m < g.members.length; m++){ const p = pairFor(g.members[m], 'left', o); if(p){ pairs.push(p); o++; } }
     }
+    // the pref that stores this room's name lives one ply back from the anchor's
+    // seq (see genRoomMeta) -- carried through so a VR rename can write the same
+    // idb item the Attributes → Room Name field edits.
+    const nameSeq = anchor.seq && anchor.seq.length ? anchor.seq.slice(0, -1) : null;
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             memberCount: g.members.length, walls, exits, pairs };
+             nameSeq, memberCount: g.members.length, walls, exits, pairs };
   });
 
   return { genRooms, stats: a, graph };
@@ -797,6 +801,33 @@ const sanitizeKeyPart = s => String(s || '').replace(/[^a-zA-Z0-9]/g, '_');
 const castleInstanceId = (lineId, castleName) =>
   castleName ? `${sanitizeKeyPart(lineId)}_${sanitizeKeyPart(castleName)}` : 'preview';
 const castleRoomKey = (instanceId, posKey) => `cas:${instanceId}:${sanitizeKeyPart(posKey)}`;
+// Map every VR room key to the pref that stores its name, so a rename done in
+// the VR walk edits the SAME idb item as the node's Attributes → Room Name.
+// castleList entries: { lineId, instanceId, genRooms }.
+function buildRoomNameIndex(castleList){
+  const index = {};
+  for(const c of castleList || []){
+    for(const r of (c && c.genRooms) || []){
+      if(!r.nameSeq) continue;
+      index[castleRoomKey(c.instanceId, r.posKey)] = { lineId: c.lineId, nameSeq: r.nameSeq };
+    }
+  }
+  return index;
+}
+// A callback handed to the VR walk: persist a room rename onto its shared pref
+// and keep the open line's in-memory PREFS in sync so the tree/Attributes
+// modal reflect it live.
+function makeRoomRenamer(index){
+  return async (roomKey, name) => {
+    const t = index[roomKey];
+    if(!t || !t.nameSeq) return;
+    await setPref(t.lineId, t.nameSeq, { name });
+    if(CURRENT_LINE && t.lineId === CURRENT_LINE.id){
+      const k = prefKey(t.lineId, t.nameSeq);
+      (PREFS[k] ??= { key:k, lineId:t.lineId, seq:t.nameSeq, reply:'', note:'', mnemonic:'', hidden:false }).name = name;
+    }
+  };
+}
 function openCastleGenModal(games, seq){
   PENDING_CASTLE_GEN = { games, seq };
   $('castleGenWipe').checked = false;
@@ -1378,12 +1409,15 @@ $('castleWalkBtn').onclick = async () => {
   $('threeTestOverlay').style.display='flex';
   const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
   const systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
+  // same instance id the street flow uses, so decorations made during this
+  // preview land in (and load from) the same per-castle rooms
+  const instanceId = castleInstanceId(CURRENT_LINE?.id, LAST_GENERATED_CASTLE.genRooms[0]?.castle || '');
+  const roomNameIndex = buildRoomNameIndex([{ lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms }]);
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
-    // same instance id the street flow uses, so decorations made during this
-    // preview land in (and load from) the same per-castle rooms
-    castleInstanceId: castleInstanceId(CURRENT_LINE?.id, LAST_GENERATED_CASTLE.genRooms[0]?.castle || ''),
+    castleInstanceId: instanceId,
+    onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });
@@ -3301,6 +3335,7 @@ $('menuThreeTest').onclick = async ()=>{
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castles,
+    onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });

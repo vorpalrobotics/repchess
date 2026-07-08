@@ -347,6 +347,10 @@ function registerOneCastle(castle, instanceId, opts = {}){
     const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
     ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack,
+      // the node's "Room Name" attribute (r.name), the same value edited in the
+      // tree's Attributes modal -- seeded here so the VR walk shows it and, when
+      // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
+      name: r.name || '',
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -555,6 +559,24 @@ function setRoomGeom(roomKey, geom){
     const r = ensureRoomLayout(roomKey);
     r.geom = geom;
   });
+}
+// A room's display name: the node's "Room Name" attribute, held live on
+// ROOMS[key].name (seeded from r.name at registration, updated in place on an
+// in-world rename). '' means unnamed -- callers fall back to the move/title.
+function roomNameFor(roomKey){
+  const n = ROOMS[roomKey] && ROOMS[roomKey].name;
+  return (n && String(n).trim()) || '';
+}
+// Name (or rename) a room from the VR walk. This edits the SAME item as the
+// tree's Attributes → Room Name: we update the live ROOMS entry and hand the
+// change to threeOpts.onRoomRename (wired by app.js) to persist it onto the
+// room's pref. Then rebuild the current room so its forward-door nameplates
+// (buildDoorHint reads the beyond-room's name) update immediately.
+function setRoomName(roomKey, name){
+  name = (name || '').trim();
+  if(ROOMS[roomKey]) ROOMS[roomKey].name = name;
+  if(typeof threeOpts.onRoomRename === 'function') threeOpts.onRoomRename(roomKey, name);
+  if(scene) buildRoom(currentRoomKey);
 }
 // commits a room-geometry-dialog session in one rebuild: the width/depth/
 // height patch plus any door moves and/or type changes (keyed by target
@@ -1703,14 +1725,17 @@ function applyAccessoryTransform(obj, room, slot, asset, xform){
     // one on the floor means raising it by half its height
     const x = slot.x + (xform.dx || 0), z = slot.z + (xform.dz || 0);
     const floorY = floorHeightAt(room, z);
+    // a move-object can be lifted off the floor (xform.dy); ordinary floor props
+    // rest on the floor and simply carry dy === 0.
+    const lift = xform.dy || 0;
     const flat = asset.type === 'extruded' && asset.orientation === 'flat';
     if(flat){
       // a flat floor covering rests on its thickness, not its (now-horizontal) height
       const d = ((asset.size && asset.size.d) || 0.3) * scale;
-      obj.position.set(x, floorY + d/2, z);
+      obj.position.set(x, floorY + d/2 + lift, z);
     } else {
       const h = ((asset.size && asset.size.h) || 1) * scale;
-      obj.position.set(x, floorY + h/2, z);
+      obj.position.set(x, floorY + h/2 + lift, z);
     }
     // Extruded props face a FIXED default -- the entrance wall (image side is
     // local -z), so they greet you on the way in without swinging to track
@@ -2021,7 +2046,9 @@ function buildMoveObjectSubtitle(slot, word, xform){
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   sprite.scale.set(0.95, 0.24, 1);
-  sprite.position.set(slot.x + (xform.dx || 0), 0.28, slot.z + (xform.dz || 0));
+  // follow the object's nudge (dx/dz) and any lift (dy) so the caption stays a
+  // fixed gap beneath the picture even when the object is raised off the floor.
+  sprite.position.set(slot.x + (xform.dx || 0), 0.28 + (xform.dy || 0), slot.z + (xform.dz || 0));
   // no userData.kind -> findInteractive() skips it, so it never intercepts an
   // edit-mode click meant for the object above it (purely decorative caption).
   sprite.userData = { decorative: true };
@@ -2666,7 +2693,7 @@ function makeMoveDecorationMesh(move, sizeM){
 // toggle for self-test.
 function buildDoorHint(size, wall, offset, targetKey){
   const group = new THREE.Group();
-  const name = (ROOMS[targetKey] && ROOMS[targetKey].name) || '';
+  const name = roomNameFor(targetKey);
   const move = mnemOpponentMove(targetKey);
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
@@ -3838,20 +3865,27 @@ function tick(){
   if(keys['ArrowUp']   || keys['w'] || keys['W']) move += 1;
   if(keys['ArrowDown'] || keys['s'] || keys['S']) move -= 1;
 
+  // strafe (sidestep without turning): q left, e right
+  let strafe = 0;
+  if(keys['q'] || keys['Q']) strafe -= 1;
+  if(keys['e'] || keys['E']) strafe += 1;
+
   // touch joystick (mobile): x turns, y walks -- same axes as the keys above
   if(!inputLocked){ turn -= joyVec.x; move += joyVec.y; }
   turn = Math.max(-1, Math.min(1, turn));
   move = Math.max(-1, Math.min(1, move));
+  strafe = Math.max(-1, Math.min(1, strafe));
 
   yaw += turn * TURN_SPEED * dt;
-  if(move !== 0 && !inputLocked){
+  if((move !== 0 || strafe !== 0) && !inputLocked){
     const room = mergedRoom(currentRoomKey);
     // outdoors covers much more ground, so walk 50% faster out there; interiors
     // keep the base speed.
     const speed = room.outdoor ? MOVE_SPEED * 1.5 : MOVE_SPEED;
-    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw))
-    pos.x += -Math.sin(yaw) * move * speed * dt;
-    pos.z += -Math.cos(yaw) * move * speed * dt;
+    // camera forward vector for rotation.y = yaw is (-sin(yaw), -cos(yaw)); the
+    // right vector (for q/e strafing) is (cos(yaw), -sin(yaw)).
+    pos.x += (-Math.sin(yaw) * move + Math.cos(yaw) * strafe) * speed * dt;
+    pos.z += (-Math.cos(yaw) * move - Math.sin(yaw) * strafe) * speed * dt;
     let clamped = clampToRoom(room.size, pos.x, pos.z);
     if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
     if(room.twoTrack) clamped = clampOutOfDivider(room, clamped.x, clamped.z);
@@ -4093,15 +4127,20 @@ function nudgeSelected(key){
   if(kind === 'floor' || kind === 'moveObject'){
     // a move-object rests on the floor like a floor prop and nudges the same way
     // (camera-relative); a future leash will clamp it near its billboard.
+    // A move-object can also be lifted off the floor with h/l (or PageUp/PageDown)
+    // -- same vertical convention as a mnemonic billboard.
     const fwd = cameraForwardVec(), right = cameraRightVec();
-    let dx = xform.dx || 0, dz = xform.dz || 0;
+    let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
     if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
     if(key === 'ArrowLeft'){  dx -= right.x * NUDGE_STEP; dz -= right.z * NUDGE_STEP; }
     if(key === 'ArrowUp'){    dx += fwd.x * NUDGE_STEP;   dz += fwd.z * NUDGE_STEP; }
     if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
+    if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
+    if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
     const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
     xform.dx = clamped.x - slot.x;
     xform.dz = clamped.z - slot.z;
+    xform.dy = Math.max(0, dy);   // can't sink below the floor
   } else if(kind === 'wall'){
     let dOffset = xform.dOffset || 0, dY = xform.dY || 0;
     if(key === 'ArrowRight') dOffset += NUDGE_STEP;
@@ -4320,9 +4359,11 @@ function updateEditHud(){
     const resize = pct != null ? `  ·  Resize: ${pct}%` : '';
     editHud.textContent = (selectedProp.kind === 'mnemonic'
       ? 'SELECTED — arrows: move · h/l or PageUp/PageDown: height · +/-: scale · Esc: deselect'
-      : selectedProp.kind === 'sign'
-        ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
-        : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect') + resize;
+      : selectedProp.kind === 'moveObject'
+        ? 'SELECTED — arrows: nudge · h/l or PageUp/PageDown: height · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect'
+        : selectedProp.kind === 'sign'
+          ? 'SIGN SELECTED — arrows: move · Enter or gear icon: change/remove skin · Esc: deselect'
+          : 'SELECTED — arrows: nudge · < >: rotate · +/-: scale · Enter or gear icon: change/remove · Esc: deselect') + resize;
     editHud.style.display = 'block';
     return;
   }
@@ -4474,7 +4515,7 @@ function buildHelpOverlay(){
     <div style="background:#fff;color:#222;max-width:32em;width:88%;max-height:84%;overflow:auto;
                 border-radius:8px;padding:1rem 1.2rem;font:400 .9rem/1.45 sans-serif">
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
-      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
+      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
@@ -4512,6 +4553,7 @@ function updateEditTouchControls(){
   editTouchEl.style.display = 'block';
   const mnem = selectedProp.kind === 'mnemonic';
   const sign = selectedProp.kind === 'sign';
+  const moveObj = selectedProp.kind === 'moveObject';
 
   // directional pad, bottom-right (a + arrangement with empty corners)
   const pad = document.createElement('div');
@@ -4525,7 +4567,7 @@ function updateEditTouchControls(){
   );
   editTouchEl.appendChild(pad);
 
-  // left cluster: scale, height (mnemonic only), change (assets only), done
+  // left cluster: scale, height (mnemonic + move-object), change (assets), done
   const col = document.createElement('div');
   col.style.cssText = 'position:absolute;left:10px;bottom:14px;display:flex;flex-direction:column;gap:6px;';
   const rowOf = (...els) => { const r = document.createElement('div'); r.style.cssText = 'display:flex;gap:6px'; r.append(...els); return r; };
@@ -4533,11 +4575,14 @@ function updateEditTouchControls(){
     makeTouchBtn('Bigger', () => scaleSelected(SCALE_STEP)),
     makeTouchBtn('Smaller', () => scaleSelected(1 / SCALE_STEP))
   ));
-  if(mnem) col.appendChild(rowOf(
+  // height controls: mnemonic billboards and move-objects can both be raised/lowered
+  if(mnem || moveObj) col.appendChild(rowOf(
     makeTouchBtn('Higher', () => nudgeSelected('PageUp')),
     makeTouchBtn('Lower', () => nudgeSelected('PageDown'))
   ));
-  else col.appendChild(rowOf(
+  // "Change" swaps the asset/skin -- available for everything except the
+  // asset-less mnemonic billboard (move-objects and signs included).
+  if(!mnem) col.appendChild(rowOf(
     makeTouchBtn('Change', () => openManagerForSelection())
   ));
   // rotate controls for a free-standing extruded floor prop (only this kind has
@@ -4805,6 +4850,24 @@ function renderRoomGeomDialog(ov, roomKey){
   const stairs = staticRoom.stairs || null;
   const buildings = staticRoom.buildings || [];
 
+  // The compound room keys (cas:<instance>:<FEN>) are far too long to read as a
+  // title or as door labels -- they overran the plan and the exit list. Collapse
+  // them to something human: the modal title uses the room's own sign title, and
+  // a doorway is labelled by the move that opens it (ex.label = the opponent
+  // reply), falling back to the target room's title or a truncated tail.
+  const roomTitle = roomNameFor(roomKey) || (ROOMS[roomKey] && ROOMS[roomKey].castleSign && ROOMS[roomKey].castleSign.title) || roomKey;
+  const exitShortLabel = ex => {
+    const named = roomNameFor(ex.target);
+    if(named) return named;                           // a name the user gave the room
+    if(ex.label) return ex.label;                     // else the move behind this door
+    if(ex.target === 'mainStreet') return 'Street';
+    if(ex.back) return 'Back';
+    const t = ROOMS[ex.target] && ROOMS[ex.target].castleSign && ROOMS[ex.target].castleSign.title;
+    if(t) return t;
+    const tail = String(ex.target).split(':').pop();
+    return tail.length > 12 ? tail.slice(0, 12) + '…' : tail;
+  };
+
   // staged door state: target room -> {wall, offset, type}, seeded from any
   // existing override (or the static position/type) and only committed on
   // Apply. Single-sided by construction -- this only ever edits roomKey's
@@ -4822,7 +4885,7 @@ function renderRoomGeomDialog(ov, roomKey){
   }
   const exitTypeRows = staticExits.map(ex => `
     <label style="display:flex;align-items:center;justify-content:space-between;font-size:.78rem;gap:.5rem;padding:.15rem 0">
-      <span>${ex.target}${ex.back ? ' ↩' : ''}</span>
+      <span title="${escHtml(ex.target)}">${escHtml(exitShortLabel(ex))}${ex.back ? ' ↩' : ''}</span>
       <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
         <option value="door" ${stagedExits[ex.target].type === 'door' ? 'selected' : ''}>Door</option>
         <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase</option>
@@ -4830,9 +4893,23 @@ function renderRoomGeomDialog(ov, roomKey){
       </select>
     </label>
   `).join('');
+  // "Room names" section: name THIS room and, more usefully, the room behind
+  // each forward door (back/exit doors are excluded). Naming a room edits the
+  // same "Room Name" pref the tree's Attributes modal does (via setRoomName ->
+  // onRoomRename), and surfaces as the door's in-world nameplate (buildDoorHint),
+  // on the plan, and as that room's own title -- so the walk can be laid out
+  // logically and each room themed to its name.
+  const nameRow = (target, chip, chipColor) => `
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;padding:.15rem 0">
+      <span title="${escHtml(target)}" style="min-width:3.6em;color:${chipColor};font-weight:600;text-align:right">${escHtml(chip)}</span>
+      <input type="text" data-room-name-for="${escHtml(target)}" value="${escHtml(roomNameFor(target))}" placeholder="name this room" style="flex:1;min-width:0;font-size:.78rem">
+    </label>`;
+  const forwardExits = staticExits.filter(ex => !ex.back);
+  const roomNameRows = nameRow(roomKey, 'This', '#555')
+    + forwardExits.map(ex => nameRow(ex.target, ex.label || 'door', '#2e7d32')).join('');
   ov.innerHTML = `
     <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
-      <h2>Room Geometry — ${roomKey}</h2>
+      <h2 title="${escHtml(roomKey)}">Room Geometry — ${escHtml(roomTitle)}</h2>
       <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.7rem">
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
           <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomW" value="${w}" style="width:6em">
@@ -4847,6 +4924,10 @@ function renderRoomGeomDialog(ov, roomKey){
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
+      <div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">
+        <div style="font-size:.72rem;color:#888;margin-bottom:.15rem">Room names — label the room behind each door to plan the walk and theme its decor.</div>
+        ${roomNameRows}
+      </div>
       <div id="roomGeomDefaultsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.5rem">${defaultsBoxHtml(roomKey)}</div>
       <div id="roomGeomPresetsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${presetsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
@@ -4870,6 +4951,15 @@ function renderRoomGeomDialog(ov, roomKey){
   for(const sel of ov.querySelectorAll('[data-exit-type-for]')){
     sel.addEventListener('change', () => {
       stagedExits[sel.dataset.exitTypeFor].type = sel.value;
+      drawPlan();
+    });
+  }
+  // room-name inputs: persist on commit (blur/Enter) and redraw the plan so the
+  // door's label updates to the new name straight away. setRoomName rebuilds the
+  // current room too, refreshing the in-world door nameplates.
+  for(const inp of ov.querySelectorAll('[data-room-name-for]')){
+    inp.addEventListener('change', () => {
+      setRoomName(inp.dataset.roomNameFor, inp.value);
       drawPlan();
     });
   }
@@ -4980,7 +5070,7 @@ function renderRoomGeomDialog(ov, roomKey){
       if(pos.wall === 'east'){  const cz = pz(pos.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
       ctx.stroke();
       ctx.setLineDash([]);
-      const label = ex.target + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
+      const label = exitShortLabel(ex) + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
       ctx.fillStyle = dragging ? '#7a4a00' : labelColor;
       ctx.fillText(label, lx, ly);
     }
@@ -5171,7 +5261,9 @@ function onKeyDown(e){
       nudgeSelected(e.key);
       return;
     }
-    if(selectedProp.kind === 'mnemonic' &&
+    // h/l (or PageUp/PageDown) raise/lower the height: mnemonic billboards float
+    // free, and a move-object can be lifted off the floor the same way.
+    if((selectedProp.kind === 'mnemonic' || selectedProp.kind === 'moveObject') &&
        (e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'h' || e.key === 'H' || e.key === 'l' || e.key === 'L')){
       nudgeSelected(e.key);
       return;
@@ -5183,8 +5275,9 @@ function onKeyDown(e){
     if(e.key === '>' || e.key === '.'){ rotateSelected(1); return; }
     return; // swallow everything else while a prop is selected (no walking/turning)
   }
-  // 'e' is intentionally NOT an edit-mode shortcut (too close to 'w'); use the
-  // pencil toolbar button. Esc still exits edit mode.
+  // 'e' strafes right (q/e sidestep, handled via the keys map in tick), so it's
+  // deliberately NOT an edit-mode shortcut; use the pencil toolbar button. Esc
+  // still exits edit mode.
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
   if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
   keys[e.key] = true;
