@@ -892,6 +892,11 @@ function setSlotXformLive(roomKey, slotId, xform){
   } else {
     const asset = slotAssetFor(roomKey, slotId);
     if(asset) applyAccessoryTransform(obj, room, slot, asset, xform);
+    // an image-backed move-object (hints on) has a decorative word caption that
+    // isn't the 'accessory' mesh above; drag it along so it doesn't lag the
+    // picture during a live nudge (it otherwise only catches up on a rebuild).
+    const cap = findSubtitleObject(slotId);
+    if(cap){ const p = moveObjectSubtitlePos(slot, xform); cap.position.set(p.x, p.y, p.z); }
   }
   refreshSelectionVisuals();
 }
@@ -899,6 +904,13 @@ function findAccessoryObject(slotId){
   let obj = null;
   if(scene) scene.traverse(o => {
     if(!obj && o.userData && o.userData.kind === 'accessory' && o.userData.slotId === slotId) obj = o;
+  });
+  return obj;
+}
+function findSubtitleObject(slotId){
+  let obj = null;
+  if(scene) scene.traverse(o => {
+    if(!obj && o.userData && o.userData.subtitleFor === slotId) obj = o;
   });
   return obj;
 }
@@ -2046,13 +2058,22 @@ function buildMoveObjectSubtitle(slot, word, xform){
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   sprite.scale.set(0.95, 0.24, 1);
-  // follow the object's nudge (dx/dz) and any lift (dy) so the caption stays a
-  // fixed gap beneath the picture even when the object is raised off the floor.
-  sprite.position.set(slot.x + (xform.dx || 0), 0.28 + (xform.dy || 0), slot.z + (xform.dz || 0));
+  const p = moveObjectSubtitlePos(slot, xform);
+  sprite.position.set(p.x, p.y, p.z);
   // no userData.kind -> findInteractive() skips it, so it never intercepts an
   // edit-mode click meant for the object above it (purely decorative caption).
-  sprite.userData = { decorative: true };
+  // subtitleFor lets setSlotXformLive re-place it live during a nudge (it isn't
+  // the 'accessory' mesh, so findAccessoryObject wouldn't catch it).
+  sprite.userData = { decorative: true, subtitleFor: slot.id };
   return sprite;
+}
+// Caption sits a fixed gap beneath the move-object's spot, following the
+// object's horizontal nudge (dx/dz) and any lift (dy) so picture and word stay
+// paired even when raised off the floor. Shared by the builder and the live
+// nudge path so the two never drift.
+function moveObjectSubtitlePos(slot, xform){
+  xform = xform || {};
+  return { x: slot.x + (xform.dx || 0), y: 0.28 + (xform.dy || 0), z: slot.z + (xform.dz || 0) };
 }
 
 function wallSpan(size, wall){
