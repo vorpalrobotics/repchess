@@ -4088,11 +4088,13 @@ function removeSelectionVisuals(){
 function selectProp(roomKey, slotId){
   const slot = slotById(mergedRoom(roomKey), roomKey, slotId);
   if(!slot) return;
+  removeSelectionVisuals();   // clear a prior selection's outline/gear before re-highlighting
   selectedProp = { roomKey, slotId, kind: slot.kind, ground: !!slot.ground };
   attachSelectionVisuals();
   updateEditHud();
 }
 function selectSign(roomKey, buildingKey){
+  removeSelectionVisuals();   // clear a prior selection's outline/gear before re-highlighting
   selectedProp = { roomKey, kind: 'sign', buildingKey };
   attachSelectionVisuals();
   updateEditHud();
