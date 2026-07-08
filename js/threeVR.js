@@ -333,7 +333,8 @@ function registerOneCastle(castle, instanceId, opts = {}){
     // (leave via the Close button).
     if(parent[r.posKey]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.posKey]), back: true });
     else if(r === entry && opts.backToStreet) exits.push({ wall: 'south', offset: 0, target: 'mainStreet', back: true });
-    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.toKey), label: dp.ex.opp });
+    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.toKey),
+                                                 label: dp.ex.opp, pair: dp.ex.pair });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -351,6 +352,10 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
       name: r.name || '',
+      // the entry room keeps its centre pair in-room for now: no interior door
+      // leads to it, so until the pair moves outside to the mansion's street door
+      // (a later phase) there'd be nowhere else to show it.
+      isEntry: r === entry,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -1911,6 +1916,11 @@ function buildYardPatch(b, roomKey, buildingKey){
 // marker (only in edit mode, so normal walking is unchanged).
 function buildSlots(room, roomKey, slots){
   for(const slot of slots){
+    // the room's centre/anchor pair no longer renders in-room -- it now lives at
+    // the door(s) leading INTO this room (buildDoorPair, drawn from the parent).
+    // Left/right run pairs still line the walls. (Kept in roomSlots so slot ids
+    // and object-list indexing are unchanged.)
+    if((slot.kind === 'mnemonic' || slot.kind === 'moveObject') && slot.side === 'center' && !room.isEntry) continue;
     if(slot.kind === 'mnemonic'){
       if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
       continue;
@@ -2270,6 +2280,20 @@ function elevatorBillboardPos(room, wall, offset){
   const side = DOOR_W/2 + 0.2, inset = 0.6;
   return { x: dcx + V.rx*side + V.ix*inset, y: 1.5, z: dcz + V.rz*side + V.iz*inset };
 }
+// a spot just to one side of a doorway and a little into the room, for the
+// door-side move-pair. sideSign -1 = the player's left as they face the door
+// (where the pair goes), +1 = right. Mirrors elevatorBillboardPos' wall math.
+function doorSideXZ(room, wall, offset, sideSign){
+  const { axis, fixed } = wallSpan(room.size, wall);
+  const dcx = axis === 'x' ? offset : fixed;
+  const dcz = axis === 'x' ? fixed : offset;
+  const V = {
+    north: { rx: 1, rz: 0, ix: 0, iz: 1 }, south: { rx:-1, rz: 0, ix: 0, iz:-1 },
+    west:  { rx: 0, rz:-1, ix: 1, iz: 0 }, east:  { rx: 0, rz: 1, ix:-1, iz: 0 }
+  }[wall];
+  const side = (DOOR_W/2 + 0.6) * sideSign, inset = 0.7;
+  return { x: dcx + V.rx*side + V.ix*inset, z: dcz + V.rz*side + V.iz*inset };
+}
 // the opponent (upper) move of a room's pair, used by door hints / elevator
 // floor labels. Handles both the single-pair shape and a multi-pair room (falls
 // back to the first pair).
@@ -2554,14 +2578,13 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
 // placeSlotAccessory). Both moves of the pair are composited onto a single
 // 1.5m x 1.5m billboard -- see DEMO_MNEMONICS comment above for why this
 // replaced two independently camera-facing sprites.
-function placeMnemonicSlot(roomKey, slot){
-  const xform = slotXformFor(roomKey, slot.id) || {};
-  const pair = slot.pair;
-  const mat = new THREE.SpriteMaterial({ color: 0xffffff, transparent: true });
-  const sprite = new THREE.Sprite(mat);
-  sprite.userData = { kind: 'accessory', slotId: slot.id, userScale: xform.scale || 1 };
-  sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
-  // immediate fallback (algebraic notation in both quadrants) while mnemonic data loads
+// builds just the composite move-pair billboard sprite (opponent + response),
+// with the immediate notation fallback plus the async graphic/word resolve.
+// Position and interactive userData are the caller's job -- shared by the
+// in-room mnemonic slots and the new door-side pairs.
+function buildMnemPairSprite(pair, userScale){
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
+  sprite.userData.userScale = userScale || 1;
   renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san });
   const myGen = buildGeneration;
   Promise.all([getAllMnemonics(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
@@ -2574,6 +2597,14 @@ function placeMnemonicSlot(roomKey, slot){
       renderMnemPairCanvas(sprite, oppContent, respContent, beardImg);
     });
   });
+  return sprite;
+}
+function placeMnemonicSlot(roomKey, slot){
+  const xform = slotXformFor(roomKey, slot.id) || {};
+  const sprite = buildMnemPairSprite(slot.pair, xform.scale || 1);
+  sprite.userData.kind = 'accessory';
+  sprite.userData.slotId = slot.id;
+  sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
   return sprite;
 }
 
@@ -2708,40 +2739,73 @@ function makeMoveDecorationMesh(move, sizeM){
   return new THREE.Mesh(new THREE.PlaneGeometry(sizeM, sizeM), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
 }
 
-// Hint over a forward door, stacked and centered on the doorway: a small name
-// plaque for the room beyond immediately above the lintel, and -- when the room
-// has an opponent move -- that move's mnemonic square above the plaque. The
-// plaque's vertical slot is reserved even when the room is unnamed, so the
-// mnemonic sits at a consistent height over every door. Hidden by the hints
-// toggle for self-test.
+// Hint over a forward door: just the small name plaque for the room beyond,
+// immediately above the lintel, centered on the doorway. (The opponent-move icon
+// that used to sit above it is gone -- the move now lives in the door-side pair,
+// buildDoorPair, so it'd be redundant.) Hidden by the hints toggle for self-test.
 function buildDoorHint(size, wall, offset, targetKey){
   const group = new THREE.Group();
   const name = roomNameFor(targetKey);
-  const move = mnemOpponentMove(targetKey);
+  if(!name) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
-  // stacked layout, all centered horizontally on the door (`offset`):
   const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
   const NAME_H = NAME_W * 0.33 / 0.9;     // keep makeNameSignMesh's plane aspect
-  const MOVE_SIZE = 1.17;                 // mnemonic square (unchanged size)
-  const GAP = 0.12;                       // door↔plaque and plaque↔mnemonic gap
-  const nameY = DOOR_H + GAP + NAME_H / 2;                         // just above the door
-  const moveY = DOOR_H + GAP + NAME_H + GAP + MOVE_SIZE / 2;       // above the plaque's slot
-  // mount a mesh flat on this wall at wall-axis `along`, height `my`, facing in
-  const mount = (mesh, along, my) => {
-    if(wall === 'north'){ mesh.position.set(along, my, fixed + clearance); mesh.rotation.y = 0; }
-    if(wall === 'south'){ mesh.position.set(along, my, fixed - clearance); mesh.rotation.y = Math.PI; }
-    if(wall === 'west'){  mesh.position.set(fixed + clearance, my, along); mesh.rotation.y = Math.PI/2; }
-    if(wall === 'east'){  mesh.position.set(fixed - clearance, my, along); mesh.rotation.y = -Math.PI/2; }
-    group.add(mesh);
-  };
-  if(name){
-    const m = makeNameSignMesh(name);
-    const s = NAME_W / 0.9;               // scale the 0.9x0.33 plane to NAME_W wide
-    m.scale.set(s, s, 1);
-    mount(m, offset, nameY);
+  const GAP = 0.12;                       // gap between the door top and the plaque
+  const nameY = DOOR_H + GAP + NAME_H / 2;
+  const m = makeNameSignMesh(name);
+  const s = NAME_W / 0.9;                 // scale the 0.9x0.33 plane to NAME_W wide
+  m.scale.set(s, s, 1);
+  if(wall === 'north'){ m.position.set(offset, nameY, fixed + clearance); m.rotation.y = 0; }
+  if(wall === 'south'){ m.position.set(offset, nameY, fixed - clearance); m.rotation.y = Math.PI; }
+  if(wall === 'west'){  m.position.set(fixed + clearance, nameY, offset); m.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  m.position.set(fixed - clearance, nameY, offset); m.rotation.y = -Math.PI/2; }
+  group.add(m);
+  return group;
+}
+// Phase 1: the move-pair + object for the room BEYOND a forward door, placed to
+// the player's LEFT of the door facing in, replacing that room's old central
+// pair. The billboard is the door's edge-specific pair (ex.pair) so transposition
+// doors show their own last move; the object is the target room's head object
+// (obj-C1) -- the same clue at every door into that position -- resolved from a
+// manual override or the target room's assigned list, and assign/replace/clear-
+// able in place (userData kind 'door-obj', owned by the target room).
+function buildDoorPair(room, wall, offset, ex){
+  const group = new THREE.Group();
+  const target = ex.target;
+  const { x, z } = doorSideXZ(room, wall, offset, -1);   // player's left of the door
+  const pair = ex.pair
+    || (DEMO_MNEMONICS[target] && DEMO_MNEMONICS[target].pairs
+        && DEMO_MNEMONICS[target].pairs.find(p => p.side === 'center'))
+    || null;
+  if(hintsOn && pair){                                    // billboard hides on self-test
+    const bb = buildMnemPairSprite(pair, 1);
+    bb.position.set(x, MNEM_EYE_Y, z);
+    group.add(bb);
   }
-  if(move) mount(makeMoveDecorationMesh(move, MOVE_SIZE), offset, moveY);
+  // the room-beyond's head object: manual override, else its assigned list item.
+  const headSlot = moveObjectSlots(target).find(s => s.side === 'center');
+  const slotId = headSlot ? headSlot.id : 'obj-C1';
+  let asset = slotAssetFor(target, slotId), word = null;
+  if(!asset && headSlot){
+    const r = moveObjectListResolved(target, headSlot);
+    if(r){ asset = r.asset; word = r.word; }
+  }
+  const ud = { kind: 'door-obj', ownerRoomKey: target, slotId, allow: PROP_TYPES };
+  if(asset){
+    const obj = buildPropAsset(asset);
+    applyAccessoryTransform(obj, room, { kind: 'moveObject', x, z }, asset, {});
+    obj.userData = ud;
+    group.add(obj);
+  } else if(word && hintsOn){
+    const label = buildMoveObjectWordLabel({ x, y: MNEM_OBJ_Y, z, id: slotId }, word);
+    label.userData = ud;
+    group.add(label);
+  } else if(editMode){                                   // empty slot: a clickable stand-in to fill
+    const ph = buildMoveObjectPlaceholder({ x, y: MNEM_OBJ_Y, z, tag: '?', id: slotId });
+    ph.userData = ud;
+    group.add(ph);
+  }
   return group;
 }
 
@@ -3617,8 +3681,11 @@ function buildRoom(roomKey){
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
           if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey));
-          // forward-door hint: name (and move thumbnail) of the room beyond
+          // forward-door hint: name plaque above the door, and the move-pair +
+          // object for the room beyond, to the left of the door. The pair is
+          // hint-gated inside buildDoorPair; a filled object stays for self-test.
           if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target));
+          if(!ex.back) scene.add(buildDoorPair(room, wall, ex.offset, ex));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
       }
@@ -4291,6 +4358,21 @@ function handleEditTarget(ud){
   if(ud.kind === 'accessory'){
     if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
     else selectProp(roomKey, ud.slotId);
+    return;
+  }
+  // the object beside a door belongs to the room BEYOND it (ud.ownerRoomKey);
+  // clicking assigns/replaces/clears its image there, so it updates at every
+  // door into that room. (Positioning is door-derived, so no nudge/scale here.)
+  if(ud.kind === 'door-obj'){
+    inputLocked = true;
+    const owner = ud.ownerRoomKey;
+    const current = slotAssetFor(owner, ud.slotId);
+    openAssetPicker({
+      allow: ud.allow || PROP_TYPES, allowRemove: !!current,
+      onClose: () => { inputLocked = false; },
+      onPick: id => setSlotOverride(owner, ud.slotId, id),
+      onRemove: () => setSlotOverride(owner, ud.slotId, null)
+    });
     return;
   }
   if(ud.kind === 'sign'){
