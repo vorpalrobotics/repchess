@@ -352,10 +352,11 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
       name: r.name || '',
-      // the entry room keeps its centre pair in-room for now: no interior door
-      // leads to it, so until the pair moves outside to the mansion's street door
-      // (a later phase) there'd be nowhere else to show it.
-      isEntry: r === entry,
+      // the entry room's centre pair moves out to the mansion's street door
+      // (buildStreetEntryPair). Only a street-less entry -- the report's single-
+      // castle "Walk in VR" preview, which spawns straight inside with no
+      // building -- keeps its centre pair in-room (nowhere else to show it).
+      entryNoStreet: r === entry && !opts.backToStreet,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -1920,7 +1921,7 @@ function buildSlots(room, roomKey, slots){
     // the door(s) leading INTO this room (buildDoorPair, drawn from the parent).
     // Left/right run pairs still line the walls. (Kept in roomSlots so slot ids
     // and object-list indexing are unchanged.)
-    if((slot.kind === 'mnemonic' || slot.kind === 'moveObject') && slot.side === 'center' && !room.isEntry) continue;
+    if((slot.kind === 'mnemonic' || slot.kind === 'moveObject') && slot.side === 'center' && !room.entryNoStreet) continue;
     if(slot.kind === 'mnemonic'){
       if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
       continue;
@@ -2763,33 +2764,36 @@ function buildDoorHint(size, wall, offset, targetKey){
   group.add(m);
   return group;
 }
-// Phase 1: the move-pair + object for the room BEYOND a forward door, placed to
-// the player's LEFT of the door facing in, replacing that room's old central
-// pair. The billboard is the door's edge-specific pair (ex.pair) so transposition
-// doors show their own last move; the object is the target room's head object
-// (obj-C1) -- the same clue at every door into that position -- resolved from a
-// manual override or the target room's assigned list, and assign/replace/clear-
-// able in place (userData kind 'door-obj', owned by the target room).
-function buildDoorPair(room, wall, offset, ex){
-  const group = new THREE.Group();
-  const target = ex.target;
-  const { x, z } = doorSideXZ(room, wall, offset, -1);   // player's left of the door
-  const pair = ex.pair
+// resolves the move-pair billboard + head-object content for the room BEYOND a
+// door/entrance. exPair (edge-specific) wins for the billboard; else the target's
+// canonical head pair. The object is the target's head object (obj-C1): a manual
+// override, else the target room's assigned list item.
+function doorPairContent(target, exPair){
+  const pair = exPair
     || (DEMO_MNEMONICS[target] && DEMO_MNEMONICS[target].pairs
         && DEMO_MNEMONICS[target].pairs.find(p => p.side === 'center'))
     || null;
-  if(hintsOn && pair){                                    // billboard hides on self-test
-    const bb = buildMnemPairSprite(pair, 1);
-    bb.position.set(x, MNEM_EYE_Y, z);
-    group.add(bb);
-  }
-  // the room-beyond's head object: manual override, else its assigned list item.
   const headSlot = moveObjectSlots(target).find(s => s.side === 'center');
   const slotId = headSlot ? headSlot.id : 'obj-C1';
   let asset = slotAssetFor(target, slotId), word = null;
   if(!asset && headSlot){
     const r = moveObjectListResolved(target, headSlot);
     if(r){ asset = r.asset; word = r.word; }
+  }
+  return { pair, asset, word, slotId };
+}
+// builds the move-pair billboard (eye height) + head object (on the floor) for a
+// room beyond a door, at world (x,z) within `room`. The billboard is hint-gated;
+// a filled object stays for self-test. The object is assign/replace/clear-able in
+// place (userData 'door-obj', owned by the target room) so it edits identically
+// at every door into that position.
+function buildPairAt(room, x, z, target, exPair){
+  const group = new THREE.Group();
+  const { pair, asset, word, slotId } = doorPairContent(target, exPair);
+  if(hintsOn && pair){
+    const bb = buildMnemPairSprite(pair, 1);
+    bb.position.set(x, MNEM_EYE_Y, z);
+    group.add(bb);
   }
   const ud = { kind: 'door-obj', ownerRoomKey: target, slotId, allow: PROP_TYPES };
   if(asset){
@@ -2807,6 +2811,25 @@ function buildDoorPair(room, wall, offset, ex){
     group.add(ph);
   }
   return group;
+}
+// Phase 1: the pair/object for the room BEYOND a forward interior door, to the
+// player's LEFT of the door, replacing that room's old central pair.
+function buildDoorPair(room, wall, offset, ex){
+  const { x, z } = doorSideXZ(room, wall, offset, -1);
+  return buildPairAt(room, x, z, ex.target, ex.pair);
+}
+// Phase 2: the entry (mansion-root) room's pair/object out on the street, beside
+// the building's front door -- that room's centre pair now lives here rather than
+// inside the foyer. Placed to one side of the door and a bit out onto the street.
+function buildStreetEntryPair(room, b, size){
+  const { axis, fixed } = wallSpan(size, b.doorWall);    // `size` = the door-bearing box
+  const along = b.doorOffset - (DOOR_W/2 + 0.9);         // just to one side of the door
+  const out = WALL_OUT_NORMAL[b.doorWall];
+  const clear = 1.8;                                     // out onto the street, past the facade
+  let x, z;
+  if(axis === 'x'){ x = b.origin.x + along;               z = b.origin.z + fixed + out.z * clear; }
+  else            { z = b.origin.z + along;               x = b.origin.x + fixed + out.x * clear; }
+  return buildPairAt(room, x, z, b.target, null);
 }
 
 // Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
@@ -3853,6 +3876,9 @@ function buildRoom(roomKey){
 
       // yard landscaping: trees / bushes / flowers / bird baths flanking the door
       buildSlots(room, roomKey, yardSlots(b, buildingKey));
+      // the entry room's move-pair + object, out here by the front door instead
+      // of inside the foyer (its centre pair is suppressed in-room, below).
+      scene.add(buildStreetEntryPair(room, b, size));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       // entering a building means walking TOWARD it -- the opposite of a room's
