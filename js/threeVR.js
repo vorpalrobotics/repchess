@@ -897,6 +897,14 @@ function setSlotXformLive(roomKey, slotId, xform){
     refreshSelectionVisuals();
     return;
   }
+  if(obj.userData.doorBill){
+    const b = obj.userData.base;
+    obj.position.set(b.x + (xform.dx || 0), b.y + (xform.dy || 0), b.z + (xform.dz || 0));
+    obj.userData.userScale = xform.scale || 1;
+    applySpriteContentScale(obj);
+    refreshSelectionVisuals();
+    return;
+  }
   const slot = slotById(room, roomKey, slotId);
   if(!slot) return;
   if(slot.kind === 'mnemonic'){
@@ -2801,8 +2809,18 @@ function buildPairAt(roomKey, room, x, z, target, exPair){
   const group = new THREE.Group();
   const { pair, asset, word, slotId } = doorPairContent(target, exPair);
   if(hintsOn && pair){
-    const bb = buildMnemPairSprite(pair, 1);
-    bb.position.set(x, MNEM_EYE_Y, z);
+    // the pair billboard is selectable + movable like the old in-room one: its
+    // per-door position/height/scale live in this room's slotXform under
+    // `dbb-<target>`, base pos on userData (no roomSlots entry).
+    const bbId = 'dbb-' + target;
+    const xf = slotXformFor(roomKey, bbId) || {};
+    const bb = buildMnemPairSprite(pair, xf.scale || 1);
+    bb.userData.kind = 'accessory';
+    bb.userData.slotId = bbId;
+    bb.userData.doorBill = true;
+    bb.userData.roomKey = roomKey;
+    bb.userData.base = { x, y: MNEM_EYE_Y, z };
+    bb.position.set(x + (xf.dx || 0), MNEM_EYE_Y + (xf.dy || 0), z + (xf.dz || 0));
     group.add(bb);
   }
   const doorId = 'dobj-' + target;                        // per-door transform key in this room
@@ -4163,6 +4181,7 @@ function attachSelectionVisuals(){
   // a rebuilt door object gets fresh userData -- keep the selection's base/asset
   // in sync so rotation and re-placement use the current values.
   if(found.userData.doorObj){ selectedProp.base = found.userData.base; selectedProp.asset = found.userData.asset; }
+  else if(found.userData.doorBill){ selectedProp.base = found.userData.base; }
   const box = new THREE.Box3().setFromObject(found);
   const size = new THREE.Vector3(); box.getSize(size);
   const center = new THREE.Vector3(); box.getCenter(center);
@@ -4213,6 +4232,14 @@ function selectDoorObj(ud){
   removeSelectionVisuals();
   selectedProp = { roomKey: ud.roomKey, slotId: ud.slotId, kind: 'moveObject', doorObj: true,
                    base: ud.base, asset: ud.asset, assetRoomKey: ud.assetRoomKey, assetSlotId: ud.assetSlotId };
+  attachSelectionVisuals();
+  updateEditHud();
+}
+// selects a door-side move-pair billboard for move/height/scale (kind 'mnemonic',
+// so it floats free and has no asset gear -- same as the old in-room billboard).
+function selectDoorBill(ud){
+  removeSelectionVisuals();
+  selectedProp = { roomKey: ud.roomKey, slotId: ud.slotId, kind: 'mnemonic', doorBill: true, base: ud.base };
   attachSelectionVisuals();
   updateEditHud();
 }
@@ -4285,10 +4312,13 @@ function nudgeSelected(key){
     return;
   }
 
-  // door objects aren't in roomSlots -- their base pos lives on selectedProp.
+  // door objects/billboards aren't in roomSlots -- their base pos lives on
+  // selectedProp (the mnemonic branch below ignores slot geometry anyway).
   const slot = selectedProp.doorObj
     ? { x: selectedProp.base.x, z: selectedProp.base.z, kind: 'moveObject' }
-    : slotById(room, roomKey, slotId);
+    : selectedProp.doorBill
+      ? { kind: 'mnemonic' }
+      : slotById(room, roomKey, slotId);
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
 
@@ -4418,10 +4448,11 @@ function handleEditTarget(ud){
     return;
   }
   if(ud.kind === 'accessory'){
-    // a filled door object routes to its own selection (base pos on userData)
-    if(ud.doorObj){
+    // door object / door billboard route to their own selection (base pos on
+    // userData -- they have no roomSlots entry to look up)
+    if(ud.doorObj || ud.doorBill){
       if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
-      else selectDoorObj(ud);
+      else (ud.doorObj ? selectDoorObj : selectDoorBill)(ud);
       return;
     }
     if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
