@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-44';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-45';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-27';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-44';
+const BUILD_TAG = '-45';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -472,8 +472,12 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true){
     if(!l){ l = {id:'leaf'+(leafCounter++), fen}; leaves.set(key,l); }
     return l;
   }
-  function addEdge(fromId,toId,exitSeq){
-    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq),seq:exitSeq.slice()});
+  function addEdge(fromId,toId,exitSeq,destSeq){
+    edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq),seq:exitSeq.slice(),
+                // the full move seq reaching the target room via THIS edge (ends
+                // in our reply), so a door can show its own edge-specific move
+                // pair even for a transposition target reached several ways.
+                destSeq: destSeq ? destSeq.slice() : null});
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
@@ -490,7 +494,7 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true){
     const destKey = positionKey(fenForSeq(destSeq));
     const alreadyExisted = rooms.has(destKey);
     const destRoom = getRoom(destSeq);
-    addEdge(fromRoomId,destRoom.id,exitSeq);
+    addEdge(fromRoomId,destRoom.id,exitSeq,destSeq);
     if(!alreadyExisted) walk(destSeq,destRoom.id);
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
@@ -737,6 +741,20 @@ function buildGeneratedCastle(line, games, rootSeq){
     if(beards) p.response.disambig = beards;
     return p;
   };
+  // the move pair for a specific EDGE, from the full seq reaching its target via
+  // that edge (ends in our reply). Unlike pairFor (which reads a room's canonical
+  // seq) this is edge-specific, so transposition doors into one room each show
+  // their own last move. Returns { opponent, response } or null.
+  const pairFromSeq = (seq) => {
+    if(!seq || seq.length < 2) return null;
+    const resp = lastMoveInfo(seq);
+    const opp = lastMoveInfo(seq.slice(0, -1));
+    if(!resp || !opp) return null;
+    const p = { opponent: CONV(opp), response: CONV(resp) };
+    const beards = moveDisambiguatorCount(seq);
+    if(beards) p.response.disambig = beards;
+    return p;
+  };
 
   const genRooms = order.map(gid => {
     const g = groups.get(gid);
@@ -757,7 +775,9 @@ function buildGeneratedCastle(line, games, rootSeq){
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
       // `to` is the R# label (for the readable report); `toKey` is the stable
       // position identity the VR uses to wire doors + persist decorations.
-      exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null, track });
+      exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null,
+                   // edge-specific move pair, shown beside this door in the VR walk
+                   pair: pairFromSeq(e.destSeq), track });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
