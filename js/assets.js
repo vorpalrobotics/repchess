@@ -199,6 +199,7 @@ function renderEditor(a){
         <div class="asset-img-side">
           <div class="asset-img-info" id="assetImgInfo"></div>
           <div class="asset-img-tools">
+            <button type="button" id="assetGenBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate…</button>
             <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop / Erase BG…</button>
             <span class="assets-res-hint" id="assetCropHint"></span>
           </div>
@@ -241,6 +242,7 @@ function renderEditor(a){
     handleImageFile(e.dataTransfer.files[0]);
   });
 
+  $('assetGenBtn').onclick = openGenerateModal;
   $('assetCropBtn').onclick = openCropModal;
   $('assetsSaveBtn').onclick = saveEditor;
   $('assetsCancelBtn').onclick = () => { showList(); };
@@ -634,26 +636,34 @@ async function rederiveImage(){
   }
 }
 
+// stage a full-resolution image data-URL into the editor (kept as the original,
+// down-converted for the working copy), refresh the preview/dims, and seed the
+// id from `nameHint` when creating a new asset. Shared by the file drop and the
+// AI generate flow.
+async function stageFullImage(fullDataUrl, nameHint){
+  EDIT_IMAGE_ORIG = fullDataUrl;
+  EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
+  setError('');
+  const drop = $('assetImgDrop');
+  if(drop) drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
+  await updateImgInfo();      // refresh dims/aspect note for the new image…
+  snapHeightFromWidth();      // …and pull height to match it if the lock is on
+  if(!EDIT_ID && nameHint){
+    const idInput = $('assetIdInput');
+    if(idInput && !idInput.value.trim()){
+      let base = String(nameHint).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+      if(!ID_RE.test(base)) base = 'asset';
+      idInput.value = base;
+    }
+  }
+}
+
 async function handleImageFile(file){
   if(!file) return;
   if(!file.type.startsWith('image/')){ setError('that file is not an image'); return; }
   if(file.size > IMG_MAX_FILE_BYTES){ setError(`image too large (max ${IMG_MAX_FILE_BYTES/1024/1024}MB)`); return; }
   try{
-    EDIT_IMAGE_ORIG = await fileToDataUrl(file);
-    EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
-    setError('');
-    const drop = $('assetImgDrop');
-    drop.innerHTML = `<img id="assetImgPreview" src="${EDIT_IMAGE}">`;
-    await updateImgInfo();      // refresh dims/aspect note for the new image…
-    snapHeightFromWidth();      // …and pull height to match it if the lock is on
-    if(!EDIT_ID){
-      const idInput = $('assetIdInput');
-      if(idInput && !idInput.value.trim()){
-        let base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-        if(!ID_RE.test(base)) base = 'asset';
-        idInput.value = base;
-      }
-    }
+    await stageFullImage(await fileToDataUrl(file), file.name.replace(/\.[^.]+$/, ''));
   }catch(err){
     console.error('[assets] image import failed', err);
     setError('could not read that image');
@@ -662,6 +672,111 @@ async function handleImageFile(file){
 
 function setError(msg){ $('assetsError').textContent = msg || ''; }
 function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
+
+/* ---------- AI image generation (OpenAI gpt-image-1) ----------
+   A small modal launched from the editor's "Generate…" button: prompt + API key
+   (kept in localStorage so it's typed once), calls OpenAI's images endpoint from
+   the browser, previews the result, and on "Use this image" stages it into the
+   editor exactly like a dropped file. GPT only for now. */
+const OPENAI_KEY_LS = 'repchess.openaiApiKey';
+const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
+function openGenerateModal(){
+  let ov = document.getElementById('assetGenOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'assetGenOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:130;display:flex;align-items:center;'
+      + 'justify-content:center;background:rgba(0,0,0,.6)';
+    document.body.appendChild(ov);
+  }
+  let savedKey = ''; try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
+  ov.innerHTML = `
+    <div style="background:#1c1f26;color:#eee;width:min(34em,94vw);max-height:92vh;overflow:auto;
+                border-radius:8px;padding:1rem 1.1rem;font:400 .9rem/1.4 sans-serif;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+      <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Generate image with GPT</h2>
+      <label style="display:block;font-size:.78rem;margin:0 0 .15rem">OpenAI API key</label>
+      <input type="password" id="genApiKey" value="${esc(savedKey)}" placeholder="sk-…" autocomplete="off"
+             style="width:100%;box-sizing:border-box">
+      <div style="font-size:.68rem;color:#9aa;margin:.15rem 0 .6rem">Stored only in this browser (localStorage) and sent straight to OpenAI.</div>
+      <label style="display:block;font-size:.78rem;margin:0 0 .15rem">Prompt</label>
+      <textarea id="genPrompt" rows="3" placeholder="e.g. a friendly cartoon grandfather clock, front view, simple, centered"
+                style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 .6rem;font-size:.78rem">
+        <label><input type="checkbox" id="genTransparent" checked> Transparent background</label>
+        <label>Size
+          <select id="genSize" style="font-size:.78rem">
+            <option value="1024x1024" selected>Square</option>
+            <option value="1024x1536">Portrait</option>
+            <option value="1536x1024">Landscape</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex;gap:.4rem">
+        <button type="button" id="genRunBtn">Generate</button>
+        <button type="button" id="genCloseBtn">Cancel</button>
+      </div>
+      <div id="genStatus" style="font-size:.78rem;color:#9aa;min-height:1.1em;margin-top:.5rem"></div>
+      <div id="genResultWrap" style="display:none;margin-top:.4rem">
+        <div style="background:repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 50%/22px 22px;
+                    border-radius:4px;padding:.4rem;text-align:center">
+          <img id="genResultImg" alt="" style="max-width:100%;max-height:44vh;border-radius:2px">
+        </div>
+        <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem">
+          <button type="button" id="genUseBtn">Use this image</button>
+          <span style="font-size:.72rem;color:#9aa">or tweak the prompt and Generate again</span>
+        </div>
+      </div>
+    </div>`;
+  ov.style.display = 'flex';
+  const q = id => ov.querySelector('#' + id);
+  let lastDataUrl = null;
+  const close = () => { ov.style.display = 'none'; ov.innerHTML = ''; };
+  q('genCloseBtn').onclick = close;
+  ov.onclick = e => { if(e.target === ov) close(); };
+
+  q('genRunBtn').onclick = async () => {
+    const key = q('genApiKey').value.trim();
+    const prompt = q('genPrompt').value.trim();
+    if(!key){ q('genStatus').textContent = 'Enter your OpenAI API key.'; return; }
+    if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return; }
+    try { localStorage.setItem(OPENAI_KEY_LS, key); } catch(_){}
+    q('genRunBtn').disabled = true;
+    q('genStatus').textContent = 'Generating… (usually 10–30s)';
+    try {
+      const body = { model: 'gpt-image-1', prompt, n: 1, size: q('genSize').value };
+      if(q('genTransparent').checked) body.background = 'transparent';   // png cutout, ideal for props
+      const res = await fetch(OPENAI_IMAGES_URL, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const json = await res.json().catch(() => ({}));
+      if(!res.ok){
+        const msg = (json && json.error && json.error.message) || ('HTTP ' + res.status);
+        q('genStatus').textContent = 'Error: ' + msg;
+        return;
+      }
+      const b64 = json.data && json.data[0] && json.data[0].b64_json;
+      if(!b64){ q('genStatus').textContent = 'No image returned.'; return; }
+      lastDataUrl = 'data:image/png;base64,' + b64;
+      q('genResultImg').src = lastDataUrl;
+      q('genResultWrap').style.display = '';
+      q('genStatus').textContent = 'Done — use it, or edit the prompt and generate again.';
+    } catch(err){
+      console.error('[assets] generate failed', err);
+      q('genStatus').textContent = 'Request failed: ' + ((err && err.message) || err) + ' (network or CORS?)';
+    } finally {
+      q('genRunBtn').disabled = false;
+    }
+  };
+
+  q('genUseBtn').onclick = async () => {
+    if(!lastDataUrl) return;
+    const hint = q('genPrompt').value.trim().split(/\s+/).slice(0, 5).join(' ');
+    await stageFullImage(lastDataUrl, hint || 'generated');
+    close();
+  };
+}
 
 /* Generic crop modal: shows `sourceDataUrl` full-viewport with four draggable
    edge bars defining a crop rectangle, an Auto-crop button that snaps the bars
