@@ -2548,6 +2548,33 @@ function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
 // opponent box (1x1) pegged to the top-left corner, the response box (1x1)
 // pegged to the bottom-right corner -- so the two overlap by half a unit each
 // way and sit close instead of a full quadrant apart. Drawn opponent-first so
+// The mnemonics store (square -> per-piece words + image data-URLs) is large and
+// getAllMnemonics() re-reads + deserializes all of it from IndexedDB on every
+// call. Rendering a room fires one call PER billboard, which piled up into a
+// ~1s stall where billboards showed their dark notation fallback before the real
+// images swapped in. Cache it once per walk (cleared when the walk (re)opens or
+// assets change) so every billboard shares a single read.
+let _mnemCache = null, _mnemPromise = null;
+function getMnemonicsCached(){
+  if(_mnemCache) return Promise.resolve(_mnemCache);
+  if(!_mnemPromise) _mnemPromise = Promise.resolve(getAllMnemonics()).then(m => { _mnemCache = m; return m; });
+  return _mnemPromise;
+}
+function clearMnemonicsCache(){ _mnemCache = null; _mnemPromise = null; }
+// Decode each move image once and reuse it (across billboards and rebuilds)
+// rather than newing an Image per render.
+const _moveImgCache = new Map();   // src -> Promise<Image|null>
+function loadImageCached(src){
+  if(_moveImgCache.has(src)) return _moveImgCache.get(src);
+  const p = new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+  _moveImgCache.set(src, p);
+  return p;
+}
 // the response laps over it in the shared corner.
 function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg){
   const canvas = document.createElement('canvas');
@@ -2584,12 +2611,7 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
     : (wordTrim ? `${wordTrim} (${move.san})` : move.san);
   const beards = move.disambig || 0;
   if(!imgSrc) return Promise.resolve({ text: wordFallback, beards });
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve({ image: img, beards });
-    img.onerror = () => resolve({ text: wordFallback, beards });
-    img.src = imgSrc;
-  });
+  return loadImageCached(imgSrc).then(img => img ? { image: img, beards } : { text: wordFallback, beards });
 }
 
 // builds the movable sprite for one mnemonic slot: position/scale come from
@@ -2606,7 +2628,7 @@ function buildMnemPairSprite(pair, userScale){
   sprite.userData.userScale = userScale || 1;
   renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san });
   const myGen = buildGeneration;
-  Promise.all([getAllMnemonics(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
+  Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
     Promise.all([
       resolveMoveContent(pair.opponent, mnemonicsBySquare),
@@ -2748,7 +2770,7 @@ function makeMoveDecorationMesh(move, sizeM){
   tex.colorSpace = THREE.SRGBColorSpace;
   draw({ text: move.san });
   const myGen = buildGeneration;
-  getAllMnemonics().then((mn) => {
+  getMnemonicsCached().then((mn) => {
     if(buildGeneration !== myGen || !scene) return;
     resolveMoveContent(move, mn).then((c) => {
       if(buildGeneration !== myGen || !scene) return;
@@ -3039,7 +3061,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   if(wall === 'east'){  mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI/2; }
 
   const myGen = buildGeneration;
-  getAllMnemonics().then((mnemonicsBySquare) => {
+  getMnemonicsCached().then((mnemonicsBySquare) => {
     if(buildGeneration !== myGen) return;
     Promise.all(floors.map(f => f.move ? resolveMoveContent(f.move, mnemonicsBySquare, true) : Promise.resolve({ text: f.label })))
       .then((contents) => {
@@ -3940,6 +3962,7 @@ export async function refreshAssetsLive(){
   if(!scene) return; // tour isn't open
   await refreshAssetMap();
   await refreshObjectLists();
+  clearMnemonicsCache(); _moveImgCache.clear();   // pick up any edited move images
   buildRoom(currentRoomKey);
 }
 
@@ -3973,7 +3996,7 @@ function openElevatorPopup(meta){
   // wall panel/billboards), as long as the popup hasn't moved on by then.
   renderElevatorPopup(ov, meta, null);
   if(meta.kind === 'forward'){
-    getAllMnemonics().then((mnemonicsBySquare) => {
+    getMnemonicsCached().then((mnemonicsBySquare) => {
       if(activeElevatorDoor === meta) renderElevatorPopup(ov, meta, mnemonicsBySquare);
     });
   }
@@ -5526,6 +5549,12 @@ export async function openThreeTest(containerEl, opts){
   generateMainStreet(OPENING_SYSTEMS, streetCastles);   // Main Street + one side street per opening system
   if(!THREE) THREE = await import('https://esm.sh/three@0.160.0');
   if(!textureLoader) textureLoader = new THREE.TextureLoader();
+  THREE.Cache.enabled = true;   // reuse decoded prop textures across rebuilds
+  // start each walk from fresh mnemonic/image caches (they may have been edited
+  // since last time), then warm the mnemonics read so the first room's billboards
+  // resolve their images without the per-billboard IndexedDB stall.
+  clearMnemonicsCache(); _moveImgCache.clear();
+  getMnemonicsCached();
 
   editMode = false;
   inputLocked = false;
