@@ -889,6 +889,14 @@ function setSlotXformLive(roomKey, slotId, xform){
   const obj = findAccessoryObject(slotId);
   if(!obj){ buildRoom(currentRoomKey); return; }   // fallback if it wasn't found
   const room = mergedRoom(roomKey);
+  // a door object has no roomSlots entry -- its base pos + asset ride on userData,
+  // so re-place it from those rather than looking the slot up.
+  if(obj.userData.doorObj){
+    applyAccessoryTransform(obj, room, { kind: 'moveObject', x: obj.userData.base.x, z: obj.userData.base.z },
+                            obj.userData.asset || { size: {} }, xform);
+    refreshSelectionVisuals();
+    return;
+  }
   const slot = slotById(room, roomKey, slotId);
   if(!slot) return;
   if(slot.kind === 'mnemonic'){
@@ -2782,12 +2790,14 @@ function doorPairContent(target, exPair){
   }
   return { pair, asset, word, slotId };
 }
-// builds the move-pair billboard (eye height) + head object (on the floor) for a
-// room beyond a door, at world (x,z) within `room`. The billboard is hint-gated;
-// a filled object stays for self-test. The object is assign/replace/clear-able in
-// place (userData 'door-obj', owned by the target room) so it edits identically
-// at every door into that position.
-function buildPairAt(room, x, z, target, exPair){
+// builds the move-pair billboard (eye height) + head object for a room beyond a
+// door, at base world (x,z) within `room` (rendered under `roomKey`). The
+// billboard is hint-gated; a filled object stays for self-test. The object is
+// editable in place: its per-door position/rotation/scale live in THIS room's
+// slotXform under `dobj-<target>`, while its (shared) image edits on the target
+// room. Base pos + resolved asset ride on userData so the editor can re-place it
+// without a roomSlots entry.
+function buildPairAt(roomKey, room, x, z, target, exPair){
   const group = new THREE.Group();
   const { pair, asset, word, slotId } = doorPairContent(target, exPair);
   if(hintsOn && pair){
@@ -2795,33 +2805,38 @@ function buildPairAt(room, x, z, target, exPair){
     bb.position.set(x, MNEM_EYE_Y, z);
     group.add(bb);
   }
-  const ud = { kind: 'door-obj', ownerRoomKey: target, slotId, allow: PROP_TYPES };
+  const doorId = 'dobj-' + target;                        // per-door transform key in this room
+  // empty slot: a clickable stand-in that assigns the shared image (on the target)
+  const emptyUd = { kind: 'door-obj', ownerRoomKey: target, slotId, allow: PROP_TYPES };
   if(asset){
+    const xform = slotXformFor(roomKey, doorId) || {};
     const obj = buildPropAsset(asset);
-    applyAccessoryTransform(obj, room, { kind: 'moveObject', x, z }, asset, {});
-    obj.userData = ud;
+    applyAccessoryTransform(obj, room, { kind: 'moveObject', x, z }, asset, xform);
+    obj.userData = { kind: 'accessory', slotId: doorId, doorObj: true, roomKey,
+                     base: { x, z }, asset, assetRoomKey: target, assetSlotId: slotId };
+    if(asset.type === 'billboard-cylindrical') billboards.push(obj);   // faces the camera each frame
     group.add(obj);
   } else if(word && hintsOn){
     const label = buildMoveObjectWordLabel({ x, y: MNEM_OBJ_Y, z, id: slotId }, word);
-    label.userData = ud;
+    label.userData = emptyUd;
     group.add(label);
   } else if(editMode){                                   // empty slot: a clickable stand-in to fill
     const ph = buildMoveObjectPlaceholder({ x, y: MNEM_OBJ_Y, z, tag: '?', id: slotId });
-    ph.userData = ud;
+    ph.userData = emptyUd;
     group.add(ph);
   }
   return group;
 }
 // Phase 1: the pair/object for the room BEYOND a forward interior door, to the
 // player's LEFT of the door, replacing that room's old central pair.
-function buildDoorPair(room, wall, offset, ex){
+function buildDoorPair(roomKey, room, wall, offset, ex){
   const { x, z } = doorSideXZ(room, wall, offset, -1);
-  return buildPairAt(room, x, z, ex.target, ex.pair);
+  return buildPairAt(roomKey, room, x, z, ex.target, ex.pair);
 }
 // Phase 2: the entry (mansion-root) room's pair/object out on the street, beside
 // the building's front door -- that room's centre pair now lives here rather than
 // inside the foyer. Placed to one side of the door and a bit out onto the street.
-function buildStreetEntryPair(room, b, size){
+function buildStreetEntryPair(roomKey, room, b, size){
   const { axis, fixed } = wallSpan(size, b.doorWall);    // `size` = the door-bearing box
   const along = b.doorOffset - (DOOR_W/2 + 0.9);         // just to one side of the door
   const out = WALL_OUT_NORMAL[b.doorWall];
@@ -2829,7 +2844,7 @@ function buildStreetEntryPair(room, b, size){
   let x, z;
   if(axis === 'x'){ x = b.origin.x + along;               z = b.origin.z + fixed + out.z * clear; }
   else            { z = b.origin.z + along;               x = b.origin.x + fixed + out.x * clear; }
-  return buildPairAt(room, x, z, b.target, null);
+  return buildPairAt(roomKey, room, x, z, b.target, null);
 }
 
 // Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
@@ -3708,7 +3723,7 @@ function buildRoom(roomKey){
           // object for the room beyond, to the left of the door. The pair is
           // hint-gated inside buildDoorPair; a filled object stays for self-test.
           if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target));
-          if(!ex.back) scene.add(buildDoorPair(room, wall, ex.offset, ex));
+          if(!ex.back) scene.add(buildDoorPair(roomKey, room, wall, ex.offset, ex));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
       }
@@ -3878,7 +3893,7 @@ function buildRoom(roomKey){
       buildSlots(room, roomKey, yardSlots(b, buildingKey));
       // the entry room's move-pair + object, out here by the front door instead
       // of inside the foyer (its centre pair is suppressed in-room, below).
-      scene.add(buildStreetEntryPair(room, b, size));
+      scene.add(buildStreetEntryPair(roomKey, room, b, size));
 
       const spawn = doorSpawn(targetRoom.size, b.doorWall, b.doorOffset, null, true);
       // entering a building means walking TOWARD it -- the opposite of a room's
@@ -4145,6 +4160,9 @@ function attachSelectionVisuals(){
     }
   });
   if(!found){ selectedProp = null; updateEditHud(); return; }
+  // a rebuilt door object gets fresh userData -- keep the selection's base/asset
+  // in sync so rotation and re-placement use the current values.
+  if(found.userData.doorObj){ selectedProp.base = found.userData.base; selectedProp.asset = found.userData.asset; }
   const box = new THREE.Box3().setFromObject(found);
   const size = new THREE.Vector3(); box.getSize(size);
   const center = new THREE.Vector3(); box.getCenter(center);
@@ -4163,7 +4181,9 @@ function attachSelectionVisuals(){
     const gear = buildGearSprite();
     gear.userData = isSign
       ? { kind: 'sign-gear', buildingKey: selectedProp.buildingKey }
-      : { kind: 'prop-gear', slotId: selectedProp.slotId };
+      : { kind: 'prop-gear', slotId: selectedProp.slotId,
+          // a door object's image lives on the target room, not this slot
+          assetRoomKey: selectedProp.assetRoomKey, assetSlotId: selectedProp.assetSlotId };
     scene.add(gear);
     selectionGear = gear;
     selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
@@ -4183,6 +4203,16 @@ function selectProp(roomKey, slotId){
   if(!slot) return;
   removeSelectionVisuals();   // clear a prior selection's outline/gear before re-highlighting
   selectedProp = { roomKey, slotId, kind: slot.kind, ground: !!slot.ground };
+  attachSelectionVisuals();
+  updateEditHud();
+}
+// selects a door object for transform editing. Unlike selectProp it takes its
+// base pos + shared-asset owner off the clicked mesh's userData (door objects
+// live outside roomSlots). kind 'moveObject' so nudge/rotate/scale/height apply.
+function selectDoorObj(ud){
+  removeSelectionVisuals();
+  selectedProp = { roomKey: ud.roomKey, slotId: ud.slotId, kind: 'moveObject', doorObj: true,
+                   base: ud.base, asset: ud.asset, assetRoomKey: ud.assetRoomKey, assetSlotId: ud.assetSlotId };
   attachSelectionVisuals();
   updateEditHud();
 }
@@ -4226,6 +4256,7 @@ function openManagerForSelection(){
   if(!selectedProp) return;
   inputLocked = true;
   if(selectedProp.kind === 'sign') openSignManager(selectedProp.roomKey, selectedProp.buildingKey);
+  else if(selectedProp.doorObj) openPropManager(selectedProp.assetRoomKey, selectedProp.assetSlotId);
   else openPropManager(selectedProp.roomKey, selectedProp.slotId);
 }
 
@@ -4254,7 +4285,10 @@ function nudgeSelected(key){
     return;
   }
 
-  const slot = slotById(room, roomKey, slotId);
+  // door objects aren't in roomSlots -- their base pos lives on selectedProp.
+  const slot = selectedProp.doorObj
+    ? { x: selectedProp.base.x, z: selectedProp.base.z, kind: 'moveObject' }
+    : slotById(room, roomKey, slotId);
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
 
@@ -4333,7 +4367,7 @@ const ROT_STEP = Math.PI / 12;   // 15 degrees per press
 function rotateSelected(dir){
   if(!selectedProp || (selectedProp.kind !== 'floor' && selectedProp.kind !== 'moveObject')) return;
   const { roomKey, slotId } = selectedProp;
-  const asset = slotAssetFor(roomKey, slotId);
+  const asset = selectedProp.doorObj ? selectedProp.asset : slotAssetFor(roomKey, slotId);
   if(!asset || asset.type !== 'extruded') return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.dYaw = (xform.dYaw || 0) - dir * ROT_STEP;   // clockwise from above = negative yaw
@@ -4378,17 +4412,25 @@ function handleEditTarget(ud){
 
   if(ud.kind === 'prop-gear'){
     inputLocked = true;
-    openPropManager(roomKey, ud.slotId);
+    // a door object's image lives on the target room (ud.assetRoomKey), not this slot
+    if(ud.assetRoomKey) openPropManager(ud.assetRoomKey, ud.assetSlotId);
+    else openPropManager(roomKey, ud.slotId);
     return;
   }
   if(ud.kind === 'accessory'){
+    // a filled door object routes to its own selection (base pos on userData)
+    if(ud.doorObj){
+      if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
+      else selectDoorObj(ud);
+      return;
+    }
     if(selectedProp && selectedProp.slotId === ud.slotId) deselectProp();
     else selectProp(roomKey, ud.slotId);
     return;
   }
-  // the object beside a door belongs to the room BEYOND it (ud.ownerRoomKey);
-  // clicking assigns/replaces/clears its image there, so it updates at every
-  // door into that room. (Positioning is door-derived, so no nudge/scale here.)
+  // an EMPTY door object belongs to the room BEYOND it (ud.ownerRoomKey); clicking
+  // assigns its shared image there. (A filled one is an 'accessory' + doorObj,
+  // handled above, and is selectable for position/rotation/scale/height.)
   if(ud.kind === 'door-obj'){
     inputLocked = true;
     const owner = ud.ownerRoomKey;
