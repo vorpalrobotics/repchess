@@ -264,6 +264,10 @@ function registerOneCastle(castle, instanceId, opts = {}){
                                  // clear the move-pair + object sitting to the LEFT
                                  // of each door (was 3.6 before they moved there)
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
+  // the move-pair + object sit to the LEFT of each door -- ~1.7 m off the door
+  // centre (doorSideXZ) plus ~0.6 m for half the billboard. The edge door needs
+  // this much clear to the side wall so its pair doesn't poke through.
+  const PAIR_MARGIN = 2.8;
   const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
   for(const r of genRooms){
     // depth needed for the wall move-pairs: the center pair sits near the
@@ -291,7 +295,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
       const leftDoors = fwd.filter(ex => ex.track !== 'right').sort(doorCmp);
       const rightDoors = fwd.filter(ex => ex.track === 'right').sort(doorCmp);
       const maxSpan = Math.max(span(leftDoors.length), span(rightDoors.length));
-      sz = { w: Math.max(base.w, 2 * maxSpan + 8), d: Math.max(base.d, pairDepth), h: base.h };
+      // each half's edge door needs PAIR_MARGIN to its side (wall on the outer
+      // half, the centre divider on the inner half): 4*PAIR_MARGIN across the room.
+      sz = { w: Math.max(base.w, 2 * maxSpan + 4 * PAIR_MARGIN), d: Math.max(base.d, pairDepth), h: base.h };
       const quarter = sz.w / 4;   // center of each half of the north wall
       const placeHalf = (list, cx) => list.forEach((ex, j) =>
         doorPlacements.push({ wall: 'north', offset: cx + (j - (list.length - 1) / 2) * DOOR_SPACING, ex }));
@@ -315,7 +321,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
           + (maxEW - 1) * DOOR_SPACING + EDGE_MARGIN
         : 0;
       sz = {
-        w: Math.max(base.w, span(byWall.north.length) + 2 * EDGE_MARGIN),
+        // PAIR_MARGIN (not EDGE_MARGIN) each side so the leftmost north door's
+        // pair, which overhangs ~2.3 m to its left, clears the west wall.
+        w: Math.max(base.w, span(byWall.north.length) + 2 * PAIR_MARGIN),
         d: Math.max(base.d, pairDepth, ewDepth),
         h: base.h
       };
