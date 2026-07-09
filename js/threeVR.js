@@ -2877,10 +2877,15 @@ function buildPairAt(roomKey, room, x, z, target, exPair){
   }
   return group;
 }
-// Phase 1: the pair/object for the room BEYOND a forward interior door, to the
-// player's LEFT of the door, replacing that room's old central pair.
+// Phase 1: the pair/object for the room BEYOND a forward interior door. It sits
+// on the side of the door the player reaches FIRST walking in from the (south)
+// entrance, so the images read before the door. On the two SIDE walls that means
+// the entrance (south) side: west already lands there with -1, east needs +1
+// (which also keeps the top east door's pair off the north wall). The north
+// (opposite) wall keeps its left placement.
 function buildDoorPair(roomKey, room, wall, offset, ex){
-  const { x, z } = doorSideXZ(room, wall, offset, -1);
+  const sideSign = wall === 'east' ? 1 : -1;
+  const { x, z } = doorSideXZ(room, wall, offset, sideSign);
   return buildPairAt(roomKey, room, x, z, ex.target, ex.pair);
 }
 // Phase 2: the entry (mansion-root) room's pair/object out on the street, beside
