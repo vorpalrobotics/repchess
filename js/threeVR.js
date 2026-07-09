@@ -4443,6 +4443,9 @@ function rotateSelected(dir){
 }
 
 /* ---------- in-world layout editor: click handling ---------- */
+// "background" click targets (a room/building surface): a foreground prop sitting
+// on one of these should win a near-tied click (see onCanvasClick).
+const SURFACE_KINDS = new Set(['floor', 'wall', 'ceiling-surface', 'stair-surface', 'yard', 'facade']);
 function findInteractive(obj){
   while(obj){
     if(obj.userData && obj.userData.kind) return obj.userData;
@@ -4458,17 +4461,24 @@ function onCanvasClick(e){
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(scene.children, true);
-  // The selection gear renders on top (depthTest off), so a click anywhere over
-  // it should hit it even when a prop or move billboard sits in front -- scan
-  // all hits and let a gear win over the nearest ordinary target.
-  let gearUd = null, firstUd = null;
+  // Pick priority: a selection gear (renders on top, depthTest off) wins from
+  // anywhere; otherwise a prop/object beats a background SURFACE it's sitting on
+  // when they're at the same spot -- a flat prop like a rug is ~coplanar with the
+  // floor/yard, so the nearest hit alone would grab the grass instead of the rug.
+  // A prop only wins if it's within a small tolerance of the nearest hit, so
+  // clicking open ground (with some distant prop farther along the ray) still
+  // targets the ground.
+  const PICK_TOL = 0.6;
+  let gearUd = null, firstUd = null, firstDist = 0, propUd = null, propDist = 0;
   for(const hit of hits){
     const ud = findInteractive(hit.object);
     if(!ud) continue;
-    if(!firstUd) firstUd = ud;
     if(ud.kind === 'prop-gear' || ud.kind === 'sign-gear'){ gearUd = ud; break; }
+    if(!firstUd){ firstUd = ud; firstDist = hit.distance; }
+    if(!propUd && !SURFACE_KINDS.has(ud.kind)){ propUd = ud; propDist = hit.distance; }
   }
-  const ud = gearUd || firstUd;
+  const ud = gearUd
+    || (propUd && propDist <= firstDist + PICK_TOL ? propUd : firstUd);
   if(ud){ handleEditTarget(ud); return; }
   // clicked nothing interactive (e.g. open floor/sky past everything) --
   // treat it as "click away" and drop the current selection, if any
