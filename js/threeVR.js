@@ -260,7 +260,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
   const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
   const entryKey = roomKeyFor(entry);
   CASTLE_ENTRY = entryKey;
-  const DOOR_SPACING = 3.6;      // center-to-center; DOOR_W is 2.2, leaves a clear gap + room for hints
+  const DOOR_SPACING = 5.6;      // center-to-center; DOOR_W is 2.2. Wide enough to
+                                 // clear the move-pair + object sitting to the LEFT
+                                 // of each door (was 3.6 before they moved there)
   const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
   const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
   for(const r of genRooms){
