@@ -679,6 +679,7 @@ function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent 
    the browser, previews the result, and on "Use this image" stages it into the
    editor exactly like a dropped file. GPT only for now. */
 const OPENAI_KEY_LS = 'repchess.openaiApiKey';
+const OPENAI_STANDING_LS = 'repchess.genStandingInstructions';
 const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
 function openGenerateModal(){
   let ov = document.getElementById('assetGenOverlay');
@@ -689,7 +690,9 @@ function openGenerateModal(){
       + 'justify-content:center;background:rgba(0,0,0,.6)';
     document.body.appendChild(ov);
   }
-  let savedKey = ''; try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
+  let savedKey = '', savedStanding = '';
+  try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
+  try { savedStanding = localStorage.getItem(OPENAI_STANDING_LS) || ''; } catch(_){}
   ov.innerHTML = `
     <div style="background:#1c1f26;color:#eee;width:min(34em,94vw);max-height:92vh;overflow:auto;
                 border-radius:8px;padding:1rem 1.1rem;font:400 .9rem/1.4 sans-serif;box-shadow:0 8px 40px rgba(0,0,0,.5)">
@@ -701,6 +704,11 @@ function openGenerateModal(){
       <label style="display:block;font-size:.78rem;margin:0 0 .15rem">Prompt</label>
       <textarea id="genPrompt" rows="3" placeholder="e.g. a friendly cartoon grandfather clock, front view, simple, centered"
                 style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
+      <label style="display:block;font-size:.78rem;margin:.5rem 0 .15rem">Standing instructions
+        <span style="color:#9aa;font-weight:400">— style applied to every generation</span></label>
+      <textarea id="genStanding" rows="2" placeholder="e.g. flat cartoon style, thick outlines, bright colors, no text"
+                style="width:100%;box-sizing:border-box;resize:vertical">${esc(savedStanding)}</textarea>
+      <div style="font-size:.68rem;color:#9aa;margin:.15rem 0 0">Saved in this browser and appended to every prompt.</div>
       <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 .6rem;font-size:.78rem">
         <label><input type="checkbox" id="genTransparent" checked> Transparent background</label>
         <label>Size
@@ -737,13 +745,16 @@ function openGenerateModal(){
   q('genRunBtn').onclick = async () => {
     const key = q('genApiKey').value.trim();
     const prompt = q('genPrompt').value.trim();
+    const standing = q('genStanding').value.trim();
     if(!key){ q('genStatus').textContent = 'Enter your OpenAI API key.'; return; }
     if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return; }
     try { localStorage.setItem(OPENAI_KEY_LS, key); } catch(_){}
+    try { localStorage.setItem(OPENAI_STANDING_LS, standing); } catch(_){}
+    const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
     q('genRunBtn').disabled = true;
     q('genStatus').textContent = 'Generating… (usually 10–30s)';
     try {
-      const body = { model: 'gpt-image-1', prompt, n: 1, size: q('genSize').value };
+      const body = { model: 'gpt-image-1', prompt: fullPrompt, n: 1, size: q('genSize').value };
       if(q('genTransparent').checked) body.background = 'transparent';   // png cutout, ideal for props
       const res = await fetch(OPENAI_IMAGES_URL, {
         method: 'POST',
