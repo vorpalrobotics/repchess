@@ -481,6 +481,45 @@ async function updateImgInfo(){
   renderImgNote();
 }
 
+/* Whether this browser can *encode* WebP from a canvas. Decoding is universal
+   (Safari 14+), but canvas encoding only landed in Safari 17 -- older Safari
+   silently returns a PNG from toDataURL('image/webp'), so we sniff the result.
+   Cached after the first check. */
+let _webpEncodeOk = null;
+export function webpEncodeSupported(){
+  if(_webpEncodeOk !== null) return _webpEncodeOk;
+  try{
+    const c = document.createElement('canvas');
+    c.width = c.height = 1;
+    _webpEncodeOk = c.toDataURL('image/webp').startsWith('data:image/webp');
+  }catch(_){ _webpEncodeOk = false; }
+  return _webpEncodeOk;
+}
+
+/* Re-encode a data-URL as WebP, preserving alpha (WebP keeps transparency,
+   which is why JPEG can't be used for cutout props/signs). Returns the input
+   unchanged when WebP encoding isn't supported, when it's already WebP, or when
+   the re-encode wouldn't actually be smaller. quality applies to the lossy
+   colour channels; the alpha channel is preserved regardless. */
+export function toWebpDataUrl(dataUrl, quality = 0.85){
+  return new Promise((resolve, reject) => {
+    if(!dataUrl || !webpEncodeSupported() || /^data:image\/webp/i.test(dataUrl)){ resolve(dataUrl); return; }
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      let out;
+      try{ out = c.toDataURL('image/webp', quality); }
+      catch(_){ resolve(dataUrl); return; }
+      // base64 length is proportional to byte size; keep whichever is smaller
+      resolve(out && out.length < dataUrl.length ? out : dataUrl);
+    };
+    img.onerror = () => reject(new Error('could not decode image'));
+    img.src = dataUrl;
+  });
+}
+
 /* read a file to a full-resolution PNG data-URL (no scaling) */
 export function fileToDataUrl(file){
   return new Promise((resolve,reject)=>{
@@ -1031,7 +1070,8 @@ async function saveEditor(){
   if(!EDIT_IMAGE){ setError('please choose an image'); return; }
   const type = $('assetTypeInput').value;
   const keywords = $('assetKeywords').value.trim();
-  const patch = { type, keywords, image: EDIT_IMAGE, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
+  const image = await toWebpDataUrl(EDIT_IMAGE);   // shrink on save, alpha preserved
+  const patch = { type, keywords, image, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
   await setAsset(id, patch);
   await refreshGrid();
   showList();
@@ -1226,7 +1266,7 @@ async function pickerUpload(file, ov){
   let id = base, n = 2;
   while(existing.some(a => a.id === id)){ id = `${base}-${n++}`; }
   try{
-    const image = await importImageFile(file, pickerUploadType, pickerResolution);
+    const image = await toWebpDataUrl(await importImageFile(file, pickerUploadType, pickerResolution));
     await setAsset(id, { type: pickerUploadType, image, resolution: pickerResolution });
     await renderPicker(ov);
   }catch(err){

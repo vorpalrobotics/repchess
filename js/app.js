@@ -2,7 +2,7 @@ import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-59';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-55';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-60';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
 
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-59';
+const BUILD_TAG = '-60';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3222,6 +3222,58 @@ $('menuImport').onclick = ()=>{
   $('menuList').style.display='none';
   $('backupImport').click();
 };
+$('menuCompressImages').onclick = ()=>{
+  $('menuList').style.display='none';
+  compressAllImages();
+};
+
+/* estimate a data-URL's stored byte size from its base64 payload length. */
+function dataUrlBytes(u){
+  if(typeof u !== 'string') return 0;
+  const i = u.indexOf(',');
+  return i < 0 ? u.length : Math.floor((u.length - i - 1) * 3 / 4);
+}
+
+/* Re-encode every stored image (VR assets + per-square move images) to WebP,
+   shrinking the backup while preserving transparency. Only replaces an image
+   when the WebP is actually smaller, and skips already-WebP images, so it is
+   safe to run repeatedly. Non-destructive to any other data. */
+async function compressAllImages(){
+  if(!webpEncodeSupported()){
+    log('this browser cannot encode WebP — nothing to do', true);
+    return;
+  }
+  const assets = await getAllAssets();
+  const mnemonics = Object.values(await getAllMnemonics());
+  let before = 0, after = 0, changed = 0;
+  log('compressing images to WebP…');
+
+  for(const a of assets){
+    if(!a.image) continue;
+    before += dataUrlBytes(a.image);
+    const webp = await toWebpDataUrl(a.image);
+    after += dataUrlBytes(webp);
+    if(webp !== a.image){ await setAsset(a.id, { ...a, image: webp }); changed++; }
+  }
+  for(const entry of mnemonics){
+    const patch = {};
+    for(const p of MNEM_PIECES){
+      const img = entry[p+'Img'];
+      if(!img) continue;
+      before += dataUrlBytes(img);
+      const webp = await toWebpDataUrl(img);
+      after += dataUrlBytes(webp);
+      if(webp !== img){ patch[p+'Img'] = webp; changed++; }
+    }
+    if(Object.keys(patch).length) await setMnemonicSquare(entry.square, patch);
+  }
+
+  MNEMONICS = await getAllMnemonics();
+  if(!changed){ log('images already compressed — nothing changed'); return; }
+  const saved = ((before - after) / 1048576).toFixed(1);
+  const pct = before ? Math.round((1 - after / before) * 100) : 0;
+  log(`compressed ${changed} image(s) to WebP — saved ~${saved}MB (${pct}% smaller). Re-export your backup to keep it.`);
+}
 $('backupImport').addEventListener('change', async e=>{
   const f = e.target.files[0];
   e.target.value = '';
@@ -3625,7 +3677,10 @@ function downscaleMnemImage(dataUrl, maxDim){
         const data = ctx.getImageData(0, 0, w, h).data;
         for(let i = 3; i < data.length; i += 4){ if(data[i] < 255){ hasAlpha = true; break; } }
       }catch(_){ /* tainted canvas — fall back to JPEG */ }
-      resolve(hasAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85));
+      // WebP keeps transparency and beats both PNG and JPEG; fall back to the
+      // old alpha-aware PNG/JPEG split where WebP encoding isn't supported.
+      if(webpEncodeSupported()) resolve(canvas.toDataURL('image/webp', 0.85));
+      else resolve(hasAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85));
     };
     img.onerror = () => reject(new Error('could not decode image'));
     img.src = dataUrl;
