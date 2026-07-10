@@ -118,6 +118,10 @@ const WALL_THICK = 0.25;
 const EYE_HEIGHT = 1.6;
 const STAIR_STEP_RISE = 0.2;  // a stair-exit corridor's climbing steps, in meters
 const STAIR_STEP_RUN = 0.3;
+// stair exits come in two directions: 'stair' climbs up, 'stair-down' descends.
+// stairDir gives +1 / -1 (0 for non-stairs); isStairType tests either.
+const isStairType = t => t === 'stair' || t === 'stair-down';
+const stairDir = t => t === 'stair' ? 1 : (t === 'stair-down' ? -1 : 0);
 const MOVE_SPEED = 4.2;   // m/s
 const TURN_SPEED = 1.8;   // rad/s
 
@@ -627,8 +631,33 @@ function commitRoomGeomDialog(roomKey, geom, exitMoves){
         r.doors[newKey] = r.doors[oldKey];
         delete r.doors[oldKey];
       }
+      // reciprocal stair linking: an up-stair to B implies a down-stair back from
+      // B (and vice versa); turning a stair back into a plain door unlinks the
+      // other side too. Writes B's own exit-to-here override (a cross-room edit).
+      const oldType = (oldOv && oldOv.type) || ex.type || 'door';
+      if(isStairType(moveType)) setReciprocalStairType(ex.target, roomKey, moveType === 'stair' ? 'stair-down' : 'stair');
+      else if(isStairType(oldType)) setReciprocalStairType(ex.target, roomKey, 'door');
     }
   });
+}
+// Set room B's exit-back-to-A to `type` (used to mirror a stair on the far side).
+// Preserves B's current wall/offset for that door; a plain 'door' at the static
+// position drops the override entirely. No-op if B has no exit back to A.
+function setReciprocalStairType(bKey, aKey, type){
+  const bRoom = ROOMS[bKey];
+  const back = bRoom && bRoom.exits && bRoom.exits.find(e => e.target === aKey);
+  if(!back) return;
+  const rb = ensureRoomLayout(bKey);
+  const ov = rb.exits[aKey] || {};
+  const wall = ov.wall != null ? ov.wall : back.wall;
+  const offset = ov.offset != null ? ov.offset : back.offset;
+  const staticType = back.type || 'door';
+  if(type === staticType && wall === back.wall && Math.abs(offset - back.offset) < 0.001){
+    delete rb.exits[aKey];
+  } else {
+    rb.exits[aKey] = { wall, offset };
+    if(type !== staticType) rb.exits[aKey].type = type;
+  }
 }
 // wipe a room's styling and placed objects back to nothing -- floors, walls,
 // ceiling, stairs and door skins, plus every placed prop and its nudge/scale.
@@ -1129,7 +1158,7 @@ function floorHeightAtPos(room, x, z){
     const c = currentStairCorridors[wall];
     const { axis, fixed } = wallSpan(room.size, wall);
     const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
-    if(along > 0) return c.rise * Math.min(1, along / c.depth);
+    if(along > 0) return (c.dir || 1) * c.rise * Math.min(1, along / c.depth);
   }
   return floorHeightAt(room, z);
 }
@@ -3438,18 +3467,25 @@ function buildStreetNameSign(s){
 // a-continuous-ramp split that buildStairs already uses for room.stairs).
 // The far end is left open -- like an ordinary door, the "next room" is an
 // illusion stitched together by enterRoom's teleport, not real geometry.
-function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey){
+function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
+  dir = dir || 1;
+  const down = dir < 0;
   const { axis, fixed } = wallSpan(room.size, wall);
   const outSign = fixed >= 0 ? 1 : -1;
   const { rise, steps, depth } = stairCorridorGeom(room);
   const dHalf = DOOR_W/2;
-  const ceilingH = rise + EYE_HEIGHT + 1.0; // generous headroom above the highest step
+  const stepRise = rise / steps;
+  // vertical extent of the shaft: an UP corridor rises from the room floor (0) to
+  // ceilingH; a DOWN corridor descends into a pit (-rise) under a low ceiling.
+  const topY = down ? (EYE_HEIGHT + 1.0) : (rise + EYE_HEIGHT + 1.0);
+  const botY = down ? -rise : 0;
+  const shaftH = topY - botY;
   const group = new THREE.Group();
-  // The corridor's side walls and ceiling can't be individually clicked (the
-  // doorway's marker sits in front of them), so they always inherit whatever
-  // skin the parent wall is wearing -- skin that wall and the corridor follows.
-  const wallTex = surfaceAsset ? null : makeBrickTexture(room.color);
+  // A DOWN corridor is rendered in a flat light gray (a clear "you're going down"
+  // cue, per the design); an UP corridor inherits the parent wall's skin.
+  const wallTex = (down || surfaceAsset) ? null : makeBrickTexture(room.color);
   const wallMatFor = (segW, segH) => {
+    if(down) return new THREE.MeshStandardMaterial({ color: 0xcccccc });
     if(surfaceAsset){
       const rpm = surfaceAsset.repeatPerMeter || 0.5;
       return assetSurfaceMaterial(surfaceAsset, segW * rpm, segH * rpm);
@@ -3463,10 +3499,10 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey){
   for(const side of [-1, 1]){
     const across = offset + side*dHalf;
     let geo, x, z;
-    if(axis === 'x'){ geo = new THREE.BoxGeometry(WALL_THICK, ceilingH, depth); x = across; z = fixed + outSign*depth/2; }
-    else { geo = new THREE.BoxGeometry(depth, ceilingH, WALL_THICK); x = fixed + outSign*depth/2; z = across; }
-    const sideWall = new THREE.Mesh(geo, wallMatFor(depth, ceilingH));
-    sideWall.position.set(x, ceilingH/2, z);
+    if(axis === 'x'){ geo = new THREE.BoxGeometry(WALL_THICK, shaftH, depth); x = across; z = fixed + outSign*depth/2; }
+    else { geo = new THREE.BoxGeometry(depth, shaftH, WALL_THICK); x = fixed + outSign*depth/2; z = across; }
+    const sideWall = new THREE.Mesh(geo, wallMatFor(depth, shaftH));
+    sideWall.position.set(x, botY + shaftH/2, z);
     group.add(sideWall);
   }
 
@@ -3475,21 +3511,25 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey){
     if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W, WALL_THICK, depth); x = offset; z = fixed + outSign*depth/2; }
     else { geo = new THREE.BoxGeometry(depth, WALL_THICK, DOOR_W); x = fixed + outSign*depth/2; z = offset; }
     const ceiling = new THREE.Mesh(geo, wallMatFor(depth, DOOR_W));
-    ceiling.position.set(x, ceilingH + WALL_THICK/2, z);
+    ceiling.position.set(x, topY + WALL_THICK/2, z);
     group.add(ceiling);
   }
 
-  const stepMat = stairMaterial(roomKey, DOOR_W);
-  const stepTag = { kind: 'stair-surface', roomKey };
-  const stepRise = rise / steps;
+  const stepMat = down ? new THREE.MeshStandardMaterial({ color: 0xbfbfbf }) : stairMaterial(roomKey, DOOR_W);
+  const stepTag = down ? { decorative: true } : { kind: 'stair-surface', roomKey };
   for(let i = 0; i < steps; i++){
-    const stepH = stepRise * (i+1);
+    // UP: solid block from the floor (0) up to this step's top. DOWN: a block
+    // from the pit bottom (-rise) up to this tread's (descending) top, so the
+    // tread tops step down as you walk out. Skip the far zero-height down block.
+    const treadTop = down ? -stepRise * (i + 1) : stepRise * (i + 1);
+    const stepH = down ? (treadTop - botY) : treadTop;   // block height
+    if(stepH <= 0.001) continue;
     const along = (i + 0.5) * STAIR_STEP_RUN;
     let geo, x, z;
     if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W*0.96, stepH, STAIR_STEP_RUN); x = offset; z = fixed + outSign*along; }
     else { geo = new THREE.BoxGeometry(STAIR_STEP_RUN, stepH, DOOR_W*0.96); x = fixed + outSign*along; z = offset; }
     const step = new THREE.Mesh(geo, stepMat);
-    step.position.set(x, stepH/2, z);
+    step.position.set(x, treadTop - stepH/2, z);   // top of the block at treadTop
     step.userData = stepTag;
     group.add(step);
   }
@@ -3710,10 +3750,10 @@ function buildRoom(roomKey){
   currentStairCorridors = {};
   for(const ex of room.exits){
     currentExitsByWall[ex.wall] = ex;
-    if(ex.type === 'stair'){
+    if(isStairType(ex.type)){
       const { fixed } = wallSpan(room.size, ex.wall);
       const { rise, depth } = stairCorridorGeom(room);
-      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1 };
+      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1, dir: stairDir(ex.type) };
     }
   }
 
@@ -3764,7 +3804,7 @@ function buildRoom(roomKey){
         }
       } else {
         for(const ex of wallExits){
-          const isStair = ex.type === 'stair';
+          const isStair = isStairType(ex.type);
           const dKey = doorKey(wall, ex.offset);
           // room override wins, else the building's exit-door / ordinary-door default
           const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex.back);
@@ -3773,7 +3813,7 @@ function buildRoom(roomKey){
           exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
-          if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey));
+          if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey, stairDir(ex.type)));
           // forward-door hint: name plaque above the door, and the move-pair +
           // object for the room beyond, to the left of the door. The pair is
           // hint-gated inside buildDoorPair; a filled object stays for self-test.
@@ -5158,7 +5198,8 @@ function renderRoomGeomDialog(ov, roomKey){
       <span title="${escHtml(ex.target)}">${escHtml(exitShortLabel(ex))}${ex.back ? ' ↩' : ''}</span>
       <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
         <option value="door" ${stagedExits[ex.target].type === 'door' ? 'selected' : ''}>Door</option>
-        <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase</option>
+        <option value="stair" ${stagedExits[ex.target].type === 'stair' ? 'selected' : ''}>Staircase (up)</option>
+        <option value="stair-down" ${stagedExits[ex.target].type === 'stair-down' ? 'selected' : ''}>Staircase (down)</option>
         <option value="elevator" ${stagedExits[ex.target].type === 'elevator' ? 'selected' : ''}>Elevator</option>
       </select>
     </label>
@@ -5305,9 +5346,10 @@ function renderRoomGeomDialog(ov, roomKey){
       const doorPxC = DOOR_W * scale;
       for(const ex of staticExits){
         const pos = stagedExits[ex.target];
-        if(pos.type !== 'stair') continue;
-        ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 1.5; ctx.setLineDash([3,2]);
-        ctx.fillStyle = 'rgba(141,110,99,.12)';
+        if(!isStairType(pos.type)) continue;
+        const isDown = pos.type === 'stair-down';   // down corridors read light gray (as in-world)
+        ctx.strokeStyle = isDown ? '#9e9e9e' : '#8d6e63'; ctx.lineWidth = 1.5; ctx.setLineDash([3,2]);
+        ctx.fillStyle = isDown ? 'rgba(158,158,158,.16)' : 'rgba(141,110,99,.12)';
         let rx, ry, rw2, rh2;
         if(pos.wall === 'north'){ rx = px(pos.offset)-doorPxC/2; ry = oy - corridorDepthPx; rw2 = doorPxC; rh2 = corridorDepthPx; }
         if(pos.wall === 'south'){ rx = px(pos.offset)-doorPxC/2; ry = oy + pd; rw2 = doorPxC; rh2 = corridorDepthPx; }
@@ -5326,9 +5368,10 @@ function renderRoomGeomDialog(ov, roomKey){
     for(const ex of staticExits){
       const pos = stagedExits[ex.target];
       const dragging = dragTarget === ex.target;
-      const isStair = pos.type === 'stair';
-      const baseColor = isStair ? '#8d6e63' : '#2e7d32';
-      const labelColor = isStair ? '#4e342e' : '#1b5e20';
+      const isStair = isStairType(pos.type);
+      const isDown = pos.type === 'stair-down';
+      const baseColor = isDown ? '#9e9e9e' : isStair ? '#8d6e63' : '#2e7d32';
+      const labelColor = isDown ? '#616161' : isStair ? '#4e342e' : '#1b5e20';
       ctx.fillStyle = dragging ? '#f9a825' : baseColor;
       ctx.strokeStyle = dragging ? '#f9a825' : baseColor; ctx.lineWidth = dragging ? 6 : 4;
       ctx.setLineDash(isStair && !dragging ? [4, 3] : []);
@@ -5340,7 +5383,7 @@ function renderRoomGeomDialog(ov, roomKey){
       if(pos.wall === 'east'){  const cz = pz(pos.offset); ctx.moveTo(ox+pw, cz - doorPx/2); ctx.lineTo(ox+pw, cz + doorPx/2); lx = ox + pw - 3; ly = cz; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; }
       ctx.stroke();
       ctx.setLineDash([]);
-      const label = exitShortLabel(ex) + (ex.back ? ' ↩' : '') + (isStair ? ' ⌐' : '');
+      const label = exitShortLabel(ex) + (ex.back ? ' ↩' : '') + (isDown ? ' ⌐↓' : isStair ? ' ⌐↑' : '');
       ctx.fillStyle = dragging ? '#7a4a00' : labelColor;
       ctx.fillText(label, lx, ly);
     }
