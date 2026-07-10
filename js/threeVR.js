@@ -118,6 +118,10 @@ const WALL_THICK = 0.25;
 const EYE_HEIGHT = 1.6;
 const STAIR_STEP_RISE = 0.2;  // a stair-exit corridor's climbing steps, in meters
 const STAIR_STEP_RUN = 0.3;
+// A down-staircase first rises a short lead-in flight (so the steps are visible
+// from a horizontal-facing approach) before descending -- you walk UP onto a
+// landing, then DOWN into the pit. STAIR_DOWN_LIFT is the lead-in flight's height.
+const STAIR_DOWN_LIFT = 0.8;
 // stair exits come in two directions: 'stair' climbs up, 'stair-down' descends.
 // stairDir gives +1 / -1 (0 for non-stairs); isStairType tests either.
 const isStairType = t => t === 'stair' || t === 'stair-down';
@@ -1149,6 +1153,23 @@ function stairCorridorGeom(room){
   return { rise, steps, depth };
 }
 
+// Full shaft geometry for a stair corridor, aware of direction. An UP shaft is
+// just the climbing flight. A DOWN shaft prepends a short rising lead-in flight
+// (STAIR_DOWN_LIFT tall) so the stairs are visible when approached looking
+// horizontally, then descends the full room height into the pit beyond.
+function stairShaftGeom(room, dir){
+  const { rise, steps } = stairCorridorGeom(room);
+  if(dir < 0){
+    const riseSteps = Math.max(2, Math.round(STAIR_DOWN_LIFT / STAIR_STEP_RISE));
+    const lift = riseSteps * STAIR_STEP_RISE;
+    const riseLen = riseSteps * STAIR_STEP_RUN;
+    const depth = riseLen + steps * STAIR_STEP_RUN;
+    return { rise, steps, lift, riseSteps, riseLen, depth };
+  }
+  const depth = steps * STAIR_STEP_RUN;
+  return { rise, steps, lift: 0, riseSteps: 0, riseLen: 0, depth };
+}
+
 // Like floorHeightAt, but also accounts for any stair-exit corridor the
 // player may have walked into (clampToRoom is what keeps x/z inside the
 // corridor's actual footprint once they're past the wall plane). Falls
@@ -1158,7 +1179,15 @@ function floorHeightAtPos(room, x, z){
     const c = currentStairCorridors[wall];
     const { axis, fixed } = wallSpan(room.size, wall);
     const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
-    if(along > 0) return (c.dir || 1) * c.rise * Math.min(1, along / c.depth);
+    if(along > 0){
+      if(c.dir < 0){
+        // rise up the lead-in flight to the landing, then descend into the pit
+        if(along <= c.riseLen) return c.lift * (along / c.riseLen);
+        const descFrac = Math.min(1, (along - c.riseLen) / (c.depth - c.riseLen));
+        return c.lift - c.rise * descFrac;
+      }
+      return c.rise * Math.min(1, along / c.depth);
+    }
   }
   return floorHeightAt(room, z);
 }
@@ -3472,20 +3501,20 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
   const down = dir < 0;
   const { axis, fixed } = wallSpan(room.size, wall);
   const outSign = fixed >= 0 ? 1 : -1;
-  const { rise, steps, depth } = stairCorridorGeom(room);
+  const { rise, steps, lift, riseSteps, riseLen, depth } = stairShaftGeom(room, dir);
   const dHalf = DOOR_W/2;
   const stepRise = rise / steps;
-  // vertical extent of the shaft: an UP corridor rises from the room floor (0) to
-  // ceilingH; a DOWN corridor descends into a pit (-rise) under a low ceiling.
-  const topY = down ? (EYE_HEIGHT + 1.0) : (rise + EYE_HEIGHT + 1.0);
-  const botY = down ? -rise : 0;
+  // vertical extent of the shaft. UP: floor (0) to ceilingH. DOWN: from the pit
+  // bottom (lift - rise) up over the lead-in landing (lift) with headroom above.
+  const topY = (down ? lift : rise) + EYE_HEIGHT + 1.0;
+  const botY = down ? (lift - rise) : 0;
   const shaftH = topY - botY;
   const group = new THREE.Group();
-  // A DOWN corridor is rendered in a flat light gray (a clear "you're going down"
-  // cue, per the design); an UP corridor inherits the parent wall's skin.
-  const wallTex = (down || surfaceAsset) ? null : makeBrickTexture(room.color);
+  // Both UP and DOWN corridors inherit the parent wall's skin so they can be
+  // skinned the same way (down-stairs used to be gray, which also made them
+  // unskinnable -- reverted per feedback).
+  const wallTex = surfaceAsset ? null : makeBrickTexture(room.color);
   const wallMatFor = (segW, segH) => {
-    if(down) return new THREE.MeshStandardMaterial({ color: 0xcccccc });
     if(surfaceAsset){
       const rpm = surfaceAsset.repeatPerMeter || 0.5;
       return assetSurfaceMaterial(surfaceAsset, segW * rpm, segH * rpm);
@@ -3515,16 +3544,12 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
     group.add(ceiling);
   }
 
-  const stepMat = down ? new THREE.MeshStandardMaterial({ color: 0xbfbfbf }) : stairMaterial(roomKey, DOOR_W);
-  const stepTag = down ? { decorative: true } : { kind: 'stair-surface', roomKey };
-  for(let i = 0; i < steps; i++){
-    // UP: solid block from the floor (0) up to this step's top. DOWN: a block
-    // from the pit bottom (-rise) up to this tread's (descending) top, so the
-    // tread tops step down as you walk out. Skip the far zero-height down block.
-    const treadTop = down ? -stepRise * (i + 1) : stepRise * (i + 1);
-    const stepH = down ? (treadTop - botY) : treadTop;   // block height
-    if(stepH <= 0.001) continue;
-    const along = (i + 0.5) * STAIR_STEP_RUN;
+  const stepMat = stairMaterial(roomKey, DOOR_W);
+  const stepTag = { kind: 'stair-surface', roomKey };
+  // Build one solid step block whose top is at treadTop (down to botY).
+  const addStep = (treadTop, along) => {
+    const stepH = treadTop - botY;   // block height from the shaft floor up
+    if(stepH <= 0.001) return;
     let geo, x, z;
     if(axis === 'x'){ geo = new THREE.BoxGeometry(DOOR_W*0.96, stepH, STAIR_STEP_RUN); x = offset; z = fixed + outSign*along; }
     else { geo = new THREE.BoxGeometry(STAIR_STEP_RUN, stepH, DOOR_W*0.96); x = fixed + outSign*along; z = offset; }
@@ -3532,6 +3557,23 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
     step.position.set(x, treadTop - stepH/2, z);   // top of the block at treadTop
     step.userData = stepTag;
     group.add(step);
+  };
+
+  if(down){
+    // Lead-in flight climbing from 0 up to the landing (lift), so the stairs
+    // read as stairs from a level approach...
+    for(let i = 0; i < riseSteps; i++){
+      addStep(STAIR_STEP_RISE * (i + 1), (i + 0.5) * STAIR_STEP_RUN);
+    }
+    // ...then the descending flight from the landing (lift) down into the pit.
+    for(let i = 0; i < steps; i++){
+      const treadTop = lift - stepRise * (i + 1);
+      addStep(treadTop, riseLen + (i + 0.5) * STAIR_STEP_RUN);
+    }
+  } else {
+    for(let i = 0; i < steps; i++){
+      addStep(stepRise * (i + 1), (i + 0.5) * STAIR_STEP_RUN);
+    }
   }
 
   return group;
@@ -3752,8 +3794,9 @@ function buildRoom(roomKey){
     currentExitsByWall[ex.wall] = ex;
     if(isStairType(ex.type)){
       const { fixed } = wallSpan(room.size, ex.wall);
-      const { rise, depth } = stairCorridorGeom(room);
-      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1, dir: stairDir(ex.type) };
+      const dir = stairDir(ex.type);
+      const g = stairShaftGeom(room, dir);
+      currentStairCorridors[ex.wall] = { ...g, outSign: fixed >= 0 ? 1 : -1, dir };
     }
   }
 
@@ -5342,12 +5385,14 @@ function renderRoomGeomDialog(ov, roomKey){
     {
       const rise = Math.max(0.1, Number(hEl.value) || 0);
       const steps = Math.max(4, Math.ceil(rise / STAIR_STEP_RISE));
-      const corridorDepthPx = steps * STAIR_STEP_RUN * scale;
+      const riseStepsC = Math.max(2, Math.round(STAIR_DOWN_LIFT / STAIR_STEP_RISE));
       const doorPxC = DOOR_W * scale;
       for(const ex of staticExits){
         const pos = stagedExits[ex.target];
         if(!isStairType(pos.type)) continue;
-        const isDown = pos.type === 'stair-down';   // down corridors read light gray (as in-world)
+        const isDown = pos.type === 'stair-down';
+        // down corridors add the visible lead-in flight before descending
+        const corridorDepthPx = (steps + (isDown ? riseStepsC : 0)) * STAIR_STEP_RUN * scale;
         ctx.strokeStyle = isDown ? '#9e9e9e' : '#8d6e63'; ctx.lineWidth = 1.5; ctx.setLineDash([3,2]);
         ctx.fillStyle = isDown ? 'rgba(158,158,158,.16)' : 'rgba(141,110,99,.12)';
         let rx, ry, rw2, rh2;
