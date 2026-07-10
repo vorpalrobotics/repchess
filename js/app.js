@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-57';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-58';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl } from './assets.js?v=20260630-55';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-57';
+const BUILD_TAG = '-58';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2983,6 +2983,47 @@ $('menuDownload').onclick = ()=>{
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
 
+/* ---------- gzip helpers for backups ----------
+   Backups are dominated by base64 PNG data URLs (VR assets + move images),
+   and base64 inflates binary by ~33%. gzip recovers almost all of that (plus
+   near-total compression of the JSON keys/whitespace), shrinking a backup by
+   ~30% with zero dependencies via the native CompressionStream API.
+   Older browsers without CompressionStream fall back to plain JSON. */
+const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+async function gzipString(str){
+  const stream = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'));
+  return await new Response(stream).blob();
+}
+async function gunzipToText(blob){
+  const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+  return await new Response(stream).text();
+}
+// Read an imported file as text, transparently gunzipping it if it carries the
+// gzip magic bytes (0x1f 0x8b). Keeps old plain-.json backups working while
+// accepting the new .json.gz ones — sniffed by content, not filename.
+async function readMaybeGzipped(file){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if(buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b){
+    if(!GZIP_OK) throw new Error('this browser cannot read gzipped backups');
+    return await gunzipToText(new Blob([buf]));
+  }
+  return new TextDecoder().decode(buf);
+}
+// Serialize obj to JSON, gzip it when supported, and trigger a download.
+// baseName omits the extension (.json.gz / .json is appended here). Returns
+// the resulting byte size for logging.
+async function downloadJsonBackup(obj, baseName){
+  const json = JSON.stringify(obj);
+  let blob, name;
+  if(GZIP_OK){ blob = await gzipString(json); name = baseName + '.json.gz'; }
+  else { blob = new Blob([json], {type:'application/json'}); name = baseName + '.json'; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+  return blob.size;
+}
+
 /* ---------- export / import backup ----------
    This is a *total* backup: everything stored locally (downloaded games,
    repertoire lines/prefs, mnemonics + images, mnemonics notes, and the
@@ -3025,14 +3066,10 @@ async function exportBackup(){
     assets: await getAllAssets(),
     objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `repchess-backup-${CURRENT_USER}-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  log(`exported ${lines.length} opening system(s), ${games.length} game(s)`);
+  const stamp = new Date().toISOString().slice(0,10);
+  const size = await downloadJsonBackup(data, `repchess-backup-${CURRENT_USER}-${stamp}`);
+  const mb = (size/1048576).toFixed(1);
+  log(`exported ${lines.length} opening system(s), ${games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
 }
 
 /* full restore: wipes every local store first, so the result matches the
@@ -3124,13 +3161,7 @@ async function exportMnemonics(){
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY)
   };
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `repchess-mnemonics-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadJsonBackup(data, `repchess-mnemonics-${new Date().toISOString().slice(0,10)}`);
   log(`exported ${data.mnemonics.length} mnemonic square(s)`);
 }
 
@@ -3142,13 +3173,7 @@ async function exportAssets(){
   const assets = await getAllAssets();
   if(!assets.length){ log('no assets to export',true); return; }
   const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets };
-  const blob = new Blob([JSON.stringify(bundle,null,2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `repchess-assets-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadJsonBackup(bundle, `repchess-assets-${new Date().toISOString().slice(0,10)}`);
   log(`exported ${assets.length} asset(s)`);
 }
 
@@ -3203,10 +3228,10 @@ $('backupImport').addEventListener('change', async e=>{
   if(!f) return;
 
   let data;
-  try{ data = JSON.parse(await f.text()); }
+  try{ data = JSON.parse(await readMaybeGzipped(f)); }
   catch(err){
     console.error('[import] parse failed',err);
-    log('import failed: not a valid JSON file',true);
+    log('import failed: not a valid backup file',true);
     return;
   }
 
