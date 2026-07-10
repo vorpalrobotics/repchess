@@ -122,7 +122,7 @@ const STAIR_STEP_RUN = 0.3;
 // camera pitches down so the descending steps come into view (real stairs go
 // straight down, so a level gaze would otherwise miss them).
 const STAIR_DOWN_PEEK_DIST = 1.0;   // meters from the doorway
-const STAIR_DOWN_PEEK_PITCH = -Math.PI/4;   // 45 degrees down
+const STAIR_DOWN_PEEK_PITCH = -Math.PI/6;   // 30 degrees down
 // stair exits come in two directions: 'stair' climbs up, 'stair-down' descends.
 // stairDir gives +1 / -1 (0 for non-stairs); isStairType tests either.
 const isStairType = t => t === 'stair' || t === 'stair-down';
