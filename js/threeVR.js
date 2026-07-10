@@ -118,10 +118,11 @@ const WALL_THICK = 0.25;
 const EYE_HEIGHT = 1.6;
 const STAIR_STEP_RISE = 0.2;  // a stair-exit corridor's climbing steps, in meters
 const STAIR_STEP_RUN = 0.3;
-// A down-staircase first rises a short lead-in flight (so the steps are visible
-// from a horizontal-facing approach) before descending -- you walk UP onto a
-// landing, then DOWN into the pit. STAIR_DOWN_LIFT is the lead-in flight's height.
-const STAIR_DOWN_LIFT = 0.8;
+// When the player gets within this distance of a down-staircase doorway, the
+// camera pitches down so the descending steps come into view (real stairs go
+// straight down, so a level gaze would otherwise miss them).
+const STAIR_DOWN_PEEK_DIST = 1.0;   // meters from the doorway
+const STAIR_DOWN_PEEK_PITCH = -Math.PI/4;   // 45 degrees down
 // stair exits come in two directions: 'stair' climbs up, 'stair-down' descends.
 // stairDir gives +1 / -1 (0 for non-stairs); isStairType tests either.
 const isStairType = t => t === 'stair' || t === 'stair-down';
@@ -388,6 +389,7 @@ let renderer=null, scene=null, camera=null, clock=null;
 let container=null, animHandle=null, resizeObs=null;
 let keys = {};
 let yaw = 0;
+let lookPitch = 0;   // eased camera pitch; only non-zero when peeking down a down-staircase
 let pos = { x:0, z:0 };
 let currentRoomKey = 'start';
 // where the player last walked in (spawn point just inside the entry door).
@@ -1153,23 +1155,6 @@ function stairCorridorGeom(room){
   return { rise, steps, depth };
 }
 
-// Full shaft geometry for a stair corridor, aware of direction. An UP shaft is
-// just the climbing flight. A DOWN shaft prepends a short rising lead-in flight
-// (STAIR_DOWN_LIFT tall) so the stairs are visible when approached looking
-// horizontally, then descends the full room height into the pit beyond.
-function stairShaftGeom(room, dir){
-  const { rise, steps } = stairCorridorGeom(room);
-  if(dir < 0){
-    const riseSteps = Math.max(2, Math.round(STAIR_DOWN_LIFT / STAIR_STEP_RISE));
-    const lift = riseSteps * STAIR_STEP_RISE;
-    const riseLen = riseSteps * STAIR_STEP_RUN;
-    const depth = riseLen + steps * STAIR_STEP_RUN;
-    return { rise, steps, lift, riseSteps, riseLen, depth };
-  }
-  const depth = steps * STAIR_STEP_RUN;
-  return { rise, steps, lift: 0, riseSteps: 0, riseLen: 0, depth };
-}
-
 // Like floorHeightAt, but also accounts for any stair-exit corridor the
 // player may have walked into (clampToRoom is what keeps x/z inside the
 // corridor's actual footprint once they're past the wall plane). Falls
@@ -1179,17 +1164,32 @@ function floorHeightAtPos(room, x, z){
     const c = currentStairCorridors[wall];
     const { axis, fixed } = wallSpan(room.size, wall);
     const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
-    if(along > 0){
-      if(c.dir < 0){
-        // rise up the lead-in flight to the landing, then descend into the pit
-        if(along <= c.riseLen) return c.lift * (along / c.riseLen);
-        const descFrac = Math.min(1, (along - c.riseLen) / (c.depth - c.riseLen));
-        return c.lift - c.rise * descFrac;
-      }
-      return c.rise * Math.min(1, along / c.depth);
-    }
+    if(along > 0) return (c.dir || 1) * c.rise * Math.min(1, along / c.depth);
   }
   return floorHeightAt(room, z);
+}
+
+// Desired camera pitch for the current position: level (0) everywhere except
+// when approaching or standing on a down-staircase, where it ramps to
+// STAIR_DOWN_PEEK_PITCH so the descending steps come into view. The ramp keys
+// off proximity to the doorway threshold (real stairs drop straight down, so a
+// level gaze would otherwise sail right over them).
+function downStairPeekPitch(room, x, z){
+  for(const wall in currentStairCorridors){
+    const c = currentStairCorridors[wall];
+    if(c.dir >= 0) continue;   // only down-staircases
+    const { axis, fixed } = wallSpan(room.size, wall);
+    const ex = currentExitsByWall[wall];
+    const offset = ex ? ex.offset : 0;
+    // must be roughly lined up with the doorway, not off to the side
+    const lateral = axis === 'x' ? x - offset : z - offset;
+    if(Math.abs(lateral) > DOOR_W/2 + 0.3) continue;
+    const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
+    if(along >= 0) return STAIR_DOWN_PEEK_PITCH;              // on the descent
+    if(along > -STAIR_DOWN_PEEK_DIST)                          // approaching
+      return STAIR_DOWN_PEEK_PITCH * (1 + along / STAIR_DOWN_PEEK_DIST);
+  }
+  return 0;
 }
 
 /* ---------- procedural textures & furniture ----------
@@ -3501,13 +3501,14 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
   const down = dir < 0;
   const { axis, fixed } = wallSpan(room.size, wall);
   const outSign = fixed >= 0 ? 1 : -1;
-  const { rise, steps, lift, riseSteps, riseLen, depth } = stairShaftGeom(room, dir);
+  const { rise, steps, depth } = stairCorridorGeom(room);
   const dHalf = DOOR_W/2;
   const stepRise = rise / steps;
-  // vertical extent of the shaft. UP: floor (0) to ceilingH. DOWN: from the pit
-  // bottom (lift - rise) up over the lead-in landing (lift) with headroom above.
-  const topY = (down ? lift : rise) + EYE_HEIGHT + 1.0;
-  const botY = down ? (lift - rise) : 0;
+  // vertical extent of the shaft. UP: floor (0) to ceilingH. DOWN: descends
+  // straight into a pit (-rise) under a floor-level ceiling. The camera tilts
+  // down near the doorway (see STAIR_DOWN_PEEK) so the descent is visible.
+  const topY = down ? (EYE_HEIGHT + 1.0) : (rise + EYE_HEIGHT + 1.0);
+  const botY = down ? -rise : 0;
   const shaftH = topY - botY;
   const group = new THREE.Group();
   // Both UP and DOWN corridors inherit the parent wall's skin so they can be
@@ -3559,21 +3560,11 @@ function buildStairCorridor(room, wall, offset, surfaceAsset, roomKey, dir){
     group.add(step);
   };
 
-  if(down){
-    // Lead-in flight climbing from 0 up to the landing (lift), so the stairs
-    // read as stairs from a level approach...
-    for(let i = 0; i < riseSteps; i++){
-      addStep(STAIR_STEP_RISE * (i + 1), (i + 0.5) * STAIR_STEP_RUN);
-    }
-    // ...then the descending flight from the landing (lift) down into the pit.
-    for(let i = 0; i < steps; i++){
-      const treadTop = lift - stepRise * (i + 1);
-      addStep(treadTop, riseLen + (i + 0.5) * STAIR_STEP_RUN);
-    }
-  } else {
-    for(let i = 0; i < steps; i++){
-      addStep(stepRise * (i + 1), (i + 0.5) * STAIR_STEP_RUN);
-    }
+  for(let i = 0; i < steps; i++){
+    // UP: tread tops climb 0 → rise. DOWN: tread tops step down 0 → -rise, so
+    // each block runs from the pit floor up to its (descending) tread top.
+    const treadTop = down ? -stepRise * (i + 1) : stepRise * (i + 1);
+    addStep(treadTop, (i + 0.5) * STAIR_STEP_RUN);
   }
 
   return group;
@@ -3794,9 +3785,8 @@ function buildRoom(roomKey){
     currentExitsByWall[ex.wall] = ex;
     if(isStairType(ex.type)){
       const { fixed } = wallSpan(room.size, ex.wall);
-      const dir = stairDir(ex.type);
-      const g = stairShaftGeom(room, dir);
-      currentStairCorridors[ex.wall] = { ...g, outSign: fixed >= 0 ? 1 : -1, dir };
+      const { rise, depth } = stairCorridorGeom(room);
+      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1, dir: stairDir(ex.type) };
     }
   }
 
@@ -4178,9 +4168,14 @@ function tick(){
     pos.x = clamped.x; pos.z = clamped.z;
   }
 
-  const eyeY = EYE_HEIGHT + floorHeightAtPos(mergedRoom(currentRoomKey), pos.x, pos.z);
+  const curRoom = mergedRoom(currentRoomKey);
+  const eyeY = EYE_HEIGHT + floorHeightAtPos(curRoom, pos.x, pos.z);
   camera.position.set(pos.x, eyeY, pos.z);
-  camera.rotation.set(0, yaw, 0);
+  // ease the pitch toward its target so peeking down a down-staircase is smooth,
+  // not an instant snap. YXZ order keeps this a clean yaw-then-pitch (FPS) look.
+  const targetPitch = editMode ? 0 : downStairPeekPitch(curRoom, pos.x, pos.z);
+  lookPitch += (targetPitch - lookPitch) * Math.min(1, dt * 8);
+  camera.rotation.set(lookPitch, yaw, 0, 'YXZ');
   window.__threeTestState = { room: currentRoomKey, x: pos.x, z: pos.z, y: eyeY, yaw, editMode };
 
   // cylindrical billboards: rotate to face the camera horizontally each frame
@@ -5385,14 +5380,12 @@ function renderRoomGeomDialog(ov, roomKey){
     {
       const rise = Math.max(0.1, Number(hEl.value) || 0);
       const steps = Math.max(4, Math.ceil(rise / STAIR_STEP_RISE));
-      const riseStepsC = Math.max(2, Math.round(STAIR_DOWN_LIFT / STAIR_STEP_RISE));
+      const corridorDepthPx = steps * STAIR_STEP_RUN * scale;
       const doorPxC = DOOR_W * scale;
       for(const ex of staticExits){
         const pos = stagedExits[ex.target];
         if(!isStairType(pos.type)) continue;
         const isDown = pos.type === 'stair-down';
-        // down corridors add the visible lead-in flight before descending
-        const corridorDepthPx = (steps + (isDown ? riseStepsC : 0)) * STAIR_STEP_RUN * scale;
         ctx.strokeStyle = isDown ? '#9e9e9e' : '#8d6e63'; ctx.lineWidth = 1.5; ctx.setLineDash([3,2]);
         ctx.fillStyle = isDown ? 'rgba(158,158,158,.16)' : 'rgba(141,110,99,.12)';
         let rx, ry, rw2, rh2;
