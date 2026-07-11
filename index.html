@@ -1080,7 +1080,7 @@
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
 
 <!-- hidden file chooser for backup restore -->
-<input id="backupImport" type="file" accept=".json" style="display:none">
+<input id="backupImport" type="file" accept=".json,.gz,.json.gz,application/gzip,application/json" style="display:none">
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
@@ -1101,6 +1101,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-60"></script>
+<script type="module" src="js/app.js?v=20260630-61"></script>
 </body>
 </html>
