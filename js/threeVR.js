@@ -192,8 +192,14 @@ function generateMainStreet(systems, streetCastles){
       text: sys.streetName || sys.name,
       cross: 'Main Street',
       axis: east ? 'east' : 'west',
+      side,
       x: side * (MAIN_W / 2 + 1.2),
-      z: z + SIDE_W / 2 + 1.2
+      z: z + SIDE_W / 2 + 1.2,
+      // the opening move for this system, shown as an editable tile under the sign
+      lineId: sys.id,
+      openingMove: sys.openingMove || '',
+      openingImg: sys.openingImg || '',
+      openingWord: sys.openingWord || ''
     });
     // this system's built castles: one building each on the north side of its
     // street, door facing south onto it; lower street number = closer to Main St.
@@ -3487,6 +3493,55 @@ function buildStreetNameSign(s){
   return group;
 }
 
+const OPEN_TILE_UNITS = 1.3;              // world size (m) of an opening-move tile
+const OPEN_TILE_HALF = OPEN_TILE_UNITS / 2;
+// A camera-facing tile showing a system's OPENING MOVE, sat at ground level
+// under its street sign. Fallback chain: the move's mnemonic image, else its
+// word, else the SAN notation. Reuses the movable-sprite ('doorBill') machinery
+// so it selects/nudges/scales/persists like the door-side pair billboards.
+function buildOpeningMoveSprite(s, userScale){
+  const px = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  sprite.userData.baseH = OPEN_TILE_UNITS;
+  sprite.userData.baseAspect = 1;
+  sprite.userData.userScale = userScale || 1;
+
+  const drawText = (t) => {
+    ctx.clearRect(0, 0, px, px);
+    ctx.fillStyle = 'rgba(240,236,226,0.95)';
+    ctx.fillRect(0, 0, px, px);
+    ctx.strokeStyle = '#caa46a'; ctx.lineWidth = 14; ctx.strokeRect(7, 7, px - 14, px - 14);
+    ctx.fillStyle = '#1a1a1a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let font = 150; ctx.font = `bold ${font}px sans-serif`;
+    while(font > 24 && ctx.measureText(t).width > px - 48){ font -= 6; ctx.font = `bold ${font}px sans-serif`; }
+    ctx.fillText(t, px / 2, px / 2 + 6);
+    tex.needsUpdate = true;
+  };
+  const drawImage = (img) => {
+    ctx.clearRect(0, 0, px, px);
+    const sc = Math.min(px / img.width, px / img.height);
+    const w = img.width * sc, h = img.height * sc;
+    ctx.drawImage(img, (px - w) / 2, (px - h) / 2, w, h);
+    tex.needsUpdate = true;
+  };
+
+  drawText(s.openingWord || s.openingMove || '?');   // immediate; swapped for the image if one loads
+  if(s.openingImg){
+    const myGen = buildGeneration;
+    loadImageCached(s.openingImg).then(img => {
+      if(buildGeneration !== myGen || !scene || !img) return;
+      drawImage(img);
+    });
+  }
+  applySpriteContentScale(sprite);
+  return sprite;
+}
+
 // A 'stair'-type exit gets a real protruding corridor instead of an ordinary
 // doorway gap: the room's geometry grows a DOOR_W-wide hallway out through
 // the wall, with stairs climbing from the room's own floor (0) up to its
@@ -3881,6 +3936,18 @@ function buildRoom(roomKey){
         const sign = buildStreetNameSign(s);
         sign.position.set(s.x, 0, s.z);
         scene.add(sign);
+        // the system's opening-move tile, at ground level under the sign. Its
+        // move/height/scale nudges persist in this room's slotXform, keyed per
+        // system; base sits a touch into the side street so it clears the post.
+        if(s.openingMove || s.openingImg || s.openingWord){
+          const bbId = 'open-' + (s.lineId || i);
+          const xf = slotXformFor(roomKey, bbId) || {};
+          const base = { x: s.x + (s.side || 1) * 0.9, y: OPEN_TILE_HALF, z: s.z };
+          const tile = buildOpeningMoveSprite(s, xf.scale || 1);
+          tile.userData = { kind: 'accessory', slotId: bbId, doorBill: true, roomKey, base };
+          tile.position.set(base.x + (xf.dx || 0), base.y + (xf.dy || 0), base.z + (xf.dz || 0));
+          scene.add(tile);
+        }
         return;
       }
       // Standalone street-name signs (not tied to any building) share the same
