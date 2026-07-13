@@ -2647,8 +2647,29 @@ function loadImageCached(src){
   _moveImgCache.set(src, p);
   return p;
 }
+// opponent-move quality glyph colours — mirror the move table / graph (css
+// .mq-good/.mq-interesting/.mq-dubious/.mq-bad).
+const MOVE_QUALITY_COLOR = {
+  '!': '#2e7d32', '!!': '#2e7d32', '!?': '#1565c0',
+  '?!': '#e07b00', '?': '#c62828', '??': '#c62828',
+};
+// a small pill badge showing an opponent move's quality glyph, pinned to the
+// top-left corner of the pair billboard (the opponent quadrant).
+function drawQualityBadge(ctx, q){
+  const color = MOVE_QUALITY_COLOR[q];
+  if(!color) return;
+  ctx.font = 'bold 96px sans-serif';
+  const pad = 20, x = 12, y = 12, h = 116;
+  const w = ctx.measureText(q).width + pad * 2;
+  ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(x, y, w, h, 18); else ctx.rect(x, y, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.fill();
+  ctx.lineWidth = 7; ctx.strokeStyle = color; ctx.stroke();
+  ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(q, x + pad, y + h / 2 + 4);
+}
 // the response laps over it in the shared corner.
-function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg){
+function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality){
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE;
@@ -2656,6 +2677,7 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg){
   const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
   drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
   drawMnemQuadrant(ctx, far, far, respContent, beardImg);   // response pegged bottom-right
+  if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -2698,7 +2720,8 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
 function buildMnemPairSprite(pair, userScale){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
   sprite.userData.userScale = userScale || 1;
-  renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san });
+  const oppQ = pair.opponent.quality;
+  renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san }, null, oppQ);
   const myGen = buildGeneration;
   Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
@@ -2707,7 +2730,7 @@ function buildMnemPairSprite(pair, userScale){
       resolveMoveContent(pair.response, mnemonicsBySquare)
     ]).then(([oppContent, respContent]) => {
       if(buildGeneration !== myGen) return;
-      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg);
+      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ);
     });
   });
   return sprite;

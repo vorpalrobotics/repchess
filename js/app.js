@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-62';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-63';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-60';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-62';
+const BUILD_TAG = '-63';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -737,6 +737,8 @@ function buildGeneratedCastle(line, games, rootSeq){
     const opp = lastMoveInfo(node.seq.slice(0, -1));
     if(!resp || !opp) return null;
     const p = { side, order, opponent: CONV(opp), response: CONV(resp) };
+    const q = PREFS[prefKey(line.id, node.seq.slice(0, -1))]?.moveQuality;
+    if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(node.seq);
     if(beards) p.response.disambig = beards;
     return p;
@@ -751,6 +753,8 @@ function buildGeneratedCastle(line, games, rootSeq){
     const opp = lastMoveInfo(seq.slice(0, -1));
     if(!resp || !opp) return null;
     const p = { opponent: CONV(opp), response: CONV(resp) };
+    const q = PREFS[prefKey(line.id, seq.slice(0, -1))]?.moveQuality;
+    if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(seq);
     if(beards) p.response.disambig = beards;
     return p;
@@ -1115,7 +1119,9 @@ async function showTranspositionGraph(){
       ...(flat ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
-        const data = {id:r.id, label: name ? `${r.label}\n${name}` : r.label, fen:r.fen, seq:r.seq};
+        const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
+        const moveLabel = r.label + (q ? ' ' + q : '');
+        const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         return {
           data,
@@ -1855,6 +1861,16 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
   renderBranch(div,games,endSeq,endDepth,flip);
 }
 
+/* opponent-move quality annotations (chess glyphs). Kept in one place so the
+   move table, the network graph and the VR walk all render the same glyph +
+   colour. Class drives colour: good/interesting/dubious/bad. */
+const MOVE_QUALITY_GLYPHS = ['!', '!!', '!?', '?!', '?', '??'];
+const MOVE_QUALITY_CLASS = {
+  '!': 'mq-good', '!!': 'mq-good', '!?': 'mq-interesting',
+  '?!': 'mq-dubious', '?': 'mq-bad', '??': 'mq-bad',
+};
+const moveQualityFor = (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.moveQuality || '';
+
 /* ---------- recursive branch renderer ----------
    flip=true is used for Black lines from move-pair 2 onward: the enumerated
    move (opp) is White's actual move (data), and "our" move is the standard
@@ -1908,8 +1924,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
     tr.className = 'data-row';
     tr.dataset.opp = opp;
     const moveHtml = flip
-      ? `${depth+1}. ${opp} <span class="ourReply">...</span>`
-      : `${opp} ${depth+2}. <span class="ourReply">...</span>`;
+      ? `${depth+1}. ${opp}<span class="moveQual"></span> <span class="ourReply">...</span>`
+      : `${opp}<span class="moveQual"></span> ${depth+2}. <span class="ourReply">...</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
@@ -1927,6 +1943,18 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+             <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
+               <span class="rmq-label">Move quality</span>
+               <span class="rmq-strip">
+                 <button type="button" class="rmq mq-good" data-q="!" title="good move">!</button>
+                 <button type="button" class="rmq mq-good" data-q="!!" title="brilliant move">!!</button>
+                 <button type="button" class="rmq mq-interesting" data-q="!?" title="interesting move">!?</button>
+                 <button type="button" class="rmq mq-dubious" data-q="?!" title="dubious move">?!</button>
+                 <button type="button" class="rmq mq-bad" data-q="?" title="weak move">?</button>
+                 <button type="button" class="rmq mq-bad" data-q="??" title="blunder">??</button>
+                 <button type="button" class="rmq rmq-clear" data-q="" title="clear annotation">✕</button>
+               </span>
+             </div>
              <hr class="row-menu-sep">
              <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
              <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
@@ -2028,6 +2056,14 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(next && next.classList.contains('branch-row')) rows.push(next);
       return rows;
     }
+    const moveQualEl = tr.querySelector('.moveQual');
+    function refreshMoveQuality(){
+      const q = currentSaved()?.moveQuality || '';
+      moveQualEl.textContent = q;
+      moveQualEl.className = 'moveQual' + (q ? ' ' + MOVE_QUALITY_CLASS[q] : '');
+      rowMenu.querySelectorAll('.rmq').forEach(b =>
+        b.classList.toggle('rmq-active', q !== '' && b.dataset.q === q));
+    }
     function refreshHidden(){
       const isHidden = !!currentSaved()?.hidden;
       getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
@@ -2071,6 +2107,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       expandWith(savedRep, !currentSaved()?.collapsed);
     }
     refreshHidden();
+    refreshMoveQuality();
     refreshEvalSpan(evalSpan, currentSaved()?.eval);
     refreshBranchName(nameSpan, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
@@ -2110,6 +2147,14 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     };
+    rowMenu.querySelectorAll('.rmq').forEach(btn => {
+      btn.onclick = e => {
+        e.stopPropagation();
+        savePrefField(lineSeq, 'moveQuality', btn.dataset.q);   // '' clears
+        refreshMoveQuality();
+        rowMenu.classList.remove('show');
+      };
+    });
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -3064,7 +3109,7 @@ async function exportBackup(){
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
-        collapsed:p.collapsed,
+        collapsed:p.collapsed, moveQuality:p.moveQuality,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
         castleStreetNumber:p.castleStreetNumber
       }))
@@ -3118,6 +3163,7 @@ async function importBackup(data){
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
         eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false,
+        moveQuality:pref.moveQuality||'',
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
         castleStreetNumber:pref.castleStreetNumber??''
       });
