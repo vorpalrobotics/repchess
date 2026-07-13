@@ -142,5 +142,56 @@ try {
   await app2.close();
 }
 
+// --- Phase C: cross-castle door plaque (two-line: castle name over room) ---
+const app3 = await launchApp();
+try {
+  // seed a line whose "Alpha" castle contains a nested "Beta" castle root, so
+  // Alpha's generation has a door crossing into Beta.
+  await seedBackup(app3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      // the entry branches (e6 / g6) so it's a junction with real doors; the e6
+      // door leads into the nested Beta castle, the g6 door stays in Alpha.
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2, name: 'Beta Foyer' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await app3.page.click('.line-row');
+  await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+
+  // 8. Generate Alpha's castle and walk it; a door into Beta shows the taller
+  //    two-line castle plaque (PlaneGeometry height 0.45 vs 0.33 for room-only).
+  try {
+    // open the Nf6 row's ⋮ and Generate Castle (icon buttons have zero size
+    // without Font Awesome, so click through evaluate)
+    await app3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+    await app3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+    await app3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+    await app3.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+    await app3.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+    await app3.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+    await app3.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+    // let the async move-image/plaque builds settle
+    await app3.page.waitForTimeout(500);
+    const found = await app3.page.evaluate(() => {
+      const meshes = window.__threeTestEdit.meshes();
+      const planes = meshes.filter(m => m.type === 'PlaneGeometry');
+      const twoLine = planes.filter(m => m.params && Math.abs(m.params.height - 0.45) < 0.02);
+      const oneLine = planes.filter(m => m.params && Math.abs(m.params.height - 0.33) < 0.02);
+      return { twoLine: twoLine.length, oneLine: oneLine.length };
+    });
+    assert(found.twoLine >= 1,
+      `expected a two-line cross-castle plaque (0.45-high plane); planes found: ${JSON.stringify(found)}`);
+    ok(`cross-castle door shows the two-line castle plaque (${found.twoLine} found)`);
+  } catch(e){ bad('cross-castle door plaque', e); }
+} finally {
+  await app3.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
