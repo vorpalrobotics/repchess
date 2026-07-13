@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-59';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-62';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-60';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-61';
+const BUILD_TAG = '-62';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1428,7 +1428,7 @@ $('castleWalkBtn').onclick = async () => {
   $('castleReportOverlay').style.display='none';
   $('threeTestOverlay').style.display='flex';
   const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-  const systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
+  const systems = await systemsForWalk(lines);
   // same instance id the street flow uses, so decorations made during this
   // preview land in (and load from) the same per-castle rooms
   const instanceId = castleInstanceId(CURRENT_LINE?.id, LAST_GENERATED_CASTLE.genRooms[0]?.castle || '');
@@ -2550,6 +2550,24 @@ async function renderHome(){
 function streetNameForLine(line){
   return (line && line.streetName && line.streetName.trim()) || (line && line.name) || '';
 }
+/* Map opening-system lines to the shape the VR walker wants, resolving each
+   system's OPENING MOVE and its mnemonic image/word for the tile under the
+   street sign. The opening move is openingMoves[0]: for a white system that's
+   our own first move (e.g. d4); for a black system it's the first opponent move
+   in the list we defend against. Image → word → SAN is the display fallback,
+   resolved here (in threeVR the raw SAN is drawn until/unless an image loads). */
+async function systemsForWalk(lines){
+  const mnem = await getAllMnemonics();
+  return lines.map(l => {
+    const move = (l.openingMoves && l.openingMoves[0]) || '';
+    return {
+      id: l.id, name: l.name, streetName: streetNameForLine(l), color: l.color,
+      openingMove: move,
+      openingImg: move ? mnemonicImgForSeq([move], mnem) : '',
+      openingWord: move ? mnemonicWordForSeq([move], mnem) : ''
+    };
+  });
+}
 function refreshLineStreetName(){
   $('lineStreetName').textContent = CURRENT_LINE ? streetNameForLine(CURRENT_LINE) : '';
 }
@@ -3423,7 +3441,7 @@ $('menuThreeTest').onclick = async ()=>{
     // (white branches right off Main Street, black branches left), plus every
     // built castle so each one appears as a building on its system's street.
     const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-    systems = lines.map(l=>({ id:l.id, name:l.name, streetName:streetNameForLine(l), color:l.color }));
+    systems = await systemsForWalk(lines);
     castles = await gatherBuiltCastles(lines);
   } finally {
     hideSpinner(spinner);
