@@ -284,6 +284,10 @@ function registerOneCastle(castle, instanceId, opts = {}){
   // this much clear to the side wall so its pair doesn't poke through.
   const PAIR_MARGIN = 2.8;
   const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
+  // the castle these rooms belong to (its entry/root room carries the name).
+  // A room whose OWN castle-root name differs from this is a boundary into a
+  // different castle -- its door gets the two-line castle plaque.
+  const ownerCastle = (genRooms[0] && genRooms[0].castle) || '';
   for(const r of genRooms){
     // depth needed for the wall move-pairs: the center pair sits near the
     // entrance and each left/right pair marches ~3 m farther north, so the room
@@ -377,9 +381,12 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
       name: r.name || '',
-      // the castle this room belongs to (only set on a castle-root/entry room);
-      // buildDoorHint uses it to label a door that crosses into another castle.
+      // r.castle: this room's OWN castle-root name (set only when the room is a
+      // castle root, e.g. a nested castle's entry embedded in this generation).
+      // ownerCastle: the castle these rooms were generated for. buildDoorHint
+      // shows the two-line plaque when a door's target has a different `castle`.
       castle: r.castle || '',
+      ownerCastle,
       // the entry room's centre pair moves out to the mansion's street door
       // (buildStreetEntryPair). Only a street-less entry -- the report's single-
       // castle "Walk in VR" preview, which spawns straight inside with no
@@ -601,13 +608,6 @@ function setRoomGeom(roomKey, geom){
 function roomNameFor(roomKey){
   const n = ROOMS[roomKey] && ROOMS[roomKey].name;
   return (n && String(n).trim()) || '';
-}
-// the castle instance a room key belongs to ('cas:<inst>' from 'cas:<inst>:<pos>');
-// non-castle keys (e.g. mainStreet) return themselves. Two rooms are in the same
-// castle iff these match — used to spot a door that crosses into another castle.
-function castleInstanceOf(roomKey){
-  const m = /^(cas:[^:]+):/.exec(roomKey || '');
-  return m ? m[1] : (roomKey || '');
 }
 // Name (or rename) a room from the VR walk. This edits the SAME item as the
 // tree's Attributes → Room Name: we update the live ROOMS entry and hand the
@@ -2925,9 +2925,14 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey){
   const group = new THREE.Group();
   const name = roomNameFor(targetKey);
   // a door crossing into another castle shows that castle's name (over the room
-  // within it); an ordinary in-castle door just shows the room name.
+  // within it); an ordinary in-castle door just shows the room name. The target
+  // is a boundary into another castle when its OWN castle-root name differs from
+  // the castle we're currently walking in (its owner). (The subtree of the other
+  // castle is generated inline under this instance, so the keys share a prefix --
+  // the castle NAME, not the key, is what distinguishes them.)
   const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
-  const crossCastle = !!destCastle && castleInstanceOf(roomKey) !== castleInstanceOf(targetKey);
+  const ownerCastle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
+  const crossCastle = !!destCastle && destCastle !== ownerCastle;
   if(!name && !crossCastle) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
