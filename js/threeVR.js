@@ -377,6 +377,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
       name: r.name || '',
+      // the castle this room belongs to (only set on a castle-root/entry room);
+      // buildDoorHint uses it to label a door that crosses into another castle.
+      castle: r.castle || '',
       // the entry room's centre pair moves out to the mansion's street door
       // (buildStreetEntryPair). Only a street-less entry -- the report's single-
       // castle "Walk in VR" preview, which spawns straight inside with no
@@ -598,6 +601,13 @@ function setRoomGeom(roomKey, geom){
 function roomNameFor(roomKey){
   const n = ROOMS[roomKey] && ROOMS[roomKey].name;
   return (n && String(n).trim()) || '';
+}
+// the castle instance a room key belongs to ('cas:<inst>' from 'cas:<inst>:<pos>');
+// non-castle keys (e.g. mainStreet) return themselves. Two rooms are in the same
+// castle iff these match — used to spot a door that crosses into another castle.
+function castleInstanceOf(roomKey){
+  const m = /^(cas:[^:]+):/.exec(roomKey || '');
+  return m ? m[1] : (roomKey || '');
 }
 // Name (or rename) a room from the VR walk. This edits the SAME item as the
 // tree's Attributes → Room Name: we update the live ROOMS entry and hand the
@@ -2829,6 +2839,38 @@ function makeNameSignMesh(name){
   tex.colorSpace = THREE.SRGBColorSpace;
   return new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.33), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
 }
+// A taller two-line plaque for a door that crosses into another castle: the
+// destination castle name (top, larger) over the room within it (below,
+// smaller/muted). Same off-white + gold-frame styling as makeNameSignMesh; the
+// 0.9-wide plane keeps buildDoorHint's uniform scaling working.
+function makeCastleDoorSignMesh(castleName, roomName){
+  const cw = 300, ch = 150;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(240,236,226,0.95)';
+  ctx.fillRect(4, 4, cw - 8, ch - 8);
+  ctx.strokeStyle = '#caa46a';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(7, 7, cw - 14, ch - 14);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // castle name (top, larger, auto-shrunk to fit)
+  ctx.fillStyle = '#1a1a1a';
+  let f1 = 52; ctx.font = `bold ${f1}px serif`;
+  while(f1 > 16 && ctx.measureText(castleName).width > cw - 30){ f1 -= 2; ctx.font = `bold ${f1}px serif`; }
+  ctx.fillText(castleName, cw/2, roomName ? ch * 0.35 : ch / 2);
+  // room within the castle (below, smaller, muted)
+  if(roomName){
+    ctx.fillStyle = '#5a5148';
+    let f2 = 34; ctx.font = `${f2}px serif`;
+    while(f2 > 12 && ctx.measureText(roomName).width > cw - 36){ f2 -= 2; ctx.font = `${f2}px serif`; }
+    ctx.fillText(roomName, cw/2, ch * 0.72);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9 * ch / cw), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+}
 // a small framed square showing one move's image (or its notation if no image
 // has been set), used as a door-side decoration cueing the room beyond.
 function makeMoveDecorationMesh(move, sizeM){
@@ -2879,18 +2921,22 @@ function makeMoveDecorationMesh(move, sizeM){
 // immediately above the lintel, centered on the doorway. (The opponent-move icon
 // that used to sit above it is gone -- the move now lives in the door-side pair,
 // buildDoorPair, so it'd be redundant.) Hidden by the hints toggle for self-test.
-function buildDoorHint(size, wall, offset, targetKey){
+function buildDoorHint(size, wall, offset, targetKey, roomKey){
   const group = new THREE.Group();
   const name = roomNameFor(targetKey);
-  if(!name) return group;
+  // a door crossing into another castle shows that castle's name (over the room
+  // within it); an ordinary in-castle door just shows the room name.
+  const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
+  const crossCastle = !!destCastle && castleInstanceOf(roomKey) !== castleInstanceOf(targetKey);
+  if(!name && !crossCastle) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
   const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
-  const NAME_H = NAME_W * 0.33 / 0.9;     // keep makeNameSignMesh's plane aspect
+  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name) : makeNameSignMesh(name);
+  const NAME_H = NAME_W * m.geometry.parameters.height / 0.9;   // keep the plane's aspect
   const GAP = 0.12;                       // gap between the door top and the plaque
   const nameY = DOOR_H + GAP + NAME_H / 2;
-  const m = makeNameSignMesh(name);
-  const s = NAME_W / 0.9;                 // scale the 0.9x0.33 plane to NAME_W wide
+  const s = NAME_W / 0.9;                 // scale the 0.9-wide plane to NAME_W wide
   m.scale.set(s, s, 1);
   if(wall === 'north'){ m.position.set(offset, nameY, fixed + clearance); m.rotation.y = 0; }
   if(wall === 'south'){ m.position.set(offset, nameY, fixed - clearance); m.rotation.y = Math.PI; }
@@ -3928,7 +3974,7 @@ function buildRoom(roomKey){
           // forward-door hint: name plaque above the door, and the move-pair +
           // object for the room beyond, to the left of the door. The pair is
           // hint-gated inside buildDoorPair; a filled object stays for self-test.
-          if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target));
+          if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target, roomKey));
           if(!ex.back) scene.add(buildDoorPair(roomKey, room, wall, ex.offset, ex));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
