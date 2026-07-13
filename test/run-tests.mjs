@@ -82,5 +82,49 @@ try {
   await app.close();
 }
 
+// --- Phase B: opponent move-quality annotation (move table) ---
+const app2 = await launchApp();
+try {
+  // seed a white 1.d4 line plus a game so the opponent reply (Nf6) appears as a row
+  await seedBackup(app2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app2.page.click('.line-row');                                   // open the move table
+  await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+
+  // 5. Setting a glyph from the ⋮ strip renders it (colour-coded) on the move.
+  //    (Click via evaluate: the ⋮ icon button has zero size because Font Awesome
+  //    is CDN-blocked here, so Playwright deems it "not visible" — the real
+  //    onclick handlers still fire.)
+  try {
+    await app2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await app2.page.evaluate(s => document.querySelector(`${s} .rmq[data-q="?"]`).click(), rowSel);
+    const glyph = (await app2.page.textContent(`${rowSel} .moveQual`)).trim();
+    const cls = await app2.page.getAttribute(`${rowSel} .moveQual`, 'class');
+    assert(glyph === '?', `expected '?' on the move, got '${glyph}'`);
+    assert(/mq-bad/.test(cls), `expected mq-bad colour class, got '${cls}'`);
+    ok("move-quality glyph set from the ⋮ strip renders on the move (Nf6?)");
+  } catch(e){ bad('move-quality glyph set', e); }
+
+  // 6. It persists: reload the app from IDB and reopen the line — glyph is back.
+  try {
+    await app2.page.reload({ waitUntil: 'domcontentloaded' });
+    await app2.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await app2.page.click('.line-row');
+    await app2.page.waitForSelector(rowSel, { timeout: 10000 });
+    const glyph = (await app2.page.textContent(`${rowSel} .moveQual`)).trim();
+    assert(glyph === '?', `glyph did not persist across reload, got '${glyph}'`);
+    ok('move-quality glyph persists across reload (IDB)');
+  } catch(e){ bad('move-quality glyph persists', e); }
+} finally {
+  await app2.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
