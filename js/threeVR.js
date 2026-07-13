@@ -417,8 +417,10 @@ let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}
 // [{box, kind:'forward', floors:[{label,target,spawn}]} | {box, kind:'back', target, spawn}]
 let elevatorMeta = [];
 let activeElevatorDoor = null;  // the elevatorMeta entry whose popup is currently open
-let currentExitsByWall = {};
-let currentStairCorridors = {}; // wall -> {rise, depth, outSign}, for ex.type === 'stair'
+// wall -> [{rise, depth, outSign, dir, offset}], one entry per stair exit on that
+// wall. An array (not one-per-wall) so a staircase sharing a wall with another
+// door still has its own walkable gap keyed to its own offset.
+let currentStairCorridors = {};
 let currentBuildingColliders = []; // outdoor only: [{origin,size,doorWall,doorOffset}]
 let teleportLockUntil = 0;
 const PLAYER_RADIUS = 0.4;
@@ -1042,6 +1044,17 @@ function setDoorOverride(roomKey, dKey, assetId){
   });
 }
 
+// the stair corridor (if any) on `wall` whose doorway gap spans `across` (the
+// coordinate along the wall: x for north/south, z for west/east). Keyed to each
+// stair's own offset, so a staircase sharing a wall with other doors is still
+// found -- fixes being blocked at the base when an import adds a door there.
+function stairGapAt(wall, across){
+  const cs = currentStairCorridors[wall];
+  if(!cs) return null;
+  const dHalf = DOOR_W/2;
+  return cs.find(c => across > c.offset - dHalf && across < c.offset + dHalf) || null;
+}
+
 // A stair exit's doorway opens onto a real protruding corridor (built by
 // buildStairCorridor) rather than the usual "step through and teleport
 // almost immediately" gap, so once the player is in the gap we let them
@@ -1058,34 +1071,30 @@ function clampToRoom(size, x, z){
   // of the room into the void. Only a stair corridor's gap is walkable, and
   // then only within the corridor's own footprint.
   if(z < -halfD){
-    const ex = currentExitsByWall['north'];
-    const c = ex && currentStairCorridors['north'];
-    if(c && x > ex.offset-dHalf && x < ex.offset+dHalf){
-      x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+    const c = stairGapAt('north', x);
+    if(c){
+      x = Math.max(c.offset-dHalf+PLAYER_RADIUS, Math.min(c.offset+dHalf-PLAYER_RADIUS, x));
       z = Math.max(z, -halfD - c.depth);
     } else z = -halfD;
   }
   if(z > halfD){
-    const ex = currentExitsByWall['south'];
-    const c = ex && currentStairCorridors['south'];
-    if(c && x > ex.offset-dHalf && x < ex.offset+dHalf){
-      x = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, x));
+    const c = stairGapAt('south', x);
+    if(c){
+      x = Math.max(c.offset-dHalf+PLAYER_RADIUS, Math.min(c.offset+dHalf-PLAYER_RADIUS, x));
       z = Math.min(z, halfD + c.depth);
     } else z = halfD;
   }
   if(x < -halfW){
-    const ex = currentExitsByWall['west'];
-    const c = ex && currentStairCorridors['west'];
-    if(c && z > ex.offset-dHalf && z < ex.offset+dHalf){
-      z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+    const c = stairGapAt('west', z);
+    if(c){
+      z = Math.max(c.offset-dHalf+PLAYER_RADIUS, Math.min(c.offset+dHalf-PLAYER_RADIUS, z));
       x = Math.max(x, -halfW - c.depth);
     } else x = -halfW;
   }
   if(x > halfW){
-    const ex = currentExitsByWall['east'];
-    const c = ex && currentStairCorridors['east'];
-    if(c && z > ex.offset-dHalf && z < ex.offset+dHalf){
-      z = Math.max(ex.offset-dHalf+PLAYER_RADIUS, Math.min(ex.offset+dHalf-PLAYER_RADIUS, z));
+    const c = stairGapAt('east', z);
+    if(c){
+      z = Math.max(c.offset-dHalf+PLAYER_RADIUS, Math.min(c.offset+dHalf-PLAYER_RADIUS, z));
       x = Math.min(x, halfW + c.depth);
     } else x = halfW;
   }
@@ -1177,10 +1186,13 @@ function stairCorridorGeom(room){
 // back to the legacy single-room stairs platform when not in a corridor.
 function floorHeightAtPos(room, x, z){
   for(const wall in currentStairCorridors){
-    const c = currentStairCorridors[wall];
     const { axis, fixed } = wallSpan(room.size, wall);
-    const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
-    if(along > 0) return (c.dir || 1) * c.rise * Math.min(1, along / c.depth);
+    const across = axis === 'x' ? x : z;    // coordinate along the wall
+    for(const c of currentStairCorridors[wall]){
+      if(Math.abs(across - c.offset) > DOOR_W/2) continue;   // not in this stair's gap
+      const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
+      if(along > 0) return (c.dir || 1) * c.rise * Math.min(1, along / c.depth);
+    }
   }
   return floorHeightAt(room, z);
 }
@@ -1192,18 +1204,17 @@ function floorHeightAtPos(room, x, z){
 // level gaze would otherwise sail right over them).
 function downStairPeekPitch(room, x, z){
   for(const wall in currentStairCorridors){
-    const c = currentStairCorridors[wall];
-    if(c.dir >= 0) continue;   // only down-staircases
     const { axis, fixed } = wallSpan(room.size, wall);
-    const ex = currentExitsByWall[wall];
-    const offset = ex ? ex.offset : 0;
-    // must be roughly lined up with the doorway, not off to the side
-    const lateral = axis === 'x' ? x - offset : z - offset;
-    if(Math.abs(lateral) > DOOR_W/2 + 0.3) continue;
-    const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
-    if(along >= 0) return STAIR_DOWN_PEEK_PITCH;              // on the descent
-    if(along > -STAIR_DOWN_PEEK_DIST)                          // approaching
-      return STAIR_DOWN_PEEK_PITCH * (1 + along / STAIR_DOWN_PEEK_DIST);
+    for(const c of currentStairCorridors[wall]){
+      if(c.dir >= 0) continue;   // only down-staircases
+      // must be roughly lined up with this stair's doorway, not off to the side
+      const lateral = (axis === 'x' ? x : z) - c.offset;
+      if(Math.abs(lateral) > DOOR_W/2 + 0.3) continue;
+      const along = (axis === 'x' ? z - fixed : x - fixed) * c.outSign;
+      if(along >= 0) return STAIR_DOWN_PEEK_PITCH;              // on the descent
+      if(along > -STAIR_DOWN_PEEK_DIST)                          // approaching
+        return STAIR_DOWN_PEEK_PITCH * (1 + along / STAIR_DOWN_PEEK_DIST);
+    }
   }
   return 0;
 }
@@ -3721,7 +3732,8 @@ function doorTriggerBox(size, wall, offset, origin){
 // corridor and climb the steps before the room transition fires.
 function stairTriggerBox(room, wall, offset){
   const { axis, fixed } = wallSpan(room.size, wall);
-  const c = currentStairCorridors[wall];
+  const cs = currentStairCorridors[wall] || [];
+  const c = cs.find(cc => Math.abs(cc.offset - offset) < 0.001) || cs[0];
   const dHalf = DOOR_W/2;
   const pad = 0.8;
   const farEdge = fixed + c.outSign*c.depth;
@@ -3908,14 +3920,13 @@ function buildRoom(roomKey){
   // two-track castle rooms get a half-wall dividing the left and right lanes
   if(room.twoTrack) scene.add(buildTwoTrackDivider(room));
 
-  currentExitsByWall = {};
   currentStairCorridors = {};
   for(const ex of room.exits){
-    currentExitsByWall[ex.wall] = ex;
     if(isStairType(ex.type)){
       const { fixed } = wallSpan(room.size, ex.wall);
       const { rise, depth } = stairCorridorGeom(room);
-      currentStairCorridors[ex.wall] = { rise, depth, outSign: fixed >= 0 ? 1 : -1, dir: stairDir(ex.type) };
+      (currentStairCorridors[ex.wall] ||= []).push(
+        { rise, depth, outSign: fixed >= 0 ? 1 : -1, dir: stairDir(ex.type), offset: ex.offset });
     }
   }
 
@@ -3929,9 +3940,9 @@ function buildRoom(roomKey){
     for(const wall of ['north','south','east','west']){
       // gather EVERY exit on this wall. Car rooms put a floor's worth of buttons
       // behind a single door; ordinary rooms can also now carry several doors on
-      // one wall (e.g. the user moved two exits to the same side), so each one
-      // needs its own gap + panel + trigger -- not just whichever the
-      // currentExitsByWall map last saw.
+      // one wall (e.g. the user moved two exits to the same side, or an import
+      // added one), so each one needs its own gap + panel + trigger, and each
+      // stair its own walkable corridor (see stairGapAt).
       const wallExits = room.exits.filter(e => e.wall === wall);
       const ex0 = wallExits[0];
       // a car's floor buttons all share ONE physical door; ordinary rooms cut a

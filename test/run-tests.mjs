@@ -193,5 +193,84 @@ try {
   await app3.close();
 }
 
+// --- Phase D: walk UP a staircase that shares its wall with other doors ---
+// (regression: a variation import added a door to a stair's wall, and the clamp
+// only allowed ONE door per wall as walkable, blocking the stair at its base.)
+const app4 = await launchApp();
+try {
+  const keys = await app4.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']), r2: pk(['d4','Nf6','c4','e6','Nc3']) };
+  });
+  // a castle entry with FIVE forward branches (so doors share walls) + the e6
+  // door made an up-staircase via a threeLayout override
+  await seedBackup(app4.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','c5'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','d6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e5'], reply: 'dxe5' },
+    ]}],
+    games: [
+      { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' },
+      { id:'g2', moves:'d4 Nf6 c4 g6 Nc3 Bg7', white:'a', black:'b', result:'*' },
+      { id:'g3', moves:'d4 Nf6 c4 c5 d5 b5',   white:'a', black:'b', result:'*' },
+      { id:'g4', moves:'d4 Nf6 c4 d6 Nc3 g6',  white:'a', black:'b', result:'*' },
+      { id:'g5', moves:'d4 Nf6 c4 e5 dxe5 Ng4',white:'a', black:'b', result:'*' },
+    ],
+    threeLayout: JSON.stringify({ [keys.alpha]: { exits: { [keys.r2]: { type: 'stair' } } } }),
+  });
+  await app4.page.click('.line-row');
+  await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app4.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app4.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app4.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app4.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app4.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app4.page.waitForTimeout(400);
+
+  // 9. Walk up the staircase from its base; the player should climb the corridor
+  //    and teleport into the room above (not be blocked at the doorway).
+  try {
+    const r = await app4.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const steps = dbg.meshes().filter(m => m.kind === 'stair-surface');
+      if(!steps.length) return { err: 'no staircase built' };
+      let near = steps[0], far = steps[0];
+      for(const s of steps){
+        if(s.x*s.x+s.z*s.z < near.x*near.x+near.z*near.z) near = s;
+        if(s.x*s.x+s.z*s.z > far.x*far.x+far.z*far.z) far = s;
+      }
+      const len = Math.hypot(far.x, far.z) || 1, dirx = far.x/len, dirz = far.z/len;
+      const yaw = Math.atan2(-dirx, -dirz);
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(near.x - dirx*1.5, near.z - dirz*1.5, yaw);   // just inside, facing up
+      await new Promise(r => setTimeout(r, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      // poll for the room change rather than a fixed hold -- headless frame
+      // timing varies with machine load (this is the 4th browser launched in
+      // the run), and a real climb can take longer than any single fixed delay.
+      const deadline = Date.now() + 12000;
+      while(Date.now() < deadline && window.__threeTestState.room === roomBefore){
+        await new Promise(r => setTimeout(r, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return { roomBefore, roomAfter: window.__threeTestState.room };
+    });
+    assert(!r.err, r.err);
+    assert(r.roomAfter && r.roomAfter !== r.roomBefore,
+      `blocked on the staircase — room did not change (before/after ${r.roomBefore} / ${r.roomAfter})`);
+    ok('walk UP a wall-sharing staircase reaches the room above');
+  } catch(e){ bad('walk up shared-wall staircase', e); }
+} finally {
+  await app4.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
