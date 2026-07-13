@@ -1,0 +1,14 @@
+{
+  "name": "repchess-test",
+  "private": true,
+  "type": "module",
+  "description": "Offline test harness: serves the app and intercepts CDN module URLs with locally-vendored library builds so the VR/app can run headlessly (the CDNs are unreachable in the sandbox).",
+  "scripts": {
+    "test": "node run-tests.mjs",
+    "vendor": "node build-vendor.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1",
+    "esbuild": "0.28.1"
+  }
+}
