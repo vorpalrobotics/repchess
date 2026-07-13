@@ -122,6 +122,22 @@ try {
     assert(glyph === '?', `glyph did not persist across reload, got '${glyph}'`);
     ok('move-quality glyph persists across reload (IDB)');
   } catch(e){ bad('move-quality glyph persists', e); }
+
+  // 7. Importing a whole variation writes the standard responses along it. This
+  //    is the shared core the engine panel's "Import this variation" delegates
+  //    to (importParsedLine on [...pathToPosition, ...pv]). The engine panel
+  //    itself can't be driven here — Stockfish is CDN-blocked in the sandbox —
+  //    so we verify the tree-writing core through the paste-import UI.
+  try {
+    await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await app2.page.fill('#importLineInput', '1. d4 Nf6 2. c4 e6 3. Nc3');
+    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await app2.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-opp="Nf6"]');
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
+    }, { timeout: 10000 });
+    ok('import-variation writes standard responses into the tree (engine-import core)');
+  } catch(e){ bad('import-variation core', e); }
 } finally {
   await app2.close();
 }

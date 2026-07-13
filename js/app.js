@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-63';
+const BUILD_TAG = '-64';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1853,7 +1853,7 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
 
   const btnEval = tr.querySelector('td.resp > button.iconbtn');
   attachHoverPreview(btnEval, endSeq);
-  btnEval.onclick = () => showPosition(fenForSeq(endSeq), ()=>{}, ()=>{});
+  btnEval.onclick = () => showPosition(fenForSeq(endSeq), ()=>{}, ()=>{}, endSeq);
 
   const tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
   const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
@@ -2222,11 +2222,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
          our reply too whenever one's been chosen, not stop one ply short.
          Black systems show the row the other way round (our reply already
          the next row's own move), so leave those keyed on lineSeq alone. */
-      const fen = fenForSeq(!flip && childrenSeq ? childrenSeq : lineSeq);
+      const posSeq = !flip && childrenSeq ? childrenSeq : lineSeq;
+      const fen = fenForSeq(posSeq);
       markLiveEval(evalSpan, btnEval);
       showPosition(fen,
         (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
-        ()=>clearLiveEval(evalSpan));
+        ()=>clearLiveEval(evalSpan), posSeq);
     };
   });
 
@@ -2522,7 +2523,7 @@ function renderBlackRoot(parent,games,trigger){
     markLiveEval(evalSpan, btnEval);
     showPosition(fen,
       (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
-      ()=>clearLiveEval(evalSpan));
+      ()=>clearLiveEval(evalSpan), lineSeq);
   };
 }
 
@@ -4625,6 +4626,11 @@ let expandedPvLines = new Set();
 const engine = new Engine();
 let engineRunId = 0;
 let currentEngineFen = null;
+// the repertoire move-path (from the trigger) to the position being analysed,
+// when analysis was opened from a tree row — lets the engine panel's "Import
+// this variation" build a full root-anchored line. null when the path is
+// unknown (e.g. the initial start-position analysis), which hides that action.
+let currentEngineSeq = null;
 
 /* the one evaltag span (if any) currently tracking a live engine search, so its
    styling/tooltip can be reset once another row takes over or the search ends.
@@ -5024,6 +5030,37 @@ function pvChipsFromSan(startFen, sanStr){
   return chips.length ? chips.join(' ') : null;
 }
 
+/* replay a UCI PV from startFen into clean SAN, up to maxPlies (stops early on
+   any illegal/mismatched move). Used to import an engine line into the tree. */
+function pvSanFromUci(startFen, uciMoves, maxPlies){
+  const chess = new Chess(startFen);
+  const out = [];
+  for(const u of uciMoves.slice(0, maxPlies)){
+    const mv = chess.move({ from: u.slice(0,2), to: u.slice(2,4), promotion: u.slice(4,5) || undefined });
+    if(!mv) break;
+    out.push(mv.san);
+  }
+  return out;
+}
+
+/* import a whole engine variation into the open system's tree: the path from
+   the root to the analysed position (startSeq) plus the engine's PV from there,
+   walked exactly like a pasted variation (our moves become standard responses,
+   opponent moves become manual replies). */
+async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
+  if(!CURRENT_LINE){ log('open an opening system first', true); return; }
+  const pv = pvSanFromUci(startFen, uciMoves, maxPlies);
+  if(!pv.length){ log('nothing to import from that engine line', true); return; }
+  try {
+    const count = await importParsedLine([...startSeq, ...pv]);
+    log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
+    await openLine(CURRENT_LINE);
+  } catch(err){
+    console.error('[importEngineVariation]', err);
+    log('import failed: ' + err.message, true);
+  }
+}
+
 function renderEngineLines(fen, depth, lines, multipv){
   const prefix = engineState === 'stopped' ? 'Stopped' : 'Live';
   $('engineDepth').textContent = `${prefix} — Depth ${depth}${engineModeTag()}`;
@@ -5036,8 +5073,14 @@ function renderEngineLines(fen, depth, lines, multipv){
     const expanded = expandedPvLines.has(i);
     const pvComplete = line.pv.length >= line.depth - PV_COMPLETE_SLACK;
     const showFull = expanded && pvComplete;
+    // "Import this variation" is only offered when we know the path from the
+    // root to the analysed position (analysis opened from a tree row).
+    const canImport = !!(currentEngineSeq && CURRENT_LINE);
     const li = document.createElement('li');
     li.innerHTML =
+      (canImport
+        ? `<button class="iconbtn pvMenu" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>`
+        : '') +
       `<button class="iconbtn pvToggle" title="${expanded ? 'Show fewer moves' : 'Show full line'}">` +
         `<i class="fa-solid fa-caret-${expanded ? 'down' : 'right'}"></i>` +
       `</button>` +
@@ -5048,6 +5091,19 @@ function renderEngineLines(fen, depth, lines, multipv){
       if(expanded) expandedPvLines.delete(i); else expandedPvLines.add(i);
       renderEngineLines(fen, depth, lines, multipv);
     };
+    if(canImport){
+      // import what's shown for this line (respects the expand toggle), captured
+      // now so the rapidly-re-rendering panel can't swap it out mid-click
+      const seqCopy = currentEngineSeq.slice(), fenCopy = fen, pvCopy = line.pv.slice();
+      const plies = showFull ? pvCopy.length : Math.min(pvCopy.length, ENGINE_PV_PLIES);
+      li.querySelector('.pvMenu').onclick = e => {
+        e.stopPropagation();
+        showGraphCtxMenu(e.clientX || 0, e.clientY || 0, [
+          { label: '⬇ Import this variation',
+            onClick: () => importEngineVariation(seqCopy, fenCopy, pvCopy, plies) },
+        ]);
+      };
+    }
     ol.appendChild(li);
   }
 }
@@ -5103,9 +5159,10 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
 }
 
-function showPosition(fen, onEvalUpdate, onComplete){
+function showPosition(fen, onEvalUpdate, onComplete, seq){
   if(!Chessboard) return;   // no board widget -> live board analysis is unavailable
   console.debug(`[showPosition] fen=${fen}`);
+  currentEngineSeq = seq ? seq.slice() : null;   // enables "Import this variation" when known
   board?.setPosition(fen);
   runEngine(fen, onEvalUpdate, onComplete);
 }
