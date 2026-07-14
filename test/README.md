@@ -14,6 +14,7 @@ The app loads a few libraries from public CDNs:
 | cytoscape `3.28.1` | `esm.sh` | top-level in `js/app.js` (**boot-blocking**) |
 | cytoscape-dagre `2.5.0` | `esm.sh` | top-level in `js/app.js` (**boot-blocking**) |
 | chess.js `0.10.3` | `cdnjs` | classic `<script>` in `index.html` |
+| cm-chessboard `8` piece sprite (`assets/pieces/standard.svg` only) | `unpkg` | `fetch()` in `js/app.js`/`js/threeVR.js` (mini boards) |
 
 In the CI/agent sandbox those CDN hosts are **network-blocked**, so the app
 can't boot there and browser-level tests were impossible. This harness fixes
@@ -22,8 +23,12 @@ Playwright request interception to satisfy those exact CDN URLs from
 locally-vendored builds in [`vendor/`](vendor). The app's own CDN URLs are
 unchanged — the remapping lives only in `harness.mjs`.
 
-`cm-chessboard`, Chart.js and Stockfish are left un-mocked; the app already
-degrades gracefully when they're absent, and the VR flow doesn't need them.
+The cm-chessboard **JS widget**, Chart.js and Stockfish are left un-mocked;
+the app already degrades gracefully when they're absent, and the VR flow
+doesn't need them. Only the piece **sprite** (a static SVG, no bundling
+needed) is vendored, since both mini boards (VR toolbar icon, graph room-info
+modal) render their pieces from it directly via `fetch()` + inline SVG `<use>`
+— not through the widget.
 
 ## Run
 

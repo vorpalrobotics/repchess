@@ -5141,11 +5141,38 @@ function currentRoomFen(){
   const pk = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].posKey;
   return (pk && pk.includes('/')) ? pk : null;
 }
-const PIECE_GLYPH = { K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙', k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟' };
+// the same cm-chessboard piece sprite the app's real boards (analysis, hover
+// preview) use, so the VR mini board's pieces are pixel-identical artwork, not
+// a Unicode-glyph approximation. app.js passes its own PIECES_FILE constant in
+// via threeOpts.piecesFile (see openThreeTest) so there's one source of truth;
+// this literal is only a fallback for the rare caller that omits it.
+let PIECES_FILE_URL = 'https://unpkg.com/cm-chessboard@8/assets/pieces/standard.svg';
+// Browsers block an SVG <use> from referencing a document at a different
+// origin outright ("Unsafe attempt to load URL ... Domains, protocols and
+// ports must match") -- so the sprite can't be used cross-origin in place.
+// cm-chessboard's own board widget works around exactly this by fetching the
+// raw SVG once and inlining it into the page, then referencing pieces by a
+// bare #id (a same-document, same-origin reference). This mirrors that same
+// technique (same cache-div id too, so if a real Chessboard instance is also
+// on the page, whichever runs first does the one fetch and the other reuses
+// it) rather than depending on cm-chessboard's own internal DOM as a hidden
+// dependency of this module.
+let pieceSpriteRequested = false;
+function ensurePieceSprite(){
+  if(pieceSpriteRequested || document.getElementById('cm-chessboard-sprite')) return;
+  pieceSpriteRequested = true;
+  const wrapper = document.createElement('div');
+  wrapper.id = 'cm-chessboard-sprite';
+  wrapper.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden';
+  wrapper.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(wrapper);
+  fetch(PIECES_FILE_URL).then(r => r.text()).then(svg => { wrapper.innerHTML = svg; }).catch(() => {});
+}
 // side to move from the posKey's 2nd field ('w'/'b'), for the caption
 function fenSideToMove(fen){ const parts = fen.split(' '); return parts[1] === 'b' ? 'Black' : 'White'; }
 // build an 8x8 grid (rank 8 at top) from the board field of a FEN/posKey
 function miniBoardGridHtml(fen){
+  ensurePieceSprite();
   const board = fen.split(' ')[0];
   const ranks = board.split('/');
   let cells = '';
@@ -5157,7 +5184,9 @@ function miniBoardGridHtml(fen){
         const n = +ch;
         for(let k = 0; k < n; k++){ cells += miniCell(r, file, ''); file++; }
       } else {
-        cells += miniCell(r, file, PIECE_GLYPH[ch] || '', ch === ch.toLowerCase());
+        // cm-chessboard's sprite ids are colour+piece, lowercase (e.g. 'wp','bn')
+        const code = (ch === ch.toLowerCase() ? 'b' : 'w') + ch.toLowerCase();
+        cells += miniCell(r, file, code);
         file++;
       }
     }
@@ -5165,13 +5194,16 @@ function miniBoardGridHtml(fen){
   }
   return cells;
 }
-function miniCell(rank, file, glyph, isBlackPiece){
+function miniCell(rank, file, pieceCode){
   const light = (rank + file) % 2 === 0;
   const bg = light ? '#e8ddc7' : '#9a7b53';
-  // black pieces get a dark glyph, white pieces a light glyph with a subtle outline
-  const color = isBlackPiece ? '#141414' : '#fbfbfb';
-  const shadow = glyph ? `text-shadow:0 0 2px ${isBlackPiece ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.7)'}` : '';
-  return `<div style="background:${bg};display:flex;align-items:center;justify-content:center;font-size:1.55rem;line-height:1;color:${color};${shadow}">${glyph}</div>`;
+  // sprite pieces are drawn in a native 40x40 box (standard.svg's own viewBox);
+  // matching viewBox here reproduces their original proportions/positioning.
+  // Bare "#id" (not a full URL) -- see ensurePieceSprite for why.
+  const piece = pieceCode
+    ? `<svg viewBox="0 0 40 40" width="88%" height="88%"><use href="#${pieceCode}"></use></svg>`
+    : '';
+  return `<div style="background:${bg};display:flex;align-items:center;justify-content:center">${piece}</div>`;
 }
 function toggleMiniBoard(show){
   let ov = document.getElementById('miniBoardOverlay');
@@ -5966,6 +5998,7 @@ function onKeyUp(e){ keys[e.key] = false; }
 export async function openThreeTest(containerEl, opts){
   container = containerEl;
   threeOpts = opts || {};
+  if(threeOpts.piecesFile) PIECES_FILE_URL = threeOpts.piecesFile;
   OPENING_SYSTEMS = threeOpts.systems || [];
   _beardImg = undefined;                 // re-read the disambiguator image each time the walk opens
   // register every BUILT castle's rooms first (each namespaced by its instance

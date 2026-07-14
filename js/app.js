@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-69';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-72';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-60';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-71';
+const BUILD_TAG = '-72';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1403,11 +1403,32 @@ function attachGraphClickHandler(cy){
 const mnemThumbHtml = img => img ? `<img class="room-info-img" src="${img}">` : '';
 
 /* ---------- mini board (from a FEN) ----------
-   Renders a position's board field as an 8x8 grid of Unicode pieces (rank 8 at
-   top, or flipped for a black repertoire). Same style as the VR board icon so
-   the two read alike. Used in the graph room-info modal. */
-const MINI_PIECE_GLYPH = { K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙', k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟' };
+   Renders a position's board field as an 8x8 grid using the SAME piece sprite
+   (PIECES_FILE) the real boards (analysis, hover preview) render from, via SVG
+   <use> -- pixel-identical artwork, not a Unicode-glyph approximation. Rank 8
+   at top, or flipped for a black repertoire. Also used by the VR board icon
+   (threeVR.js gets the same PIECES_FILE passed through openThreeTest) so every
+   mini board in the app reads alike. Used in the graph room-info modal. */
+// Browsers block an SVG <use> from referencing a document at a DIFFERENT
+// origin outright, so the CDN sprite can't be used cross-origin in place --
+// it has to be fetched and inlined into this document once, then referenced
+// by a bare #id (a same-document reference). Same cache-div id/technique
+// cm-chessboard's own board widget uses internally, so whichever runs first
+// (a real Chessboard instance, or this) does the one fetch and the other
+// reuses it -- this doesn't hard-depend on cm-chessboard's own DOM, though.
+let pieceSpriteRequested = false;
+function ensurePieceSprite(){
+  if(pieceSpriteRequested || document.getElementById('cm-chessboard-sprite')) return;
+  pieceSpriteRequested = true;
+  const wrapper = document.createElement('div');
+  wrapper.id = 'cm-chessboard-sprite';
+  wrapper.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden';
+  wrapper.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(wrapper);
+  fetch(PIECES_FILE).then(r => r.text()).then(svg => { wrapper.innerHTML = svg; }).catch(() => {});
+}
 function miniBoardGridHtml(fen, flip){
+  ensurePieceSprite();
   const board = (fen || '').split(' ')[0];
   const ranks = board.split('/');                 // index 0 = rank 8
   const grid = [];
@@ -1426,17 +1447,25 @@ function miniBoardGridHtml(fen, flip){
   for(const r of order){
     for(const f of order){
       const ch = grid[r][f];
-      const glyph = ch ? (MINI_PIECE_GLYPH[ch] || '') : '';
-      const isBlack = ch && ch === ch.toLowerCase();
+      // cm-chessboard's sprite ids are colour+piece, lowercase (e.g. 'wp','bn')
+      const code = ch ? (ch === ch.toLowerCase() ? 'b' : 'w') + ch.toLowerCase() : '';
       const light = (r + f) % 2 === 0;            // parity by true square, so flip keeps colors right
       const bg = light ? '#e8ddc7' : '#9a7b53';
-      const color = isBlack ? '#141414' : '#fbfbfb';
-      const shadow = glyph ? `text-shadow:0 0 2px ${isBlack ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.7)'}` : '';
-      html += `<div style="background:${bg};color:${color};${shadow}">${glyph}</div>`;
+      // sprite pieces are drawn in a native 40x40 box (standard.svg's own
+      // viewBox); matching viewBox here reproduces their original proportions.
+      // Bare "#id" (not a full URL) -- see ensurePieceSprite for why.
+      const piece = code
+        ? `<svg viewBox="0 0 40 40" width="88%" height="88%"><use href="#${code}"></use></svg>`
+        : '';
+      html += `<div style="background:${bg}">${piece}</div>`;
     }
   }
   return html;
 }
+// test-only hook (mirrors threeVR.js's window.__threeTestEdit), so the graph's
+// canvas-rendered room-info mini board can be checked without driving a real
+// cytoscape node click.
+if(localStorage.getItem('threeTestDebug')) window.__miniBoardGridHtml = miniBoardGridHtml;
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
   const mnemonicsBySquare = await getAllMnemonics();
@@ -1493,6 +1522,7 @@ $('castleWalkBtn').onclick = async () => {
     systems,
     castle: LAST_GENERATED_CASTLE,
     castleInstanceId: instanceId,
+    piecesFile: PIECES_FILE,
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
@@ -3547,6 +3577,7 @@ $('menuThreeTest').onclick = async ()=>{
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castles,
+    piecesFile: PIECES_FILE,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets

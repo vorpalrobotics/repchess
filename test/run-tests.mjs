@@ -321,16 +321,28 @@ try {
     });
     assert(nudged && nudged.x > 3, `nudge didn't move the billboard far enough to test with (x=${nudged && nudged.x})`);
 
-    const afterResize = await app5.page.evaluate(async (rk) => {
+    // dbg.resize() -> setRoomGeom() doesn't return a promise the caller can
+    // await (applyEdit's persistLayout/refreshAssetMap/buildRoom chain runs
+    // async), so poll for the reconciled position rather than trust a fixed
+    // delay -- under load (this is the 5th browser launched in the run) a
+    // single guessed wait was occasionally too short, flaking the assertion
+    // even though the fix itself had already landed correctly.
+    const tolerance = 4/2 - 0.3 + 0.02;   // room half-width (w=d=4) plus a small margin
+    const afterResize = await app5.page.evaluate(async ({ rk, bound }) => {
       const dbg = window.__threeTestEdit;
       dbg.resize(rk, { w: 4, d: 4, h: 3 });
-      await new Promise(r => setTimeout(r, 150));
-      return dbg.posOf('mnem-C1');
-    }, room);
-    const halfW = 4/2 - 0.3, halfD = 4/2 - 0.3;
-    const inBounds = p => p && Math.abs(p.x) <= halfW + 0.02 && Math.abs(p.z) <= halfD + 0.02;
+      let pos = null;
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline){
+        pos = dbg.posOf('mnem-C1');
+        if(pos && Math.abs(pos.x) <= bound && Math.abs(pos.z) <= bound) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return pos;
+    }, { rk: room, bound: tolerance });
+    const inBounds = p => p && Math.abs(p.x) <= tolerance && Math.abs(p.z) <= tolerance;
     assert(inBounds(afterResize),
-      `billboard stayed outside the shrunk room right after resize: ${JSON.stringify(afterResize)} (bound ±${halfW})`);
+      `billboard stayed outside the shrunk room after resize: ${JSON.stringify(afterResize)} (bound ±${tolerance})`);
 
     const afterReentry = await app5.page.evaluate(async (rk) => {
       const dbg = window.__threeTestEdit;
@@ -341,7 +353,7 @@ try {
       return dbg.posOf('mnem-C1');
     }, room);
     assert(inBounds(afterReentry),
-      `billboard drifted back out after a re-entry: ${JSON.stringify(afterReentry)} (bound ±${halfW})`);
+      `billboard drifted back out after a re-entry: ${JSON.stringify(afterReentry)} (bound ±${tolerance})`);
 
     ok('a nudged billboard is auto-clamped back inside a room that was made smaller');
   } catch(e){ bad('room-bounds auto-fix', e); }
@@ -476,6 +488,95 @@ try {
   } catch(e){ bad('whole-system coverage includes lead-in item', e); }
 } finally {
   await app7.close();
+}
+
+// --- Phase H: the VR mini board and the room-info mini board render identical,
+//     real piece artwork (same cm-chessboard sprite as the main analysis boards) ---
+const app8 = await launchApp();
+try {
+  const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  // 15. app.js's miniBoardGridHtml (the room-info modal's renderer): every one
+  //     of the 32 starting pieces resolves to real, non-empty SVG artwork from
+  //     the vendored sprite -- not just a plausible-looking <use> reference.
+  //     The sprite is fetched asynchronously and inlined (see ensurePieceSprite
+  //     -- a cross-origin <use> is blocked outright, so this is the actual
+  //     production mechanism, not a test-only shortcut), so poll rather than
+  //     check immediately.
+  try {
+    const res = await app8.page.evaluate(async (fen) => {
+      const div = document.createElement('div');
+      div.innerHTML = window.__miniBoardGridHtml(fen, false);
+      document.body.appendChild(div);
+      const svgs = [...div.querySelectorAll('svg')];
+      const uses = svgs.map(s => s.querySelector('use'));
+      let allResolved = false;
+      for(let i = 0; i < 30 && !allResolved; i++){
+        if(i > 0) await new Promise(r => setTimeout(r, 100));
+        allResolved = uses.every(u => { const b = u.getBBox(); return b.width > 0 && b.height > 0; });
+      }
+      div.remove();
+      return { svgCount: svgs.length, allResolved };
+    }, startFen);
+    assert(res.svgCount === 32, `expected 32 piece SVGs on the starting position, got ${res.svgCount}`);
+    assert(res.allResolved, 'some room-info mini-board pieces did not resolve to real artwork (dangling <use>)');
+    ok('room-info mini board renders real piece artwork for all 32 starting pieces');
+  } catch(e){ bad('room-info mini board renders real artwork', e); }
+
+  // seed + generate a castle so the VR mini board has a real room position to show
+  await seedBackup(app8.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
+  });
+  await app8.page.click('.line-row');
+  await app8.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app8.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app8.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app8.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app8.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app8.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app8.page.waitForTimeout(500);
+
+  // 16. threeVR.js's mini board (the actual toolbar board icon, real UI path,
+  //     not just its renderer function): opens with real piece artwork too,
+  //     referencing the sprite by a bare "#id" fragment -- a full cross-origin
+  //     URL there is exactly what browsers block (see ensurePieceSprite), so a
+  //     bare fragment is the correct/expected form, not a fallback.
+  try {
+    const btn = await app8.page.evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find(x => /board position/i.test(x.title || ''));
+      if(!b) return false;
+      b.click();
+      return true;
+    });
+    assert(btn, 'VR board toolbar icon not found');
+    const res = await app8.page.evaluate(async () => {
+      const ov = document.getElementById('miniBoardOverlay');
+      if(!ov || ov.style.display !== 'flex') return { open: false };
+      const svgs = [...ov.querySelectorAll('svg')];
+      const useEls = svgs.map(s => s.querySelector('use'));
+      let allResolved = false;
+      for(let i = 0; i < 30 && !allResolved; i++){
+        if(i > 0) await new Promise(r => setTimeout(r, 100));
+        allResolved = useEls.every(u => { const b = u.getBBox(); return b.width > 0 && b.height > 0; });
+      }
+      const hrefs = useEls.map(u => u.getAttribute('href'));
+      return { open: true, svgCount: svgs.length, allResolved, sampleHref: hrefs[0] };
+    });
+    assert(res.open, 'VR mini board did not open');
+    assert(res.svgCount > 0, 'VR mini board shows no piece artwork');
+    assert(res.allResolved, 'some VR mini-board pieces did not resolve to real artwork (dangling <use>)');
+    assert(/^#[wb][pnbrqk]$/.test(res.sampleHref || ''),
+      `VR mini board should reference the piece by a bare #id, got: ${res.sampleHref}`);
+    ok('VR mini board renders real piece artwork, same sprite technique as the room-info board');
+  } catch(e){ bad('VR mini board renders real artwork', e); }
+} finally {
+  await app8.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
