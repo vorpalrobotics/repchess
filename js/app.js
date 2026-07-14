@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-70';
+const BUILD_TAG = '-71';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3646,9 +3646,17 @@ async function computeMnemonicCoverage(line, rootSeq=null){
 // castle options in the dropdown are addressed by index into this array (not by
 // embedding lineId/castleName in the option value) since line ids themselves
 // contain colons, which would make any colon-delimited encoding ambiguous.
+// Shared by every coverage-style select (Manage Mnemonics, Quiz) since only one
+// such select is ever open/read at a time -- each populate call rebuilds this
+// array immediately before its own select's options, so the two stay in sync.
 let MNEM_CASTLE_OPTIONS = []; // [{lineId, castleName}]
-async function populateMnemonicsCoverageSelect(){
-  const sel = $('mnemonicsCoverageSelect');
+
+// fills `sel` with one optgroup per opening system, each offering "(whole
+// system)" plus "↳ <castle>" for every castle defined under it -- the same
+// system/castle breakdown Manage Mnemonics uses, so scoping a quiz or a
+// coverage view means the same thing in either place. `noneOptionHtml` is the
+// select's leading "nothing chosen" option (wording differs by context).
+async function populateCoverageOptgroups(sel, noneOptionHtml){
   const prevValue = sel.value;
   const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
   MNEM_CASTLE_OPTIONS = [];
@@ -3665,8 +3673,37 @@ async function populateMnemonicsCoverageSelect(){
       castleOpts +
       `</optgroup>`);
   }
-  sel.innerHTML = '<option value="">(none selected)</option>' + groups.join('');
+  sel.innerHTML = noneOptionHtml + groups.join('');
   if([...sel.options].some(o=>o.value===prevValue)) sel.value = prevValue;
+}
+async function populateMnemonicsCoverageSelect(){
+  await populateCoverageOptgroups($('mnemonicsCoverageSelect'), '<option value="">(none selected)</option>');
+}
+// resolves a coverage select's value ("" | lineId | "castle:<idx>") to
+// {line, rootSeq, isCastle} (or null for the blank option). isCastle
+// distinguishes "whole system" (rootSeq always null, meaning "no subtree
+// restriction") from a castle pick whose root simply has no reply yet
+// (rootSeq null there means "nothing built" — an empty-coverage case, not
+// "cover everything"). Shared by the Manage Mnemonics and Quiz coverage
+// handlers so "what does this value mean" only lives in one place.
+async function resolveCoverageSelection(val, lines){
+  if(!val) return null;
+  if(val.startsWith('castle:')){
+    const opt = MNEM_CASTLE_OPTIONS[+val.slice('castle:'.length)];
+    const line = opt && lines.find(l=>l.id===opt.lineId);
+    if(!line) return null;
+    const rootSeq = await findCastleRootSeq(line, opt.castleName);
+    return { line, rootSeq, isCastle: true };
+  }
+  const line = lines.find(l=>l.id===val);
+  return line ? { line, rootSeq: null, isCastle: false } : null;
+}
+// {line, rootSeq, isCastle} -> the coverage Set (or empty Set for an
+// unbuilt castle root) -- the terminal step resolveCoverageSelection feeds into.
+function coverageSetFor(sel){
+  if(!sel) return null;
+  if(sel.isCastle) return sel.rootSeq ? computeMnemonicCoverage(sel.line, sel.rootSeq) : Promise.resolve(new Set());
+  return computeMnemonicCoverage(sel.line);
 }
 
 async function renderMnemonicsGrid(){
@@ -3995,17 +4032,8 @@ $('mnemonicsCoverageSelect').onchange = async (e)=>{
   const spinner = showSpinner('Loading opening system…');
   try {
     const lines = await getLines(CURRENT_USER);
-    if(val.startsWith('castle:')){
-      const opt = MNEM_CASTLE_OPTIONS[+val.slice('castle:'.length)];
-      const line = opt && lines.find(l=>l.id===opt.lineId);
-      const rootSeq = line ? await findCastleRootSeq(line, opt.castleName) : null;
-      // no rootSeq means the castle root has no reply set yet (no room built) --
-      // show empty coverage rather than silently falling back to the whole system
-      MNEM_COVERAGE = line ? (rootSeq ? await computeMnemonicCoverage(line, rootSeq) : new Set()) : null;
-    } else {
-      const line = lines.find(l=>l.id===val);
-      MNEM_COVERAGE = line ? await computeMnemonicCoverage(line) : null;
-    }
+    const sel = await resolveCoverageSelection(val, lines);
+    MNEM_COVERAGE = await coverageSetFor(sel);
   } finally {
     hideSpinner(spinner);
   }
@@ -4219,15 +4247,12 @@ async function quizOpenSetup(){
   $('quizSetup').style.display = 'block';
 }
 
-/* fill the "Restrict items to Opening Coverage" dropdown with the user's opening
-   systems (lines); "" = no restriction. Mirrors populateMnemonicsCoverageSelect. */
+/* fill the "Restrict items to Opening Coverage" dropdown with the user's
+   opening systems, each expandable to its individual castles -- same
+   system/castle breakdown as Manage Mnemonics, since a user typically
+   memorizes one castle at a time and wants to drill just that one. */
 async function populateQuizCoverageSelect(){
-  const sel = $('quizCoverageSelect');
-  const prev = sel.value;
-  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-  sel.innerHTML = '<option value="">None: All items quizzed</option>' +
-    lines.map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('');
-  if(lines.some(l=>l.id===prev)) sel.value = prev;
+  await populateCoverageOptgroups($('quizCoverageSelect'), '<option value="">None: All items quizzed</option>');
 }
 
 /* read the setup choices, filter the pool, and begin the trials. */
@@ -4237,18 +4262,16 @@ async function quizStart(){
   if(!Number.isFinite(n) || n < 1){ $('quizSetupError').textContent = 'Enter a question count of 1 or more.'; return; }
   let pool = filterPoolByScope(QUIZ_FULL_POOL, scope);
   // optional restriction to the square+piece combos actually played in a chosen
-  // opening system (its repertoire coverage).
-  const coverageLineId = $('quizCoverageSelect').value;
-  if(coverageLineId){
+  // opening system or castle (its repertoire coverage).
+  const coverageVal = $('quizCoverageSelect').value;
+  if(coverageVal){
     const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
-    const line = lines.find(l=>l.id === coverageLineId);
-    if(line){
-      const coverage = await computeMnemonicCoverage(line);
-      pool = pool.filter(it => coverage.has(`${it.square}|${it.piece}`));
-    }
+    const sel = await resolveCoverageSelection(coverageVal, lines);
+    const coverage = await coverageSetFor(sel);
+    if(coverage) pool = pool.filter(it => coverage.has(`${it.square}|${it.piece}`));
   }
   if(pool.length === 0){
-    $('quizSetupError').textContent = coverageLineId
+    $('quizSetupError').textContent = coverageVal
       ? 'No mnemonics match that opening’s coverage and square scope. Loosen one of them.'
       : (scope === 'custom'
         ? 'No mnemonics on the selected squares. Pick different squares.'
