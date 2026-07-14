@@ -993,5 +993,104 @@ try {
   await app12.close();
 }
 
+// --- Phase M: tint-at-assign-time (per-placement recolor of an assigned
+//     asset, distinct from the flat "Color…" replace) ---
+const app13 = await launchApp();
+try {
+  await seedBackup(app13.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
+    assets: [{ id: 'wallpaper-1', type: 'surface',
+      image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      repeatPerMeter: 0.5 }],
+  });
+  await app13.page.click('.line-row');
+  await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app13.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app13.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app13.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app13.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app13.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app13.page.waitForTimeout(400);
+  await app13.page.evaluate(() => window.__threeTestEdit.toggle());
+  await app13.page.waitForTimeout(60);
+
+  // 31. Assigning a real asset to a wall: no "Tint…" tile yet (nothing to
+  //     recolor), the wall gets the real texture (hasMap, no forced color).
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const tintTileBefore = await app13.page.evaluate(() => !!document.querySelector('#pickerGrid .asset-card-tint'));
+    assert(!tintTileBefore, 'Tint… tile should not show before any real asset is assigned');
+
+    await app13.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+        .find(c => !c.classList.contains('asset-card-color') && c.textContent.includes('wallpaper-1'));
+      card.click();
+    });
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(150);
+
+    const afterAssign = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(afterAssign.length && afterAssign.every(m => m.hasMap && m.color === '#ffffff'),
+      `wall should show the real (untinted) texture after assigning the asset: ${JSON.stringify(afterAssign)}`);
+    ok('assigning a real asset shows its texture untinted, with no Tint… option yet');
+  } catch(e){ bad('tint: assign real asset baseline', e); }
+
+  // 32. Reopening now offers "Tint…"; picking a color recolors the wall
+  //     WHILE KEEPING the real texture (hasMap stays true -- the key
+  //     difference from "Color…", which replaces the texture outright).
+  let tintHex;
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#pickerGrid .asset-card-tint');
+    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
+    tintHex = await app13.page.evaluate(() => document.querySelector('#colorSwatchPickerOverlay .color-swatch').dataset.hex);
+    await app13.page.click('#colorSwatchPickerOverlay .color-swatch');
+    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(150);
+
+    const tinted = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(tinted.length && tinted.every(m => m.hasMap && m.color === tintHex),
+      `wall should keep its texture (hasMap) while showing the tint color ${tintHex}: ${JSON.stringify(tinted)}`);
+
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const tile = await app13.page.evaluate(() => {
+      const el = document.querySelector('#pickerGrid .asset-card-tint');
+      return el ? { current: el.classList.contains('asset-card-current'), text: el.textContent } : null;
+    });
+    assert(tile && tile.current && tile.text.includes(tintHex), `tint tile not marked current: ${JSON.stringify(tile)}`);
+    ok(`Tint… recolors the wall (${tintHex}) while keeping its real texture (hasMap)`);
+  } catch(e){ bad('tint: apply tint keeps the texture', e); }
+
+  // 33. Removing the tint reverts to the asset's own (untinted) look while
+  //     the real asset stays assigned -- distinct from "Remove" on the
+  //     surface itself, which would drop back to the procedural default.
+  try {
+    await app13.page.evaluate(() => document.querySelector('#pickerGrid .asset-card-tint').click());
+    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#cswRemoveBtn');
+    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(150);
+
+    const untinted = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(untinted.length && untinted.every(m => m.hasMap && m.color === '#ffffff'),
+      `removing the tint should keep the real texture but drop the recolor: ${JSON.stringify(untinted)}`);
+    ok('removing the tint reverts to the untinted asset while keeping it assigned');
+  } catch(e){ bad('tint: remove tint keeps the asset', e); }
+} finally {
+  await app13.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

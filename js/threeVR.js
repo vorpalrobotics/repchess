@@ -510,24 +510,33 @@ const SCALE_STEP = 1.02;
 const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 
 // a surface slot (LAYOUT[roomKey].floor/ceiling/stairSurface/walls[w], and the
-// same fields inside a building default/preset) holds either a real asset id
-// or a flat "#rrggbb" color -- colors can't collide with an asset id (ID_RE
-// forbids '#'). This resolves either into the same "asset record" shape the
+// same fields inside a building default/preset) holds one of three shapes:
+// a real asset id, a flat "#rrggbb" color (colors can't collide with an asset
+// id -- ID_RE forbids '#'), or { id, tint } -- a real asset with a per-
+// placement tint layered on top of (or replacing) its own baked-in tint,
+// without touching the shared asset definition or any other placement of it.
+// This resolves any of the three into the same "asset record" shape the
 // renderer expects, so callers never need to know which one they got.
 function isColorId(id){ return typeof id === 'string' && id[0] === '#'; }
 function assetOrColorFor(id){
   if(!id) return null;
+  if(typeof id === 'object'){
+    const base = ASSET_BY_ID[id.id];
+    return base ? (id.tint ? Object.assign({}, base, { tint: id.tint }) : base) : null;
+  }
   if(isColorId(id)) return { id, color: id, isColor: true };
   return ASSET_BY_ID[id] || null;
 }
-// surface getters resolve in layers: this room's own override -> the building's
-// default (set via the Room dialog's "make default" checkbox) -> null, which
-// leaves the procedural brick/wood fallback. See buildingDefaults() below.
-function floorAssetFor(roomKey){
-  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].floor) || defaultFieldId(roomKey, 'floor');
-  return assetOrColorFor(id);
+// the raw stored/inherited value for a surface slot (room override -> the
+// building default), untouched -- a plain id, a "#hex" color, or {id,tint} --
+// unlike the *AssetFor() getters below, which resolve it into an asset record.
+// Shared by them and by snapshotRoomStyle(), so a tint override survives
+// being captured into a building default or a named preset instead of
+// collapsing down to just its base asset id.
+function rawSurfaceId(roomKey, field){
+  return (LAYOUT[roomKey] && LAYOUT[roomKey][field]) || defaultFieldId(roomKey, field) || null;
 }
-function wallAssetFor(roomKey, wall){
+function rawWallId(roomKey, wall){
   let id = LAYOUT[roomKey] && LAYOUT[roomKey].walls && LAYOUT[roomKey].walls[wall];
   if(!id){
     const d = buildingDefaults(roomKey);
@@ -537,19 +546,33 @@ function wallAssetFor(roomKey, wall){
       id = d.walls[wallRelative(entranceWall(mergedRoom(roomKey)), wall)] || null;
     }
   }
-  return assetOrColorFor(id);
+  return id || null;
 }
+// surface getters resolve in layers: this room's own override -> the building's
+// default (set via the Room dialog's "make default" checkbox) -> null, which
+// leaves the procedural brick/wood fallback. See buildingDefaults() below.
+function floorAssetFor(roomKey){ return assetOrColorFor(rawSurfaceId(roomKey, 'floor')); }
+function wallAssetFor(roomKey, wall){ return assetOrColorFor(rawWallId(roomKey, wall)); }
 function slotAssetFor(roomKey, slotId){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slotId];
   return id ? ASSET_BY_ID[id] : null;
 }
-function ceilingAssetFor(roomKey){
-  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].ceiling) || defaultFieldId(roomKey, 'ceiling');
-  return assetOrColorFor(id);
-}
-function stairAssetFor(roomKey){
-  const id = (LAYOUT[roomKey] && LAYOUT[roomKey].stairSurface) || defaultFieldId(roomKey, 'stairSurface');
-  return assetOrColorFor(id);
+function ceilingAssetFor(roomKey){ return assetOrColorFor(rawSurfaceId(roomKey, 'ceiling')); }
+function stairAssetFor(roomKey){ return assetOrColorFor(rawSurfaceId(roomKey, 'stairSurface')); }
+// layers (or clears) a per-placement tint on top of whatever real asset is
+// currently assigned to a surface -- the base asset id is preserved either
+// way; only the stored value's shape changes (plain id <-> {id,tint}). A
+// no-op if the surface currently holds a flat color (allowTint's own picker
+// gating already keeps this unreachable then; this is just a safety net).
+function setSurfaceTint(roomKey, kind, wall, tint){
+  const rawId = kind === 'wall' ? rawWallId(roomKey, wall) : rawSurfaceId(roomKey, kind === 'stair' ? 'stairSurface' : kind);
+  const baseId = (rawId && typeof rawId === 'object') ? rawId.id : rawId;
+  if(!baseId || isColorId(baseId)) return;
+  const value = tint ? { id: baseId, tint } : baseId;
+  if(kind === 'floor') setFloorOverride(roomKey, value);
+  else if(kind === 'ceiling') setCeilingOverride(roomKey, value);
+  else if(kind === 'stair') setStairOverride(roomKey, value);
+  else if(kind === 'wall') setWallOverride(roomKey, wall, value);
 }
 function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
@@ -1747,18 +1770,19 @@ function defaultDoorAsset(roomKey, isExit){
 function snapshotRoomStyle(roomKey){
   const room = mergedRoom(roomKey);
   const ent = entranceWall(room);
-  const idOf = (a) => (a && a.id) || null;
+  // raw values (not the resolved *AssetFor() records), so a tint override
+  // survives the snapshot verbatim instead of collapsing to its base asset id.
   const d = {
-    floor: idOf(floorAssetFor(roomKey)),
-    ceiling: idOf(ceilingAssetFor(roomKey)),
-    stairSurface: idOf(stairAssetFor(roomKey)),
+    floor: rawSurfaceId(roomKey, 'floor'),
+    ceiling: rawSurfaceId(roomKey, 'ceiling'),
+    stairSurface: rawSurfaceId(roomKey, 'stairSurface'),
     door: null,
     exitDoor: null,
     walls: { entrance:null, opposite:null, left:null, right:null }
   };
   for(const wall of ['north','south','east','west']){
-    const a = wallAssetFor(roomKey, wall);
-    if(a) d.walls[wallRelative(ent, wall)] = a.id;
+    const id = rawWallId(roomKey, wall);
+    if(id) d.walls[wallRelative(ent, wall)] = id;
   }
   // first back:true door -> exitDoor, first ordinary door -> door
   for(const ex of (room.exits || [])){
@@ -4908,25 +4932,33 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
       onPick: id => setFloorOverride(roomKey, id),
-      onRemove: () => setFloorOverride(roomKey, null)
+      onRemove: () => setFloorOverride(roomKey, null),
+      onTintPick: hex => setSurfaceTint(roomKey, 'floor', null, hex),
+      onTintRemove: () => setSurfaceTint(roomKey, 'floor', null, null)
     });
   } else if(ud.kind === 'wall'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
       onPick: id => setWallOverride(roomKey, ud.wall, id),
-      onRemove: () => setWallOverride(roomKey, ud.wall, null)
+      onRemove: () => setWallOverride(roomKey, ud.wall, null),
+      onTintPick: hex => setSurfaceTint(roomKey, 'wall', ud.wall, hex),
+      onTintRemove: () => setSurfaceTint(roomKey, 'wall', ud.wall, null)
     });
   } else if(ud.kind === 'ceiling-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
       onPick: id => setCeilingOverride(roomKey, id),
-      onRemove: () => setCeilingOverride(roomKey, null)
+      onRemove: () => setCeilingOverride(roomKey, null),
+      onTintPick: hex => setSurfaceTint(roomKey, 'ceiling', null, hex),
+      onTintRemove: () => setSurfaceTint(roomKey, 'ceiling', null, null)
     });
   } else if(ud.kind === 'stair-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
       onPick: id => setStairOverride(roomKey, id),
-      onRemove: () => setStairOverride(roomKey, null)
+      onRemove: () => setStairOverride(roomKey, null),
+      onTintPick: hex => setSurfaceTint(roomKey, 'stair', null, hex),
+      onTintRemove: () => setSurfaceTint(roomKey, 'stair', null, null)
     });
   } else if(ud.kind === 'slot'){
     openAssetPicker({
@@ -4982,7 +5014,9 @@ function surfacePickerExtras(roomKey, kind, wall, effAsset){
     allowRemove: !!override,
     currentId: (effAsset && effAsset.id) || null,
     currentSource: override ? 'room' : (effAsset ? 'default' : null),
-    defaultExists: !!def
+    defaultExists: !!def,
+    allowTint: true,
+    currentTint: (effAsset && effAsset.tint) || null
   };
 }
 
