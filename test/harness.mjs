@@ -22,10 +22,14 @@ const VENDOR = path.join(HERE, 'vendor');
 
 // CDN URL → vendored file. Matched against the full request URL (query and all).
 const CDN_MAP = [
-  { re: /esm\.sh\/three@/,            file: 'three.mjs' },
-  { re: /esm\.sh\/cytoscape-dagre@/,  file: 'cytoscape-dagre.mjs' },
-  { re: /esm\.sh\/cytoscape@/,        file: 'cytoscape.mjs' },
-  { re: /chess\.js\/.*chess(\.min)?\.js/, file: 'chess.js' },
+  { re: /esm\.sh\/three@/,            file: 'three.mjs', type: 'application/javascript' },
+  { re: /esm\.sh\/cytoscape-dagre@/,  file: 'cytoscape-dagre.mjs', type: 'application/javascript' },
+  { re: /esm\.sh\/cytoscape@/,        file: 'cytoscape.mjs', type: 'application/javascript' },
+  { re: /chess\.js\/.*chess(\.min)?\.js/, file: 'chess.js', type: 'application/javascript' },
+  // the cm-chessboard piece sprite (SVG <use> art shared by the real boards and
+  // both mini boards) -- only this one static asset is vendored, not the whole
+  // cm-chessboard JS widget, which stays un-mocked/aborted like other non-core CDNs.
+  { re: /cm-chessboard@.*\/pieces\/standard\.svg/, file: 'cm-chessboard-standard.svg', type: 'image/svg+xml' },
 ];
 
 const MIME = {
@@ -82,7 +86,7 @@ export async function launchApp({ headless = true } = {}){
     const hit = CDN_MAP.find(m => m.re.test(url));
     if(hit){
       const body = await readFile(path.join(VENDOR, hit.file));
-      return route.fulfill({ status: 200, contentType: 'application/javascript', body });
+      return route.fulfill({ status: 200, contentType: hit.type, body });
     }
     blockedCdn.push(url);        // cm-chessboard / chart / fonts — app degrades gracefully
     return route.abort();

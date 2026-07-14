@@ -5,10 +5,12 @@
 //   node build-vendor.mjs
 //
 // Versions here must match the CDN URLs in index.html / js/app.js / js/threeVR.js:
-//   esm.sh/three@…            js/threeVR.js dynamic import
-//   esm.sh/cytoscape@…        js/app.js
-//   esm.sh/cytoscape-dagre@…  js/app.js
-//   cdnjs …/chess.js/…        index.html <script>
+//   esm.sh/three@…                     js/threeVR.js dynamic import
+//   esm.sh/cytoscape@…                 js/app.js
+//   esm.sh/cytoscape-dagre@…           js/app.js
+//   cdnjs …/chess.js/…                 index.html <script>
+//   unpkg …/cm-chessboard@…/pieces/…   js/app.js PIECES_FILE (only the piece
+//                                      sprite is vendored, not the JS widget)
 import { execSync } from 'node:child_process';
 import { mkdtempSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +23,7 @@ const VERSIONS = {
   'cytoscape-dagre': '2.5.0',
   dagre: '0.8.5',        // cytoscape-dagre's peer dep, bundled in
   'chess.js': '0.10.3',
+  'cm-chessboard': '8',  // only assets/pieces/standard.svg is used from this
 };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VENDOR = path.join(HERE, 'vendor');
@@ -47,6 +50,9 @@ try {
   bundle('cdagre.mjs', 'cytoscape-dagre.mjs');
   // chess.js 0.10.3 is a UMD browser global (window.Chess) — serve as-is
   copyFileSync(path.join(work, 'node_modules/chess.js/chess.js'), path.join(VENDOR, 'chess.js'));
+  // cm-chessboard: just the piece sprite SVG (static asset, no bundling needed)
+  copyFileSync(path.join(work, 'node_modules/cm-chessboard/assets/pieces/standard.svg'),
+               path.join(VENDOR, 'cm-chessboard-standard.svg'));
 
   console.log('\nvendor rebuilt in', VENDOR);
 } finally {
