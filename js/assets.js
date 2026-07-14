@@ -1245,6 +1245,30 @@ async function renderPicker(ov){
     };
     grid.appendChild(card);
   }
+  // "Tint…" recolors whatever real asset is already assigned, in place, as a
+  // per-placement override -- distinct from "Color…" above, which replaces
+  // the surface with a flat color outright. Only offered once a real asset
+  // (not a flat color, not empty) is actually assigned to recolor.
+  if(pickerOpts.allowTint && curId && curId[0] !== '#'){
+    const curTint = pickerOpts.currentTint || null;
+    const card = document.createElement('div');
+    card.className = 'asset-card asset-card-tint' + (curTint ? ' asset-card-current' : '');
+    card.innerHTML = `
+      <div class="asset-thumb color-tile-thumb">${curTint ? `<div class="color-tile-current" style="background:${esc(curTint)}"></div>` : '<i class="fa-solid fa-fill-drip"></i>'}</div>
+      <div class="asset-id">Tint…${curTint ? ` ${esc(curTint)} ✓` : ''}</div>
+      <div class="asset-type">Recolor this asset</div>
+    `;
+    card.onclick = () => {
+      const { onTintPick, onTintRemove } = pickerOpts;
+      closePicker();
+      openColorSwatchPicker({
+        current: curTint,
+        onPick: hex => { if(onTintPick) onTintPick(hex); },
+        onRemove: curTint ? () => { if(onTintRemove) onTintRemove(); } : null,
+      });
+    };
+    grid.appendChild(card);
+  }
   if(!list.length){
     const p = document.createElement('p');
     p.className = 'assets-empty';
