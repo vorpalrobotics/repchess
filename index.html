@@ -98,6 +98,14 @@
   tr.meta-row .meta-pv{margin-right:1.3em;font-family:'Courier New',monospace}
   tr.meta-row .meta-pv em{color:#999}
   tr.meta-row i{margin-right:.35em;color:#888}
+  tr.meta-row .meta-pv-row{margin-bottom:.2em}
+  tr.meta-row .meta-pv-row:last-child{margin-bottom:0}
+  tr.meta-row .meta-pv-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.5em}
+  tr.meta-row .meta-pv-score.eval-neutral  {color:#777}
+  tr.meta-row .meta-pv-score.eval-inferior {color:#e65100}
+  tr.meta-row .meta-pv-score.eval-losing   {color:#c62828}
+  tr.meta-row .meta-pv-score.eval-superior {color:#1565c0}
+  tr.meta-row .meta-pv-score.eval-winning  {color:#2e7d32}
 
   .row-menu-wrap{position:relative;display:inline-block}
   .row-menu{position:absolute;left:0;top:1.7em;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:10em;z-index:10}
@@ -1160,6 +1168,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-80"></script>
+<script type="module" src="js/app.js?v=20260630-81"></script>
 </body>
 </html>
