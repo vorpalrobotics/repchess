@@ -392,6 +392,7 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // castle "Walk in VR" preview, which spawns straight inside with no
       // building -- keeps its centre pair in-room (nowhere else to show it).
       entryNoStreet: r === entry && !opts.backToStreet,
+      posKey: r.posKey,   // first-4-FEN-fields for this room's position (mini-board icon)
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -463,7 +464,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -4274,6 +4275,7 @@ function buildRoom(roomKey){
   currentRoomKey = roomKey;
   if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
   updateToolbar();   // wall-lists button visibility depends on the room having pairs
+  refreshMiniBoard();   // update/hide the mini board if it's open and the room changed
 }
 
 // Called after the asset manager is closed while the walking tour is still
@@ -5060,12 +5062,13 @@ function buildTopToolbar(){
   left.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
+  boardBtn    = makeIconBtn('fa-chess-board',    'Show this room’s board position', () => toggleMiniBoard());
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
   wallListsBtn = makeIconBtn('fa-list-ol',        'Wall object lists', () => openWallListsDialog(currentRoomKey));
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
-  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
+  left.append(hintsBtn, editBtn, boardBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
   bar.append(left, closeBtn);
   return bar;
 }
@@ -5084,6 +5087,13 @@ function updateToolbar(){
   if(wallListsBtn){
     const hasPairs = moveObjectSlots(currentRoomKey).length > 0;
     wallListsBtn.style.display = (editMode && hasPairs) ? '' : 'none';
+  }
+  // board button whenever the current room carries a chess position (castle rooms);
+  // hidden for the street / start where there is none. Highlights while open.
+  if(boardBtn){
+    boardBtn.style.display = currentRoomFen() ? '' : 'none';
+    const open = !!document.getElementById('miniBoardOverlay') && document.getElementById('miniBoardOverlay').style.display === 'flex';
+    boardBtn.style.background = open ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
   }
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
@@ -5106,6 +5116,7 @@ function buildHelpOverlay(){
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
@@ -5118,6 +5129,82 @@ function toggleHelp(show){
   if(!helpOverlay) return;
   const on = show === undefined ? helpOverlay.style.display === 'none' : show;
   helpOverlay.style.display = on ? 'flex' : 'none';
+}
+
+/* ---------- mini board (current room's position) ----------
+   The current castle room's position, drawn as a small 2D board from the stored
+   posKey (first-4-FEN-fields; its first token is the piece placement). A quick
+   reference while walking — toggled from the board icon in the top toolbar. */
+// the position string for the current room, or null when the room has none
+// (the street / start) or it's a non-FEN fallback id.
+function currentRoomFen(){
+  const pk = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].posKey;
+  return (pk && pk.includes('/')) ? pk : null;
+}
+const PIECE_GLYPH = { K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙', k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟' };
+// side to move from the posKey's 2nd field ('w'/'b'), for the caption
+function fenSideToMove(fen){ const parts = fen.split(' '); return parts[1] === 'b' ? 'Black' : 'White'; }
+// build an 8x8 grid (rank 8 at top) from the board field of a FEN/posKey
+function miniBoardGridHtml(fen){
+  const board = fen.split(' ')[0];
+  const ranks = board.split('/');
+  let cells = '';
+  for(let r = 0; r < 8; r++){
+    const row = ranks[r] || '8';
+    let file = 0;
+    for(const ch of row){
+      if(/\d/.test(ch)){
+        const n = +ch;
+        for(let k = 0; k < n; k++){ cells += miniCell(r, file, ''); file++; }
+      } else {
+        cells += miniCell(r, file, PIECE_GLYPH[ch] || '', ch === ch.toLowerCase());
+        file++;
+      }
+    }
+    while(file < 8){ cells += miniCell(r, file, ''); file++; }   // pad short/absent ranks
+  }
+  return cells;
+}
+function miniCell(rank, file, glyph, isBlackPiece){
+  const light = (rank + file) % 2 === 0;
+  const bg = light ? '#e8ddc7' : '#9a7b53';
+  // black pieces get a dark glyph, white pieces a light glyph with a subtle outline
+  const color = isBlackPiece ? '#141414' : '#fbfbfb';
+  const shadow = glyph ? `text-shadow:0 0 2px ${isBlackPiece ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.7)'}` : '';
+  return `<div style="background:${bg};display:flex;align-items:center;justify-content:center;font-size:1.55rem;line-height:1;color:${color};${shadow}">${glyph}</div>`;
+}
+function toggleMiniBoard(show){
+  let ov = document.getElementById('miniBoardOverlay');
+  const fen = currentRoomFen();
+  const want = show === undefined ? !(ov && ov.style.display === 'flex') : show;
+  if(!want || !fen){ if(ov) ov.style.display = 'none'; updateToolbar(); return; }
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'miniBoardOverlay';
+    ov.style.cssText = 'position:absolute;left:8px;top:56px;z-index:7;display:none;';
+    (container || document.body).appendChild(ov);
+  }
+  const name = (ROOMS[currentRoomKey] && ROOMS[currentRoomKey].castleSign && ROOMS[currentRoomKey].castleSign.title) || 'Position';
+  ov.innerHTML = `
+    <div style="background:rgba(20,24,34,.92);border:1px solid #556;border-radius:8px;padding:.5rem;box-shadow:0 4px 16px rgba(0,0,0,.4);width:236px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-bottom:.35rem">
+        <span style="color:#eee;font:600 .78rem/1.2 sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span>
+        <button id="miniBoardClose" style="flex:0 0 auto;font-size:.7rem;padding:.1rem .4rem;cursor:pointer">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);width:220px;height:220px;border:2px solid #333;border-radius:3px;overflow:hidden">
+        ${miniBoardGridHtml(fen)}
+      </div>
+      <div style="color:#aab;font:400 .72rem/1.3 sans-serif;margin-top:.35rem">${fenSideToMove(fen)} to move</div>
+    </div>`;
+  ov.style.display = 'flex';
+  ov.querySelector('#miniBoardClose').onclick = () => toggleMiniBoard(false);
+  updateToolbar();
+}
+// keep the board in sync when the room changes: refresh if open, hide if the new
+// room has no position.
+function refreshMiniBoard(){
+  const ov = document.getElementById('miniBoardOverlay');
+  if(ov && ov.style.display === 'flex') toggleMiniBoard(true);
 }
 
 // move/scale pad shown while a prop is selected. Buttons drive the same
