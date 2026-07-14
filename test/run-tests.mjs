@@ -771,5 +771,93 @@ try {
   await app10.close();
 }
 
+// --- Phase K: Chessboard test (Test > Chessboard) -- coverage/depth logic ---
+// cm-chessboard is intentionally un-mocked in this harness (Chessboard is
+// null), so the actual board-driven quiz play can't be exercised end-to-end
+// here -- same structural gap the pre-existing per-row Opening Quiz already
+// has zero coverage for. What's new and testable in isolation is the plain
+// data logic added for the session quiz (coverage-bounded eligibility, the
+// same-choices replay picker, and the move-number/depth math), exercised
+// directly through the real production functions via __oqTestHooks.
+const app11 = await launchApp();
+try {
+  // 23. Menu wiring: clicking Test > Chessboard reaches the real feature (not
+  //     a "Coming Soon" stub anymore) and degrades gracefully, same as the
+  //     existing row-based Opening Quiz, when the board library is unavailable.
+  try {
+    let alertMsg = null;
+    app11.page.once('dialog', d => { alertMsg = d.message(); });
+    await app11.page.evaluate(() => document.getElementById('menuTestChessboard').click());
+    await app11.page.waitForTimeout(200);
+    assert(alertMsg && /could not be loaded/i.test(alertMsg), `expected the chessboard-unavailable alert, got: ${alertMsg}`);
+    const setupVisible = await app11.page.evaluate(() =>
+      getComputedStyle(document.getElementById('oqSetup')).display !== 'none');
+    assert(!setupVisible, 'setup screen should not show when the chessboard library failed to load');
+    ok('Test > Chessboard reaches the real feature (degrades gracefully without cm-chessboard)');
+  } catch(e){ bad('chessboard test menu wiring', e); }
+
+  // 24. oqCoverageEligible: before a castle's root sequence is reached there is
+  //     only ever one move that stays on the path to it (forced); at/past the
+  //     root, normal branching resumes; outside session/coverage, unrestricted.
+  try {
+    const root = ['d4', 'Nf6', 'c4'];
+    await app11.page.evaluate((coverageRootSeq) => window.__oqTestHooks.setOQ({ coverageRootSeq }), root);
+    const r = await app11.page.evaluate(() => {
+      const h = window.__oqTestHooks;
+      return {
+        atStart: h.coverageEligible([], ['d4', 'e4']),
+        afterD4: h.coverageEligible(['d4'], ['Nf6', 'Nc6']),
+        afterNf6: h.coverageEligible(['d4', 'Nf6'], ['c4', 'Nf3']),
+        atRoot: h.coverageEligible(['d4', 'Nf6', 'c4'], ['e6', 'g6']),
+        offPath: h.coverageEligible(['d4'], ['g6']),
+      };
+    });
+    assert(JSON.stringify(r.atStart) === JSON.stringify(['d4']), `expected the forced trigger ['d4'], got ${JSON.stringify(r.atStart)}`);
+    assert(JSON.stringify(r.afterD4) === JSON.stringify(['Nf6']), `expected the forced reply ['Nf6'], got ${JSON.stringify(r.afterD4)}`);
+    assert(JSON.stringify(r.afterNf6) === JSON.stringify(['c4']), `expected the forced reply ['c4'], got ${JSON.stringify(r.afterNf6)}`);
+    assert(JSON.stringify(r.atRoot) === JSON.stringify(['e6', 'g6']), `expected unrestricted branching at the root, got ${JSON.stringify(r.atRoot)}`);
+    assert(JSON.stringify(r.offPath) === JSON.stringify([]), `forced move not among candidates should yield no eligible moves, got ${JSON.stringify(r.offPath)}`);
+
+    await app11.page.evaluate(() => window.__oqTestHooks.setOQ({ coverageRootSeq: null }));
+    const whole = await app11.page.evaluate(() => window.__oqTestHooks.coverageEligible(['d4', 'Nf6'], ['e6', 'g6', 'a6']));
+    assert(JSON.stringify(whole) === JSON.stringify(['e6', 'g6', 'a6']), `whole-system coverage should leave every candidate eligible, got ${JSON.stringify(whole)}`);
+    ok('oqCoverageEligible forces the single path to a castle root, then opens up branching past it');
+  } catch(e){ bad('oqCoverageEligible', e); }
+
+  // 25. oqPickChoice: fresh picks get recorded for later replay; a "same
+  //     choices" replay reproduces a still-valid recorded pick deterministically,
+  //     and falls back to a fresh random pick when the recorded one no longer applies.
+  try {
+    await app11.page.evaluate(() => window.__oqTestHooks.setOQ({ replay: false, replayIdx: 0, oppChoices: [] }));
+    const first = await app11.page.evaluate(() => window.__oqTestHooks.pickChoice(['a']));
+    const afterFirst = await app11.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(first === 'a', `expected the only candidate 'a', got ${first}`);
+    assert(JSON.stringify(afterFirst.oppChoices) === JSON.stringify(['a']) && afterFirst.replayIdx === 1,
+      `pick was not recorded correctly: ${JSON.stringify(afterFirst)}`);
+
+    // replay=true, the recorded choice ('a') is still a valid candidate -> reproduced exactly
+    await app11.page.evaluate(() => window.__oqTestHooks.setOQ({ replay: true, replayIdx: 0 }));
+    const replayed = await app11.page.evaluate(() => window.__oqTestHooks.pickChoice(['a', 'z']));
+    assert(replayed === 'a', `same-choices replay should reproduce the recorded pick 'a', got ${replayed}`);
+
+    // recorded choice ('a') no longer among candidates -> falls back to a fresh random pick
+    const fallback = await app11.page.evaluate(() => window.__oqTestHooks.pickChoice(['x', 'y']));
+    assert(['x', 'y'].includes(fallback), `expected a fresh pick from ['x','y'] when the recorded choice no longer applies, got ${fallback}`);
+    ok('oqPickChoice records fresh picks and replays a still-valid recorded choice deterministically');
+  } catch(e){ bad('oqPickChoice', e); }
+
+  // 26. oqNextMoveNumber: the PGN move number the next ply belongs to, given
+  //     how many plies have already been played -- what Max Depth is checked against.
+  try {
+    const cases = await app11.page.evaluate(() =>
+      [0, 1, 2, 3, 11, 12].map(n => [n, window.__oqTestHooks.nextMoveNumber(n)]));
+    const expected = [[0,1],[1,1],[2,2],[3,2],[11,6],[12,7]];
+    assert(JSON.stringify(cases) === JSON.stringify(expected), `move-number mapping wrong: ${JSON.stringify(cases)}`);
+    ok('oqNextMoveNumber matches PGN move numbering (the Max Depth check)');
+  } catch(e){ bad('oqNextMoveNumber', e); }
+} finally {
+  await app11.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

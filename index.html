@@ -440,6 +440,11 @@
   #quizSetupError{color:#c62828;font-size:.85rem;min-height:1.1em;margin:.3rem 0}
   #quizStartBtn{font-size:1.1rem;font-weight:700;padding:.4rem 1.6rem}
   #openingQuizOverlay .modal{min-width:min(92vw,26em);text-align:center}
+  #oqSetup{display:none}
+  #oqSetupError{color:#c62828;font-size:.85rem;min-height:1.1em;margin:.3rem 0}
+  #oqNumQuestions,#oqMaxDepth{font-size:1rem;width:5em;text-align:center;padding:.25rem .4rem}
+  #oqCoverageSelect{font-size:1rem;padding:.25rem .4rem}
+  #oqQuestionLabel{display:none;font-size:.85rem;color:#666;margin-bottom:.5rem}
   #oqSummary{display:none}
   #oqScoreBar{display:flex;justify-content:center;gap:1.5rem;font-weight:700;margin-bottom:.6rem}
   #oqScoreBar #oqHits{color:#2e7d32}
@@ -1024,7 +1029,24 @@
       <h2>Opening Quiz</h2>
       <button id="oqCloseBtn">Close</button>
     </div>
+    <div id="oqSetup">
+      <div class="quiz-setup-row">
+        <label for="oqNumQuestions">Number of questions</label>
+        <input type="number" id="oqNumQuestions" min="1" max="999" value="10">
+      </div>
+      <div class="quiz-setup-row">
+        <label for="oqCoverageSelect">Opening coverage</label>
+        <select id="oqCoverageSelect"></select>
+      </div>
+      <div class="quiz-setup-row">
+        <label for="oqMaxDepth" title="Quiz plies up through this move number, then stop">Max Depth</label>
+        <input type="number" id="oqMaxDepth" min="1" max="999" value="20">
+      </div>
+      <div id="oqSetupError"></div>
+      <button id="oqStartBtn">START</button>
+    </div>
     <div id="oqPlay">
+      <div id="oqQuestionLabel"></div>
       <div id="oqScoreBar">
         <span id="oqHits">Hits 0</span>
         <span id="oqMisses">Misses 0</span>
@@ -1138,6 +1160,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-75"></script>
+<script type="module" src="js/app.js?v=20260630-76"></script>
 </body>
 </html>
