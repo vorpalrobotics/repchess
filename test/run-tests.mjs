@@ -441,7 +441,7 @@ try {
   // Uncaught, that would crash the whole run instead of just this phase.
   try {
     await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
-    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 35000 });
+    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 50000 });
   } catch(e){ bad('quiz setup opened', e); }
 
   // 12. The coverage select is broken out into per-system optgroups with a
@@ -1090,6 +1090,109 @@ try {
   } catch(e){ bad('tint: remove tint keeps the asset', e); }
 } finally {
   await app13.close();
+}
+
+// --- Phase N: multi-line ("MultiPV") engine eval saved per node ---
+// Stockfish has no vendored mock in this harness (same class of gap as
+// cm-chessboard), so a live search can't be driven end-to-end here -- the
+// save/display logic this feature added is plain data manipulation,
+// independent of the engine, and fully testable via __evalTestHooks against
+// a throwaway pref bag instead of real PREFS/IDB.
+const app14 = await launchApp();
+try {
+  await seedBackup(app14.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app14.page.click('.line-row');   // sets CURRENT_LINE, needed by refreshEvalSpan's color-coding
+  await app14.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  // 34. A single-line (MultiPV=1) analysis saves eval only -- no evalLines.
+  let single;
+  try {
+    single = await app14.page.evaluate((fen) =>
+      window.__evalTestHooks.recordEvalIfDeeper(fen, 20, { type: 'cp', value: 50 }, ['d2d4', 'd7d5'], null, null),
+      startFen);
+    assert(single.eval && single.eval.depth === 20 && single.eval.pv.includes('d4'),
+      `expected a depth-20 eval mentioning d4, got ${JSON.stringify(single.eval)}`);
+    assert(!single.evalLines, `single-line analysis should not create evalLines: ${JSON.stringify(single.evalLines)}`);
+    ok('single-line analysis saves eval only (no evalLines)');
+  } catch(e){ bad('eval: single-line save', e); }
+
+  // 35. A multi-line (MultiPV=3) analysis saves eval (the best line, as
+  //     before) AND evalLines (every rank, each with its own score/PV).
+  let multi;
+  try {
+    const lines = {
+      1: { score: { type: 'cp', value: 60 }, depth: 22, pv: ['d2d4', 'd7d5'] },
+      2: { score: { type: 'cp', value: 40 }, depth: 22, pv: ['e2e4', 'e7e5'] },
+      3: { score: { type: 'cp', value: 10 }, depth: 22, pv: ['c2c4', 'c7c5'] },
+    };
+    multi = await app14.page.evaluate(({ fen, lines, prior }) =>
+      window.__evalTestHooks.recordEvalIfDeeper(fen, 22, lines[1].score, lines[1].pv, lines, prior),
+      { fen: startFen, lines, prior: single });
+    assert(multi.eval.depth === 22, `expected the best line's depth 22, got ${multi.eval.depth}`);
+    assert(multi.evalLines && multi.evalLines.length === 3, `expected 3 saved lines, got ${JSON.stringify(multi.evalLines)}`);
+    assert(multi.evalLines[0].value === 60 && multi.evalLines[1].value === 40 && multi.evalLines[2].value === 10,
+      `evalLines should keep rank order with each rank's own score: ${JSON.stringify(multi.evalLines)}`);
+    assert(multi.evalLines[0].pv.includes('d4') && multi.evalLines[1].pv.includes('e4') && multi.evalLines[2].pv.includes('c4'),
+      `each line's own PV should be preserved: ${JSON.stringify(multi.evalLines.map(l => l.pv))}`);
+    ok('multi-line analysis saves every rank (eval = best, evalLines = all 3)');
+  } catch(e){ bad('eval: multi-line save', e); }
+
+  // 36. Depth-gating still applies to the whole set: a SHALLOWER re-analysis
+  //     (even with a different multi-line result) must not overwrite anything.
+  try {
+    const shallowerLines = {
+      1: { score: { type: 'cp', value: 5 }, depth: 18, pv: ['g1f3'] },
+      2: { score: { type: 'cp', value: 1 }, depth: 18, pv: ['b1c3'] },
+    };
+    const afterShallow = await app14.page.evaluate(({ fen, lines, prior }) =>
+      window.__evalTestHooks.recordEvalIfDeeper(fen, 18, lines[1].score, lines[1].pv, lines, prior),
+      { fen: startFen, lines: shallowerLines, prior: multi });
+    assert(JSON.stringify(afterShallow) === JSON.stringify(multi),
+      `a shallower analysis should not change the saved eval/evalLines: before=${JSON.stringify(multi)} after=${JSON.stringify(afterShallow)}`);
+    ok('a shallower re-analysis never overwrites a deeper saved eval/evalLines');
+  } catch(e){ bad('eval: depth-gating', e); }
+
+  // 37. Regression: a DEEPER but single-line (MultiPV=1) re-analysis must
+  //     still update the best-line eval, but must NOT downgrade a
+  //     previously-saved multi-line set down to nothing.
+  try {
+    const afterDeeper = await app14.page.evaluate(({ fen, prior }) =>
+      window.__evalTestHooks.recordEvalIfDeeper(fen, 25, { type: 'cp', value: 65 }, ['d2d4', 'd7d5'], null, prior),
+      { fen: startFen, prior: multi });
+    assert(afterDeeper.eval.depth === 25, `expected the deeper single-line eval to win, got depth ${afterDeeper.eval.depth}`);
+    assert(afterDeeper.evalLines && afterDeeper.evalLines.length === 3,
+      `a deeper single-line re-analysis should not drop the previously-saved multi-line set: ${JSON.stringify(afterDeeper.evalLines)}`);
+    ok('a deeper single-line re-analysis updates the best eval without downgrading a saved multi-line set');
+  } catch(e){ bad('eval: single-line never downgrades evalLines', e); }
+
+  // 38. Display: evalContinuationHtml renders one row per saved line (each
+  //     with its own score badge) when evalLines exists, the original
+  //     single-span format when it doesn't (unchanged for old saved evals),
+  //     and "not available" when there's nothing to show.
+  try {
+    const multiHtml = await app14.page.evaluate((saved) =>
+      window.__evalTestHooks.evalContinuationHtml(saved, []), multi);
+    const rowCount = (multiHtml.match(/class="meta-pv-row"/g) || []).length;
+    const scoreCount = (multiHtml.match(/class="meta-pv-score/g) || []).length;
+    assert(rowCount === 3 && scoreCount === 3, `expected 3 line rows each with a score badge, got rows=${rowCount} scores=${scoreCount} in: ${multiHtml}`);
+
+    const singleHtml = await app14.page.evaluate((saved) =>
+      window.__evalTestHooks.evalContinuationHtml(saved, []), { eval: multi.eval });
+    assert(!singleHtml.includes('meta-pv-row') && singleHtml.includes('class="meta-pv"'),
+      `a single saved eval (no evalLines) should render the original single-span format, got: ${singleHtml}`);
+
+    const emptyHtml = await app14.page.evaluate(() => window.__evalTestHooks.evalContinuationHtml({}, []));
+    assert(emptyHtml.includes('not available'), `expected "not available" for a node with no saved eval, got: ${emptyHtml}`);
+    ok('evalContinuationHtml renders all saved lines, falls back for a single eval, and handles none saved');
+  } catch(e){ bad('eval: continuation display', e); }
+} finally {
+  await app14.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

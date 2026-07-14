@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-80';
+const BUILD_TAG = '-81';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2047,6 +2047,32 @@ const MOVE_QUALITY_CLASS = {
 };
 const moveQualityFor = (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.moveQuality || '';
 
+/* the saved eval's PV as tappable move chips: one line when only a
+   single-line (MultiPV=1) analysis produced it (unchanged from before
+   evalLines existed), or one row per line -- each with its own eval badge,
+   since only the best one shows in the row's own eval tag -- when it came
+   from a multi-line (MultiPV>1) run. "not available" covers evals saved
+   before PV storage existed. Shared by renderBranch/renderBlackRoot's
+   near-identical per-row continuation wiring. */
+function evalContinuationHtml(saved, lineSeq){
+  const ev = saved?.eval;
+  if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
+  const lines = (saved.evalLines && saved.evalLines.length > 1) ? saved.evalLines : null;
+  if(!lines){
+    const startFen = ev.pvFen || fenForSeq(lineSeq);
+    const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
+      || pvChipsFromSan(startFen, ev.pv);
+    return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+  }
+  return lines.map(line => {
+    const startFen = line.pvFen || fenForSeq(lineSeq);
+    const chips = (line.pvUci?.length && pvChipsFromUci(startFen, line.pvUci, line.pvUci.length))
+      || pvChipsFromSan(startFen, line.pv);
+    const scoreTag = `<span class="meta-pv-score ${evalClass(line, CURRENT_LINE.color)}">${formatEvalTag(line)}</span>`;
+    return `<div class="meta-pv-row">${scoreTag}<span class="meta-pv">${chips || escapeHtml(line.pv)}</span></div>`;
+  }).join('');
+}
+
 /* ---------- recursive branch renderer ----------
    flip=true is used for Black lines from move-pair 2 onward: the enumerated
    move (opp) is White's actual move (data), and "our" move is the standard
@@ -2184,13 +2210,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        eval tag; "not available" covers evals saved before PV storage existed */
     let showContinuation = false;
     function continuationHtml(){
-      if(!showContinuation) return '';
-      const ev = currentSaved()?.eval;
-      if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
-      const startFen = ev.pvFen || fenForSeq(lineSeq);
-      const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
-        || pvChipsFromSan(startFen, ev.pv);
-      return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+      return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
     }
     function refreshMeta(){
       const saved = currentSaved();
@@ -2284,7 +2304,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
     refreshHidden();
     refreshMoveQuality();
-    refreshEvalSpan(evalSpan, currentSaved()?.eval);
+    refreshEvalSpan(evalSpan, currentSaved()?.eval, currentSaved()?.evalLines?.length);
     refreshBranchName(nameSpan, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
 
@@ -2402,7 +2422,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const fen = fenForSeq(posSeq);
       markLiveEval(evalSpan, btnEval);
       showPosition(fen,
-        (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
+        (d,score,pv,lines)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv,lines),
         ()=>clearLiveEval(evalSpan), posSeq);
     };
   });
@@ -2519,13 +2539,7 @@ function renderBlackRoot(parent,games,trigger){
 
   let showContinuation = false;
   function continuationHtml(){
-    if(!showContinuation) return '';
-    const ev = currentSaved()?.eval;
-    if(!ev?.pv) return `<span class="meta-pv"><em>not available</em></span>`;
-    const startFen = ev.pvFen || fenForSeq(lineSeq);
-    const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
-      || pvChipsFromSan(startFen, ev.pv);
-    return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+    return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
   }
   function refreshMeta(){
     const saved = currentSaved();
@@ -2606,7 +2620,7 @@ function renderBlackRoot(parent,games,trigger){
     expandWith(savedRep, !currentSaved()?.collapsed);
   }
   refreshHidden();
-  refreshEvalSpan(evalSpan, currentSaved()?.eval);
+  refreshEvalSpan(evalSpan, currentSaved()?.eval, currentSaved()?.evalLines?.length);
   refreshBranchName(nameSpan, currentSaved());
   refreshBranchStats(statsSpan, games, childrenSeq);
 
@@ -2698,7 +2712,7 @@ function renderBlackRoot(parent,games,trigger){
     const fen = fenForSeq(lineSeq);
     markLiveEval(evalSpan, btnEval);
     showPosition(fen,
-      (d,score,pv)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv),
+      (d,score,pv,lines)=>recordEvalIfDeeper(saveField,currentSaved,evalSpan,d,score,fen,pv,lines),
       ()=>clearLiveEval(evalSpan), lineSeq);
   };
 }
@@ -3285,7 +3299,7 @@ async function exportBackup(){
       name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
-        hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, name:p.name,
+        hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
         collapsed:p.collapsed, moveQuality:p.moveQuality,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
         castleStreetNumber:p.castleStreetNumber
@@ -3339,7 +3353,7 @@ async function importBackup(data){
       await setPref(line.id, pref.seq, {
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
-        eval:pref.eval||null, name:pref.name||'', collapsed:pref.collapsed||false,
+        eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
         moveQuality:pref.moveQuality||'',
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
         castleStreetNumber:pref.castleStreetNumber??''
@@ -5178,13 +5192,14 @@ function evalClass({type, value}, lineColor){
   return 'eval-inferior';
 }
 
-function refreshEvalSpan(evalSpan, evalObj){
+function refreshEvalSpan(evalSpan, evalObj, lineCount){
   if(!evalObj){ evalSpan.style.display='none'; return; }
   evalSpan.textContent = formatEvalTag(evalObj);
   evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
   evalSpan.dataset.depth = evalObj.depth;
   evalSpan.dataset.pv = evalObj.pv || '';
-  const pvSuffix = evalObj.pv ? `\nBest line: ${evalObj.pv}` : '';
+  const linesNote = (lineCount > 1) ? ` (+${lineCount - 1} more line${lineCount - 1 === 1 ? '' : 's'} saved, click to view)` : '';
+  const pvSuffix = evalObj.pv ? `\nBest line: ${evalObj.pv}${linesNote}` : '';
   if(evalSpan === liveEvalSpan){
     evalSpan.classList.add('evaltag-live');
     evalSpan.title = 'Live analysis in progress…' + pvSuffix;
@@ -5242,15 +5257,37 @@ function refreshRowMenuLabels(rowMenu, saved){
   if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
 }
 
-/* only overwrite a saved eval if the engine has now searched deeper than before */
+/* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
+   and UCI) into the same White-relative, SAN+UCI-carrying shape eval/evalLines
+   entries are saved in. */
 const EVAL_TAG_PV_PLIES = 16;
-function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, fen, pv){
+function toEvalLine(score, depth, uciPv, fen){
+  const pvSan = uciPv?.length ? pvToSan(fen, uciPv, EVAL_TAG_PV_PLIES) : '';
+  return {...evalToWhiteRelative(score,fen), depth, pv: pvSan, pvFen: fen, pvUci: uciPv?.length ? uciPv.slice(0, EVAL_TAG_PV_PLIES) : undefined};
+}
+/* only overwrite a saved eval if the engine has now searched deeper than
+   before. `lines`, when given, is the full MultiPV rank map from this same
+   search -- saved alongside the single best eval as evalLines (one entry per
+   rank) so a node analyzed with MultiPV>1 remembers every candidate line the
+   engine considered, not just its top pick. A narrower single-line (MultiPV=1)
+   re-analysis never touches evalLines, so it can't downgrade a previously
+   captured richer multi-line set. */
+function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, fen, pv, lines){
   const existing = currentSaved()?.eval;
   if(existing && existing.depth >= depth) return;
-  const pvSan = pv?.length ? pvToSan(fen, pv, EVAL_TAG_PV_PLIES) : '';
-  const evalObj = {...evalToWhiteRelative(rawScore,fen), depth, pv: pvSan, pvFen: fen, pvUci: pv?.length ? pv.slice(0, EVAL_TAG_PV_PLIES) : undefined};
+  const evalObj = toEvalLine(rawScore, depth, pv, fen);
   saveField('eval', evalObj);
-  refreshEvalSpan(evalSpan, evalObj);
+  const ranks = lines && Object.keys(lines).map(Number).sort((a,b)=>a-b);
+  let evalLines = null;
+  if(ranks && ranks.length > 1){
+    evalLines = ranks
+      .map(idx => lines[idx])
+      .filter(line => line?.score)
+      .map(line => toEvalLine(line.score, line.depth, line.pv, fen));
+    if(evalLines.length > 1) saveField('evalLines', evalLines);
+    else evalLines = null;
+  }
+  refreshEvalSpan(evalSpan, evalObj, (evalLines || currentSaved()?.evalLines)?.length);
 }
 
 function savePrefField(seq,field,value){
@@ -5562,7 +5599,7 @@ async function runEngine(fen, onEvalUpdate, onComplete){
       // so they can't overwrite the frozen "Stopped" snapshot/label.
       if(engineState === 'stopped') return;
       renderEngineLines(fen,d,lines,multipv);
-      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score, lines[1].pv);
+      if(onEvalUpdate && lines[1]?.score) onEvalUpdate(lines[1].depth, lines[1].score, lines[1].pv, lines);
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
@@ -5585,3 +5622,27 @@ function showPosition(fen, onEvalUpdate, onComplete, seq){
 }
 
 showPosition(new Chess().fen());
+
+// test-only hook (mirrors __oqTestHooks/__graphTestHooks/etc.): Stockfish is
+// unavailable in the offline harness (no vendored mock, same as cm-chessboard),
+// so a live multi-line search can't be driven end-to-end there -- but the
+// save/display logic this feature actually added (evalLines: depth-gating,
+// never letting a narrower single-line re-analysis downgrade a saved
+// multi-line set, and rendering them) is plain data manipulation, independent
+// of the engine, and fully testable directly against a throwaway pref bag.
+if(localStorage.getItem('threeTestDebug')){
+  window.__evalTestHooks = {
+    toEvalLine: (score, depth, uciPv, fen) => toEvalLine(score, depth, uciPv, fen),
+    evalContinuationHtml: (saved, lineSeq) => evalContinuationHtml(saved, lineSeq),
+    // drives the real recordEvalIfDeeper against a throwaway {eval,evalLines}
+    // bag (not real PREFS/IDB), returning the bag afterward so a test can
+    // assert on exactly what it decided to save.
+    recordEvalIfDeeper: (fen, depth, rawScore, pv, lines, priorSaved) => {
+      const bag = Object.assign({}, priorSaved);
+      const saveField = (field, value) => { bag[field] = value; };
+      const currentSaved = () => bag;
+      recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
+      return bag;
+    },
+  };
+}
