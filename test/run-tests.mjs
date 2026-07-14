@@ -433,12 +433,16 @@ try {
     mnemonics: [{ square: 'd4', pawn: 'Deer' }],
   });
 
-  await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
-  // generous timeout: this is the 7th of 9 sequential browser launches in the
-  // run, and quizOpenSetup awaits an IDB read before showing -- under the
-  // accumulated load of a full suite run this occasionally needs much longer
-  // than it does standalone (confirmed: resolves in ~100ms in isolation).
-  await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 25000 });
+  // wrapped (unlike the rest of this file's per-test try/catches, this one
+  // guards *setup* used by tests 12-14): quizOpenSetup awaits an IDB read
+  // before showing, and under the accumulated load of a full suite run with
+  // many sequential browser launches this has been observed to occasionally
+  // exceed even a generous timeout (confirmed: resolves in ~100ms standalone).
+  // Uncaught, that would crash the whole run instead of just this phase.
+  try {
+    await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
+    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 35000 });
+  } catch(e){ bad('quiz setup opened', e); }
 
   // 12. The coverage select is broken out into per-system optgroups with a
   //     "(whole system)" option plus one "↳ <castle>" option per castle --
@@ -673,6 +677,98 @@ try {
   } catch(e){ bad('Reset Layout clears offset', e); }
 } finally {
   await app9.close();
+}
+
+// --- Phase J: surface color picker (flat color as an alternative to an image asset) ---
+const app10 = await launchApp();
+try {
+  await seedBackup(app10.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
+  });
+  await app10.page.click('.line-row');
+  await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app10.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app10.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app10.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app10.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app10.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app10.page.waitForTimeout(400);
+  await app10.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on, once, for the whole phase
+  await app10.page.waitForTimeout(60);
+
+  // 20. Clicking the picker's "Color…" tile, then a preset swatch, flat-colors
+  //     the wall (no texture map) and the tile shows that color as current on reopen.
+  let presetHex;
+  try {
+    await app10.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app10.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app10.page.click('#pickerGrid .asset-card-color');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
+    presetHex = await app10.page.evaluate(() => document.querySelector('#colorSwatchPickerOverlay .color-swatch').dataset.hex);
+    await app10.page.click('#colorSwatchPickerOverlay .color-swatch');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app10.page.waitForTimeout(150);   // room rebuild after applyEdit
+
+    const wallMeshes = await app10.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(wallMeshes.length, 'no north wall meshes found after coloring');
+    assert(wallMeshes.every(m => m.color === presetHex && !m.hasMap),
+      `wall did not render as flat color ${presetHex}: ${JSON.stringify(wallMeshes)}`);
+
+    await app10.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app10.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const tile = await app10.page.evaluate(() => {
+      const el = document.querySelector('#pickerGrid .asset-card-color');
+      return { current: el.classList.contains('asset-card-current'), text: el.textContent };
+    });
+    assert(tile.current && tile.text.includes(presetHex), `color tile not marked current: ${JSON.stringify(tile)}`);
+    await app10.page.click('#pickerCloseBtn');
+    await app10.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    ok(`picking a preset swatch flat-colors the wall (${presetHex}, no texture map) and reopens as "current"`);
+  } catch(e){ bad('surface color picker: preset swatch on a wall', e); }
+
+  // 21. Custom hex entry via the text input + Apply, on the floor this time.
+  try {
+    await app10.page.evaluate(() => window.__threeTestEdit.target({ kind: 'floor' }));
+    await app10.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app10.page.click('#pickerGrid .asset-card-color');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app10.page.fill('#cswHexInput', '#336699');
+    await app10.page.click('#cswApplyBtn');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app10.page.waitForTimeout(150);
+
+    const floorMeshes = await app10.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'floor'));
+    assert(floorMeshes.length && floorMeshes.every(m => m.color === '#336699' && !m.hasMap),
+      `floor did not take the custom hex: ${JSON.stringify(floorMeshes)}`);
+    ok('custom hex entry (+ Apply) flat-colors the floor');
+  } catch(e){ bad('surface color picker: custom hex on the floor', e); }
+
+  // 22. Remove clears the color override back to the procedural default.
+  try {
+    await app10.page.evaluate(() => window.__threeTestEdit.target({ kind: 'floor' }));
+    await app10.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app10.page.click('#pickerGrid .asset-card-color');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app10.page.click('#cswRemoveBtn');
+    await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app10.page.waitForTimeout(150);
+
+    const floorMeshes = await app10.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'floor'));
+    assert(floorMeshes.length && floorMeshes.every(m => m.color !== '#336699'),
+      `floor still shows the removed color: ${JSON.stringify(floorMeshes)}`);
+    ok('Remove clears a surface color override back to the procedural default');
+  } catch(e){ bad('surface color picker: remove', e); }
+} finally {
+  await app10.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

@@ -1225,8 +1225,31 @@ async function renderPicker(ov){
     </div>
   `;
   const grid = ov.querySelector('#pickerGrid');
+  if(pickerOpts.allowColor){
+    const curIsColor = curId && curId[0] === '#';
+    const card = document.createElement('div');
+    card.className = 'asset-card asset-card-color' + (curIsColor ? ' asset-card-current' : '');
+    card.innerHTML = `
+      <div class="asset-thumb color-tile-thumb">${curIsColor ? `<div class="color-tile-current" style="background:${esc(curId)}"></div>` : '<i class="fa-solid fa-palette"></i>'}</div>
+      <div class="asset-id">Color…${curIsColor ? ` ${esc(curId)} ✓` : ''}</div>
+      <div class="asset-type">Flat color</div>
+    `;
+    card.onclick = () => {
+      const { onPick, onRemove, allowRemove } = pickerOpts;
+      closePicker();
+      openColorSwatchPicker({
+        current: curIsColor ? curId : null,
+        onPick: hex => { if(onPick) onPick(hex); },
+        onRemove: allowRemove ? () => { if(onRemove) onRemove(); } : null,
+      });
+    };
+    grid.appendChild(card);
+  }
   if(!list.length){
-    grid.innerHTML = '<p class="assets-empty">No matching assets yet. Use "Upload new…" or add some via menu → Manage VR Assets.</p>';
+    const p = document.createElement('p');
+    p.className = 'assets-empty';
+    p.textContent = 'No matching assets yet. Use "Upload new…" or add some via menu → Manage VR Assets.';
+    grid.appendChild(p);
   } else {
     for(const a of list){
       const card = document.createElement('div');
@@ -1272,5 +1295,98 @@ async function pickerUpload(file, ov){
   }catch(err){
     console.error('[assets] picker upload failed', err);
     alert('could not read that image');
+  }
+}
+
+/* ---------- surface color picker ----------
+   A flat-color alternative to picking an image asset, reached via the "Color…"
+   tile the asset picker prepends when opened with allowColor:true (floor/wall/
+   ceiling/stair surfaces in threeVR.js). The chosen hex is handed back through
+   the SAME onPick(id) callback the picker itself would have used -- threeVR
+   stores it in the identical LAYOUT slot an asset id goes in, distinguishing
+   the two by the leading '#' (never valid in an asset id, see ID_RE). */
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+const RECENT_COLORS_KEY = 'recentSurfaceColors';
+const RECENT_COLORS_MAX = 8;
+
+// Curated for walls/ceilings: mostly pale/muted (pastel-leaning), with a
+// handful of bolder accents mixed in for rooms that want more punch.
+const PRESET_SURFACE_COLORS = [
+  '#f5f0e8', '#eee8dd', '#e8e0d0', '#ded4c0', '#e0e0d8', '#e8e8e8', '#d8dcdc', '#c8ccd0',
+  '#e3d5c8', '#f0e0d0', '#e8d5d0', '#e8c8c8', '#d8c5c8', '#dcd0e0', '#d0c8e0', '#d5d8e8',
+  '#d0dce8', '#c8dce0', '#d0e0d5', '#c0d8d0', '#d8e0c8', '#e5e0c0',
+  '#7d9db5', '#8fae7d', '#b57d7d', '#a58dc0', '#c9a55c',
+];
+
+async function getRecentColors(){
+  try { return JSON.parse(await getMeta(RECENT_COLORS_KEY) || '[]'); }
+  catch { return []; }
+}
+async function addRecentColor(hex){
+  const list = (await getRecentColors()).filter(c => c.toLowerCase() !== hex.toLowerCase());
+  list.unshift(hex);
+  await setMeta(RECENT_COLORS_KEY, JSON.stringify(list.slice(0, RECENT_COLORS_MAX)));
+}
+
+/* opts = { current: '#hex'|null, onPick: fn(hex), onRemove: fn()|null } */
+async function openColorSwatchPicker(opts){
+  let ov = document.getElementById('colorSwatchPickerOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'colorSwatchPickerOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '65';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  const recent = await getRecentColors();
+  const swatchRow = (colors) => colors.map(hex => `
+    <div class="color-swatch${opts.current && opts.current.toLowerCase()===hex.toLowerCase() ? ' color-swatch-current' : ''}"
+         style="background:${esc(hex)}" data-hex="${esc(hex)}" title="${esc(hex)}"></div>
+  `).join('');
+  ov.innerHTML = `
+    <div class="modal" style="width:min(34em,92vw);max-height:88vh;display:flex;flex-direction:column">
+      <div class="cp-header">
+        <h2>Choose Color</h2>
+        <button id="cswCancelBtn">Cancel</button>
+      </div>
+      ${recent.length ? `
+        <p class="color-swatch-label">Recently used</p>
+        <div class="color-swatch-grid">${swatchRow(recent)}</div>
+      ` : ''}
+      <p class="color-swatch-label">Presets</p>
+      <div class="color-swatch-grid">${swatchRow(PRESET_SURFACE_COLORS)}</div>
+      <div class="side-color-row" style="margin-top:.7rem">
+        <div class="side-color-swatch" id="cswCustomSwatch"></div>
+        <input type="text" id="cswHexInput" placeholder="#rrggbb" value="${esc(opts.current || '')}">
+        <input type="color" id="cswNativeInput" value="${esc(opts.current || '#cccccc')}">
+        <button id="cswApplyBtn">Apply</button>
+      </div>
+      <div class="assets-editor-actions">
+        <div class="left"></div>
+        ${opts.onRemove ? `<button id="cswRemoveBtn" style="background:#c62828;color:#fff">Remove color</button>` : ''}
+      </div>
+    </div>
+  `;
+  const close = () => { ov.style.display = 'none'; };
+  const choose = (hex) => { addRecentColor(hex); close(); opts.onPick(hex); };
+  ov.querySelectorAll('.color-swatch').forEach(el => {
+    el.onclick = () => choose(el.dataset.hex);
+  });
+  const hexInput = ov.querySelector('#cswHexInput');
+  const nativeInput = ov.querySelector('#cswNativeInput');
+  const customSwatch = ov.querySelector('#cswCustomSwatch');
+  const paintCustom = () => { customSwatch.style.background = HEX_RE.test(hexInput.value.trim()) ? hexInput.value.trim() : ''; };
+  paintCustom();
+  hexInput.oninput = () => { paintCustom(); if(HEX_RE.test(hexInput.value.trim())) nativeInput.value = hexInput.value.trim(); };
+  nativeInput.oninput = () => { hexInput.value = nativeInput.value; paintCustom(); };
+  ov.querySelector('#cswApplyBtn').onclick = () => {
+    const hex = hexInput.value.trim();
+    if(!HEX_RE.test(hex)){ alert('enter a color as #rrggbb'); return; }
+    choose(hex);
+  };
+  ov.querySelector('#cswCancelBtn').onclick = close;
+  if(opts.onRemove){
+    ov.querySelector('#cswRemoveBtn').onclick = () => { close(); opts.onRemove(); };
   }
 }

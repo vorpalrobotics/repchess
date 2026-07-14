@@ -486,12 +486,23 @@ const NUDGE_STEP = 0.1;
 const SCALE_STEP = 1.02;
 const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 
+// a surface slot (LAYOUT[roomKey].floor/ceiling/stairSurface/walls[w], and the
+// same fields inside a building default/preset) holds either a real asset id
+// or a flat "#rrggbb" color -- colors can't collide with an asset id (ID_RE
+// forbids '#'). This resolves either into the same "asset record" shape the
+// renderer expects, so callers never need to know which one they got.
+function isColorId(id){ return typeof id === 'string' && id[0] === '#'; }
+function assetOrColorFor(id){
+  if(!id) return null;
+  if(isColorId(id)) return { id, color: id, isColor: true };
+  return ASSET_BY_ID[id] || null;
+}
 // surface getters resolve in layers: this room's own override -> the building's
 // default (set via the Room dialog's "make default" checkbox) -> null, which
 // leaves the procedural brick/wood fallback. See buildingDefaults() below.
 function floorAssetFor(roomKey){
   const id = (LAYOUT[roomKey] && LAYOUT[roomKey].floor) || defaultFieldId(roomKey, 'floor');
-  return id ? ASSET_BY_ID[id] : null;
+  return assetOrColorFor(id);
 }
 function wallAssetFor(roomKey, wall){
   let id = LAYOUT[roomKey] && LAYOUT[roomKey].walls && LAYOUT[roomKey].walls[wall];
@@ -503,7 +514,7 @@ function wallAssetFor(roomKey, wall){
       id = d.walls[wallRelative(entranceWall(mergedRoom(roomKey)), wall)] || null;
     }
   }
-  return id ? ASSET_BY_ID[id] : null;
+  return assetOrColorFor(id);
 }
 function slotAssetFor(roomKey, slotId){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slotId];
@@ -511,11 +522,11 @@ function slotAssetFor(roomKey, slotId){
 }
 function ceilingAssetFor(roomKey){
   const id = (LAYOUT[roomKey] && LAYOUT[roomKey].ceiling) || defaultFieldId(roomKey, 'ceiling');
-  return id ? ASSET_BY_ID[id] : null;
+  return assetOrColorFor(id);
 }
 function stairAssetFor(roomKey){
   const id = (LAYOUT[roomKey] && LAYOUT[roomKey].stairSurface) || defaultFieldId(roomKey, 'stairSurface');
-  return id ? ASSET_BY_ID[id] : null;
+  return assetOrColorFor(id);
 }
 function buildingFacadeFor(roomKey, buildingKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].buildings && LAYOUT[roomKey].buildings[buildingKey];
@@ -1409,6 +1420,9 @@ function placeFurniture(room){
    finishes loading after a room change is discarded.
 */
 function assetSurfaceMaterial(asset, repeatX, repeatY){
+  if(asset.isColor){
+    return new THREE.MeshStandardMaterial({ color: new THREE.Color(asset.color), roughness: 0.85, metalness: 0 });
+  }
   const mat = new THREE.MeshStandardMaterial({
     color: asset.tint ? new THREE.Color(asset.tint) : 0xffffff,
     roughness: asset.roughness ?? 0.85,
@@ -4859,25 +4873,25 @@ function handleEditTarget(ud){
   const onClose = () => { inputLocked = false; };
   if(ud.kind === 'floor'){
     openAssetPicker({
-      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
+      allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
       onPick: id => setFloorOverride(roomKey, id),
       onRemove: () => setFloorOverride(roomKey, null)
     });
   } else if(ud.kind === 'wall'){
     openAssetPicker({
-      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
+      allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
       onPick: id => setWallOverride(roomKey, ud.wall, id),
       onRemove: () => setWallOverride(roomKey, ud.wall, null)
     });
   } else if(ud.kind === 'ceiling-surface'){
     openAssetPicker({
-      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
+      allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
       onPick: id => setCeilingOverride(roomKey, id),
       onRemove: () => setCeilingOverride(roomKey, null)
     });
   } else if(ud.kind === 'stair-surface'){
     openAssetPicker({
-      allow: ['surface'], onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
+      allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
       onPick: id => setStairOverride(roomKey, id),
       onRemove: () => setStairOverride(roomKey, null)
     });
@@ -6097,7 +6111,7 @@ export async function openThreeTest(containerEl, opts){
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
-      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId }); } }); return out; },
+      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map) }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
       pos: () => ({ x: pos.x, z: pos.z, yaw }),

@@ -337,6 +337,19 @@
   .cp-stage img{max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair}
   .cp-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:.7rem}
 
+  /* surface color picker (flat-color alternative to an image asset) */
+  .color-tile-thumb{display:flex;align-items:center;justify-content:center;color:#999;font-size:1.4rem}
+  .color-tile-current{width:100%;height:100%;border-radius:4px}
+  #colorSwatchPickerOverlay{z-index:65;background:rgba(0,0,0,.7)}
+  #colorSwatchPickerOverlay .modal{width:min(34em,92vw);max-height:88vh;overflow:auto}
+  .color-swatch-label{margin:.5rem 0 .3rem;font-size:.78rem;color:#666}
+  .color-swatch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(2.1rem,1fr));gap:.4rem}
+  .color-swatch{width:100%;aspect-ratio:1;border-radius:4px;border:1px solid #999;cursor:pointer}
+  .color-swatch:hover{border-color:#1565c0}
+  .color-swatch-current{box-shadow:0 0 0 2px #1565c0}
+  #cswHexInput{flex:1 1 auto;width:auto;padding:.3rem .4rem;font-size:.9rem}
+  #cswNativeInput{flex:0 0 auto;width:2.4rem;height:1.95rem;padding:0;border:1px solid #bbb;border-radius:4px;cursor:pointer}
+
   /* crop modal */
   #cropOverlay{z-index:70;background:rgba(0,0,0,.7)}
   #cropOverlay .modal{width:96vw;height:94vh;max-width:none;display:flex;flex-direction:column;padding:.8rem}
@@ -1123,6 +1136,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-73"></script>
+<script type="module" src="js/app.js?v=20260630-74"></script>
 </body>
 </html>
