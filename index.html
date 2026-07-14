@@ -159,6 +159,9 @@
   .room-info-exit{padding:.3rem .5rem;border:1px solid #ddd;border-radius:4px;font-size:.9rem;display:flex;align-items:center;flex-wrap:wrap}
   .room-info-empty{color:#888;font-style:italic;border-style:dashed}
   .room-info-img{width:50px;height:50px;object-fit:contain;margin-left:.5em;border:1px solid #ddd;border-radius:4px;vertical-align:middle}
+  .room-info-board{margin-top:.7rem;display:none;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);width:208px;height:208px;border:2px solid #333;border-radius:3px;overflow:hidden;font-size:1.45rem;line-height:1}
+  .room-info-board > div{display:flex;align-items:center;justify-content:center}
+  .room-info-board-cap{display:none;margin-top:.3rem;font-size:.8rem;color:#666}
   .cr-room{border:1px solid #e0e0e0;border-radius:5px;padding:.45rem .6rem;margin-bottom:.5rem;font-size:.85rem}
   .cr-id{font-weight:700;color:#1565c0}
   .cr-type{font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;padding:.05rem .4rem;border-radius:3px;background:#eee;color:#555;margin-left:.3em}
@@ -774,6 +777,8 @@
   <div class="modal" style="min-width:20em;max-width:28em">
     <h2 id="roomInfoTitle">Room</h2>
     <div id="roomInfoExits" class="room-info-exits"></div>
+    <div id="roomInfoBoard" class="room-info-board"></div>
+    <div id="roomInfoBoardCap" class="room-info-board-cap"></div>
     <div class="modal-actions">
       <button id="roomInfoCloseBtn">Close</button>
     </div>
@@ -1116,6 +1121,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-68"></script>
+<script type="module" src="js/app.js?v=20260630-70"></script>
 </body>
 </html>

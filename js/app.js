@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-68';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-69';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-60';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-68';
+const BUILD_TAG = '-70';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1401,6 +1401,42 @@ function attachGraphClickHandler(cy){
   cy.on('tap', evt => { if(evt.target === cy) hideGraphHoverPreview(); });  // tap empty space dismisses the position preview
 }
 const mnemThumbHtml = img => img ? `<img class="room-info-img" src="${img}">` : '';
+
+/* ---------- mini board (from a FEN) ----------
+   Renders a position's board field as an 8x8 grid of Unicode pieces (rank 8 at
+   top, or flipped for a black repertoire). Same style as the VR board icon so
+   the two read alike. Used in the graph room-info modal. */
+const MINI_PIECE_GLYPH = { K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙', k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟' };
+function miniBoardGridHtml(fen, flip){
+  const board = (fen || '').split(' ')[0];
+  const ranks = board.split('/');                 // index 0 = rank 8
+  const grid = [];
+  for(let r = 0; r < 8; r++){
+    const row = ranks[r] || '8';
+    const cells = [];
+    for(const ch of row){
+      if(/\d/.test(ch)){ for(let k = 0; k < +ch; k++) cells.push(''); }
+      else cells.push(ch);
+    }
+    while(cells.length < 8) cells.push('');
+    grid.push(cells);
+  }
+  const order = flip ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
+  let html = '';
+  for(const r of order){
+    for(const f of order){
+      const ch = grid[r][f];
+      const glyph = ch ? (MINI_PIECE_GLYPH[ch] || '') : '';
+      const isBlack = ch && ch === ch.toLowerCase();
+      const light = (r + f) % 2 === 0;            // parity by true square, so flip keeps colors right
+      const bg = light ? '#e8ddc7' : '#9a7b53';
+      const color = isBlack ? '#141414' : '#fbfbfb';
+      const shadow = glyph ? `text-shadow:0 0 2px ${isBlack ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.7)'}` : '';
+      html += `<div style="background:${bg};color:${color};${shadow}">${glyph}</div>`;
+    }
+  }
+  return html;
+}
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
   const mnemonicsBySquare = await getAllMnemonics();
@@ -1422,6 +1458,20 @@ async function showRoomInfoPanel(roomEl){
   });
   $('roomInfoExits').innerHTML = rows.length ? rows.join('') :
     '<div class="room-info-exit room-info-empty">No replies yet</div>';
+
+  // mini board of this node's position, below the move images
+  const fen = roomEl.data('fen');
+  const boardEl = $('roomInfoBoard'), capEl = $('roomInfoBoardCap');
+  if(fen){
+    boardEl.innerHTML = miniBoardGridHtml(fen, CURRENT_LINE?.color === 'black');
+    boardEl.style.display = 'grid';
+    capEl.textContent = (fen.split(' ')[1] === 'b' ? 'Black' : 'White') + ' to move';
+    capEl.style.display = 'block';
+  } else {
+    boardEl.style.display = 'none';
+    capEl.style.display = 'none';
+  }
+
   $('roomInfoOverlay').style.display = 'flex';
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
