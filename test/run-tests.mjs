@@ -349,5 +349,59 @@ try {
   await app5.close();
 }
 
+// 11. The top-toolbar board icon shows a mini board of the current room's
+//     position. Generate a castle, walk in, and confirm the board button is
+//     present for a castle room and toggles an 8x8 (64-cell) overlay.
+const app6 = await launchApp();
+try {
+  await seedBackup(app6.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
+  });
+  await app6.page.click('.line-row');
+  await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app6.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app6.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app6.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app6.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app6.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app6.page.waitForTimeout(400);
+  try {
+    // the current room is a castle room, so it carries a position
+    const room = await app6.page.evaluate(() => window.__threeTestEdit.room());
+    assert(/^cas:/.test(room), `expected to spawn in a castle room, got '${room}'`);
+    // the board button is the toolbar icon whose title mentions the board position
+    const btnVisible = await app6.page.evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find(x => /board position/i.test(x.title || ''));
+      return b ? b.offsetParent !== null : false;
+    });
+    assert(btnVisible, 'board toolbar button not visible in a castle room');
+    // click it and confirm a 64-cell mini board appears with a side-to-move caption
+    const board = await app6.page.evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find(x => /board position/i.test(x.title || ''));
+      b.click();
+      const ov = document.getElementById('miniBoardOverlay');
+      if(!ov || ov.style.display !== 'flex') return { open: false };
+      const cells = ov.querySelectorAll('div[style*="grid-template-columns"] > div').length;
+      const cap = /to move/.test(ov.textContent);
+      return { open: true, cells, cap };
+    });
+    assert(board.open, 'clicking the board icon did not open the mini board');
+    assert(board.cells === 64, `mini board should have 64 cells, got ${board.cells}`);
+    assert(board.cap, 'mini board missing the side-to-move caption');
+    assert(realErrors(app6.consoleErrors).length === 0,
+      'unexpected console errors:\n' + realErrors(app6.consoleErrors).join('\n'));
+    ok('toolbar board icon shows a 64-cell mini board of the room position');
+  } catch(e){ bad('VR board icon', e); }
+} finally {
+  await app6.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
