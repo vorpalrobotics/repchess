@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-81';
+const BUILD_TAG = '-82';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -922,7 +922,7 @@ $('castleGenGoBtn').onclick = async () => {
 let LAST_GENERATED_CASTLE = null;   // stashed so "Walk in VR" can hand it to the VR engine
 async function showGeneratedCastleReport(games, seq){
   if(!CURRENT_LINE) return;
-  const spinner = showSpinner('Generating castle…');
+  const spinner = showSpinner('Previewing castle…');
   await nextPaint();
   let castle;
   try { castle = buildGeneratedCastle(CURRENT_LINE, games, seq); }
@@ -2141,7 +2141,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
-             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
+             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
@@ -2488,7 +2488,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Generate Castle</button>
+           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
