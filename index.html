@@ -514,12 +514,14 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuThreeTest">Run VR</button>
-      <button id="menuAssets">Manage VR Assets</button>
-      <button id="menuObjectLists">Manage Object Lists</button>
-      <button class="menu-parent" data-sub="subMnemonics">Mnemonics</button>
-      <div id="subMnemonics" class="menu-sub">
-        <button id="menuMnemonics">Manage</button>
-        <button id="menuQuiz">Test</button>
+      <button id="menuAssets">VR Assets</button>
+      <button id="menuObjectLists">VR Object Lists</button>
+      <button id="menuMnemonics">Mnemonics</button>
+      <hr class="row-menu-sep">
+      <button class="menu-parent" data-sub="subTest">Test</button>
+      <div id="subTest" class="menu-sub">
+        <button id="menuQuiz">Mnemonics</button>
+        <button id="menuTestChessboard">Chessboard</button>
       </div>
       <hr class="row-menu-sep">
       <button class="menu-parent" data-sub="subImport">Import</button>
@@ -1136,6 +1138,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-74"></script>
+<script type="module" src="js/app.js?v=20260630-75"></script>
 </body>
 </html>
