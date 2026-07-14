@@ -151,6 +151,7 @@ let OPENING_SYSTEMS = [];
 function generateMainStreet(systems, streetCastles){
   const MAIN_W = 8, SIDE_W = 7, SPACING = 24, MARGIN = 10;
   const BW = 14, BD = 8, BH = 9, BGAP = 15, FIRST_X = 6;   // castle-building slots along a side street (BGAP: gap between buildings; wide so skinned facades don't touch)
+  const WORLD_PAD = 50;   // grass beyond the built content on every side, so there's always comfortable room to walk/build without immediately running out again
   const list = (systems && systems.length)
     ? systems
     : [{ name:'Main', streetName:'Main Street', color:'white' }];
@@ -216,8 +217,30 @@ function generateMainStreet(systems, streetCastles){
     });
   });
 
-  ROOMS.mainStreet = { outdoor: true, size: { w: width, d: depth, h: 7 }, exits: [], roads, streetSigns, buildings };
-  START_SPAWN.x = 0; START_SPAWN.z = depth / 2 - 4; START_SPAWN.yaw = 0;   // spawn at the south end, facing up the street
+  // width/depth above are a sensible ESTIMATE from counts and spacing, sized
+  // to comfortably contain the street network. As a hard guarantee against a
+  // castle ever ending up floating outside the grass -- whether from an edge
+  // case in that estimate, or (mainStreet being fully procedural) a stale
+  // LAYOUT.mainStreet.geom override left over from a manual resize back when
+  // there was less content -- measure the REAL bounding box of everything
+  // just placed and never let the final ground size be smaller than that,
+  // plus WORLD_PAD of breathing room on every side. (The stale-override half
+  // of this guarantee is enforced in mergedRoom(), which never lets a saved
+  // override shrink mainStreet below this freshly-computed minimum.)
+  let maxX = width / 2, maxZ = depth / 2;
+  for(const r of roads){
+    maxX = Math.max(maxX, Math.abs(r.x) + r.sx / 2);
+    maxZ = Math.max(maxZ, Math.abs(r.z) + r.sz / 2);
+  }
+  for(const b of buildings){
+    maxX = Math.max(maxX, Math.abs(b.origin.x) + b.size.w / 2);
+    maxZ = Math.max(maxZ, Math.abs(b.origin.z) + b.size.d / 2);
+  }
+  const finalWidth = 2 * maxX + 2 * WORLD_PAD;
+  const finalDepth = 2 * maxZ + 2 * WORLD_PAD;
+
+  ROOMS.mainStreet = { outdoor: true, size: { w: finalWidth, d: finalDepth, h: 7 }, exits: [], roads, streetSigns, buildings };
+  START_SPAWN.x = 0; START_SPAWN.z = depth / 2 - 4; START_SPAWN.yaw = 0;   // spawn at the south end of the paved street itself, not the padded grass beyond it
 }
 
 /* ---------- G2a: walk a GENERATED castle ----------
@@ -588,7 +611,17 @@ function mergedRoom(roomKey){
   if(!room) return room;
   const L = LAYOUT[roomKey];
   if(!L || (!L.geom && !L.exits)) return room;
-  const size = L.geom ? Object.assign({}, room.size, L.geom) : room.size;
+  let size = L.geom ? Object.assign({}, room.size, L.geom) : room.size;
+  // mainStreet is fully procedural: buildings/roads are placed by formula
+  // every load, not stored props, and its own freshly-computed size (see
+  // generateMainStreet) is already the true minimum needed to contain
+  // everything just placed. A saved override -- e.g. a manual resize from
+  // back when there was less content -- must never be allowed to shrink it
+  // below that and strand a castle outside the grass; a *larger* override
+  // still wins, for anyone who wants extra room to walk around.
+  if(roomKey === 'mainStreet' && L.geom){
+    size = { w: Math.max(size.w, room.size.w), d: Math.max(size.d, room.size.d), h: Math.max(size.h, room.size.h) };
+  }
   let exits = room.exits;
   if(L.exits && room.exits){
     exits = room.exits.map(ex => {
@@ -6128,7 +6161,15 @@ export async function openThreeTest(containerEl, opts){
       },
       // apply a room geometry resize exactly as the room-geometry dialog's Apply
       // button does (same setRoomGeom call), for testing the bounds auto-fix.
-      resize: (roomKey, geom) => setRoomGeom(roomKey, geom)
+      resize: (roomKey, geom) => setRoomGeom(roomKey, geom),
+      // the room's EFFECTIVE size (static + any LAYOUT.geom override folded
+      // in, same accessor every real read site uses) -- for testing that
+      // mainStreet's auto-computed minimum can't be shrunk by a stale override.
+      roomSize: (roomKey) => { const r = mergedRoom(roomKey || currentRoomKey); return r ? { w: r.size.w, d: r.size.d, h: r.size.h } : null; },
+      // the raw buildings array mainStreet was generated with (positions/sizes
+      // as placed, before any size guarantee) -- for checking every building
+      // footprint actually fits inside roomSize('mainStreet').
+      buildings: () => (ROOMS.mainStreet && ROOMS.mainStreet.buildings) ? JSON.parse(JSON.stringify(ROOMS.mainStreet.buildings)) : []
     };
   }
 }
