@@ -272,5 +272,82 @@ try {
   await app4.close();
 }
 
+// --- Phase E: room-bounds auto-fix (a nudged item survives a later downsize) ---
+const app5 = await launchApp();
+try {
+  await seedBackup(app5.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' },
+      { id:'g2', moves:'d4 Nf6 c4 g6 Nc3 Bg7', white:'a', black:'b', result:'*' },
+    ],
+  });
+  await app5.page.click('.line-row');
+  await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app5.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app5.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app5.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app5.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await app5.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await app5.page.waitForTimeout(400);
+
+  // 10. Nudge the entry room's own move-pair billboard (mnem-C1 -- always
+  //     present, unlike the move-object prop which needs an asset assigned)
+  //     far toward a wall while the room is still full-size, then shrink the
+  //     room well below that position. It should already be back inside the
+  //     new footprint immediately (buildRoom runs the reconciler on every
+  //     rebuild, not just on room entry) -- and stay fixed after a re-entry.
+  try {
+    const room = await app5.page.evaluate(() => window.__threeTestEdit.room());
+    const nudged = await app5.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      dbg.toggle();
+      await new Promise(r => setTimeout(r, 60));
+      dbg.target({ kind: 'accessory', slotId: 'mnem-C1' });
+      await new Promise(r => setTimeout(r, 60));
+      for(let i = 0; i < 60; i++){
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+        await new Promise(r => setTimeout(r, 20));
+      }
+      await new Promise(r => setTimeout(r, 100));
+      return dbg.posOf('mnem-C1');
+    });
+    assert(nudged && nudged.x > 3, `nudge didn't move the billboard far enough to test with (x=${nudged && nudged.x})`);
+
+    const afterResize = await app5.page.evaluate(async (rk) => {
+      const dbg = window.__threeTestEdit;
+      dbg.resize(rk, { w: 4, d: 4, h: 3 });
+      await new Promise(r => setTimeout(r, 150));
+      return dbg.posOf('mnem-C1');
+    }, room);
+    const halfW = 4/2 - 0.3, halfD = 4/2 - 0.3;
+    const inBounds = p => p && Math.abs(p.x) <= halfW + 0.02 && Math.abs(p.z) <= halfD + 0.02;
+    assert(inBounds(afterResize),
+      `billboard stayed outside the shrunk room right after resize: ${JSON.stringify(afterResize)} (bound ±${halfW})`);
+
+    const afterReentry = await app5.page.evaluate(async (rk) => {
+      const dbg = window.__threeTestEdit;
+      dbg.enter('mainStreet');
+      await new Promise(r => setTimeout(r, 150));
+      dbg.enter(rk);
+      await new Promise(r => setTimeout(r, 150));
+      return dbg.posOf('mnem-C1');
+    }, room);
+    assert(inBounds(afterReentry),
+      `billboard drifted back out after a re-entry: ${JSON.stringify(afterReentry)} (bound ±${halfW})`);
+
+    ok('a nudged billboard is auto-clamped back inside a room that was made smaller');
+  } catch(e){ bad('room-bounds auto-fix', e); }
+} finally {
+  await app5.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
