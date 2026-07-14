@@ -894,6 +894,39 @@ try {
       `savedPrefs should be cleared after restoring, got ${JSON.stringify(oqAfterRestore.savedPrefs)}`);
     ok('starting a chessboard-quiz session loads the quizzed line\'s real PREFS and restores the previous PREFS on close');
   } catch(e){ bad('chessboard quiz PREFS swap', e); }
+
+  // 28. Regression: advancing from one session question to the next must not
+  //     re-enable board input without disabling it first. cm-chessboard
+  //     throws if enableMoveInput() is called while already enabled; oqRun()
+  //     (called again for every subsequent question) always re-enables it,
+  //     so oqFinish()'s auto-advance has to disable first -- exactly the bug
+  //     reported after shipping the feature ("Question 2 of 10" appeared but
+  //     the board never reset, because the enable call threw and aborted the
+  //     rest of oqRun before it reached oqLoadStep/oqMarkOpponentMove).
+  try {
+    await app11.page.evaluate(() => {
+      window.__oqTestHooks.setOQ({
+        mode: 'session', questionIndex: 1, questionsTotal: 2, startSeq: [], color: 'white',
+        hits: 3, misses: 1, oppChoices: [], line: { openingMoves: ['d4'] }, maxDepth: 20,
+        coverageRootSeq: null,
+      });
+      window.__oqTestHooks.installFakeBoard();
+    });
+    let threw = null;
+    try { await app11.page.evaluate(() => window.__oqTestHooks.callFinish()); }
+    catch(e){ threw = e; }
+    assert(!threw, `oqFinish should not throw when advancing to the next question: ${threw}`);
+
+    const oqAfter = await app11.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(oqAfter.questionIndex === 2, `should have advanced to question 2, got ${oqAfter.questionIndex}`);
+    assert(oqAfter.hits === 3 && oqAfter.misses === 1,
+      `aggregate score should be kept across questions, got hits=${oqAfter.hits} misses=${oqAfter.misses}`);
+
+    const log = await app11.page.evaluate(() => window.__oqTestHooks.getFakeBoardLog());
+    assert(JSON.stringify(log) === JSON.stringify(['disable', 'enable']),
+      `expected the board to be disabled before being re-enabled for the next question, got ${JSON.stringify(log)}`);
+    ok('advancing to the next session question resets the board (disables input before re-enabling it)');
+  } catch(e){ bad('chessboard quiz next-question board reset', e); }
 } finally {
   await app11.close();
 }

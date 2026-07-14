@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-77';
+const BUILD_TAG = '-78';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4693,8 +4693,13 @@ function oqAfterCorrect(){
 function oqFinish(){
   // session mode: this was one question of several -- move on to the next
   // one (fresh random path, aggregate score kept) instead of ending the run.
+  // oqRun() re-enables move input unconditionally -- cm-chessboard throws if
+  // it's already enabled, so it has to be disabled first (oqRun itself never
+  // does this; the "real" finish below only gets away without a guard because
+  // it's the last thing that runs before the summary screen).
   if(OQ.mode === 'session' && OQ.questionIndex < OQ.questionsTotal){
     OQ.questionIndex++;
+    if(oqBoard) oqBoard.disableMoveInput();
     oqRun(false, true);
     return;
   }
@@ -4862,6 +4867,27 @@ if(localStorage.getItem('threeTestDebug')){
     restorePrefs: () => oqRestorePrefsIfSwapped(),
     getPrefs: () => JSON.parse(JSON.stringify(PREFS)),
     setPrefs: (p) => { PREFS = p; },
+    // a minimal stand-in for the real cm-chessboard instance (unavailable in
+    // this harness) that mimics its one behavior this suite needs to catch a
+    // regression on: throwing if enableMoveInput() is called while already
+    // enabled. Lets oqRun/oqFinish/oqLoadStep run for real without a live board.
+    installFakeBoard: () => {
+      let enabled = false;
+      const log = [];
+      oqBoard = {
+        setPosition: () => {},
+        setOrientation: () => {},
+        enableMoveInput: () => {
+          if(enabled) throw new Error('moveInput already enabled');
+          enabled = true;
+          log.push('enable');
+        },
+        disableMoveInput: () => { enabled = false; log.push('disable'); },
+        _log: log,
+      };
+    },
+    getFakeBoardLog: () => (oqBoard && oqBoard._log) ? oqBoard._log.slice() : null,
+    callFinish: () => oqFinish(),
   };
 }
 
