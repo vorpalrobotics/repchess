@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-75';
+const BUILD_TAG = '-76';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4422,7 +4422,7 @@ $('menuQuiz').onclick = ()=>{
 };
 $('menuTestChessboard').onclick = ()=>{
   $('menuList').style.display='none';
-  alert('Coming Soon');
+  openChessboardQuizSetup();
 };
 $('quizScopeSelect').onchange = ()=>{
   const custom = $('quizScopeSelect').value === 'custom';
@@ -4478,6 +4478,38 @@ function oqVisibleOpps(seq){
   const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
   return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);
+}
+
+/* bounds a raw candidate list (opponent replies at seq, or a White line's own
+   openingMoves triggers at seq=[]) to what the engine may randomly choose
+   from, given a session quiz's coverage scope. Outside session mode, or once
+   "(whole system)" coverage is picked (coverageRootSeq null), every candidate
+   stays eligible. Scoped to one castle, there is only ever one move that
+   stays on the path to its exact root sequence -- so before the walk reaches
+   that sequence, eligibility collapses to that single forced move (still
+   something the user has to find and play, same as any other move); normal
+   branching resumes once inside the castle's own subtree. */
+function oqCoverageEligible(seq, candidates){
+  const root = OQ.coverageRootSeq;
+  if(!root || seq.length >= root.length) return candidates;
+  const forced = root[seq.length];
+  return candidates.includes(forced) ? [forced] : [];
+}
+
+/* the engine's random pick from `candidates`, honoring a same-choices replay
+   (OQ.replay) -- shared by every point where the engine (not the user)
+   decides a move: the opponent's replies throughout, and (session mode only)
+   a White line's own first move when a fresh question starts. */
+function oqPickChoice(candidates){
+  let choice;
+  if(OQ.replay && OQ.replayIdx < OQ.oppChoices.length && candidates.includes(OQ.oppChoices[OQ.replayIdx])){
+    choice = OQ.oppChoices[OQ.replayIdx];
+  } else {
+    choice = candidates[Math.floor(Math.random()*candidates.length)];
+    OQ.oppChoices[OQ.replayIdx] = choice;
+  }
+  OQ.replayIdx++;
+  return choice;
 }
 
 function oqEnsureBoard(){
@@ -4536,15 +4568,60 @@ function oqSetStatus(text, cls){
   el.className = cls || '';
 }
 
+// the PGN move number the ply about to be played belongs to, given how many
+// plies have already been played (0 -> 1, 1 -> 1, 2 -> 2, 3 -> 2, ...).
+function oqNextMoveNumber(playedPlies){ return Math.ceil((playedPlies + 1) / 2); }
+
 /* advance OQ.seq to the next node where it is our turn, then arm the board for
-   input. If there's no stored response, the tree has ended → finish. */
+   input. If there's no stored response, the tree has ended → finish.
+
+   Session mode only: OQ.seq starts at [] (the real game start, not a tree
+   node), so ply 0 has no PREFS entry to look up -- it's either our own
+   line's first move (tested, sourced from openingMoves instead of PREFS) or
+   the opponent's forced first move (auto-played, never something the user
+   plays, same as every other opponent move -- see oqPlayTrigger). Session
+   mode also enforces Max Depth: once the move we're about to ask for would
+   exceed it, stop here instead of prompting for another. */
 function oqLoadStep(){
+  if(OQ.mode === 'session' && OQ.maxDepth != null){
+    if(oqNextMoveNumber(OQ.seq.length) > OQ.maxDepth){ oqFinish(); return; }
+  }
+  if(OQ.mode === 'session' && OQ.seq.length === 0){
+    if(OQ.color === 'black'){ oqPlayTrigger(); return; }
+    const triggers = oqCoverageEligible([], OQ.line.openingMoves || []);
+    if(!triggers.length){ oqFinish(); return; }
+    OQ.expected = oqPickChoice(triggers);
+    OQ.busy = false;
+    oqClearHighlights();
+    oqBoard.setPosition(fenForSeq([]), true);
+    oqSetStatus('Your move');
+    return;
+  }
   const expected = PREFS[prefKey(OQ.line.id, OQ.seq)]?.reply;
   if(!expected){ oqFinish(); return; }
   OQ.expected = expected;
   OQ.busy = false;
   oqBoard.setPosition(fenForSeq(OQ.seq), true);
   oqSetStatus('Your move');
+}
+
+/* session mode only: a Black-color line's board always starts at the true
+   game start, so ply 1 is White's forced first move -- something the engine
+   plays for you (same as any opponent move), never something you're tested
+   on. Mirrors oqAfterCorrect's play-then-pause-then-advance choreography. */
+function oqPlayTrigger(){
+  const triggers = oqCoverageEligible([], OQ.line.openingMoves || []);
+  if(!triggers.length){ oqFinish(); return; }
+  const trigger = oqPickChoice(triggers);
+  const nextSeq = [trigger];
+  oqClearHighlights();
+  oqBoard.setPosition(fenForSeq([]), true);
+  setTimeout(()=>{
+    oqMarkOpponentMove(nextSeq);
+    oqBoard.setPosition(fenForSeq(nextSeq), true);
+    OQ.seq = nextSeq;
+    setTimeout(oqLoadStep, 500);
+  }, 500);
 }
 
 /* cm-chessboard move-input callback: validate the dragged move against the
@@ -4593,20 +4670,13 @@ function oqInputHandler(event){
    animate it, then load the following step — or finish if the line ends. */
 function oqAfterCorrect(){
   const ourSeq = [...OQ.seq, OQ.expected];
-  const opps = oqVisibleOpps(ourSeq);
+  const opps = oqCoverageEligible(ourSeq, oqVisibleOpps(ourSeq));
   if(opps.length === 0){
     oqBoard.setPosition(fenForSeq(ourSeq), true);
     setTimeout(oqFinish, 500);
     return;
   }
-  let oppMove;
-  if(OQ.replay && OQ.replayIdx < OQ.oppChoices.length && opps.includes(OQ.oppChoices[OQ.replayIdx])){
-    oppMove = OQ.oppChoices[OQ.replayIdx];
-  } else {
-    oppMove = opps[Math.floor(Math.random()*opps.length)];
-    OQ.oppChoices[OQ.replayIdx] = oppMove;   // (re)record for same-choices replay
-  }
-  OQ.replayIdx++;
+  const oppMove = oqPickChoice(opps);
   const nextSeq = [...ourSeq, oppMove];
   // reconcile our move (castling/captures), keep our FROM/TO marks showing, then
   // after a 500ms pause play the opponent's reply (marking its FROM/TO) so it
@@ -4621,29 +4691,51 @@ function oqAfterCorrect(){
 }
 
 function oqFinish(){
+  // session mode: this was one question of several -- move on to the next
+  // one (fresh random path, aggregate score kept) instead of ending the run.
+  if(OQ.mode === 'session' && OQ.questionIndex < OQ.questionsTotal){
+    OQ.questionIndex++;
+    oqRun(false, true);
+    return;
+  }
   OQ.finished = true;
   if(oqBoard) oqBoard.disableMoveInput();
   oqClearHighlights();
   const total = OQ.hits + OQ.misses;
   const pct = total ? Math.round(OQ.hits / total * 100) : 0;
   $('oqScorePct').textContent = total ? `${pct}%` : 'No moves to test';
-  $('oqScoreDetail').textContent = total ? `${OQ.hits} hit${OQ.hits===1?'':'s'}, ${OQ.misses} miss${OQ.misses===1?'':'es'}` : '';
+  $('oqScoreDetail').textContent = total
+    ? `${OQ.hits} hit${OQ.hits===1?'':'s'}, ${OQ.misses} miss${OQ.misses===1?'':'es'}` +
+      (OQ.mode === 'session' ? ` across ${OQ.questionsTotal} question${OQ.questionsTotal===1?'':'s'}` : '')
+    : '';
+  // "same choices" replay isn't tracked across a whole multi-question session
+  // (only within one question) -- only offer it after a single row-quiz run.
+  $('oqAgainSameBtn').style.display = OQ.mode === 'session' ? 'none' : '';
   $('oqPlay').style.display = 'none';
   $('oqSummary').style.display = 'block';
 }
 
 /* (re)start a run from OQ.startSeq. replaySame=true reuses the recorded
-   opponent choices; otherwise they're re-rolled as play proceeds. */
-function oqRun(replaySame){
+   opponent choices; otherwise they're re-rolled as play proceeds. keepScore
+   (session mode only) skips zeroing hits/misses -- used when advancing to
+   the next question of a session, whose score keeps accumulating. */
+function oqRun(replaySame, keepScore){
   OQ.seq = OQ.startSeq.slice();
-  OQ.hits = 0; OQ.misses = 0;
+  if(!keepScore){ OQ.hits = 0; OQ.misses = 0; }
   OQ.replay = !!replaySame;
   OQ.replayIdx = 0;
   if(!replaySame) OQ.oppChoices = [];
   OQ.finished = false; OQ.busy = false;
   oqUpdateScore();
+  $('oqSetup').style.display = 'none';
   $('oqSummary').style.display = 'none';
   $('oqPlay').style.display = 'block';
+  if(OQ.mode === 'session'){
+    $('oqQuestionLabel').textContent = `Question ${OQ.questionIndex} of ${OQ.questionsTotal}`;
+    $('oqQuestionLabel').style.display = 'block';
+  } else {
+    $('oqQuestionLabel').style.display = 'none';
+  }
   oqEnsureBoard();
   const col = OQ.color === 'black' ? COLOR.black : COLOR.white;
   oqBoard.setOrientation(col);
@@ -4662,11 +4754,52 @@ function openOpeningQuiz(startSeq){
     alert('Set a standard response on this move first — there is nothing to quiz yet.');
     return;
   }
-  OQ = { line: CURRENT_LINE, color: CURRENT_LINE.color, startSeq: startSeq.slice(),
+  OQ = { mode: 'row', line: CURRENT_LINE, color: CURRENT_LINE.color, startSeq: startSeq.slice(),
          oppChoices: [], hits:0, misses:0 };
   $('openingQuizOverlay').style.display = 'flex';
   oqRun(false);
 }
+
+/* ---------- chessboard test (Test > Chessboard): a multi-question board
+   quiz, always starting each question at the true game start, scoped to an
+   opening system or one of its castles and capped at a max move depth.
+   Reuses the same overlay/board/gameplay machinery as the per-row Opening
+   Quiz above (mode:'session' on OQ is what switches on the extra behavior:
+   the ply-0 special case in oqLoadStep/oqPlayTrigger, coverage-bounded
+   random choices, the depth cap, and oqFinish's next-question loop). */
+async function openChessboardQuizSetup(){
+  if(!Chessboard){
+    alert('The chessboard could not be loaded (a CDN may be down), so the board-based quiz is unavailable. Reload to retry.');
+    return;
+  }
+  $('openingQuizOverlay').style.display = 'flex';
+  $('oqPlay').style.display = 'none';
+  $('oqSummary').style.display = 'none';
+  $('oqSetupError').textContent = '';
+  await populateCoverageOptgroups($('oqCoverageSelect'), '<option value="">Choose a system…</option>');
+  $('oqSetup').style.display = 'block';
+}
+$('oqStartBtn').onclick = async ()=>{
+  let n = parseInt($('oqNumQuestions').value, 10);
+  if(!Number.isFinite(n) || n < 1){ $('oqSetupError').textContent = 'Enter a question count of 1 or more.'; return; }
+  let depth = parseInt($('oqMaxDepth').value, 10);
+  if(!Number.isFinite(depth) || depth < 1){ $('oqSetupError').textContent = 'Enter a max depth of 1 or more.'; return; }
+  const coverageVal = $('oqCoverageSelect').value;
+  if(!coverageVal){ $('oqSetupError').textContent = 'Choose an opening system.'; return; }
+  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const sel = await resolveCoverageSelection(coverageVal, lines);
+  if(!sel){ $('oqSetupError').textContent = 'That opening system could not be found — pick another.'; return; }
+  if(sel.isCastle && !sel.rootSeq){ $('oqSetupError').textContent = 'That castle has no content built yet — pick another.'; return; }
+  if(!sel.line.openingMoves || !sel.line.openingMoves.length){ $('oqSetupError').textContent = 'That opening system has no starting move configured yet.'; return; }
+  $('oqSetupError').textContent = '';
+  OQ = {
+    mode: 'session', line: sel.line, color: sel.line.color, startSeq: [],
+    coverageRootSeq: sel.isCastle ? sel.rootSeq : null,
+    maxDepth: depth, questionsTotal: n, questionIndex: 1,
+    oppChoices: [], hits: 0, misses: 0,
+  };
+  oqRun(false);
+};
 
 $('oqCloseBtn').onclick = ()=>{
   if(oqBoard) oqBoard.disableMoveInput();
@@ -4676,7 +4809,25 @@ $('oqCloseBtn').onclick = ()=>{
 };
 $('oqExitBtn').onclick = ()=>{ $('openingQuizOverlay').style.display='none'; };
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
-$('oqAgainNewBtn').onclick  = ()=> oqRun(false);
+$('oqAgainNewBtn').onclick  = ()=>{
+  if(OQ && OQ.mode === 'session') OQ.questionIndex = 1;
+  oqRun(false);
+};
+
+// test-only hook (mirrors window.__threeTestEdit / __graphTestHooks): the
+// offline harness runs with cm-chessboard un-mocked (Chessboard is null), so
+// oqBoard-dependent flows can't be driven end-to-end there -- but the new
+// coverage/depth logic below is plain data manipulation on OQ, independent
+// of the board, and fully testable directly.
+if(localStorage.getItem('threeTestDebug')){
+  window.__oqTestHooks = {
+    setOQ: (patch) => { OQ = Object.assign(OQ || {}, patch); },
+    getOQ: () => OQ && JSON.parse(JSON.stringify(OQ)),
+    coverageEligible: (seq, candidates) => oqCoverageEligible(seq, candidates),
+    pickChoice: (candidates) => oqPickChoice(candidates),
+    nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
+  };
+}
 
 /* ---------- analysis board ----------
    null when the chessboard library failed to load; every call site uses ?. so
