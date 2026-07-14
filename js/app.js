@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-72';
+const BUILD_TAG = '-73';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1065,6 +1065,44 @@ function findBackEdges(rooms, edges){
 // graph-local focus seq (set by right-click "Focus on this variation" inside the
 // graph overlay); overrides the move-table FOCUSED_SEQ while the overlay is open.
 let GRAPH_FOCUS_SEQ = null;
+
+/* ---------- graph node layout persistence ----------
+   dagre reflows the whole graph fresh on every open, which is great for a new
+   tree but throws away any manual de-overlap dragging. We save each dragged
+   node's deviation from dagre's own placement (a DELTA, not an absolute
+   coordinate) keyed by the node's own position -- not cytoscape's per-render
+   node id, which is just a reassigned counter -- so a saved nudge survives
+   both a tree edit elsewhere and reopening the same scope later. The delta
+   design means a node whose neighborhood shifts a little still lands near
+   where dagre naturally wants it, nudged the same relative amount, rather
+   than being pinned to a stale absolute spot.
+   Scoped per (line, focus root) since "whole tree" and "focused on the
+   Chigorin" are different layouts with different node sets. Stored as one
+   JSON blob (same convention as threeLayout/objectLists):
+   { "<lineId>|<scopeKey>": { "<positionKey>": {dx, dy} } }. */
+let GRAPH_LAYOUT = {};
+async function loadGraphLayout(){
+  try { GRAPH_LAYOUT = JSON.parse(await getMeta('graphLayout') || '{}'); }
+  catch { GRAPH_LAYOUT = {}; }
+}
+// returns the write's promise (unlike threeVR.js's fire-and-forget
+// persistLayout) because Reset Layout immediately triggers a reload that
+// reads this same key back -- without awaiting, that reload can race the
+// write and reload the stale pre-reset value.
+function persistGraphLayout(){ return setMeta('graphLayout', JSON.stringify(GRAPH_LAYOUT)); }
+function graphScopeKey(line, rootSeq){
+  return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
+}
+// records (or clears, if the drag ended up negligibly close to dagre's own
+// spot) one node's deviation from its dagre-computed base position.
+function saveGraphNodeDelta(scopeKey, posKey, dx, dy){
+  const scope = (GRAPH_LAYOUT[scopeKey] ??= {});
+  if(Math.abs(dx) < 1 && Math.abs(dy) < 1) delete scope[posKey];
+  else scope[posKey] = { dx: Math.round(dx), dy: Math.round(dy) };
+  if(!Object.keys(scope).length) delete GRAPH_LAYOUT[scopeKey];
+  persistGraphLayout();
+}
+
 async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
@@ -1074,6 +1112,8 @@ async function showTranspositionGraph(){
   await nextPaint();
   try {
     const rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;   // graph-local focus (right-click) overrides the move-table focus
+    await loadGraphLayout();
+    const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed }
@@ -1202,6 +1242,24 @@ async function showTranspositionGraph(){
         rooms.forEach(r=>{ if(boxOf.has(r.id)){ const n = cy.getElementById(r.id); if(n.nonempty()) n.move({parent: boxOf.get(r.id)}); } });
       } catch(err){ console.warn('[graph] box re-wrap skipped', err); }
     }
+    // Snapshot dagre's own placement for every real (fen-bearing) node BEFORE
+    // reapplying any saved deltas, so a later drag's delta is always measured
+    // against dagre's fresh output -- never against a previously-nudged
+    // position, which would double up the offset on every subsequent open.
+    // Box/start nodes have no fen and aren't individually saved (v1 scope).
+    cy.nodes().forEach(n => {
+      const fen = n.data('fen');
+      if(fen) n.scratch('_dagreBase', { x: n.position('x'), y: n.position('y') });
+    });
+    const savedDeltas = GRAPH_LAYOUT[scopeKey] || {};
+    cy.nodes().forEach(n => {
+      const fen = n.data('fen');
+      if(!fen) return;
+      const d = savedDeltas[positionKey(fen)];
+      if(!d) return;
+      const base = n.scratch('_dagreBase');
+      n.position({ x: base.x + d.dx, y: base.y + d.dy });
+    });
     // Drop the dashed repetition edges back in -- they connect already-positioned
     // nodes and never touch the layout.
     if(deferredEdgeEls.length){
@@ -1211,11 +1269,49 @@ async function showTranspositionGraph(){
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphClickHandler(cy);
     attachGraphContextMenu(cy);
+
+    // Save a manual de-overlap drag: delta from dagre's own placement, keyed
+    // by the node's position (stable across a rebuild, unlike its cytoscape id).
+    cy.on('dragfree', 'node', evt => {
+      const n = evt.target;
+      const fen = n.data('fen');
+      if(!fen) return;   // box/start node -- not individually saved in v1
+      const base = n.scratch('_dagreBase');
+      if(!base) return;
+      const p = n.position();
+      saveGraphNodeDelta(scopeKey, positionKey(fen), p.x - base.x, p.y - base.y);
+    });
+    // test-only hook (mirrors threeVR.js's window.__threeTestEdit): drives a
+    // "drag" programmatically (cytoscape nodes are canvas-rendered, not real
+    // DOM elements a test can click-and-drag) by moving a node then emitting
+    // the same event the real drag-release handler listens for.
+    if(localStorage.getItem('threeTestDebug')){
+      window.__graphTestHooks = {
+        cy: () => cy,
+        scopeKey: () => scopeKey,
+        layout: () => GRAPH_LAYOUT,
+        dragNodeBy: (fen, dx, dy) => {
+          const n = cy.nodes().filter(x => x.data('fen') === fen);
+          if(!n.nonempty()) return false;
+          const p = n.position();
+          n.position({ x: p.x + dx, y: p.y + dy });
+          n.emit('dragfree');
+          return true;
+        }
+      };
+    }
   } finally {
     hideSpinner(spinner);
   }
 }
 $('buildGraphBtn').onclick = showTranspositionGraph;
+$('graphResetLayoutBtn').onclick = async () => {
+  if(!CURRENT_LINE) return;
+  const rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;
+  delete GRAPH_LAYOUT[graphScopeKey(CURRENT_LINE, rootSeq)];
+  await persistGraphLayout();   // must land before showTranspositionGraph's own reload reads it back
+  await showTranspositionGraph();
+};
 $('graphCloseBtn').onclick = () => {
   $('graphOverlay').style.display='none';
   hideGraphHoverPreview();

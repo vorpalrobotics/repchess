@@ -434,7 +434,11 @@ try {
   });
 
   await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
-  await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 10000 });
+  // generous timeout: this is the 7th of 9 sequential browser launches in the
+  // run, and quizOpenSetup awaits an IDB read before showing -- under the
+  // accumulated load of a full suite run this occasionally needs much longer
+  // than it does standalone (confirmed: resolves in ~100ms in isolation).
+  await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 25000 });
 
   // 12. The coverage select is broken out into per-system optgroups with a
   //     "(whole system)" option plus one "↳ <castle>" option per castle --
@@ -577,6 +581,98 @@ try {
   } catch(e){ bad('VR mini board renders real artwork', e); }
 } finally {
   await app8.close();
+}
+
+// --- Phase I: graph node layout (manual de-overlap dragging) persists ---
+const app9 = await launchApp();
+try {
+  await seedBackup(app9.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4'], reply: 'e6' },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
+  });
+  await app9.page.click('.line-row');
+  await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  // 17. Drag a node, close and reopen the graph (fresh dagre relayout): the
+  //     node should land back at dagre's own spot PLUS the saved delta, not
+  //     at dagre's raw spot (the fix wouldn't be doing anything) and not
+  //     pinned to a stale absolute coordinate.
+  let targetFen, posBefore, dragDx = 41, dragDy = -27;
+  try {
+    targetFen = await app9.page.evaluate(() => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => !!x.data('fen'))[0];
+      return n ? n.data('fen') : null;
+    });
+    assert(targetFen, 'no fen-bearing graph node found to drag');
+    posBefore = await app9.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.position();
+    }, targetFen);
+    const dragged = await app9.page.evaluate(({ fen, dx, dy }) => window.__graphTestHooks.dragNodeBy(fen, dx, dy),
+      { fen: targetFen, dx: dragDx, dy: dragDy });
+    assert(dragged, 'dragNodeBy could not find the target node');
+
+    // reopen: close, then rebuild the graph fresh (new cy instance, fresh dagre run)
+    await app9.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const posAfter = await app9.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.position() : null;
+    }, targetFen);
+    assert(posAfter, 'dragged node not found after reopening the graph');
+    const dx = posAfter.x - posBefore.x, dy = posAfter.y - posBefore.y;
+    assert(Math.abs(dx - dragDx) < 2 && Math.abs(dy - dragDy) < 2,
+      `expected the reopened node offset by ~(${dragDx},${dragDy}) from dagre's base, got (${dx.toFixed(1)},${dy.toFixed(1)})`);
+    ok('dragged graph node keeps its manual offset across a same-session reopen');
+  } catch(e){ bad('graph layout persists across reopen', e); }
+
+  // 18. Persists across a full reload too (real IndexedDB round-trip, not just
+  //     the in-memory GRAPH_LAYOUT surviving a re-render).
+  try {
+    await app9.page.reload({ waitUntil: 'domcontentloaded' });
+    await app9.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await app9.page.click('.line-row');
+    await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+    await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const posReload = await app9.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.position() : null;
+    }, targetFen);
+    assert(posReload, 'dragged node not found after a full page reload');
+    const dx = posReload.x - posBefore.x, dy = posReload.y - posBefore.y;
+    assert(Math.abs(dx - dragDx) < 2 && Math.abs(dy - dragDy) < 2,
+      `expected the offset to survive a reload: ~(${dragDx},${dragDy}), got (${dx.toFixed(1)},${dy.toFixed(1)})`);
+    ok('graph layout survives a full page reload (real IndexedDB persistence)');
+  } catch(e){ bad('graph layout persists across reload', e); }
+
+  // 19. "Reset Layout" clears the saved delta -- the node goes back to
+  //     dagre's raw position (matching posBefore).
+  try {
+    await app9.page.evaluate(() => document.getElementById('graphResetLayoutBtn').onclick());
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const posReset = await app9.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.position() : null;
+    }, targetFen);
+    assert(posReset, 'node not found after Reset Layout');
+    const dx = posReset.x - posBefore.x, dy = posReset.y - posBefore.y;
+    assert(Math.abs(dx) < 2 && Math.abs(dy) < 2,
+      `Reset Layout should return the node to dagre's raw spot; drifted by (${dx.toFixed(1)},${dy.toFixed(1)})`);
+    ok('Reset Layout clears the saved offset');
+  } catch(e){ bad('Reset Layout clears offset', e); }
+} finally {
+  await app9.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
