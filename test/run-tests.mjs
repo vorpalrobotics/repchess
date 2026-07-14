@@ -931,5 +931,67 @@ try {
   await app11.close();
 }
 
+// --- Phase L: outdoor world (Main Street) sizing never strands a castle
+//     outside the grass ---
+const app12 = await launchApp();
+try {
+  await seedBackup(app12.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
+  });
+  await app12.page.click('.line-row');
+  await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await app12.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await app12.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app12.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await app12.page.evaluate(() => document.getElementById('castleReportCloseBtn').click());
+  // "Run VR" (not the report's single-castle "Walk in VR"), so Main Street is
+  // built with every real castle on it, same as generateMainStreet always does.
+  await openVR(app12.page);
+  await app12.page.waitForTimeout(400);
+
+  // 29. Every castle building's footprint must fit inside the auto-sized grass.
+  try {
+    const size = await app12.page.evaluate(() => window.__threeTestEdit.roomSize('mainStreet'));
+    const buildings = await app12.page.evaluate(() => window.__threeTestEdit.buildings());
+    assert(size && size.w > 0 && size.d > 0, `mainStreet has no size: ${JSON.stringify(size)}`);
+    assert(buildings.length > 0, 'expected at least one castle building on the street');
+    const outside = buildings.filter(b =>
+      Math.abs(b.origin.x) + b.size.w / 2 > size.w / 2 || Math.abs(b.origin.z) + b.size.d / 2 > size.d / 2);
+    assert(outside.length === 0,
+      `${outside.length} building(s) fall outside the ground plane: ${JSON.stringify(outside)} (room size ${JSON.stringify(size)})`);
+    ok(`every castle building fits inside the auto-sized grass (${buildings.length} building(s), room ${size.w}x${size.d})`);
+  } catch(e){ bad('mainStreet auto-sizes to fit all castles', e); }
+
+  // 30. Regression: a stale saved mainStreet size (e.g. a manual resize from
+  //     back when there was less content -- mainStreet is fully procedural, so
+  //     nothing else ever corrects it) must never be allowed to shrink the
+  //     ground below what current content actually needs and strand a castle
+  //     outside it. A LARGER manual override should still be honored.
+  try {
+    const before = await app12.page.evaluate(() => window.__threeTestEdit.roomSize('mainStreet'));
+    await app12.page.evaluate(() => window.__threeTestEdit.resize('mainStreet', { w: 5, d: 5, h: 7 }));
+    await app12.page.waitForTimeout(100);
+    const afterShrink = await app12.page.evaluate(() => window.__threeTestEdit.roomSize('mainStreet'));
+    assert(afterShrink.w >= before.w && afterShrink.d >= before.d,
+      `a stale small override should not shrink mainStreet below its computed minimum: before=${JSON.stringify(before)} after=${JSON.stringify(afterShrink)}`);
+
+    const bigger = { w: before.w + 200, d: before.d + 200, h: 7 };
+    await app12.page.evaluate((g) => window.__threeTestEdit.resize('mainStreet', g), bigger);
+    await app12.page.waitForTimeout(100);
+    const afterGrow = await app12.page.evaluate(() => window.__threeTestEdit.roomSize('mainStreet'));
+    assert(afterGrow.w === bigger.w && afterGrow.d === bigger.d,
+      `a larger manual override should still be honored, got ${JSON.stringify(afterGrow)} vs requested ${JSON.stringify(bigger)}`);
+    ok('a stale/small saved mainStreet size can never shrink below the auto-computed minimum, but a larger one still wins');
+  } catch(e){ bad('mainStreet size override guard', e); }
+} finally {
+  await app12.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
