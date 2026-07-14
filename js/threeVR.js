@@ -445,6 +445,8 @@ let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
 let editHud = null;
+let toastEl = null;
+let toastTimer = null;
 
 /* ---------- on-screen touch joystick (mobile) ----------
    A virtual stick near the bottom-center drives the same walk the WASD/arrow
@@ -3864,7 +3866,88 @@ function buildTwoTrackDivider(room){
   mesh.userData = { kind: 'divider' };
   return mesh;
 }
+// briefly shows a status message top-center (e.g. the bounds-auto-fix notice)
+// so a silent data correction isn't invisible to the user; fades after ~3.5s.
+function showToast(msg){
+  if(!toastEl) return;
+  toastEl.textContent = msg;
+  toastEl.style.display = 'block';
+  toastEl.style.opacity = '1';
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.style.opacity = '0';
+    toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 400);
+  }, 3500);
+}
+
+// Re-validate every stored slot transform for `roomKey` against the room's
+// CURRENT geometry, snapping anything that now pokes outside the room back in
+// bounds. A stored nudge (dx/dz for a floor/move-object/billboard item, or
+// dOffset/dY for a wall item) was only ever validated against the room size AT
+// THE TIME the nudge was made -- shrinking the room afterward (via the room
+// geometry dialog) can leave it clipping through a wall or sitting outside
+// entirely, and it stays broken until someone notices and re-nudges it by hand.
+// Runs at the top of every buildRoom, so it's a standing check on every room
+// entry AND every geometry edit, not a one-time migration -- and it mirrors the
+// exact clamp math nudgeSelected already uses live, so a reconciled item ends
+// up exactly where a manual nudge to the same spot would have put it. Returns
+// the number of items it corrected (0 = nothing needed fixing).
+function reconcileRoomBounds(roomKey){
+  const room = mergedRoom(roomKey);
+  if(!room || room.outdoor) return 0;   // streets/lawns aren't resizable "rooms"
+  const layoutRoom = LAYOUT[roomKey];
+  const xforms = layoutRoom && layoutRoom.slotXform;
+  if(!xforms) return 0;
+  let fixed = 0;
+  for(const slotId of Object.keys(xforms)){
+    const xform = xforms[slotId];
+    if(!xform) continue;
+    let kind, baseX, baseZ, baseY, wall, offset;
+    const slot = slotById(room, roomKey, slotId);
+    if(slot){
+      kind = slot.kind; baseX = slot.x; baseZ = slot.z; baseY = slot.y; wall = slot.wall; offset = slot.offset;
+    } else if(slotId.startsWith('dobj-') || slotId.startsWith('dbb-')){
+      // a door-anchored object/billboard (buildPairAt) -- not in roomSlots; its
+      // base tracks the target door's CURRENT wall/offset instead of a fixed slot.
+      const target = slotId.slice(slotId.indexOf('-') + 1);
+      const ex = (room.exits || []).find(e => e.target === target && !e.back);
+      if(!ex) continue;   // that door doesn't exist on this room anymore -- nothing to reconcile
+      const pos = doorSideXZ(room, ex.wall, ex.offset, ex.wall === 'east' ? 1 : -1);
+      baseX = pos.x; baseZ = pos.z;
+      kind = slotId.startsWith('dobj-') ? 'moveObject' : 'mnemonic';
+    } else {
+      continue;   // stale/unknown slot id -- nothing safe to reconcile against
+    }
+
+    const next = { ...xform };
+    let changed = false;
+    if(kind === 'floor' || kind === 'moveObject' || kind === 'mnemonic'){
+      // same clamp nudgeSelected applies live for these kinds (clampFloorXZ)
+      const clamped = clampFloorXZ(room.size, baseX + (xform.dx || 0), baseZ + (xform.dz || 0));
+      const dx = clamped.x - baseX, dz = clamped.z - baseZ;
+      if(dx !== (xform.dx || 0) || dz !== (xform.dz || 0)){ next.dx = dx; next.dz = dz; changed = true; }
+    } else if(kind === 'wall'){
+      const { half } = wallSpan(room.size, wall);
+      const maxOffset = half - 0.4;
+      const wantOffset = offset + (xform.dOffset || 0);
+      const clampedOffset = Math.max(-maxOffset, Math.min(maxOffset, wantOffset));
+      const dOffset = clampedOffset - offset;
+      if(dOffset !== (xform.dOffset || 0)){ next.dOffset = dOffset; changed = true; }
+      if(baseY != null){
+        const minDY = 0.3 - baseY, maxDY = room.size.h - 0.3 - baseY;
+        const dY = Math.max(minDY, Math.min(maxDY, xform.dY || 0));
+        if(dY !== (xform.dY || 0)){ next.dY = dY; changed = true; }
+      }
+    }
+    if(changed){ xforms[slotId] = next; fixed++; }
+  }
+  if(fixed) persistLayout();
+  return fixed;
+}
+
 function buildRoom(roomKey){
+  const boundsFixed = reconcileRoomBounds(roomKey);
+  if(boundsFixed) showToast(`Moved ${boundsFixed} item${boundsFixed === 1 ? '' : 's'} back inside the room`);
   const room = mergedRoom(roomKey);
   buildGeneration++;
   const myGeneration = buildGeneration;
@@ -4581,11 +4664,12 @@ function nudgeSelected(key){
   }
 
   // door objects/billboards aren't in roomSlots -- their base pos lives on
-  // selectedProp (the mnemonic branch below ignores slot geometry anyway).
+  // selectedProp instead, carried through here so the floor/mnemonic branches
+  // below can bounds-clamp them exactly like a regular slot.
   const slot = selectedProp.doorObj
     ? { x: selectedProp.base.x, z: selectedProp.base.z, kind: 'moveObject' }
     : selectedProp.doorBill
-      ? { kind: 'mnemonic' }
+      ? { x: selectedProp.base.x, z: selectedProp.base.z, kind: 'mnemonic' }
       : slotById(room, roomKey, slotId);
   if(!slot) return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
@@ -4625,7 +4709,9 @@ function nudgeSelected(key){
     // it horizontally (camera-relative, same convention as floor props) and
     // PageUp/PageDown (or h/l, for keyboards without dedicated Page keys)
     // move it vertically -- a pure position change, the graphic itself isn't
-    // stretched.
+    // stretched. Horizontally clamped to the room footprint (clampFloorXZ) so
+    // it can't be nudged out through a wall -- same bound reconcileRoomBounds
+    // enforces on room entry, kept consistent here too.
     const fwd = cameraForwardVec(), right = cameraRightVec();
     let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
     if(key === 'ArrowRight'){ dx += right.x * NUDGE_STEP; dz += right.z * NUDGE_STEP; }
@@ -4634,7 +4720,10 @@ function nudgeSelected(key){
     if(key === 'ArrowDown'){  dx -= fwd.x * NUDGE_STEP;   dz -= fwd.z * NUDGE_STEP; }
     if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
     if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
-    xform.dx = dx; xform.dz = dz; xform.dy = dy;
+    const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
+    xform.dx = clamped.x - slot.x;
+    xform.dz = clamped.z - slot.z;
+    xform.dy = dy;
   } else {
     return; // ceiling slot: only scaling applies, no nudge
   }
@@ -5833,6 +5922,15 @@ export async function openThreeTest(containerEl, opts){
   editHud.textContent = 'EDIT MODE — click floor / wall / stairs / slot / doorway to set; [Esc] to exit';
   container.appendChild(editHud);
 
+  // transient top-center toast (e.g. the room-bounds auto-fix notice) — hidden
+  // until showToast() is called, fades itself back out after a few seconds.
+  toastEl = document.createElement('div');
+  toastEl.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);'
+    + 'padding:.4rem .8rem;background:rgba(21,101,192,.9);color:#fff;font:600 .8rem sans-serif;'
+    + 'border-radius:4px;pointer-events:none;display:none;z-index:3;max-width:calc(100% - 16px);'
+    + 'text-align:center;transition:opacity .4s';
+  container.appendChild(toastEl);
+
   // top-left icon toolbar (hints / edit / room / assets / close / help)
   hintsOn = (() => { try{ return localStorage.getItem('threeHintsOn') !== '0'; }catch(_){ return true; } })();
   toolbarEl = buildTopToolbar();
@@ -5882,7 +5980,21 @@ export async function openThreeTest(containerEl, opts){
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
-      pos: () => ({ x: pos.x, z: pos.z, yaw })
+      pos: () => ({ x: pos.x, z: pos.z, yaw }),
+      // world position of whichever scene object carries this slotId, regardless
+      // of whether it's a Mesh or a Sprite (meshes() only sees the former) --
+      // needed to check e.g. a placeholder billboard's position after a resize.
+      posOf: (slotId) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
+        if(!found) return null;
+        const wp = new THREE.Vector3();
+        found.getWorldPosition(wp);
+        return { x: +wp.x.toFixed(3), y: +wp.y.toFixed(3), z: +wp.z.toFixed(3) };
+      },
+      // apply a room geometry resize exactly as the room-geometry dialog's Apply
+      // button does (same setRoomGeom call), for testing the bounds auto-fix.
+      resize: (roomKey, geom) => setRoomGeom(roomKey, geom)
     };
   }
 }
@@ -5909,6 +6021,8 @@ export function closeThreeTest(){
   selectionGear = null;
   selectionAnchor = null;
   editHud = null;
+  if(toastTimer){ clearTimeout(toastTimer); toastTimer = null; }
+  toastEl = null;
   joystickEl = null; joyKnob = null; joyPointerId = null;
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
