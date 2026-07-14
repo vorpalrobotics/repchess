@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-76';
+const BUILD_TAG = '-77';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4779,35 +4779,67 @@ async function openChessboardQuizSetup(){
   await populateCoverageOptgroups($('oqCoverageSelect'), '<option value="">Choose a system…</option>');
   $('oqSetup').style.display = 'block';
 }
-$('oqStartBtn').onclick = async ()=>{
-  let n = parseInt($('oqNumQuestions').value, 10);
-  if(!Number.isFinite(n) || n < 1){ $('oqSetupError').textContent = 'Enter a question count of 1 or more.'; return; }
-  let depth = parseInt($('oqMaxDepth').value, 10);
-  if(!Number.isFinite(depth) || depth < 1){ $('oqSetupError').textContent = 'Enter a max depth of 1 or more.'; return; }
-  const coverageVal = $('oqCoverageSelect').value;
-  if(!coverageVal){ $('oqSetupError').textContent = 'Choose an opening system.'; return; }
+/* resolves the setup form's coverage value, swaps PREFS to that line's real
+   data, and builds a fresh session OQ (not yet run). Returns an error string
+   on failure (leaving PREFS/OQ untouched), or null on success.
+
+   PREFS is a single module-global holding whichever line's prefs are
+   currently loaded (normally set by openLine() when its tree is opened) --
+   but Test > Chessboard is reachable with no line open at all, or with a
+   DIFFERENT line open than the one picked here. Every reply/coverage lookup
+   for the rest of the session reads PREFS directly, so it has to actually
+   hold the selected line's data first -- swapped in here for the session's
+   duration and restored on close (oqRestorePrefsIfSwapped) so the tree view
+   isn't left showing the wrong line's prefs afterwards.
+
+   Split out from the START button's handler so __oqTestHooks can drive it
+   without a live board. */
+async function oqStartSession(coverageVal, n, depth){
+  if(!Number.isFinite(n) || n < 1) return 'Enter a question count of 1 or more.';
+  if(!Number.isFinite(depth) || depth < 1) return 'Enter a max depth of 1 or more.';
+  if(!coverageVal) return 'Choose an opening system.';
   const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
   const sel = await resolveCoverageSelection(coverageVal, lines);
-  if(!sel){ $('oqSetupError').textContent = 'That opening system could not be found — pick another.'; return; }
-  if(sel.isCastle && !sel.rootSeq){ $('oqSetupError').textContent = 'That castle has no content built yet — pick another.'; return; }
-  if(!sel.line.openingMoves || !sel.line.openingMoves.length){ $('oqSetupError').textContent = 'That opening system has no starting move configured yet.'; return; }
-  $('oqSetupError').textContent = '';
+  if(!sel) return 'That opening system could not be found — pick another.';
+  if(sel.isCastle && !sel.rootSeq) return 'That castle has no content built yet — pick another.';
+  if(!sel.line.openingMoves || !sel.line.openingMoves.length) return 'That opening system has no starting move configured yet.';
+  const savedPrefs = PREFS;
+  PREFS = await getAllPrefs(sel.line.id);
   OQ = {
     mode: 'session', line: sel.line, color: sel.line.color, startSeq: [],
     coverageRootSeq: sel.isCastle ? sel.rootSeq : null,
     maxDepth: depth, questionsTotal: n, questionIndex: 1,
-    oppChoices: [], hits: 0, misses: 0,
+    oppChoices: [], hits: 0, misses: 0, savedPrefs,
   };
+  return null;
+}
+$('oqStartBtn').onclick = async ()=>{
+  const n = parseInt($('oqNumQuestions').value, 10);
+  const depth = parseInt($('oqMaxDepth').value, 10);
+  const coverageVal = $('oqCoverageSelect').value;
+  const err = await oqStartSession(coverageVal, n, depth);
+  if(err){ $('oqSetupError').textContent = err; return; }
+  $('oqSetupError').textContent = '';
   oqRun(false);
 };
 
+function oqRestorePrefsIfSwapped(){
+  if(OQ && OQ.mode === 'session' && OQ.savedPrefs){
+    PREFS = OQ.savedPrefs;
+    OQ.savedPrefs = null;
+  }
+}
 $('oqCloseBtn').onclick = ()=>{
   if(oqBoard) oqBoard.disableMoveInput();
   if(OQ) OQ.finished = true;
+  oqRestorePrefsIfSwapped();
   oqClearHighlights();
   $('openingQuizOverlay').style.display='none';
 };
-$('oqExitBtn').onclick = ()=>{ $('openingQuizOverlay').style.display='none'; };
+$('oqExitBtn').onclick = ()=>{
+  oqRestorePrefsIfSwapped();
+  $('openingQuizOverlay').style.display='none';
+};
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
 $('oqAgainNewBtn').onclick  = ()=>{
   if(OQ && OQ.mode === 'session') OQ.questionIndex = 1;
@@ -4826,6 +4858,10 @@ if(localStorage.getItem('threeTestDebug')){
     coverageEligible: (seq, candidates) => oqCoverageEligible(seq, candidates),
     pickChoice: (candidates) => oqPickChoice(candidates),
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
+    startSession: (coverageVal, n, depth) => oqStartSession(coverageVal, n, depth),
+    restorePrefs: () => oqRestorePrefsIfSwapped(),
+    getPrefs: () => JSON.parse(JSON.stringify(PREFS)),
+    setPrefs: (p) => { PREFS = p; },
   };
 }
 

@@ -855,6 +855,45 @@ try {
     assert(JSON.stringify(cases) === JSON.stringify(expected), `move-number mapping wrong: ${JSON.stringify(cases)}`);
     ok('oqNextMoveNumber matches PGN move numbering (the Max Depth check)');
   } catch(e){ bad('oqNextMoveNumber', e); }
+
+  // 27. Regression: starting a chessboard-quiz session must load the QUIZZED
+  //     line's real PREFS -- Test > Chessboard is reachable with no line open
+  //     (CURRENT_LINE null, PREFS whatever was last there), and every reply
+  //     lookup for the rest of the session reads the module-global PREFS
+  //     directly. Before this fix PREFS was never actually swapped in, so
+  //     every lookup after the first (openingMoves-sourced) move silently
+  //     failed -- exactly the reported bug ("black never replies, then every
+  //     move is wrong"). Also checks the swap is undone on close, so the
+  //     tree view isn't left showing the wrong line's prefs afterwards.
+  try {
+    await seedBackup(app11.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'WhiteSys', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4', 'Nf6'], reply: 'c4' },
+      ]}],
+    });
+    // no .line-row click here -- CURRENT_LINE stays null, exactly the "went
+    // straight from the hamburger menu" path that triggered the bug.
+    await app11.page.evaluate(() => window.__oqTestHooks.setPrefs({ sentinel: 'before' }));
+    const err = await app11.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 10));
+    assert(err === null, `startSession should succeed for a valid whole-system pick, got error: ${err}`);
+
+    const prefsAfterStart = await app11.page.evaluate(() => window.__oqTestHooks.getPrefs());
+    assert(Object.values(prefsAfterStart).some(p => p.reply === 'c4'),
+      `PREFS was not swapped to the quizzed line's real data: ${JSON.stringify(prefsAfterStart)}`);
+    const oqAfterStart = await app11.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(JSON.stringify(oqAfterStart.savedPrefs) === JSON.stringify({ sentinel: 'before' }),
+      `savedPrefs should capture the pre-session PREFS, got ${JSON.stringify(oqAfterStart.savedPrefs)}`);
+
+    await app11.page.evaluate(() => window.__oqTestHooks.restorePrefs());
+    const prefsAfterRestore = await app11.page.evaluate(() => window.__oqTestHooks.getPrefs());
+    assert(JSON.stringify(prefsAfterRestore) === JSON.stringify({ sentinel: 'before' }),
+      `restorePrefs did not put back the pre-session PREFS, got ${JSON.stringify(prefsAfterRestore)}`);
+    const oqAfterRestore = await app11.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(oqAfterRestore.savedPrefs === null,
+      `savedPrefs should be cleared after restoring, got ${JSON.stringify(oqAfterRestore.savedPrefs)}`);
+    ok('starting a chessboard-quiz session loads the quizzed line\'s real PREFS and restores the previous PREFS on close');
+  } catch(e){ bad('chessboard quiz PREFS swap', e); }
 } finally {
   await app11.close();
 }
