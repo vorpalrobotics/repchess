@@ -403,5 +403,80 @@ try {
   await app6.close();
 }
 
+// --- Phase G: mnemonic quiz "Restrict to Opening Coverage" scoped to a castle ---
+const app7 = await launchApp();
+try {
+  // Alpha's castle root sits at ['d4','Nf6','c4'] (the room after 1.d4 Nf6 2.c4).
+  // computeMnemonicCoverage(line, rootSeq) only covers that room's OWN subtree,
+  // not the lead-in moves above it -- so a mnemonic on d4 (the line's own first
+  // move, pawn->d4) is covered by "(whole system)" but NOT by "castle:Alpha".
+  // That gap is exactly what proves castle-scoping is narrower than the old
+  // system-only restriction, not just cosmetically different.
+  await seedBackup(app7.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
+    mnemonics: [{ square: 'd4', pawn: 'Deer' }],
+  });
+
+  await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
+  await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 10000 });
+
+  // 12. The coverage select is broken out into per-system optgroups with a
+  //     "(whole system)" option plus one "↳ <castle>" option per castle --
+  //     the same structure Manage Mnemonics already uses.
+  try {
+    const struct = await app7.page.evaluate(() => {
+      const sel = document.getElementById('quizCoverageSelect');
+      const group = [...sel.querySelectorAll('optgroup')].find(g => g.label === 'Test');
+      if(!group) return { found: false };
+      const opts = [...group.querySelectorAll('option')].map(o => ({ value: o.value, text: o.textContent }));
+      return { found: true, opts };
+    });
+    assert(struct.found, 'no optgroup for the "Test" system in the quiz coverage select');
+    assert(struct.opts.some(o => o.text === '(whole system)'), `missing "(whole system)" option: ${JSON.stringify(struct.opts)}`);
+    assert(struct.opts.some(o => o.value.startsWith('castle:') && o.text === '↳ Alpha'),
+      `missing "↳ Alpha" castle option: ${JSON.stringify(struct.opts)}`);
+    ok('quiz coverage select breaks the system out into its castles');
+  } catch(e){ bad('quiz coverage select structure', e); }
+
+  // 13. Selecting the CASTLE scope excludes the d4 mnemonic (outside the
+  //     castle's own subtree) -- START should refuse with the coverage error.
+  try {
+    const castleVal = await app7.page.evaluate(() => {
+      const sel = document.getElementById('quizCoverageSelect');
+      const opt = [...sel.options].find(o => o.value.startsWith('castle:'));
+      sel.value = opt.value;
+      return opt.value;
+    });
+    assert(castleVal, 'could not find a castle: option to select');
+    await app7.page.evaluate(() => document.getElementById('quizStartBtn').click());
+    await app7.page.waitForTimeout(300);
+    const err = await app7.page.textContent('#quizSetupError');
+    const playShown = await app7.page.evaluate(() => document.getElementById('quizPlay').style.display === 'block');
+    assert(!playShown, 'quiz started despite the d4 mnemonic being outside the castle\'s coverage');
+    assert(/coverage/i.test(err), `expected a coverage-mismatch error, got: "${err}"`);
+    ok('castle-scoped coverage correctly excludes a mnemonic outside that castle\'s subtree');
+  } catch(e){ bad('castle coverage excludes out-of-subtree item', e); }
+
+  // 14. Selecting "(whole system)" for the same line includes it -- START succeeds.
+  try {
+    await app7.page.evaluate(() => {
+      const sel = document.getElementById('quizCoverageSelect');
+      const opt = [...sel.options].find(o => o.value === 'L1');
+      sel.value = opt.value;
+    });
+    await app7.page.evaluate(() => document.getElementById('quizStartBtn').click());
+    await app7.page.waitForTimeout(300);
+    const playShown = await app7.page.evaluate(() => document.getElementById('quizPlay').style.display === 'block');
+    assert(playShown, 'whole-system coverage failed to start despite covering the d4 mnemonic');
+    ok('whole-system coverage still includes the lead-in move a castle subtree excludes');
+  } catch(e){ bad('whole-system coverage includes lead-in item', e); }
+} finally {
+  await app7.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
