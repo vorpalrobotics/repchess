@@ -1444,5 +1444,57 @@ try {
   await app16.close();
 }
 
+// --- Phase Q: Manage Mnemonics with no system selected treats every
+//     square+piece as "needed" (as if a hypothetical system used every move
+//     mnemonic), so the missing counts and red/green coloring show up
+//     globally instead of only when a real coverage scope is picked. ---
+const app17 = await launchApp();
+try {
+  await seedBackup(app17.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    mnemonics: [
+      { square: 'd4', pawn: 'dolphin', pawnImg: 'data:image/png;base64,iVBORw0KGgo=' },
+    ],
+  });
+  // Manage Mnemonics is reachable straight from the home screen; no line is
+  // opened here on purpose, so CURRENT_LINE stays null and the coverage
+  // select defaults to "(none selected)" -- the exact case under test.
+  await app17.page.evaluate(() => document.getElementById('menuMnemonics').click());
+  await app17.page.waitForFunction(
+    () => document.getElementById('mnemonicsOverlay').style.display === 'flex', { timeout: 15000 });
+
+  // 51. With no system selected, the counts line reports all 384 (64 squares
+  //     x 6 pieces) square+piece slots as "used" and surfaces the missing
+  //     totals, exactly as if a hypothetical system used every mnemonic.
+  try {
+    const coverageVal = await app17.page.evaluate(() => document.getElementById('mnemonicsCoverageSelect').value);
+    assert(coverageVal === '', `expected no coverage system selected, got "${coverageVal}"`);
+    const countsText = await app17.page.evaluate(() => document.getElementById('mnemonicsCoverageCounts').textContent);
+    assert(countsText.includes('384 used'), `expected "384 used" (64 squares x 6 pieces), got: "${countsText}"`);
+    assert(/\d+ missing words/.test(countsText) && /\d+ missing images/.test(countsText),
+      `expected missing words/images counts to be surfaced with no system selected, got: "${countsText}"`);
+    ok('with no system selected, Manage Mnemonics shows counts as if every mnemonic slot were needed');
+  } catch(e){ bad('mnemonics: no-selection counts treat everything as needed', e); }
+
+  // 52. The one square+piece that IS fully filled in (d4 pawn: word+image)
+  //     renders green (mnem-ok); an empty one (d4 knight) renders red
+  //     (mnem-missing, "(none)" icon) instead of being blank as before.
+  try {
+    const classes = await app17.page.evaluate(() => {
+      const sq = document.querySelector('.mnem-square[data-square="d4"]');
+      return {
+        pawnOk: !!sq.querySelector('.mnem-word.mnem-ok'),
+        knightMissing: !!sq.querySelector('.mnem-icon-only.mnem-missing'),
+      };
+    });
+    assert(classes.pawnOk, 'expected the filled-in d4 pawn mnemonic to render green (mnem-ok)');
+    assert(classes.knightMissing, 'expected an unfilled d4 knight slot to render red (mnem-missing) instead of blank');
+    ok('filled slots render green, unfilled ones render red, with no system selected');
+  } catch(e){ bad('mnemonics: no-selection three-state coloring', e); }
+} finally {
+  await app17.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

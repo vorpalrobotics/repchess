@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-85';
+const BUILD_TAG = '-86';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3782,6 +3782,16 @@ function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
    "destination square + piece" combos actually played. */
 let MNEM_COVERAGE = null; // null = no system selected; else a Set of "sq|pieceField"
 
+/* With no system selected there's no coverage Set to check against -- treat
+   that as "every square+piece is needed" (as if a hypothetical system used
+   every single move mnemonic) rather than "nothing is needed", so the grid's
+   three-state coloring and missing-count doubles as a global completeness
+   view of the whole mnemonic vocabulary. Shared by the grid and the
+   per-square editor so they stay in sync. */
+function mnemNeeded(sq, p){
+  return MNEM_COVERAGE ? MNEM_COVERAGE.has(`${sq}|${p}`) : true;
+}
+
 /* buildCastleGraph/walk/processExit, definedCastles, and castleRootRoomSeq all
    read the global PREFS map keyed by line.id; PREFS only ever holds the prefs
    of whichever line is currently open in the main tree, which is often NOT the
@@ -3902,14 +3912,16 @@ async function renderMnemonicsGrid(){
         pieceHtml = entry[p+'Img']
           ? `<img class="mnem-cell-img" src="${entry[p+'Img']}" alt="">`
           : `<div class="mnem-cell-empty"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i></div>`;
-      } else if(MNEM_COVERAGE){
+      } else {
         // three-state coloring: not needed by the selected scope -> black
         // (default, no status class); needed and fully present (word AND
-        // image) -> green; needed but missing either one -> red.
+        // image) -> green; needed but missing either one -> red. With no
+        // system selected, mnemNeeded() treats every square+piece as needed,
+        // so this doubles as a global "what's still missing" view.
         pieceHtml = MNEM_PIECES
-          .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
+          .filter(p=>entry[p] || mnemNeeded(sq,p))
           .map(p=>{
-            const occurs = MNEM_COVERAGE.has(`${sq}|${p}`);
+            const occurs = mnemNeeded(sq,p);
             let statusCls = '';
             if(occurs){
               const missingWord = !entry[p], missingImg = !entry[p+'Img'];
@@ -3922,11 +3934,6 @@ async function renderMnemonicsGrid(){
               ? `<div class="${cls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`
               : `<div class="mnem-icon-only${statusCls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>(none)</div>`;
           })
-          .join('');
-      } else {
-        pieceHtml = MNEM_PIECES
-          .filter(p=>entry[p])
-          .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`)
           .join('');
       }
       const div = document.createElement('div');
@@ -3941,8 +3948,9 @@ async function renderMnemonicsGrid(){
     }
   }
   const counts = $('mnemonicsCoverageCounts');
-  if(MNEM_COVERAGE && !imgMode){
-    counts.innerHTML = `${MNEM_COVERAGE.size} used` +
+  if(!imgMode){
+    const usedCount = MNEM_COVERAGE ? MNEM_COVERAGE.size : 64 * MNEM_PIECES.length;
+    counts.innerHTML = `${usedCount} used` +
       (missingWords ? ` · <span class="mc-missing">${missingWords} missing words</span>` : '') +
       (missingImages ? ` · <span class="mc-missing">${missingImages} missing images</span>` : '');
   } else {
@@ -4159,7 +4167,7 @@ function openMnemonicsEditor(sq){
     // match the grid's three-state coloring: needed by the selected scope and
     // fully present (word + image) = green, needed but missing either = red,
     // not needed = default gray.
-    const needed = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
+    const needed = mnemNeeded(sq, p);
     const present = !!(entry[p] && entry[p+'Img']);
     const icon = mnemPieceIconEl(p);
     icon.classList.toggle('mnem-icon-needed-ok', needed && present);
