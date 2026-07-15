@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-82';
+const BUILD_TAG = '-83';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -97,6 +97,7 @@ const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
+const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
@@ -4796,7 +4797,42 @@ async function openChessboardQuizSetup(){
   $('oqSummary').style.display = 'none';
   $('oqSetupError').textContent = '';
   await populateCoverageOptgroups($('oqCoverageSelect'), '<option value="">Choose a system…</option>');
+  restoreOqSetupFields();
   $('oqSetup').style.display = 'block';
+}
+/* restore the last-used Number of Questions / Max Depth / Opening Coverage,
+   since a user is likely to run several sessions in a row with the same
+   settings. Coverage can't just restore the raw select value: "castle:N" is
+   an index into MNEM_CASTLE_OPTIONS, which is rebuilt fresh (and can be
+   reordered/resized) every time the select is populated -- so coverage is
+   saved/restored by stable identity (lineId, + castleName when it's a
+   castle) and re-resolved against the just-populated options instead. */
+function restoreOqSetupFields(){
+  const savedN = localStorage.getItem(LS_OQ_QUESTIONS);
+  if(savedN) $('oqNumQuestions').value = savedN;
+  const savedDepth = localStorage.getItem(LS_OQ_MAXDEPTH);
+  if(savedDepth) $('oqMaxDepth').value = savedDepth;
+  const savedCoverage = localStorage.getItem(LS_OQ_COVERAGE);
+  if(!savedCoverage) return;
+  let saved;
+  try { saved = JSON.parse(savedCoverage); } catch { return; }
+  const sel = $('oqCoverageSelect');
+  const val = saved.castleName
+    ? (() => { const idx = MNEM_CASTLE_OPTIONS.findIndex(o => o.lineId === saved.lineId && o.castleName === saved.castleName); return idx >= 0 ? `castle:${idx}` : null; })()
+    : saved.lineId;
+  if(val && [...sel.options].some(o => o.value === val)) sel.value = val;
+}
+/* the stable identity to persist for the coverage select's current value
+   (see restoreOqSetupFields) -- {lineId} for "(whole system)", or
+   {lineId, castleName} for a specific castle. null for the blank option. */
+function oqCoverageIdentity(){
+  const val = $('oqCoverageSelect').value;
+  if(!val) return null;
+  if(val.startsWith('castle:')){
+    const opt = MNEM_CASTLE_OPTIONS[+val.slice('castle:'.length)];
+    return opt ? { lineId: opt.lineId, castleName: opt.castleName } : null;
+  }
+  return { lineId: val };
 }
 /* resolves the setup form's coverage value, swaps PREFS to that line's real
    data, and builds a fresh session OQ (not yet run). Returns an error string
@@ -4836,9 +4872,15 @@ $('oqStartBtn').onclick = async ()=>{
   const n = parseInt($('oqNumQuestions').value, 10);
   const depth = parseInt($('oqMaxDepth').value, 10);
   const coverageVal = $('oqCoverageSelect').value;
+  const coverageIdentity = oqCoverageIdentity();
   const err = await oqStartSession(coverageVal, n, depth);
   if(err){ $('oqSetupError').textContent = err; return; }
   $('oqSetupError').textContent = '';
+  // remember these settings for next time -- only once they're known-valid
+  // (oqStartSession succeeded), so a bad/incomplete attempt is never saved.
+  localStorage.setItem(LS_OQ_QUESTIONS, String(n));
+  localStorage.setItem(LS_OQ_MAXDEPTH, String(depth));
+  if(coverageIdentity) localStorage.setItem(LS_OQ_COVERAGE, JSON.stringify(coverageIdentity));
   oqRun(false);
 };
 
@@ -4902,6 +4944,22 @@ if(localStorage.getItem('threeTestDebug')){
     },
     getFakeBoardLog: () => (oqBoard && oqBoard._log) ? oqBoard._log.slice() : null,
     callFinish: () => oqFinish(),
+    // setup-form persistence: populates the real coverage select (the
+    // Chessboard-unavailable guard in openChessboardQuizSetup itself is
+    // skipped here since that's just a DOM-visibility gate, not part of
+    // what's being tested), and exposes the save/restore functions directly.
+    populateCoverage: () => populateCoverageOptgroups($('oqCoverageSelect'), '<option value="">Choose a system…</option>'),
+    coverageIdentity: () => oqCoverageIdentity(),
+    restoreSetupFields: () => restoreOqSetupFields(),
+    // deterministic stand-in for a real populate: sets MNEM_CASTLE_OPTIONS and
+    // rebuilds the select's options to match, so a test can force a specific
+    // castle:N ordering (e.g. to prove a saved coverage identity still
+    // resolves correctly after the index it used to be at shifts).
+    setCastleOptionsForTest: (opts) => {
+      MNEM_CASTLE_OPTIONS = opts;
+      $('oqCoverageSelect').innerHTML = '<option value="">Choose a system…</option>' +
+        opts.map((o,i) => `<option value="castle:${i}">${o.castleName}</option>`).join('');
+    },
   };
 }
 
