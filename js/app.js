@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-75';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-76';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-62';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-89';
+const BUILD_TAG = '-90';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -746,14 +746,22 @@ function buildGeneratedCastle(line, games, rootSeq){
   // in (the ply before) plus OUR reply (the room's own move). Both derived from
   // the room's seq via lastMoveInfo (which also remaps castling to the rook
   // square). Returns null when there's no preceding opponent ply (a ply-1 root).
-  const CONV = mv => ({ to: mv.to, piece: MNEM_WORD_FOR_PIECE[mv.piece] || 'pawn', san: mv.san });
+  // `ply` is that move's ply counting from the true game start (1 = White's
+  // first move, same convention as plyLabel) -- White's half of the pair gets
+  // a moveNumber (Math.ceil(ply/2)) so the billboard can show "N." in its
+  // corner; Black's half never does, matching standard notation.
+  const CONV = (mv, ply) => {
+    const out = { to: mv.to, piece: MNEM_WORD_FOR_PIECE[mv.piece] || 'pawn', san: mv.san };
+    if(mv.color === 'w') out.moveNumber = Math.ceil(ply/2);
+    return out;
+  };
   const pairFor = (roomId, side, order) => {
     const node = nodeById.get(roomId);
     if(!node || !node.seq || node.seq.length < 2) return null;
     const resp = lastMoveInfo(node.seq);
     const opp = lastMoveInfo(node.seq.slice(0, -1));
     if(!resp || !opp) return null;
-    const p = { side, order, opponent: CONV(opp), response: CONV(resp) };
+    const p = { side, order, opponent: CONV(opp, node.seq.length - 1), response: CONV(resp, node.seq.length) };
     const q = PREFS[prefKey(line.id, node.seq.slice(0, -1))]?.moveQuality;
     if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(node.seq);
@@ -769,7 +777,7 @@ function buildGeneratedCastle(line, games, rootSeq){
     const resp = lastMoveInfo(seq);
     const opp = lastMoveInfo(seq.slice(0, -1));
     if(!resp || !opp) return null;
-    const p = { opponent: CONV(opp), response: CONV(resp) };
+    const p = { opponent: CONV(opp, seq.length - 1), response: CONV(resp, seq.length) };
     const q = PREFS[prefKey(line.id, seq.slice(0, -1))]?.moveQuality;
     if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(seq);
@@ -5678,13 +5686,16 @@ async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
 async function cancelAnalysisQueueItem(id){
   const idx = ANALYSIS_QUEUE.findIndex(it => it.id === id);
   if(idx === -1) return;
+  const wasProcessing = aqCurrentItem?.id === id;
   ANALYSIS_QUEUE.splice(idx, 1);
   await deleteAnalysisQueueItem(id);
-  // if this is the item currently being searched, just let the in-flight
-  // engine.analyze() run to its natural stop point -- whatever it saves is
-  // still a legitimate deeper result for that node, and
+  // if this is the item currently being searched, stop the in-flight search
+  // right away instead of leaving it to run to its full target depth in the
+  // background (which could stall the rest of the queue for minutes) --
   // processAnalysisQueueLoop re-checks the live array (by reference, not
-  // index) before removing/requeuing, so it can't clobber a different item.
+  // index) before removing/requeuing, sees this item is gone, and moves
+  // straight on to the next one rather than discarding/re-queuing it.
+  if(wasProcessing) engine.stop();
   renderAnalysisQueueModal();
   refreshAnalysisQueueRowMarkers();
 }
@@ -5858,12 +5869,18 @@ async function processAnalysisQueueLoop(){
 
       if(result) await saveAnalysisQueueResult(item, fen, result);
 
-      // finished (reached target depth) vs. interrupted (something else
-      // claimed the engine mid-search, e.g. interactive analysis) -- look the
-      // item up by reference rather than assuming index 0, since it may have
-      // been cancelled out from under this very search while it ran.
+      // finished (reached target depth) vs. interrupted -- look the item up
+      // by reference rather than assuming index 0, since it may have been
+      // cancelled out from under this very search while it ran. Gone from
+      // the array (cancelled) is a different case from still-present-but-
+      // interrupted (something else claimed the engine, e.g. interactive
+      // analysis): a cancel only affects this one item and the queue should
+      // carry straight on to the next; an external claim means the *engine*
+      // isn't free, so every remaining item has to wait -- yield and let the
+      // next idle transition resume the loop instead of spinning on a busy engine.
       const finished = !!result && result.depth >= item.depth;
       const idx = ANALYSIS_QUEUE.indexOf(item);
+      const cancelled = idx === -1;
       if(finished){
         if(idx !== -1){ ANALYSIS_QUEUE.splice(idx,1); await deleteAnalysisQueueItem(item.id); }
       } else if(idx !== -1){
@@ -5873,7 +5890,7 @@ async function processAnalysisQueueLoop(){
       aqCurrentProgress = null;
       renderAnalysisQueueModalIfOpen();
       refreshAnalysisQueueRowMarkers();
-      if(!finished) break;   // engine got reclaimed (or errored) -- yield; next idle transition resumes
+      if(!finished && !cancelled) break;
     }
   } finally {
     aqProcessing = false;
@@ -6122,9 +6139,17 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__aqTestHooks = {
     getQueue: () => ANALYSIS_QUEUE,
+    getCurrentItem: () => aqCurrentItem,
     addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
+    maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
+    // the real Engine singleton -- since Stockfish isn't available in this
+    // harness, a test monkey-patches .ready/.threads/.analyze/.stop directly
+    // to fake a search in progress (analyze() returns a controllable pending
+    // promise; stop() resolves it), driving the real scheduler/cancel logic
+    // instead of a throwaway re-implementation of it.
+    engine,
     refreshAnalysisQueue: () => refreshAnalysisQueue(),
     seqToNotation: (seq) => seqToNotation(seq),
     saveAnalysisQueueResult: (item, fen, result) => saveAnalysisQueueResult(item, fen, result),

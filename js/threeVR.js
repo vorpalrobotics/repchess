@@ -2763,6 +2763,27 @@ function drawQualityBadge(ctx, q){
   ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(q, x + pad, y + h / 2 + 4);
 }
+// White's move number ("5."), pinned to the upper-left corner of whichever
+// quadrant (qx,qy) is White's half of the pair -- outlined text rather than
+// the quality pill's filled badge, so it reads over both photo/PNG art and
+// the dark text-fallback box without needing its own background plate.
+// `dy` nudges it down out of the way when the opponent quadrant already has
+// a quality badge sitting in that same corner (quality is opponent-only, so
+// this only ever applies there, never to the response quadrant).
+function drawMoveNumberBadge(ctx, qx, qy, moveNumber, dy){
+  const text = `${moveNumber}.`;
+  ctx.save();
+  ctx.font = 'bold 72px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeText(text, qx + 18, qy + 16 + (dy || 0));
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, qx + 18, qy + 16 + (dy || 0));
+  ctx.restore();
+}
 // the response laps over it in the shared corner.
 function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality){
   const canvas = document.createElement('canvas');
@@ -2773,6 +2794,10 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
   drawMnemQuadrant(ctx, far, far, respContent, beardImg);   // response pegged bottom-right
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
+  // White's move-number badge in its own quadrant's corner -- offset down
+  // when it would otherwise sit under the opponent quadrant's quality pill.
+  if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, oppContent.moveNumber, oppQuality ? 128 : 0);
+  if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, respContent.moveNumber);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -2799,8 +2824,9 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
     ? (wordTrim || move.san)
     : (wordTrim ? `${wordTrim} (${move.san})` : move.san);
   const beards = move.disambig || 0;
-  if(!imgSrc) return Promise.resolve({ text: wordFallback, beards });
-  return loadImageCached(imgSrc).then(img => img ? { image: img, beards } : { text: wordFallback, beards });
+  const moveNumber = move.moveNumber;
+  if(!imgSrc) return Promise.resolve({ text: wordFallback, beards, moveNumber });
+  return loadImageCached(imgSrc).then(img => img ? { image: img, beards, moveNumber } : { text: wordFallback, beards, moveNumber });
 }
 
 // builds the movable sprite for one mnemonic slot: position/scale come from
@@ -2816,7 +2842,10 @@ function buildMnemPairSprite(pair, userScale){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
   sprite.userData.userScale = userScale || 1;
   const oppQ = pair.opponent.quality;
-  renderMnemPairCanvas(sprite, { text: pair.opponent.san }, { text: pair.response.san }, null, oppQ);
+  renderMnemPairCanvas(sprite,
+    { text: pair.opponent.san, moveNumber: pair.opponent.moveNumber },
+    { text: pair.response.san, moveNumber: pair.response.moveNumber },
+    null, oppQ);
   const myGen = buildGeneration;
   Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
@@ -6203,7 +6232,32 @@ export async function openThreeTest(containerEl, opts){
       // the raw buildings array mainStreet was generated with (positions/sizes
       // as placed, before any size guarantee) -- for checking every building
       // footprint actually fits inside roomSize('mainStreet').
-      buildings: () => (ROOMS.mainStreet && ROOMS.mainStreet.buildings) ? JSON.parse(JSON.stringify(ROOMS.mainStreet.buildings)) : []
+      buildings: () => (ROOMS.mainStreet && ROOMS.mainStreet.buildings) ? JSON.parse(JSON.stringify(ROOMS.mainStreet.buildings)) : [],
+      // builds a move-pair billboard sprite from a synthetic pair (same shape
+      // CONV in app.js produces -- {opponent,response}, each optionally
+      // carrying moveNumber) and reports whether its canvas has the
+      // move-number badge's white ink in each quadrant's corner -- verifies
+      // "N." lands in the correct (White's) quadrant without needing full
+      // pixel-level OCR of the glyph. Reads the synchronous immediate-
+      // fallback render (before the async mnemonics/beard-image resolve),
+      // which already carries moveNumber, so no waiting on IDB is needed.
+      buildMnemPairInk: (pair) => {
+        const sprite = buildMnemPairSprite(pair, 1);
+        const canvas = sprite.material.map.image;
+        const ctx = canvas.getContext('2d');
+        const hasWhiteInk = (x0, y0, w, h) => {
+          const d = ctx.getImageData(x0, y0, w, h).data;
+          for(let i = 0; i < d.length; i += 4){
+            if(d[i] > 220 && d[i+1] > 220 && d[i+2] > 220 && d[i+3] > 200) return true;
+          }
+          return false;
+        };
+        const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;
+        return {
+          oppCorner: hasWhiteInk(14, 12, 70, 80),
+          respCorner: hasWhiteInk(far + 14, far + 12, 70, 80),
+        };
+      },
     };
   }
 }
