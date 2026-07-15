@@ -1195,5 +1195,118 @@ try {
   await app14.close();
 }
 
+// --- Phase O: Chessboard test setup fields (Number of Questions / Max Depth /
+//     Opening Coverage) persist to localStorage and restore next time ---
+const app15 = await launchApp();
+try {
+  await seedBackup(app15.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'WhiteSys', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      ]},
+      { id: 'L2', name: 'BlackSys', color: 'black', openingMoves: ['e4'], prefs: [
+        { seq: ['e4'], reply: 'c5', isCastleRoot: true, castleName: 'Bravo', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'e4 c5 Nf3 d6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await app15.page.click('.line-row');
+  await app15.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 39. Whole-system coverage: saved/restored by lineId, a stable value that
+  //     doesn't depend on castle indices at all.
+  try {
+    await app15.page.evaluate(() => {
+      window.__oqTestHooks.setCastleOptionsForTest([]);
+      document.getElementById('oqCoverageSelect').innerHTML += '<option value="L1">WhiteSys</option>';
+      document.getElementById('oqCoverageSelect').value = 'L1';
+    });
+    const identity = await app15.page.evaluate(() => window.__oqTestHooks.coverageIdentity());
+    assert(JSON.stringify(identity) === JSON.stringify({ lineId: 'L1' }), `expected {lineId:'L1'}, got ${JSON.stringify(identity)}`);
+
+    await app15.page.evaluate((id) => {
+      localStorage.setItem('oq_lastCoverage', JSON.stringify(id));
+      localStorage.setItem('oq_lastQuestions', '7');
+      localStorage.setItem('oq_lastMaxDepth', '12');
+      // reset the form to prove restore actually changes it, not a no-op
+      document.getElementById('oqCoverageSelect').value = '';
+      document.getElementById('oqNumQuestions').value = '3';
+      document.getElementById('oqMaxDepth').value = '5';
+    }, identity);
+    await app15.page.evaluate(() => window.__oqTestHooks.restoreSetupFields());
+    const restored = await app15.page.evaluate(() => ({
+      coverage: document.getElementById('oqCoverageSelect').value,
+      n: document.getElementById('oqNumQuestions').value,
+      depth: document.getElementById('oqMaxDepth').value,
+    }));
+    assert(restored.coverage === 'L1' && restored.n === '7' && restored.depth === '12',
+      `expected restored {coverage:'L1',n:'7',depth:'12'}, got ${JSON.stringify(restored)}`);
+    ok('Number of Questions / Max Depth / whole-system Coverage restore from localStorage');
+  } catch(e){ bad('chessboard quiz setup: whole-system restore', e); }
+
+  // 40. Regression: a saved castle coverage identity must still resolve
+  //     correctly even if that castle's castle:N index has since shifted
+  //     (new content populated ahead of it) -- proving the restore is keyed
+  //     by stable identity {lineId,castleName}, not the raw select value.
+  try {
+    await app15.page.evaluate(() => {
+      window.__oqTestHooks.setCastleOptionsForTest([
+        { lineId: 'L1', castleName: 'Alpha' },
+        { lineId: 'L2', castleName: 'Bravo' },
+      ]);
+      document.getElementById('oqCoverageSelect').value = 'castle:1';   // Bravo, at index 1
+    });
+    const identity = await app15.page.evaluate(() => window.__oqTestHooks.coverageIdentity());
+    assert(JSON.stringify(identity) === JSON.stringify({ lineId: 'L2', castleName: 'Bravo' }),
+      `expected {lineId:'L2',castleName:'Bravo'}, got ${JSON.stringify(identity)}`);
+    await app15.page.evaluate((id) => localStorage.setItem('oq_lastCoverage', JSON.stringify(id)), identity);
+
+    // simulate content added ahead of Bravo -- its index shifts from 1 to 2
+    await app15.page.evaluate(() => {
+      window.__oqTestHooks.setCastleOptionsForTest([
+        { lineId: 'L0', castleName: 'Aardvark' },
+        { lineId: 'L1', castleName: 'Alpha' },
+        { lineId: 'L2', castleName: 'Bravo' },
+      ]);
+      document.getElementById('oqCoverageSelect').value = '';
+    });
+    await app15.page.evaluate(() => window.__oqTestHooks.restoreSetupFields());
+    const restoredVal = await app15.page.evaluate(() => document.getElementById('oqCoverageSelect').value);
+    assert(restoredVal === 'castle:2', `expected the shifted index castle:2 (Bravo), got ${restoredVal}`);
+    ok('a saved castle coverage selection still resolves correctly after its castle:N index shifts');
+  } catch(e){ bad('chessboard quiz setup: castle coverage survives index shift', e); }
+
+  // 41. Sanity check against the real populate path (not just the synthetic
+  //     hook above): restoring against actual populateCoverageOptgroups output.
+  try {
+    await app15.page.evaluate(() => window.__oqTestHooks.populateCoverage());
+    const realIdx = await app15.page.evaluate(() => {
+      const opts = [...document.getElementById('oqCoverageSelect').options];
+      const castleOpt = opts.find(o => o.value.startsWith('castle:') && o.textContent.includes('Bravo'));
+      return castleOpt ? castleOpt.value : null;
+    });
+    assert(realIdx, 'expected a real "↳ Bravo" castle option in the populated select');
+    await app15.page.evaluate((val) => { document.getElementById('oqCoverageSelect').value = val; }, realIdx);
+    const identity = await app15.page.evaluate(() => window.__oqTestHooks.coverageIdentity());
+    assert(identity && identity.lineId === 'L2' && identity.castleName === 'Bravo',
+      `expected the real Bravo castle's identity, got ${JSON.stringify(identity)}`);
+    await app15.page.evaluate((id) => {
+      localStorage.setItem('oq_lastCoverage', JSON.stringify(id));
+      document.getElementById('oqCoverageSelect').value = '';
+    }, identity);
+    await app15.page.evaluate(() => window.__oqTestHooks.populateCoverage());   // repopulate fresh, like a real reopen
+    await app15.page.evaluate(() => window.__oqTestHooks.restoreSetupFields());
+    const restoredReal = await app15.page.evaluate(() => document.getElementById('oqCoverageSelect').value);
+    assert(restoredReal === realIdx, `expected the real castle option ${realIdx} restored, got ${restoredReal}`);
+    ok('restoring against the real populateCoverageOptgroups output selects the right castle again');
+  } catch(e){ bad('chessboard quiz setup: real coverage populate/restore', e); }
+} finally {
+  await app15.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
