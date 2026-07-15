@@ -329,6 +329,17 @@
   .objlist-additem{display:flex;gap:.5rem;margin:.5rem 0;max-width:48em}
   .objlist-additem input{flex:1 1 auto;padding:.3rem .4rem;font-size:.9rem}
   #ol_delete{background:#c62828;color:#fff}
+
+  .aq-table{border-collapse:collapse;width:100%;font-size:.85rem}
+  .aq-table th,.aq-table td{border:1px solid #ddd;padding:.35rem .5rem;text-align:left;vertical-align:top}
+  .aq-table th{background:#f2f2f2;font-size:.78rem}
+  .aq-del{color:#c62828;cursor:pointer;background:none;border:none;font-size:1rem;padding:0}
+  .aq-del:hover{color:#8e0000}
+  .aq-pos{font-family:'Courier New',monospace}
+  .aq-status-processing{color:#1565c0;font-weight:600}
+  .aq-status-queued{color:#888}
+  .aq-progress{font-size:.78rem;color:#555;margin-top:.2rem}
+  .aq-progress .meta-pv-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.4em}
   .objlist-pick-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
   .objlist-pick-modal{background:#fff;border-radius:6px;padding:1rem;width:90vw;height:86vh;max-width:none;display:flex;flex-direction:column;box-shadow:0 4px 16px rgba(0,0,0,.3)}
   .objlist-pick-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.6rem;flex-wrap:wrap}
@@ -551,7 +562,7 @@
         <button id="menuExportAssets">Assets</button>
       </div>
       <hr class="row-menu-sep">
-      <button id="menuCompressImages" title="Re-encode stored images to WebP to shrink backups (keeps transparency)">Compress Images (WebP)</button>
+      <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
       <hr class="row-menu-sep">
       <button id="menuSearchLine">Search for a Variation</button>
       <hr class="row-menu-sep">
@@ -903,6 +914,43 @@
   </div>
 </div>
 
+<!-- add-to-analysis-queue modal (a move row's ⋮ menu) -->
+<div id="analysisAddOverlay" class="overlay">
+  <div class="modal" style="max-width:26em">
+    <h2 style="margin-top:0">Add to Analysis List</h2>
+    <div class="field">
+      <label for="analysisAddDepth">Depth</label>
+      <input type="number" id="analysisAddDepth" min="1" step="1" value="40" style="width:6em">
+    </div>
+    <div class="field">
+      <label for="analysisAddLines">Number of lines</label>
+      <input type="number" id="analysisAddLines" min="1" max="6" step="1" value="4" style="width:6em">
+    </div>
+    <div id="analysisAddError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
+    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
+      <button id="analysisAddCancelBtn">Cancel</button>
+      <button id="analysisAddGoBtn">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- analysis queue modal (hamburger menu) -->
+<div id="analysisQueueOverlay" class="overlay">
+  <div class="modal" style="width:min(46em,95vw);max-height:88vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
+      <h2 style="margin:0">Analysis Queue</h2>
+      <button id="analysisQueueCloseBtn" style="flex:0 0 auto;margin-left:auto">Close</button>
+    </div>
+    <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis List" to queue deep background analysis.</p>
+    <div style="flex:1;min-height:0;overflow:auto">
+      <table id="analysisQueueTable" class="aq-table" style="display:none">
+        <thead><tr><th></th><th>Position</th><th>Target</th><th>Status</th></tr></thead>
+        <tbody id="analysisQueueBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- manage mnemonics modal (full-screen grid) -->
 <div id="mnemonicsOverlay" class="overlay">
   <div class="modal">
@@ -1151,7 +1199,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260630-39"></script>
+<script src="js/db.js?v=20260630-40"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1168,6 +1216,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-83"></script>
+<script type="module" src="js/app.js?v=20260630-84"></script>
 </body>
 </html>

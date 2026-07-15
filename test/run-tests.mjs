@@ -1308,5 +1308,121 @@ try {
   await app15.close();
 }
 
+// --- Phase P: background analysis queue ("Add to Analysis List" / "Analysis
+//     Queue") -- add/dedup, cancel, and the depth-gated direct-IDB-write save
+//     path are plain data manipulation against real IDB (unlike the eval
+//     feature above, no engine search is involved in any of this), so they're
+//     fully testable via __aqTestHooks. Only the live engine.analyze() call
+//     inside processAnalysisQueueLoop needs real Stockfish and stays outside
+//     this harness's reach -- covered by manual verification instead. ---
+const app16 = await launchApp();
+try {
+  await seedBackup(app16.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6','c4'], eval: { type:'cp', value:60, depth:20, pv:'1.d4 Nf6 2.c4' } },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' }],
+  });
+  await app16.page.click('.line-row');
+  await app16.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 42. Adding a fresh node queues it with the requested depth/lines.
+  try {
+    await app16.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4'], 40, 4));
+    const q = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q.length === 1 && q[0].lineId === 'L1' && q[0].depth === 40 && q[0].multipv === 4,
+      `expected one queued item depth=40 multipv=4, got ${JSON.stringify(q)}`);
+    ok('adding a node queues it with the requested depth/lines');
+  } catch(e){ bad('analysis queue: add', e); }
+
+  // 43. Adding the SAME node again with a higher target tops the existing
+  //     entry up in place rather than duplicating it.
+  try {
+    await app16.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4'], 45, 3));
+    const q = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q.length === 1, `expected the duplicate to be merged, not appended: ${JSON.stringify(q)}`);
+    assert(q[0].depth === 45 && q[0].multipv === 4,
+      `expected the higher of each target to win (depth 45, multipv 4), got ${JSON.stringify(q[0])}`);
+    ok('re-adding a queued node tops up its target instead of duplicating it');
+  } catch(e){ bad('analysis queue: dedup tops up target', e); }
+
+  // 44. Adding a node already saved to at least the requested depth/lines is
+  //     a silent no-op -- nothing new queued.
+  try {
+    await app16.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','Nf6','c4'], 20, 1));
+    const q = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q.length === 1, `already-sufficiently-analyzed node should not be queued: ${JSON.stringify(q)}`);
+    ok('a node already analyzed to the target depth/lines is not queued');
+  } catch(e){ bad('analysis queue: no-op when already analyzed', e); }
+
+  // 45. Cancelling removes the item, and it stays gone after a fresh reload
+  //     from IDB (proving the cancel actually persisted, not just in-memory).
+  try {
+    const before = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    await app16.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), before[0].id);
+    const afterCancel = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(afterCancel.length === 0, `expected the queue empty after cancel, got ${JSON.stringify(afterCancel)}`);
+    await app16.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
+    const afterReload = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(afterReload.length === 0, `cancelled item reappeared after reload from IDB: ${JSON.stringify(afterReload)}`);
+    ok('cancelling a queue item deletes it persistently');
+  } catch(e){ bad('analysis queue: cancel', e); }
+
+  // 46. seqToNotation numbers White moves, leaves Black moves bare.
+  try {
+    const label = await app16.page.evaluate(() => window.__aqTestHooks.seqToNotation(['d4','Nf6','c4']));
+    assert(label === '1.d4 Nf6 2.c4', `expected "1.d4 Nf6 2.c4", got "${label}"`);
+    ok('seqToNotation formats a move sequence with move numbers');
+  } catch(e){ bad('analysis queue: seqToNotation', e); }
+
+  // 47. saveAnalysisQueueResult: a fresh node with no saved eval writes both
+  //     eval (best line) and evalLines (every rank).
+  const fen = 'rnbqkbnr/ppp1pppp/5n2/3p4/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3';
+  let firstSave;
+  try {
+    const result = { depth: 30, lines: {
+      1: { score:{type:'cp',value:35}, depth:30, pv:['b1c3','g8f6'] },
+      2: { score:{type:'cp',value:20}, depth:30, pv:['g1f3','e7e6'] },
+    }};
+    await app16.page.evaluate(({item,fen,result}) => window.__aqTestHooks.saveAnalysisQueueResult(item,fen,result),
+      { item: { lineId:'L1', seq:['d4','Nf6','c4','e6'] }, fen, result });
+    firstSave = await app16.page.evaluate((seq) => window.__aqTestHooks.getPref('L1', seq), ['d4','Nf6','c4','e6']);
+    assert(firstSave?.eval?.depth === 30 && firstSave?.evalLines?.length === 2,
+      `expected a depth-30 eval with 2 saved lines, got ${JSON.stringify(firstSave)}`);
+    ok('saveAnalysisQueueResult saves eval + evalLines for a fresh node');
+  } catch(e){ bad('analysis queue: save fresh result', e); }
+
+  // 48. A SHALLOWER result with the SAME line count must not overwrite it.
+  try {
+    const shallower = { depth: 25, lines: {
+      1: { score:{type:'cp',value:5}, depth:25, pv:['e2e4'] },
+      2: { score:{type:'cp',value:1}, depth:25, pv:['c2c4'] },
+    }};
+    await app16.page.evaluate(({item,fen,result}) => window.__aqTestHooks.saveAnalysisQueueResult(item,fen,result),
+      { item: { lineId:'L1', seq:['d4','Nf6','c4','e6'] }, fen, result: shallower });
+    const after = await app16.page.evaluate((seq) => window.__aqTestHooks.getPref('L1', seq), ['d4','Nf6','c4','e6']);
+    assert(after.eval.depth === 30, `a shallower result should not overwrite the depth-30 save, got depth ${after.eval.depth}`);
+    ok('a shallower saveAnalysisQueueResult never overwrites a deeper saved eval');
+  } catch(e){ bad('analysis queue: shallower save is a no-op', e); }
+
+  // 49. SAME depth but MORE lines than before counts as an improvement (the
+  //     refinement over recordEvalIfDeeper's plain depth-only gate).
+  try {
+    const sameDepthMoreLines = { depth: 30, lines: {
+      1: { score:{type:'cp',value:35}, depth:30, pv:['b1c3','g8f6'] },
+      2: { score:{type:'cp',value:20}, depth:30, pv:['g1f3','e7e6'] },
+      3: { score:{type:'cp',value:15}, depth:30, pv:['e2e3','b8c6'] },
+    }};
+    await app16.page.evaluate(({item,fen,result}) => window.__aqTestHooks.saveAnalysisQueueResult(item,fen,result),
+      { item: { lineId:'L1', seq:['d4','Nf6','c4','e6'] }, fen, result: sameDepthMoreLines });
+    const after = await app16.page.evaluate((seq) => window.__aqTestHooks.getPref('L1', seq), ['d4','Nf6','c4','e6']);
+    assert(after.evalLines.length === 3, `expected the same-depth-more-lines result to save 3 lines, got ${JSON.stringify(after.evalLines)}`);
+    ok('same-depth-but-more-lines counts as an improvement and is saved');
+  } catch(e){ bad('analysis queue: same-depth more-lines improves', e); }
+} finally {
+  await app16.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
