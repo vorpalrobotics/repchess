@@ -1521,5 +1521,86 @@ try {
   await app17.close();
 }
 
+// --- Phase R: "Analyze All Children" now queues every child for background
+//     analysis (same Depth/Lines modal as "Add to Analysis Queue") instead of
+//     running an instant in-page search. ---
+const app18 = await launchApp();
+try {
+  await seedBackup(app18.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','c4'], eval: { type:'cp', value:15, depth:25, pv:'1.d4 c4' } },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await app18.page.click('.line-row');
+  await app18.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 53. Clicking "Analyze All Children" opens the Add-to-Queue modal (Depth +
+  //     Lines, titled with the child count) instead of starting a live search.
+  try {
+    // icon buttons have zero size (Font Awesome), so click via evaluate like
+    // every other row-menu test in this suite.
+    await app18.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await app18.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="analyzeChildren"]').click());
+    const display = await app18.page.evaluate(() => document.getElementById('analysisAddOverlay').style.display);
+    assert(display === 'flex', `expected the Add-to-Queue modal to open, got display="${display}"`);
+    const title = await app18.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+    assert(title === 'Add 2 Children to Analysis Queue', `expected a child-count title, got "${title}"`);
+    const depthVal = await app18.page.evaluate(() => document.getElementById('analysisAddDepth').value);
+    const linesVal = await app18.page.evaluate(() => document.getElementById('analysisAddLines').value);
+    assert(depthVal === '40' && linesVal === '4', `expected the usual defaults (40/4), got ${depthVal}/${linesVal}`);
+    ok('"Analyze All Children" opens the Depth/Lines modal titled with the child count');
+  } catch(e){ bad('analyze all children: opens queue modal', e); }
+
+  // 54. Confirming queues every child (not an instant search); the move
+  //     table's hourglass markers appear on all of them and one combined
+  //     summary is logged (not one message per child overwriting the last).
+  try {
+    await app18.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await app18.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
+    const q = await app18.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const seqs = q.map(it => it.seq.join(',')).sort();
+    assert(JSON.stringify(seqs) === JSON.stringify(['d4,Nf6,c4,e6','d4,Nf6,c4,g6']),
+      `expected both children queued, got ${JSON.stringify(seqs)}`);
+    assert(q.every(it => it.depth === 40 && it.multipv === 4), `expected the chosen depth/lines on both items, got ${JSON.stringify(q)}`);
+
+    const markers = await app18.page.evaluate(() => {
+      const vis = sel => { const i = document.querySelector(sel); return !!i && i.style.display !== 'none'; };
+      return {
+        e6: vis('tr.data-row[data-seq="d4,Nf6,c4,e6"] .aqQueuedIcon'),
+        g6: vis('tr.data-row[data-seq="d4,Nf6,c4,g6"] .aqQueuedIcon'),
+      };
+    });
+    assert(markers.e6 && markers.g6, `expected both children's row markers to show, got ${JSON.stringify(markers)}`);
+
+    const progressText = await app18.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText.includes('2 children') && progressText.includes('2 queued'),
+      `expected a combined summary log, got "${progressText}"`);
+    ok('"Analyze All Children" queues every child instead of running an instant search');
+  } catch(e){ bad('analyze all children: queues every child', e); }
+
+  // 55. addChildrenToAnalysisQueue's summary tallies added/topped-up/skipped
+  //     separately: d5 is brand new (added), Nf6/c4/e6 is already queued from
+  //     test 54 (topped-up), and d4,c4 is pre-seeded with a sufficient saved
+  //     eval (depth 25/1 line, meeting the requested depth 20/multipv 1).
+  try {
+    await app18.page.evaluate(() =>
+      window.__aqTestHooks.addChildrenToAnalysisQueue('L1',
+        [['d4','d5'], ['d4','Nf6','c4','e6'], ['d4','c4']], 20, 1));
+    const progressText = await app18.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText.includes('3 children') && progressText.includes('1 queued') &&
+      progressText.includes('1 target updated') && progressText.includes('1 already sufficient'),
+      `expected a tallied summary (1 added, 1 topped-up, 1 skipped), got "${progressText}"`);
+    ok('addChildrenToAnalysisQueue tallies added/topped-up/skipped into one summary line');
+  } catch(e){ bad('analyze all children: bulk summary tallies results', e); }
+} finally {
+  await app18.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
