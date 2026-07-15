@@ -1602,5 +1602,56 @@ try {
   await app18.close();
 }
 
+// --- Phase S: "Search for a Variation" -- a not-found result pops up a
+//     clear "Variation not found" alert (in addition to the existing inline
+//     modal text) instead of silently doing nothing, and never touches the
+//     tree/focus state. ---
+const app19 = await launchApp();
+try {
+  await seedBackup(app19.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app19.page.click('.line-row');
+  await app19.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 56. A variation whose first move isn't even this system's opening pops
+  //     up "Variation not found" (with the specific reason) and leaves the
+  //     tree's focus state and DOM completely untouched.
+  try {
+    const treeHtmlBefore = await app19.page.evaluate(() => document.getElementById('tree').innerHTML);
+    const unfocusVisibleBefore = await app19.page.evaluate(() => document.getElementById('unfocusBtn').style.display);
+
+    await app19.page.evaluate(() => document.getElementById('menuSearchLine').click());
+    await app19.page.waitForFunction(
+      () => document.getElementById('searchLineOverlay').style.display === 'flex', { timeout: 5000 });
+    await app19.page.fill('#searchLineInput', '1. e4 e5');
+
+    let dialogMessage = null;
+    app19.page.once('dialog', d => { dialogMessage = d.message(); });
+    await app19.page.evaluate(() => document.getElementById('searchLineSaveBtn').click());
+    await app19.page.waitForFunction(() => document.getElementById('searchLineError').textContent.length > 0, { timeout: 5000 });
+
+    assert(dialogMessage && dialogMessage.startsWith('Variation not found'),
+      `expected a "Variation not found" popup, got: ${JSON.stringify(dialogMessage)}`);
+    assert(dialogMessage.includes('starts with 1. d4') && dialogMessage.includes('starts with 1. e4'),
+      `expected the popup to explain the mismatch, got: ${dialogMessage}`);
+
+    const overlayDisplay = await app19.page.evaluate(() => document.getElementById('searchLineOverlay').style.display);
+    assert(overlayDisplay === 'flex', `expected the search modal to stay open for an easy retry, got display="${overlayDisplay}"`);
+
+    const treeHtmlAfter = await app19.page.evaluate(() => document.getElementById('tree').innerHTML);
+    const unfocusVisibleAfter = await app19.page.evaluate(() => document.getElementById('unfocusBtn').style.display);
+    assert(treeHtmlAfter === treeHtmlBefore, 'expected the tree DOM to be completely untouched by a failed search');
+    assert(unfocusVisibleAfter === unfocusVisibleBefore, 'expected focus state to be untouched by a failed search');
+    ok('a not-found variation pops up a clear message and leaves the tree/focus state untouched');
+  } catch(e){ bad('search variation: not-found pops up a message, tree untouched', e); }
+} finally {
+  await app19.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

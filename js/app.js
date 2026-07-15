@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-88';
+const BUILD_TAG = '-89';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3039,6 +3039,18 @@ function expandRowBranch(row){
   }
 }
 
+/* the pasted line parsed fine but doesn't actually exist in this opening
+   system's data -- as opposed to the input itself being unusable (no system
+   open, unparseable text, empty box), which stays inline-only below since
+   that's a problem with the search box, not "the variation wasn't found".
+   Popped up (not just the small inline text, easy to miss) so it can't be
+   mistaken for the tree having silently done something; the tree itself is
+   never touched on this path -- every caller returns right after this. */
+function reportVariationNotFound(reason){
+  $('searchLineError').textContent = reason;
+  alert(`Variation not found\n\n${reason}`);
+}
+
 async function searchForLine(text){
   if(!CURRENT_LINE){ $('searchLineError').textContent = 'open an opening system first'; return; }
   let moves;
@@ -3048,8 +3060,8 @@ async function searchForLine(text){
 
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
-    $('searchLineError').textContent =
-      `this opening system starts with 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`;
+    reportVariationNotFound(
+      `this opening system starts with 1. ${triggers.join(' / ')}, but the pasted line starts with 1. ${moves[0]}`);
     return;
   }
 
@@ -3065,8 +3077,7 @@ async function searchForLine(text){
       const {counts} = replies(GAMES,seq);
       const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
       if(!(opp in counts) && !manual.includes(opp)){
-        $('searchLineError').textContent =
-          `no exact match: after ${seq.join(' ')||'the start'}, "${opp}" isn't a known reply in this opening system`;
+        reportVariationNotFound(`after ${seq.join(' ')||'the start'}, "${opp}" isn't a known reply in this opening system`);
         return;
       }
     }
@@ -3076,13 +3087,11 @@ async function searchForLine(text){
       const saved = PREFS[prefKey(CURRENT_LINE.id,lineSeq)];
       const expectedReply = moves[k+1];
       if(!saved?.reply){
-        $('searchLineError').textContent =
-          `no exact match: no standard response is set after ${lineSeq.join(' ')} yet`;
+        reportVariationNotFound(`no standard response is set after ${lineSeq.join(' ')} yet`);
         return;
       }
       if(saved.reply !== expectedReply){
-        $('searchLineError').textContent =
-          `no exact match: standard response after ${lineSeq.join(' ')} is "${saved.reply}", not "${expectedReply}"`;
+        reportVariationNotFound(`standard response after ${lineSeq.join(' ')} is "${saved.reply}", not "${expectedReply}"`);
         return;
       }
     }
