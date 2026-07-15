@@ -1,7 +1,7 @@
-import { Engine } from './engine.js';
+import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-77';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-78';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-62';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-91';
+const BUILD_TAG = '-93';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -469,7 +469,7 @@ function moveDisambiguatorCount(seq){
    leadIn=false to begin exactly AT rootSeq with no ancestors — the castle
    generator wants the mansion to start at its own root room, not show the
    opening moves that lead into it as a corridor. */
-function buildCastleGraph(line, games, rootSeq=null, leadIn=true){
+function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=null){
   const rooms = new Map();  // posKey -> {id, fen, label}
   const leaves = new Map(); // posKey -> {id, fen}
   const edges = [];
@@ -489,25 +489,41 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true){
     if(!l){ l = {id:'leaf'+(leafCounter++), fen}; leaves.set(key,l); }
     return l;
   }
-  function addEdge(fromId,toId,exitSeq,destSeq){
+  function addEdge(fromId,toId,exitSeq,destSeq,extra){
     edges.push({source:fromId,target:toId,label:plyLabel(exitSeq),fen:fenForSeq(exitSeq),seq:exitSeq.slice(),
                 // the full move seq reaching the target room via THIS edge (ends
                 // in our reply), so a door can show its own edge-specific move
                 // pair even for a transposition target reached several ways.
-                destSeq: destSeq ? destSeq.slice() : null});
+                destSeq: destSeq ? destSeq.slice() : null,
+                ...(extra||{})});
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
      line); resolves to either an existing/new room, or a locked leaf. */
   function processExit(fromRoomId, seq, opp){
     const exitSeq = [...seq,opp];
-    const reply = PREFS[prefKey(line.id,exitSeq)]?.reply;
+    const exitPref = PREFS[prefKey(line.id,exitSeq)];
+    const reply = exitPref?.reply;
     if(!reply){
       const leaf = getLeaf(exitSeq);
       addEdge(fromRoomId,leaf.id,exitSeq);
       return;
     }
     const destSeq = [...exitSeq,reply];
+    // a reply that starts ANOTHER castle's own root shouldn't be walked
+    // inline into THIS castle's tree (that would rebuild it a second time
+    // under this castle's own instance namespace, orphaning any objects/
+    // names/stairs already configured against its canonical, own-front-door
+    // instance). Redirect the edge to that castle's own room key instead --
+    // computed the same way its own walk would compute it, so it's the exact
+    // same key (a pure function of line.id + castle name + position), no
+    // registry needed.
+    const foreignName = ownCastleName && exitPref.isCastleRoot && exitPref.castleName?.trim();
+    if(foreignName && foreignName !== ownCastleName){
+      const foreignKey = castleRoomKey(castleInstanceId(line.id, foreignName), positionKey(fenForSeq(destSeq)));
+      addEdge(fromRoomId, null, exitSeq, destSeq, { foreignCastle: foreignName, foreignKey });
+      return;
+    }
     const destKey = positionKey(fenForSeq(destSeq));
     const alreadyExisted = rooms.has(destKey);
     const destRoom = getRoom(destSeq);
@@ -701,10 +717,10 @@ function genRoomMeta(seq, line = CURRENT_LINE){
    with its contained moves and its exits (doors) to other rooms. Built on the
    shared analyzer so it matches the network graph exactly. Data-only; the VR
    rendering (G2) and decoration persistence (G3) come later. */
-function buildGeneratedCastle(line, games, rootSeq){
+function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   // leadIn=false: start the mansion at its root room, not at the opening moves
   // that lead into it (those would otherwise show as a lead-in corridor).
-  const graph = buildCastleGraph(line, games, rootSeq, false);
+  const graph = buildCastleGraph(line, games, rootSeq, false, ownCastleName);
   const a = analyzeCastleStructure(graph);
   const nodeById = new Map(graph.rooms.map(r=>[r.id, r]));
   const leafIds = new Set(graph.leaves.map(l=>l.id));
@@ -799,6 +815,14 @@ function buildGeneratedCastle(line, games, rootSeq){
     for(const e of graph.edges){
       if(!memberSet.has(e.source)) continue;
       const track = trackOf(e.source);
+      if(e.foreignKey){
+        // this edge crosses into another castle's own room (see processExit's
+        // redirect in buildCastleGraph) -- `to`/`toKey` stay null (nothing of
+        // ours to point at); `foreignKey` is the real destination.
+        exits.push({ opp: e.label, to: null, foreignCastle: e.foreignCastle, foreignKey: e.foreignKey,
+                     pair: pairFromSeq(e.destSeq), track });
+        continue;
+      }
       if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track }); continue; }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
@@ -899,7 +923,8 @@ function openCastleGenModal(games, seq){
 // this castle, so a regenerate starts from a clean slate. Rooms are keyed by
 // instance + position (G3); legacy un-namespaced keys are cleared too.
 async function wipeCastleDecorations(games, seq){
-  const castle = buildGeneratedCastle(CURRENT_LINE, games, seq);
+  const ownCastleName = genRoomMeta(seq, CURRENT_LINE).castle;
+  const castle = buildGeneratedCastle(CURRENT_LINE, games, seq, ownCastleName);
   const inst = castleInstanceId(CURRENT_LINE.id, castle.genRooms[0]?.castle || '');
   const raw = await getMeta('threeLayout');
   if(!raw) return 0;
@@ -950,7 +975,8 @@ async function showGeneratedCastleReport(games, seq){
   const spinner = showSpinner('Previewing castle…');
   await nextPaint();
   let castle;
-  try { castle = buildGeneratedCastle(CURRENT_LINE, games, seq); }
+  const ownCastleName = genRoomMeta(seq, CURRENT_LINE).castle;
+  try { castle = buildGeneratedCastle(CURRENT_LINE, games, seq, ownCastleName); }
   finally { hideSpinner(spinner); }
   LAST_GENERATED_CASTLE = castle;
   console.log('[generated castle]', castle);
@@ -973,7 +999,9 @@ async function showGeneratedCastleReport(games, seq){
         `<div class="cr-wall"><b>right</b> ${escapeHtml(r.walls.right.join(' · '))}</div>`
       : `<div class="cr-wall"><b>moves</b> ${escapeHtml(r.walls.center.join(' · '))}</div>`;
     const exits = r.exits.length
-      ? `<div class="cr-exits"><b>exits</b> ${r.exits.map(x=>`${escapeHtml(x.opp)} → ${x.to || '(unbuilt)'}`).join(' · ')}</div>`
+      ? `<div class="cr-exits"><b>exits</b> ${r.exits.map(x=>
+          `${escapeHtml(x.opp)} → ${x.foreignCastle ? `⟨${escapeHtml(x.foreignCastle)}⟩` : (x.to || '(unbuilt)')}`
+        ).join(' · ')}</div>`
       : `<div class="cr-exits cr-empty">terminal (no exits)</div>`;
     return `<div class="cr-room">${title}${walls}${exits}</div>`;
   }).join('');
@@ -1637,12 +1665,20 @@ $('castleWalkBtn').onclick = async () => {
   const systems = await systemsForWalk(lines);
   // same instance id the street flow uses, so decorations made during this
   // preview land in (and load from) the same per-castle rooms
-  const instanceId = castleInstanceId(CURRENT_LINE?.id, LAST_GENERATED_CASTLE.genRooms[0]?.castle || '');
-  const roomNameIndex = buildRoomNameIndex([{ lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms }]);
+  const castleName = LAST_GENERATED_CASTLE.genRooms[0]?.castle || '';
+  const instanceId = castleInstanceId(CURRENT_LINE?.id, castleName);
+  // any OTHER castle this one has a redirected door into -- built and
+  // registered too so those doors resolve (see gatherLinkedCastles).
+  const linkedCastles = gatherLinkedCastles(castleName, LAST_GENERATED_CASTLE.genRooms);
+  const roomNameIndex = buildRoomNameIndex([
+    { lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms },
+    ...linkedCastles.map(c => ({ lineId: CURRENT_LINE?.id, instanceId: c.instanceId, genRooms: c.genRooms }))
+  ]);
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
     castleInstanceId: instanceId,
+    linkedCastles,
     piecesFile: PIECES_FILE,
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
@@ -1803,6 +1839,35 @@ function castleRootRoomSeq(castleName){
     }
   }
   return best;
+}
+/* BFS out from a previewed castle to every OTHER castle its rooms have a
+   redirected door into (see buildCastleGraph's foreign-exit redirect), so the
+   ephemeral single-castle "Walk in VR" preview can register their rooms too --
+   otherwise a door crossing into a foreign castle would point at a room that
+   was never built for this session and fail to resolve. Not needed for the
+   main "Run VR" world: gatherBuiltCastles already builds every castle in the
+   opening system independently, so every foreign key resolves on its own.
+   Returns [{name, instanceId, genRooms}, …] for every linked castle beyond
+   `startCastleName` (the caller already has that one built). */
+function gatherLinkedCastles(startCastleName, startGenRooms){
+  const seen = new Set([startCastleName].filter(Boolean));
+  const queue = [];
+  const collectForeign = genRooms => {
+    for(const r of genRooms) for(const ex of r.exits){
+      if(ex.foreignCastle && !seen.has(ex.foreignCastle)){ seen.add(ex.foreignCastle); queue.push(ex.foreignCastle); }
+    }
+  };
+  collectForeign(startGenRooms || []);
+  const out = [];
+  while(queue.length){
+    const name = queue.shift();
+    const rootSeq = castleRootRoomSeq(name);
+    if(!rootSeq) continue;   // named but not built yet -- nothing to link to
+    const genRooms = buildGeneratedCastle(CURRENT_LINE, GAMES, rootSeq, name).genRooms;
+    out.push({ name, instanceId: castleInstanceId(CURRENT_LINE.id, name), genRooms });
+    collectForeign(genRooms);
+  }
+  return out;
 }
 /* nearest castle root on THIS seq's own lineage (the default/inherited owner) */
 function inheritedCastle(lineSeq){
@@ -3710,7 +3775,7 @@ async function gatherBuiltCastles(lines){
             if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
           }
         }
-        return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq).genRooms };
+        return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
       }).filter(Boolean)
     );
     for(const c of built){

@@ -275,14 +275,19 @@ function doorWallFor(key){
   return ['north', 'east', 'west'][((h % 3) + 3) % 3];
 }
 const doorCmp = (a, b) =>
-  (a.opp || '').localeCompare(b.opp || '') || String(a.toKey || '').localeCompare(String(b.toKey || ''));
+  (a.opp || '').localeCompare(b.opp || '') ||
+  String(a.toKey || a.foreignKey || '').localeCompare(String(b.toKey || b.foreignKey || ''));
 /* Register ONE generated castle's rooms under a namespace. instanceId is a
    stable id derived from lineId+castleName (or 'preview' for the report's
-   ephemeral Walk in VR), so two castles that transpose into the same chess
-   position still get separate rooms/decorations — cross-castle sharing is a
-   deliberate future choice, not an accident. opts.backToStreet gives the entry
-   room a south back door out to mainStreet (used when a matching street
-   building exists to spawn in front of). Returns {entryKey, spawn}. */
+   ephemeral Walk in VR), so two castles that independently transpose into the
+   same chess position still get separate rooms/decorations. A nested castle
+   reached from within another's own tree is different: buildCastleGraph
+   redirects that edge to the nested castle's own room key up front (see its
+   foreign-exit handling), so this function never has to special-case it --
+   the exit just targets whatever key it's given, local or foreign. opts.
+   backToStreet gives the entry room a south back door out to mainStreet (used
+   when a matching street building exists to spawn in front of). Returns
+   {entryKey, spawn}. */
 function registerOneCastle(castle, instanceId, opts = {}){
   const genRooms = (castle && castle.genRooms) || [];
   if(!genRooms.length) return null;
@@ -322,7 +327,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
       ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
         + (sideMax - 1) * CAS_LAYOUT.sideStride + CAS_LAYOUT.northMargin
       : 0;
-    const fwd = r.exits.filter(ex => ex.to);
+    // a foreign-castle exit (see buildCastleGraph's redirect) has no local
+    // `to`/toKey but still needs a real door -- ex.foreignKey is its target.
+    const fwd = r.exits.filter(ex => ex.to || ex.foreignKey);
     const span = c => (c > 1 ? (c - 1) * DOOR_SPACING : 0);
     const base = r.type === 'corridor'
       ? { w: 8, d: Math.max(12, Math.min(44, (r.memberCount || 1) * 5)), h: 6 }
@@ -352,7 +359,7 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // doors keep their wall AND relative order across regenerations; only a
       // genuinely new variation slots in. Room grows so doors never collide.
       const byWall = { north: [], east: [], west: [] };
-      for(const ex of fwd) byWall[doorWallFor(ex.toKey || ex.opp)].push(ex);
+      for(const ex of fwd) byWall[doorWallFor(ex.toKey || ex.foreignKey || ex.opp)].push(ex);
       for(const w of ['north', 'east', 'west']) byWall[w].sort(doorCmp);
       // east/west ("left/right") doors sit at least EW_BEHIND_HEAD metres north
       // of the head mnemonic (center anchor pair) so it's clearly the first
@@ -385,7 +392,11 @@ function registerOneCastle(castle, instanceId, opts = {}){
     // (leave via the Close button).
     if(parent[r.posKey]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.posKey]), back: true });
     else if(r === entry && opts.backToStreet) exits.push({ wall: 'south', offset: 0, target: 'mainStreet', back: true });
-    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset, target: keyOf(dp.ex.toKey),
+    for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset,
+                                                 // a foreign exit's key is already the OTHER castle's own
+                                                 // room key (computed the same way its own walk would) --
+                                                 // use it directly instead of forging THIS instance's prefix.
+                                                 target: dp.ex.foreignKey || keyOf(dp.ex.toKey),
                                                  label: dp.ex.opp, pair: dp.ex.pair });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
@@ -396,8 +407,8 @@ function registerOneCastle(castle, instanceId, opts = {}){
     const moves = hasPairs ? [] : (r.walls.center || []).slice()
       .concat((r.walls.left || []).map(m => '⟸ ' + m))
       .concat((r.walls.right || []).map(m => '⟹ ' + m));
-    const doors = fwd.map(ex => `${ex.opp} → ${ex.to}`);
-    const unbuilt = r.exits.filter(ex => !ex.to).map(ex => ex.opp);
+    const doors = fwd.map(ex => `${ex.opp} → ${ex.to || (ex.foreignCastle ? `⟨${ex.foreignCastle}⟩` : '?')}`);
+    const unbuilt = r.exits.filter(ex => !ex.to && !ex.foreignKey).map(ex => ex.opp);
     ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack,
       // the node's "Room Name" attribute (r.name), the same value edited in the
@@ -3048,9 +3059,10 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey){
   // a door crossing into another castle shows that castle's name (over the room
   // within it); an ordinary in-castle door just shows the room name. The target
   // is a boundary into another castle when its OWN castle-root name differs from
-  // the castle we're currently walking in (its owner). (The subtree of the other
-  // castle is generated inline under this instance, so the keys share a prefix --
-  // the castle NAME, not the key, is what distinguishes them.)
+  // the castle we're currently walking in (its owner). (targetKey may be that
+  // other castle's own room key -- a genuinely different instance prefix, see
+  // buildCastleGraph's foreign-exit redirect -- so this always checks the
+  // castle NAME, never assumes anything about the key shape.)
   const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
   const ownerCastle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
   const crossCastle = !!destCastle && destCastle !== ownerCastle;
@@ -3893,8 +3905,13 @@ function computeSpawnForExit(fromKey, room, ex){
     return doorSpawn(room.size, ex.wall, ex.offset, building.origin, false);
   }
   // ordinary interior-to-interior transition: spawn just inside whichever
-  // of the target room's own exits leads back to the room we're leaving
+  // of the target room's own exits leads back to the room we're leaving. A
+  // linked foreign castle's entry (see gatherLinkedCastles) can have no
+  // exits of its own at all -- no forward doors built yet and not on a
+  // street -- so fall back to the same "just inside the entrance" spot a
+  // castle's own entry spawns at (registerOneCastle's `spawn`).
   const returning = targetRoom.exits.find(e => e.target === fromKey) || targetRoom.exits[0];
+  if(!returning) return { x: 0, z: targetRoom.size.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 };
   return doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true);
 }
 
@@ -6201,6 +6218,14 @@ export async function openThreeTest(containerEl, opts){
   window.addEventListener('keyup', onKeyUp);
   renderer.domElement.addEventListener('click', onCanvasClick);
 
+  // linked castles: any OTHER castle the previewed one has a redirected door
+  // into (see gatherLinkedCastles in app.js) -- registered so those doors
+  // resolve to the real, canonically-decorated room instead of dead-ending.
+  // No street/back-door wiring (they're not on a street in preview mode);
+  // Close remains the way out once you've walked into one.
+  for(const c of (threeOpts.linkedCastles || [])){
+    registerOneCastle({ genRooms: c.genRooms }, c.instanceId, {});
+  }
   // a single generated castle (the report's Walk in VR): register its rooms and
   // spawn straight into the entry; otherwise start on Main Street as usual.
   const cas = threeOpts.castle
