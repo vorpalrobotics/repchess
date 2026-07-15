@@ -1420,8 +1420,105 @@ try {
     assert(after.evalLines.length === 3, `expected the same-depth-more-lines result to save 3 lines, got ${JSON.stringify(after.evalLines)}`);
     ok('same-depth-but-more-lines counts as an improvement and is saved');
   } catch(e){ bad('analysis queue: same-depth more-lines improves', e); }
+
+  // 50. Move-table row marker: queuing a node shows the hourglass icon on its
+  //     row; cancelling makes it disappear again.
+  try {
+    const iconVisible = () => app16.page.evaluate(() => {
+      const icon = document.querySelector('tr.data-row[data-seq="d4,Nf6"] .aqQueuedIcon');
+      return !!icon && icon.style.display !== 'none';
+    });
+    assert(!(await iconVisible()), 'expected no queue marker before queuing');
+
+    await app16.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','Nf6'], 40, 4));
+    assert(await iconVisible(), 'expected the queue marker to appear on the row after queuing');
+
+    const q = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const item = q.find(it => it.seq.join(',') === 'd4,Nf6');
+    assert(item, 'expected the queued item to be findable in the queue');
+    await app16.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), item.id);
+    assert(!(await iconVisible()), 'expected the queue marker to disappear after cancelling');
+    ok('the move table shows/hides an hourglass marker as a node is queued/cancelled');
+  } catch(e){ bad('analysis queue: row marker reflects queue state', e); }
+
+  // 51. Analysis Queue modal shows the first few PV moves (not just the eval
+  //     score), one row per rank, for whichever item is being processed.
+  try {
+    const item = { id: 'aq:test', lineId: 'L1', seq: ['d4','Nf6'], depth: 40, multipv: 2 };
+    const progress = {
+      depth: 32,
+      lines: {
+        1: { score: { type:'cp', value: 180 }, depth: 32, pv: ['c2c4','e7e6','b1c3','f8b4'] },
+        2: { score: { type:'cp', value: 50 },  depth: 32, pv: ['g1f3','d7d5'] },
+      },
+    };
+    const html = await app16.page.evaluate(({item,progress}) =>
+      window.__aqTestHooks.aqProgressHtml(item, item, progress), { item, progress });
+    assert(html.includes('processing — depth 32/40'), `expected the depth readout, got: ${html}`);
+    const rowCount = (html.match(/class="meta-pv-row"/g) || []).length;
+    assert(rowCount === 2, `expected one row per PV rank (2), got ${rowCount} in: ${html}`);
+    assert(html.includes('+1.8'), `expected rank 1's eval score +1.8, got: ${html}`);
+    assert(html.includes('2.c4') && html.includes('3.Nc3'), `expected the first few PV moves numbered, got: ${html}`);
+
+    const queuedHtml = await app16.page.evaluate(({item}) =>
+      window.__aqTestHooks.aqProgressHtml(item, null, null), { item });
+    assert(queuedHtml.includes('aq-status-queued'), `expected the plain "queued" state when not the current item, got: ${queuedHtml}`);
+    ok('the queue modal shows eval + the first few PV moves per rank for the item being processed');
+  } catch(e){ bad('analysis queue: progress display shows PV moves', e); }
 } finally {
   await app16.close();
+}
+
+// --- Phase Q: Manage Mnemonics with no system selected treats every
+//     square+piece as "needed" (as if a hypothetical system used every move
+//     mnemonic), so the missing counts and red/green coloring show up
+//     globally instead of only when a real coverage scope is picked. ---
+const app17 = await launchApp();
+try {
+  await seedBackup(app17.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    mnemonics: [
+      { square: 'd4', pawn: 'dolphin', pawnImg: 'data:image/png;base64,iVBORw0KGgo=' },
+    ],
+  });
+  // Manage Mnemonics is reachable straight from the home screen; no line is
+  // opened here on purpose, so CURRENT_LINE stays null and the coverage
+  // select defaults to "(none selected)" -- the exact case under test.
+  await app17.page.evaluate(() => document.getElementById('menuMnemonics').click());
+  await app17.page.waitForFunction(
+    () => document.getElementById('mnemonicsOverlay').style.display === 'flex', { timeout: 15000 });
+
+  // 51. With no system selected, the counts line reports all 384 (64 squares
+  //     x 6 pieces) square+piece slots as "used" and surfaces the missing
+  //     totals, exactly as if a hypothetical system used every mnemonic.
+  try {
+    const coverageVal = await app17.page.evaluate(() => document.getElementById('mnemonicsCoverageSelect').value);
+    assert(coverageVal === '', `expected no coverage system selected, got "${coverageVal}"`);
+    const countsText = await app17.page.evaluate(() => document.getElementById('mnemonicsCoverageCounts').textContent);
+    assert(countsText.includes('384 used'), `expected "384 used" (64 squares x 6 pieces), got: "${countsText}"`);
+    assert(/\d+ missing words/.test(countsText) && /\d+ missing images/.test(countsText),
+      `expected missing words/images counts to be surfaced with no system selected, got: "${countsText}"`);
+    ok('with no system selected, Manage Mnemonics shows counts as if every mnemonic slot were needed');
+  } catch(e){ bad('mnemonics: no-selection counts treat everything as needed', e); }
+
+  // 52. The one square+piece that IS fully filled in (d4 pawn: word+image)
+  //     renders green (mnem-ok); an empty one (d4 knight) renders red
+  //     (mnem-missing, "(none)" icon) instead of being blank as before.
+  try {
+    const classes = await app17.page.evaluate(() => {
+      const sq = document.querySelector('.mnem-square[data-square="d4"]');
+      return {
+        pawnOk: !!sq.querySelector('.mnem-word.mnem-ok'),
+        knightMissing: !!sq.querySelector('.mnem-icon-only.mnem-missing'),
+      };
+    });
+    assert(classes.pawnOk, 'expected the filled-in d4 pawn mnemonic to render green (mnem-ok)');
+    assert(classes.knightMissing, 'expected an unfilled d4 knight slot to render red (mnem-missing) instead of blank');
+    ok('filled slots render green, unfilled ones render red, with no system selected');
+  } catch(e){ bad('mnemonics: no-selection three-state coloring', e); }
+} finally {
+  await app17.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-84';
+const BUILD_TAG = '-87';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -117,7 +117,7 @@ let aqProcessing = false;        // true while processAnalysisQueueLoop's loop i
 let aqSuspended = false;         // true while a non-queue caller (analyzeChildNodes) owns the engine outside engineState
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
-let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis List" modal
+let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis Queue" modal
 const AQ_THREAD_FRACTION = 0.5;
 const AQ_DEFAULT_DEPTH = 40;
 const AQ_DEFAULT_LINES = 4;
@@ -2156,7 +2156,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
+             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2190,6 +2190,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        </td>
        <td class="eval-col">
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
+         <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
          <span class="evaltag" style="display:none"></span>
        </td>
        <td class="name-col">
@@ -2509,7 +2510,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
+           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2528,6 +2529,7 @@ function renderBlackRoot(parent,games,trigger){
      <td class="cnt-col"></td>
      <td class="eval-col">
        <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
+       <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
        <span class="evaltag" style="display:none"></span>
      </td>
      <td class="name-col">
@@ -2898,6 +2900,7 @@ function renderTreeBody(line){
     }
   });
   refreshSystemStats();
+  refreshAnalysisQueueRowMarkers();
 
   if(keepFocusKey) reapplyFocus(keepFocusKey, keepFocusSeq);
 }
@@ -3779,6 +3782,16 @@ function squareName(col,row){ return 'abcdefgh'[col] + (8-row); }
    "destination square + piece" combos actually played. */
 let MNEM_COVERAGE = null; // null = no system selected; else a Set of "sq|pieceField"
 
+/* With no system selected there's no coverage Set to check against -- treat
+   that as "every square+piece is needed" (as if a hypothetical system used
+   every single move mnemonic) rather than "nothing is needed", so the grid's
+   three-state coloring and missing-count doubles as a global completeness
+   view of the whole mnemonic vocabulary. Shared by the grid and the
+   per-square editor so they stay in sync. */
+function mnemNeeded(sq, p){
+  return MNEM_COVERAGE ? MNEM_COVERAGE.has(`${sq}|${p}`) : true;
+}
+
 /* buildCastleGraph/walk/processExit, definedCastles, and castleRootRoomSeq all
    read the global PREFS map keyed by line.id; PREFS only ever holds the prefs
    of whichever line is currently open in the main tree, which is often NOT the
@@ -3899,14 +3912,16 @@ async function renderMnemonicsGrid(){
         pieceHtml = entry[p+'Img']
           ? `<img class="mnem-cell-img" src="${entry[p+'Img']}" alt="">`
           : `<div class="mnem-cell-empty"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i></div>`;
-      } else if(MNEM_COVERAGE){
+      } else {
         // three-state coloring: not needed by the selected scope -> black
         // (default, no status class); needed and fully present (word AND
-        // image) -> green; needed but missing either one -> red.
+        // image) -> green; needed but missing either one -> red. With no
+        // system selected, mnemNeeded() treats every square+piece as needed,
+        // so this doubles as a global "what's still missing" view.
         pieceHtml = MNEM_PIECES
-          .filter(p=>entry[p] || MNEM_COVERAGE.has(`${sq}|${p}`))
+          .filter(p=>entry[p] || mnemNeeded(sq,p))
           .map(p=>{
-            const occurs = MNEM_COVERAGE.has(`${sq}|${p}`);
+            const occurs = mnemNeeded(sq,p);
             let statusCls = '';
             if(occurs){
               const missingWord = !entry[p], missingImg = !entry[p+'Img'];
@@ -3919,11 +3934,6 @@ async function renderMnemonicsGrid(){
               ? `<div class="${cls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`
               : `<div class="mnem-icon-only${statusCls}"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>(none)</div>`;
           })
-          .join('');
-      } else {
-        pieceHtml = MNEM_PIECES
-          .filter(p=>entry[p])
-          .map(p=>`<div class="mnem-word"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i>${escapeHtml(entry[p])}${entry[p+'Img']?'':'*'}</div>`)
           .join('');
       }
       const div = document.createElement('div');
@@ -3938,8 +3948,9 @@ async function renderMnemonicsGrid(){
     }
   }
   const counts = $('mnemonicsCoverageCounts');
-  if(MNEM_COVERAGE && !imgMode){
-    counts.innerHTML = `${MNEM_COVERAGE.size} used` +
+  if(!imgMode){
+    const usedCount = MNEM_COVERAGE ? MNEM_COVERAGE.size : 64 * MNEM_PIECES.length;
+    counts.innerHTML = `${usedCount} used` +
       (missingWords ? ` · <span class="mc-missing">${missingWords} missing words</span>` : '') +
       (missingImages ? ` · <span class="mc-missing">${missingImages} missing images</span>` : '');
   } else {
@@ -4156,7 +4167,7 @@ function openMnemonicsEditor(sq){
     // match the grid's three-state coloring: needed by the selected scope and
     // fully present (word + image) = green, needed but missing either = red,
     // not needed = default gray.
-    const needed = !!MNEM_COVERAGE?.has(`${sq}|${p}`);
+    const needed = mnemNeeded(sq, p);
     const present = !!(entry[p] && entry[p+'Img']);
     const icon = mnemPieceIconEl(p);
     icon.classList.toggle('mnem-icon-needed-ok', needed && present);
@@ -5519,7 +5530,7 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
 
 /* ---------- background analysis queue ----------
    Long-running, low-priority engine analysis queued from a move row's ⋮ menu
-   ("Add to Analysis List") or driven from the "Analysis Queue" hamburger
+   ("Add to Analysis Queue") or driven from the "Analysis Queue" hamburger
    item. Items live in IDB store `analysisQueue`; each names a (lineId, seq)
    node plus a target depth/multipv. Processed one at a time, in queue order
    (oldest first), whenever the interactive engine is idle -- see
@@ -5580,6 +5591,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
     }
     log('already queued for background analysis — target updated');
     renderAnalysisQueueModalIfOpen();
+    refreshAnalysisQueueRowMarkers();
     return;
   }
   const saved = await getPref(lineId, seq);
@@ -5598,6 +5610,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
   ANALYSIS_QUEUE.push(item);
   log('queued for background analysis');
   renderAnalysisQueueModalIfOpen();
+  refreshAnalysisQueueRowMarkers();
   maybeResumeAnalysisQueue();
 }
 
@@ -5612,13 +5625,41 @@ async function cancelAnalysisQueueItem(id){
   // processAnalysisQueueLoop re-checks the live array (by reference, not
   // index) before removing/requeuing, so it can't clobber a different item.
   renderAnalysisQueueModal();
+  refreshAnalysisQueueRowMarkers();
 }
 
 async function refreshAnalysisQueue(){
-  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); return; }
-  ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
-  const lines = await getLines(CURRENT_USER);
-  AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); }
+  else {
+    ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
+    const lines = await getLines(CURRENT_USER);
+    AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+  }
+  refreshAnalysisQueueRowMarkers();
+}
+
+/* toggles the small hourglass (⧗) marker on every currently-rendered move-tree
+   row that's in the background analysis queue for CURRENT_LINE -- static
+   while merely queued, pulsing (fa-fade) while it's the one actually being
+   searched right now. Driven purely from tr.dataset.seq (the same stable row
+   identity focus/search already rely on) against ANALYSIS_QUEUE/aqCurrentItem,
+   so it needs no per-row state of its own and is cheap to call on every queue
+   change. Rows for a different opening system than CURRENT_LINE simply aren't
+   in the DOM, so nothing to do for them. */
+function refreshAnalysisQueueRowMarkers(){
+  if(!CURRENT_LINE) return;
+  document.querySelectorAll('tr.data-row[data-seq]').forEach(tr => {
+    const icon = tr.querySelector('.aqQueuedIcon');
+    if(!icon) return;
+    const item = ANALYSIS_QUEUE.find(it => it.lineId === CURRENT_LINE.id && it.seq.join(',') === tr.dataset.seq);
+    if(!item){ icon.style.display = 'none'; return; }
+    const processing = aqCurrentItem?.id === item.id;
+    icon.style.display = '';
+    icon.querySelector('i').classList.toggle('fa-fade', processing);
+    icon.title = processing
+      ? `Background analysis in progress — target depth ${item.depth}, ${item.multipv} line(s)`
+      : `Queued for background analysis — target depth ${item.depth}, ${item.multipv} line(s)`;
+  });
 }
 
 function seqToNotation(seq){
@@ -5636,12 +5677,19 @@ function aqProgressHtml(item){
   if(!aqCurrentProgress) return `<span class="aq-status-processing">starting…</span>`;
   const {depth, lines} = aqCurrentProgress;
   const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
-  const turn = fenForSeq(item.seq).split(' ')[1];
-  const evalBits = ranks
-    .map(idx => `<span class="meta-pv-score">${escapeHtml(formatScore(lines[idx].score, turn))}</span>`)
-    .join(' ');
+  const fen = fenForSeq(item.seq);
+  const turn = fen.split(' ')[1];
+  // one row per PV rank, eval badge + the first few moves (same ply count and
+  // tap-to-preview chips as the live engine panel), like evalContinuationHtml's
+  // saved multi-line display.
+  const pvRows = ranks.map(idx => {
+    const line = lines[idx];
+    const scoreTag = `<span class="meta-pv-score">${escapeHtml(formatScore(line.score, turn))}</span>`;
+    const pvHtml = line.pv?.length ? pvChipsFromUci(fen, line.pv, ENGINE_PV_PLIES) : '';
+    return `<div class="meta-pv-row">${scoreTag}<span class="meta-pv">${pvHtml}</span></div>`;
+  }).join('');
   return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}</div>` +
-    `<div class="aq-progress">${evalBits}</div>`;
+    `<div class="aq-progress">${pvRows}</div>`;
 }
 
 function aqModalOpen(){ return $('analysisQueueOverlay').style.display === 'flex'; }
@@ -5725,6 +5773,7 @@ async function processAnalysisQueueLoop(){
       aqCurrentProgress = null;
       item.status = 'processing';
       renderAnalysisQueueModalIfOpen();
+      refreshAnalysisQueueRowMarkers();
 
       const fen = fenForSeq(item.seq);
       const legalCount = new Chess(fen).moves().length;
@@ -5762,6 +5811,7 @@ async function processAnalysisQueueLoop(){
       aqCurrentItem = null;
       aqCurrentProgress = null;
       renderAnalysisQueueModalIfOpen();
+      refreshAnalysisQueueRowMarkers();
       if(!finished) break;   // engine got reclaimed (or errored) -- yield; next idle transition resumes
     }
   } finally {
@@ -6017,5 +6067,15 @@ if(localStorage.getItem('threeTestDebug')){
     seqToNotation: (seq) => seqToNotation(seq),
     saveAnalysisQueueResult: (item, fen, result) => saveAnalysisQueueResult(item, fen, result),
     getPref: (lineId, seq) => getPref(lineId, seq),
+    // aqProgressHtml reads the module-scoped aqCurrentItem/aqCurrentProgress
+    // rather than taking them as parameters (they're also what drives the
+    // live modal), so drive it the same way recordEvalIfDeeper's hook drives
+    // a throwaway bag: swap them in, render, restore.
+    aqProgressHtml: (item, currentItem, progress) => {
+      const savedItem = aqCurrentItem, savedProgress = aqCurrentProgress;
+      aqCurrentItem = currentItem; aqCurrentProgress = progress;
+      try { return aqProgressHtml(item); }
+      finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
+    },
   };
 }

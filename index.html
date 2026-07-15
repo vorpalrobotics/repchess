@@ -42,6 +42,9 @@
   .analyzingIcon{margin-right:.4em;cursor:pointer;color:#1565c0}
   .analyzingIcon:hover{color:#0d47a1}
   .analyzingDepth{font-size:.8em;font-weight:700;font-family:'Courier New',monospace}
+  /* background analysis queue marker: static while queued, pulses (fa-fade,
+     toggled in JS) while this exact node is the one currently being searched */
+  .aqQueuedIcon{margin-right:.4em;color:#7b1fa2}
 
   tr.add-move td{padding-top:.2rem;padding-bottom:.2rem;border-bottom:none}
   .add-move .addMoveBtn{color:#aaa;font-size:.85em}
@@ -339,6 +342,9 @@
   .aq-status-processing{color:#1565c0;font-weight:600}
   .aq-status-queued{color:#888}
   .aq-progress{font-size:.78rem;color:#555;margin-top:.2rem}
+  .aq-progress .meta-pv-row{margin-bottom:.2em}
+  .aq-progress .meta-pv-row:last-child{margin-bottom:0}
+  .aq-progress .meta-pv{font-family:'Courier New',monospace}
   .aq-progress .meta-pv-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.4em}
   .objlist-pick-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
   .objlist-pick-modal{background:#fff;border-radius:6px;padding:1rem;width:90vw;height:86vh;max-width:none;display:flex;flex-direction:column;box-shadow:0 4px 16px rgba(0,0,0,.3)}
@@ -917,7 +923,7 @@
 <!-- add-to-analysis-queue modal (a move row's ⋮ menu) -->
 <div id="analysisAddOverlay" class="overlay">
   <div class="modal" style="max-width:26em">
-    <h2 style="margin-top:0">Add to Analysis List</h2>
+    <h2 style="margin-top:0">Add to Analysis Queue</h2>
     <div class="field">
       <label for="analysisAddDepth">Depth</label>
       <input type="number" id="analysisAddDepth" min="1" step="1" value="40" style="width:6em">
@@ -941,7 +947,7 @@
       <h2 style="margin:0">Analysis Queue</h2>
       <button id="analysisQueueCloseBtn" style="flex:0 0 auto;margin-left:auto">Close</button>
     </div>
-    <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis List" to queue deep background analysis.</p>
+    <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis Queue" to queue deep background analysis.</p>
     <div style="flex:1;min-height:0;overflow:auto">
       <table id="analysisQueueTable" class="aq-table" style="display:none">
         <thead><tr><th></th><th>Position</th><th>Target</th><th>Status</th></tr></thead>
@@ -1216,6 +1222,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-84"></script>
+<script type="module" src="js/app.js?v=20260630-87"></script>
 </body>
 </html>
