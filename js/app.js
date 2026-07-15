@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-87';
+const BUILD_TAG = '-88';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -117,7 +117,7 @@ let aqProcessing = false;        // true while processAnalysisQueueLoop's loop i
 let aqSuspended = false;         // true while a non-queue caller (analyzeChildNodes) owns the engine outside engineState
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
-let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis Queue" modal
+let aqAddCtx = null;             // {lineId, seqs} pending in the "Add to Analysis Queue" modal
 const AQ_THREAD_FRACTION = 0.5;
 const AQ_DEFAULT_DEPTH = 40;
 const AQ_DEFAULT_LINES = 4;
@@ -2373,12 +2373,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
+      if(branchDiv) queueChildrenForAnalysis(childrenSeq, branchDiv);
     };
     rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      openAnalysisQueueAddModal(CURRENT_LINE.id, lineSeq);
+      openAnalysisQueueAddModal(CURRENT_LINE.id, [lineSeq]);
     };
     rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
       e.stopPropagation();
@@ -2687,12 +2687,12 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
+    if(branchDiv) queueChildrenForAnalysis(childrenSeq, branchDiv);
   };
   rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    openAnalysisQueueAddModal(CURRENT_LINE.id, lineSeq);
+    openAnalysisQueueAddModal(CURRENT_LINE.id, [lineSeq]);
   };
   rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
     e.stopPropagation();
@@ -5454,15 +5454,24 @@ $('analyzeChildrenGoBtn').onclick = () => {
   analyzeChildrenResolve = null;
 };
 
-let activeChildAnalysisIcon = null;
-async function analyzeChildNodes(parentSeq, branchDiv, icon){
+// every direct child row (opponent replies) of a just-expanded branch, each
+// paired with its eval span and the legal UCI move for its SAN -- shared by
+// the passive instant-analysis path (analyzeChildNodes) and the explicit
+// "Analyze All Children" queueing action below.
+function collectChildEntries(parentSeq, branchDiv){
   const fen = fenForSeq(parentSeq);
   const rows = [...branchDiv.querySelectorAll(':scope > table > tbody > tr.data-row')];
-  const entries = rows
+  return rows
     .map(tr => ({ opp: tr.dataset.opp, evalSpan: tr.querySelector('.evaltag') }))
     .filter(e => e.opp && e.evalSpan)
     .map(e => ({ ...e, uci: sanToUci(fen, e.opp) }))
     .filter(e => e.uci);
+}
+
+let activeChildAnalysisIcon = null;
+async function analyzeChildNodes(parentSeq, branchDiv, icon){
+  const fen = fenForSeq(parentSeq);
+  const entries = collectChildEntries(parentSeq, branchDiv);
   if(!entries.length) return;
 
   const targetDepth = await openAnalyzeChildrenModal(engineMaxDepth());
@@ -5528,6 +5537,19 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
   }
 }
 
+/* "Analyze All Children" (the explicit row-menu action): queues every child
+   of this branch for background analysis instead of running an instant
+   in-page search -- same depth/lines prompt as adding a single node via
+   openAnalysisQueueAddModal, just applied to every legal child move at once.
+   The passive auto-trigger in setStandardResponse still uses the instant
+   analyzeChildNodes() above; this is only the explicit menu action. */
+function queueChildrenForAnalysis(parentSeq, branchDiv){
+  const entries = collectChildEntries(parentSeq, branchDiv);
+  if(!entries.length) return;
+  const seqs = entries.map(e => [...parentSeq, e.opp]);
+  openAnalysisQueueAddModal(CURRENT_LINE.id, seqs);
+}
+
 /* ---------- background analysis queue ----------
    Long-running, low-priority engine analysis queued from a move row's ⋮ menu
    ("Add to Analysis Queue") or driven from the "Analysis Queue" hamburger
@@ -5548,8 +5570,13 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
    here) since the boot-time auto-resume call runs before the module reaches
    this point in top-to-bottom evaluation. */
 
-function openAnalysisQueueAddModal(lineId, seq){
-  aqAddCtx = {lineId, seq};
+// `seqs`: one or more move sequences under `lineId` to queue once Depth/Lines
+// are confirmed -- a single-element array for the per-node "Add to Analysis
+// Queue" row-menu action, multi-element for "Analyze All Children".
+function openAnalysisQueueAddModal(lineId, seqs){
+  aqAddCtx = {lineId, seqs};
+  $('analysisAddTitle').textContent = seqs.length > 1
+    ? `Add ${seqs.length} Children to Analysis Queue` : 'Add to Analysis Queue';
   $('analysisAddDepth').value = AQ_DEFAULT_DEPTH;
   $('analysisAddLines').value = AQ_DEFAULT_LINES;
   $('analysisAddError').textContent = '';
@@ -5565,10 +5592,11 @@ $('analysisAddGoBtn').onclick = async () => {
   const multipv = parseInt($('analysisAddLines').value, 10);
   if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
   if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
-  const {lineId, seq} = aqAddCtx;
+  const {lineId, seqs} = aqAddCtx;
   $('analysisAddOverlay').style.display='none';
   aqAddCtx = null;
-  await addToAnalysisQueue(lineId, seq, depth, multipv);
+  if(seqs.length > 1) await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv);
+  else await addToAnalysisQueue(lineId, seqs[0], depth, multipv);
 };
 
 function seqEq(a,b){
@@ -5578,8 +5606,12 @@ function seqEq(a,b){
 /* de-dup: a still-queued/processing item for the same node is topped up in
    place (raised to the max of its old and new target) instead of being
    duplicated; a node already saved to at least this depth with at least
-   this many lines is a silent no-op -- nothing to queue. */
-async function addToAnalysisQueue(lineId, seq, depth, multipv){
+   this many lines is a silent no-op -- nothing to queue. Returns
+   'topped-up' | 'skipped' | 'added' so a bulk caller can tally results
+   without re-deriving this same logic. `silent`, when true, suppresses the
+   per-item log() line (used by addChildrenToAnalysisQueue, which logs one
+   combined summary instead of one message per child overwriting the last). */
+async function addToAnalysisQueue(lineId, seq, depth, multipv, {silent=false}={}){
   const existing = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
   if(existing){
     const newDepth = Math.max(existing.depth, depth);
@@ -5589,17 +5621,17 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
       existing.multipv = newLines;
       await putAnalysisQueueItem(existing);
     }
-    log('already queued for background analysis — target updated');
+    if(!silent) log('already queued for background analysis — target updated');
     renderAnalysisQueueModalIfOpen();
     refreshAnalysisQueueRowMarkers();
-    return;
+    return 'topped-up';
   }
   const saved = await getPref(lineId, seq);
   const savedEval = saved?.eval;
   const savedLineCount = saved?.evalLines?.length || (savedEval ? 1 : 0);
   if(savedEval && savedEval.depth >= depth && savedLineCount >= multipv){
-    log(`already analyzed to depth ${savedEval.depth} with ${savedLineCount} line(s) — nothing to queue`);
-    return;
+    if(!silent) log(`already analyzed to depth ${savedEval.depth} with ${savedLineCount} line(s) — nothing to queue`);
+    return 'skipped';
   }
   const item = {
     id: `aq:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,
@@ -5608,10 +5640,30 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
   };
   await putAnalysisQueueItem(item);
   ANALYSIS_QUEUE.push(item);
-  log('queued for background analysis');
+  if(!silent) log('queued for background analysis');
   renderAnalysisQueueModalIfOpen();
   refreshAnalysisQueueRowMarkers();
   maybeResumeAnalysisQueue();
+  return 'added';
+}
+
+/* "Analyze All Children" bulk variant: queues every given seq under lineId,
+   suppressing addToAnalysisQueue's per-item log() (which would otherwise
+   have each child's message overwrite the last) in favor of one combined
+   summary line. */
+async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
+  let added=0, toppedUp=0, skipped=0;
+  for(const seq of seqs){
+    const status = await addToAnalysisQueue(lineId, seq, depth, multipv, {silent:true});
+    if(status==='added') added++;
+    else if(status==='topped-up') toppedUp++;
+    else skipped++;
+  }
+  const bits = [];
+  if(added) bits.push(`${added} queued`);
+  if(toppedUp) bits.push(`${toppedUp} target updated`);
+  if(skipped) bits.push(`${skipped} already sufficient`);
+  log(`${seqs.length} child${seqs.length===1?'':'ren'}: ${bits.join(', ') || 'nothing to do'}`);
 }
 
 async function cancelAnalysisQueueItem(id){
@@ -6062,6 +6114,7 @@ if(localStorage.getItem('threeTestDebug')){
   window.__aqTestHooks = {
     getQueue: () => ANALYSIS_QUEUE,
     addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
+    addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
     refreshAnalysisQueue: () => refreshAnalysisQueue(),
     seqToNotation: (seq) => seqToNotation(seq),
