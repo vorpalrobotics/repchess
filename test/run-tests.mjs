@@ -1795,6 +1795,38 @@ try {
 
     ok('cancelling the currently-processing item stops it and the queue moves on to the next item immediately');
   } catch(e){ bad('analysis queue: cancelling the processing item does not stall the queue', e); }
+
+  // 58. Live analysis takes precedence over the queue while it's running, but
+  //     an explicit Stop hands the engine straight back to the queue (rather
+  //     than leaving it stalled until something else happens to go idle --
+  //     the originally-reported bug: stopping a live search never restarted
+  //     the queue). One item ('d4,d5') is still queued from the previous
+  //     test, left un-processed (aqProcessing is false, nothing has asked the
+  //     scheduler to resume it since it was preempted).
+  try {
+    const callsBefore = await app20.page.evaluate(() => window.__aqFakeEngine.callCount);
+
+    // simulating "live analysis started" must NOT by itself wake the queue --
+    // only setEngineUI's own explicit triggers ('idle'/'stopped') do.
+    await app20.page.evaluate(() => window.__aqTestHooks.setEngineUI('running'));
+    await new Promise(r => setTimeout(r, 200));
+    const callsWhileRunning = await app20.page.evaluate(() => window.__aqFakeEngine.callCount);
+    assert(callsWhileRunning === callsBefore,
+      `queue should stay put while live analysis is 'running' (calls ${callsBefore} -> ${callsWhileRunning})`);
+
+    // now the user clicks Stop -- this is the fix under test.
+    await app20.page.evaluate(() => window.__aqTestHooks.setEngineUI('stopped'));
+    await app20.page.waitForFunction(
+      (before) => window.__aqFakeEngine.callCount === before + 1, callsBefore, { timeout: 5000 });
+    const resumedItem = await app20.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(resumedItem && resumedItem.seq.join(',') === 'd4,d5',
+      `expected the queue to resume the still-queued item after Stop, got ${JSON.stringify(resumedItem)}`);
+
+    // let the fake search resolve so nothing dangles past this test.
+    await app20.page.evaluate(() => window.__aqTestHooks.engine.stop());
+
+    ok("stopping live analysis ('stopped') resumes the queue; 'running' alone does not");
+  } catch(e){ bad('analysis queue resumes when live analysis is explicitly stopped', e); }
 } finally {
   await app20.close();
 }

@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-94';
+const BUILD_TAG = '-95';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5311,12 +5311,18 @@ function setEngineUI(state){
   }
   // the engine just freed up -- let the background analysis queue (if
   // anything's in it) claim it. No-op if nothing's queued or it's already running.
-  if(state === 'idle') maybeResumeAnalysisQueue();
+  if(state === 'idle' || state === 'stopped') maybeResumeAnalysisQueue();
 }
 $('engineStopBtn').onclick = () => {
   if(engineState === 'running'){
     // flip to 'stopped' *before* telling the engine, so any trailing info line
     // the engine emits as it winds down renders with the "Stopped" prefix.
+    // Live analysis takes precedence over the queue while it's running, but an
+    // explicit Stop hands the now-free engine straight back to the queue --
+    // setEngineUI's hook above does that; the button stays on "Resume" (not
+    // idle) so the user can still pick this exact search back up later, and
+    // resuming it will transparently preempt the queue again (analyze()
+    // always stops whatever's currently running first).
     setEngineUI('stopped');
     $('engineDepth').textContent = $('engineDepth').textContent.replace(/^Live — /, 'Stopped — ');
     engine.stop();
@@ -5636,9 +5642,11 @@ function queueChildrenForAnalysis(parentSeq, branchDiv){
    Analysis Queue") or driven from the "Analysis Queue" hamburger item. Items
    live in IDB store `analysisQueue`; each names a (lineId, seq) node plus a
    target depth/multipv. Processed one at a time, in queue order (oldest
-   first), whenever the interactive engine is idle -- see
-   maybeResumeAnalysisQueue(), hooked from setEngineUI('idle') and from
-   engine.init(). Always runs at the same Threads count init() picked --
+   first), whenever the interactive engine isn't actively running a live
+   search -- see maybeResumeAnalysisQueue(), hooked from setEngineUI('idle'
+   and 'stopped') and from engine.init(). A live search takes precedence
+   while it runs, but stopping it explicitly hands the engine straight back
+   to the queue. Always runs at the same Threads count init() picked --
    asking for fewer used to hang the whole engine (see engine.js's analyze()
    for why a mid-session Threads change is unsafe on a multi-threaded WASM
    build), so this deliberately never overrides it, at the cost of the queue
@@ -5906,7 +5914,12 @@ async function processAnalysisQueueLoop(){
   aqProcessing = true;
   try {
     while(ANALYSIS_QUEUE.length){
-      if(engineState !== 'idle' || aqSuspended || !engine.ready) break;
+      // 'running' means live analysis is actively using the engine (it takes
+      // precedence); 'idle' and 'stopped' both mean it's free -- 'stopped' is
+      // an explicit user Stop, which hands the engine straight back to the
+      // queue (resuming that live search later will transparently preempt
+      // the queue again via analyze()'s own _stopCurrent()).
+      if(engineState === 'running' || aqSuspended || !engine.ready) break;
       const item = ANALYSIS_QUEUE[0];
       aqCurrentItem = item;
       aqCurrentProgress = null;
@@ -6211,6 +6224,10 @@ if(localStorage.getItem('threeTestDebug')){
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
     maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
+    // drives the real live-analysis state machine (setEngineUI) so a test can
+    // simulate "live analysis started" / "explicitly stopped" without needing
+    // the cm-chessboard widget this harness can't load.
+    setEngineUI: (state) => setEngineUI(state),
     // the real Engine singleton -- since Stockfish isn't available in this
     // harness, a test monkey-patches .ready/.threads/.analyze/.stop directly
     // to fake a search in progress (analyze() returns a controllable pending
