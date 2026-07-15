@@ -2763,25 +2763,34 @@ function drawQualityBadge(ctx, q){
   ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(q, x + pad, y + h / 2 + 4);
 }
-// White's move number ("5."), pinned to the upper-left corner of whichever
-// quadrant (qx,qy) is White's half of the pair -- outlined text rather than
-// the quality pill's filled badge, so it reads over both photo/PNG art and
-// the dark text-fallback box without needing its own background plate.
-// `dy` nudges it down out of the way when the opponent quadrant already has
-// a quality badge sitting in that same corner (quality is opponent-only, so
-// this only ever applies there, never to the response quadrant).
-function drawMoveNumberBadge(ctx, qx, qy, moveNumber, dy){
+// White's move number ("5."), vertically centered on the left edge of
+// whichever quadrant (qx,qy) is White's half of the pair -- outlined text
+// rather than the quality pill's filled badge, so it reads over both
+// photo/PNG art and the dark text-fallback box without needing its own
+// background plate. Centered (rather than pinned to the top-left corner)
+// keeps it out of the diagonal overlap with the other quadrant's image --
+// worst-case overlap is the top half of a quadrant's own box, so sitting at
+// the vertical middle clears it -- and naturally staying clear of the
+// opponent quadrant's quality pill (which lives up near the top) without
+// needing a special-case offset for that.
+// `boxSize` is the side length of the square box this badge is centered in
+// (MNEM_QUADRANT for a pair quadrant, the opening-move tile's own px for
+// that single-move tile) -- kept explicit rather than assumed so this is
+// safely reusable outside the pair billboard even though both happen to be
+// 512 today.
+function drawMoveNumberBadge(ctx, qx, qy, boxSize, moveNumber){
   const text = `${moveNumber}.`;
   ctx.save();
-  ctx.font = 'bold 72px sans-serif';
+  ctx.font = 'bold 92px sans-serif';
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
+  ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 10;
+  ctx.lineWidth = 12;
   ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-  ctx.strokeText(text, qx + 18, qy + 16 + (dy || 0));
+  const x = qx + 20, y = qy + boxSize / 2;
+  ctx.strokeText(text, x, y);
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(text, qx + 18, qy + 16 + (dy || 0));
+  ctx.fillText(text, x, y);
   ctx.restore();
 }
 // the response laps over it in the shared corner.
@@ -2794,10 +2803,8 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
   drawMnemQuadrant(ctx, far, far, respContent, beardImg);   // response pegged bottom-right
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
-  // White's move-number badge in its own quadrant's corner -- offset down
-  // when it would otherwise sit under the opponent quadrant's quality pill.
-  if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, oppContent.moveNumber, oppQuality ? 128 : 0);
-  if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, respContent.moveNumber);
+  if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, MNEM_QUADRANT, oppContent.moveNumber);
+  if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, MNEM_QUADRANT, respContent.moveNumber);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -3699,6 +3706,9 @@ function buildOpeningMoveSprite(s, userScale){
   sprite.userData.baseAspect = 1;
   sprite.userData.userScale = userScale || 1;
 
+  // this tile always shows the game's very first move (ply 1), which is
+  // always White's -- whether that move is "ours" (a White system) or the
+  // opponent's (a Black system's trigger), so it always gets the "1." badge.
   const drawText = (t) => {
     ctx.clearRect(0, 0, px, px);
     ctx.fillStyle = 'rgba(240,236,226,0.95)';
@@ -3708,6 +3718,7 @@ function buildOpeningMoveSprite(s, userScale){
     let font = 150; ctx.font = `bold ${font}px sans-serif`;
     while(font > 24 && ctx.measureText(t).width > px - 48){ font -= 6; ctx.font = `bold ${font}px sans-serif`; }
     ctx.fillText(t, px / 2, px / 2 + 6);
+    drawMoveNumberBadge(ctx, 0, 0, px, 1);
     tex.needsUpdate = true;
   };
   const drawImage = (img) => {
@@ -3715,6 +3726,7 @@ function buildOpeningMoveSprite(s, userScale){
     const sc = Math.min(px / img.width, px / img.height);
     const w = img.width * sc, h = img.height * sc;
     ctx.drawImage(img, (px - w) / 2, (px - h) / 2, w, h);
+    drawMoveNumberBadge(ctx, 0, 0, px, 1);
     tex.needsUpdate = true;
   };
 
@@ -6253,10 +6265,30 @@ export async function openThreeTest(containerEl, opts){
           return false;
         };
         const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;
+        // sample a generous box around the badge's vertically-centered,
+        // left-edge position (qx+20, qy+MNEM_QUADRANT/2) rather than the
+        // old top-left corner.
+        const midY = MNEM_QUADRANT / 2;
         return {
-          oppCorner: hasWhiteInk(14, 12, 70, 80),
-          respCorner: hasWhiteInk(far + 14, far + 12, 70, 80),
+          oppCorner: hasWhiteInk(14, midY - 60, 100, 120),
+          respCorner: hasWhiteInk(far + 14, far + midY - 60, 100, 120),
         };
+      },
+      // locates a real placed scene sprite by slotId and reports whether its
+      // canvas has white ink in the given region -- the real-sprite
+      // counterpart to buildMnemPairInk (which only builds synthetic,
+      // unplaced pairs), needed for sprites like the street-sign
+      // opening-move tile that aren't reachable that way.
+      spriteHasWhiteInk: (slotId, x0, y0, w, h) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
+        const canvas = found && found.material && found.material.map && found.material.map.image;
+        if(!canvas) return null;
+        const d = canvas.getContext('2d').getImageData(x0, y0, w, h).data;
+        for(let i = 0; i < d.length; i += 4){
+          if(d[i] > 220 && d[i+1] > 220 && d[i+2] > 220 && d[i+3] > 200) return true;
+        }
+        return false;
       },
     };
   }

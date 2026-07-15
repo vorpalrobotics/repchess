@@ -1730,8 +1730,10 @@ try {
   await app20.close();
 }
 
-// --- Phase U: move-pair VR billboards show the move number ("N.") in the
-//     upper-left corner of whichever quadrant is White's move. ---
+// --- Phase U: move-pair VR billboards show the move number ("N."),
+//     vertically centered on the left edge of whichever quadrant is White's
+//     move; the street-sign opening-move tile (always White's move 1) gets
+//     the same badge. ---
 const app21 = await launchApp();
 try {
   await seedBackup(app21.page, {
@@ -1740,9 +1742,9 @@ try {
   });
   await openVR(app21.page);
 
-  // 59. White's move (moveNumber set) gets the badge in ITS quadrant's
-  //     corner; Black's half (no moveNumber) never does -- checked both ways
-  //     round (opponent-is-White and response-is-White) since the pair's two
+  // 59. White's move (moveNumber set) gets the badge in ITS quadrant; Black's
+  //     half (no moveNumber) never does -- checked both ways round
+  //     (opponent-is-White and response-is-White) since the pair's two
   //     halves swap quadrants depending on which color the opponent is.
   try {
     const oppWhite = await app21.page.evaluate(() => window.__threeTestEdit.buildMnemPairInk({
@@ -1759,8 +1761,17 @@ try {
     assert(respWhite.respCorner === true, `expected the move-number badge in the response quadrant, got ${JSON.stringify(respWhite)}`);
     assert(respWhite.oppCorner === false, `expected no badge in the opponent quadrant (Black, no moveNumber), got ${JSON.stringify(respWhite)}`);
 
-    ok('the move-pair billboard shows "N." in the upper-left corner of whichever quadrant is White\'s move');
+    ok('the move-pair billboard shows "N." vertically centered on the left edge of whichever quadrant is White\'s move');
   } catch(e){ bad('VR billboard: move-number badge in the correct quadrant', e); }
+
+  // 60. The street-sign opening-move tile (a single-move tile, not a pair --
+  //     e.g. "open-L1" for a White system's own first move) also shows its
+  //     "1." badge, in the same left-center position/style as the pair badges.
+  try {
+    const hasInk = await app21.page.evaluate(() => window.__threeTestEdit.spriteHasWhiteInk('open-L1', 14, 196, 100, 120));
+    assert(hasInk === true, `expected the opening-move tile to show a "1." badge, got ${hasInk}`);
+    ok('the street-sign opening-move tile also shows the "1." move-number badge');
+  } catch(e){ bad('VR billboard: opening-move tile shows move number', e); }
 } finally {
   await app21.close();
 }
