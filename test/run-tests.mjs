@@ -1776,5 +1776,81 @@ try {
   await app21.close();
 }
 
+// --- Phase V: Engine.analyze() must sync via isready/readyok after changing
+//     the multi-threaded build's Threads option, before issuing the next
+//     `go` -- changing Threads makes the WASM build respawn its pthread pool
+//     in the background, and searching before that settles can wedge the
+//     whole worker so it never responds to anything again. This was a real
+//     bug: the background analysis queue's reduced ("low priority") thread
+//     count was the first thing in the app to ever change Threads after
+//     init, with no such sync, and could hang the engine on its very first
+//     search. No live Stockfish is available in this harness, so
+//     engine._send/_listener are faked to simulate the UCI handshake and
+//     drive the real analyze() logic against it. ---
+const app22 = await launchApp();
+try {
+  await seedBackup(app22.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app22.page.click('.line-row');
+  await app22.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  const setup = () => {
+    const { engine } = window.__aqTestHooks;
+    engine.multithreaded = true;
+    engine.ready = true;
+    engine.threads = 8;
+    engine._currentThreads = 8;
+    window.__engineFake = { sentCommands: [], isreadyPending: false, orderViolated: false };
+    engine._send = (cmd) => {
+      const f = window.__engineFake;
+      f.sentCommands.push(cmd);
+      if (cmd === 'isready') {
+        f.isreadyPending = true;
+        setTimeout(() => { f.isreadyPending = false; engine._listener?.('readyok'); }, 30);
+      } else if (/^go /.test(cmd)) {
+        if (f.isreadyPending) f.orderViolated = true;   // go sent while still waiting for readyok
+        setTimeout(() => engine._listener?.('bestmove e2e4'), 10);
+      } else if (cmd === 'stop') {
+        setTimeout(() => engine._listener?.('bestmove e2e4'), 10);
+      }
+    };
+  };
+  const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  // 61. Changing Threads (background queue's reduced count) syncs via
+  //     isready/readyok before the next `go` -- `go` must never be sent while
+  //     an isready reply is still pending.
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, threads:4 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(f.sentCommands.includes('isready'), `expected an isready sync after the Threads change, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(f.sentCommands.includes('setoption name Threads value 4'), `expected the reduced Threads value to be sent, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(f.orderViolated === false, `"go" was sent while still waiting for readyok -- the exact bug that could hang the engine`);
+    const goIdx = f.sentCommands.findIndex(c => c.startsWith('go '));
+    const readyIdx = f.sentCommands.indexOf('isready');
+    assert(readyIdx !== -1 && readyIdx < goIdx, `expected isready before go, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('changing Threads syncs via isready/readyok before the next go command');
+  } catch(e){ bad('engine: Threads change syncs before next search', e); }
+
+  // 62. Calling analyze() again with the SAME (already-configured) thread
+  //     count must NOT resend setoption/isready -- the common case (every
+  //     caller except the background queue always asks for the full count)
+  //     should never pay for this sync.
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, threads:8 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(!f.sentCommands.some(c => c.startsWith('setoption name Threads')), `expected no Threads change when already at that count, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(!f.sentCommands.includes('isready'), `expected no isready sync when Threads didn't change, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('analyze() skips the Threads/isready sync when the thread count is already correct');
+  } catch(e){ bad('engine: no redundant Threads sync when unchanged', e); }
+} finally {
+  await app22.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

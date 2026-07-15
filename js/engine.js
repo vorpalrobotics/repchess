@@ -35,6 +35,7 @@ export class Engine {
     this.ready = false;
     this.multithreaded = false;
     this.threads = 1;
+    this._currentThreads = 1;   // whatever Threads value is actually configured right now
   }
 
   async init() {
@@ -66,6 +67,7 @@ export class Engine {
     const cores = navigator.hardwareConcurrency || 2;
     this.threads = Math.max(1, Math.min(cores - 1, 8));
     this._send(`setoption name Threads value ${this.threads}`);
+    this._currentThreads = this.threads;
     this._send('setoption name Hash value 128');
     await this._command('isready', line => line === 'readyok');
     this.multithreaded = true;
@@ -95,6 +97,7 @@ export class Engine {
     await this._command('isready', line => line === 'readyok');
     this.multithreaded = false;
     this.threads = 1;
+    this._currentThreads = 1;
     this.ready = true;
   }
 
@@ -170,13 +173,32 @@ export class Engine {
   // each other, so all of them keep reporting through to the target depth.
   // `threads`, when given (multi-threaded builds only -- ignored otherwise),
   // overrides the Threads option for just this search; defaults to the full
-  // count init() picked. Explicitly set on every call (not just when the
-  // caller passes it) so a low-priority background search's reduced thread
-  // count can never leak into the next, unrelated search that doesn't ask
-  // for an override -- e.g. an interactive analysis started right after it.
+  // count init() picked. Only re-sent when it actually differs from what's
+  // currently configured (so the common case -- every caller except the
+  // background analysis queue always asks for the full count -- never pays
+  // for it), and, when it does change, followed by an isready/readyok
+  // handshake before the next `go`: changing Threads makes a multi-threaded
+  // WASM build respawn its whole pthread pool in the background, and
+  // searching before that settles can wedge the worker so it never responds
+  // to anything again (this was a real bug -- the background queue's reduced
+  // thread count was the first thing in the app to ever change Threads after
+  // init, with no such handshake, and could hang the engine on its very
+  // first search).
   async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
     await this._stopCurrent();
-    if (this.multithreaded) this._send(`setoption name Threads value ${Math.max(1, Math.min(threads, this.threads))}`);
+    if (this.multithreaded) {
+      const clampedThreads = Math.max(1, Math.min(threads, this.threads));
+      if (clampedThreads !== this._currentThreads) {
+        this._send(`setoption name Threads value ${clampedThreads}`);
+        // race a timeout too (like _stopCurrent's) so a missing/late readyok
+        // can't wedge the app forever -- worst case we search a beat early.
+        await Promise.race([
+          this._command('isready', line => line === 'readyok'),
+          new Promise(resolve => setTimeout(resolve, 4000)),
+        ]);
+        this._currentThreads = clampedThreads;
+      }
+    }
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);
 
