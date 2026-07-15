@@ -193,6 +193,75 @@ try {
   await app3.close();
 }
 
+// --- Phase C2: a nested castle's door redirects to the OTHER castle's own
+// canonical room, so decorations configured there (e.g. a staircase) show up
+// from the nested door too, instead of a duplicate/undecorated inline copy. ---
+const appC2 = await launchApp();
+try {
+  const keys = await appC2.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      alphaEntry: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
+      betaEntry: 'cas:L1_Beta:' + pk(['d4','Nf6','c4','e6','Nc3']),
+    };
+  });
+  // same nested Alpha/Beta shape as Phase C, but with a threeLayout override
+  // making Alpha's door into Beta a staircase -- keyed on Beta's OWN canonical
+  // room key (as if the user had set this while standing in Alpha's entry,
+  // looking at the door that the app already labels "Beta Mansion, Foyer").
+  await seedBackup(appC2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2, name: 'Beta Foyer' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+    threeLayout: JSON.stringify({ [keys.alphaEntry]: { exits: { [keys.betaEntry]: { type: 'stair' } } } }),
+  });
+  await appC2.page.click('.line-row');
+  await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appC2.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appC2.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appC2.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appC2.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appC2.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appC2.page.waitForTimeout(500);
+
+  try {
+    // a staircase saved against Beta's own canonical key renders on Alpha's
+    // nested door into Beta -- proving that door's target is the same stable
+    // key Beta's own front door would use, not a per-Alpha inline duplicate.
+    const stairCount = await appC2.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'stair-surface').length);
+    assert(stairCount > 0, `expected a staircase into the shared room, found none (meshes with kind stair-surface: ${stairCount})`);
+    ok(`nested door honors a staircase saved on the other castle's own room (${stairCount} step(s))`);
+  } catch(e){ bad('nested door renders foreign-room staircase', e); }
+
+  try {
+    // walking straight to Beta's own canonical key (the same one Alpha's door
+    // targets) must land in a real, registered room -- confirming it's the
+    // SAME room object, not a blank/unregistered stand-in.
+    const entered = await appC2.page.evaluate(async (betaKey) => {
+      window.__threeTestEdit.enter(betaKey);
+      // __threeTestState is only refreshed by the render tick, not synchronously
+      // by enter() -- give it a frame or two before reading it back.
+      await new Promise(r => setTimeout(r, 150));
+      return window.__threeTestState.room;
+    }, keys.betaEntry);
+    assert(entered === keys.betaEntry, `expected to land in Beta's own canonical room ${keys.betaEntry}, got ${entered}`);
+    ok(`Beta's canonical room is the same one reachable through Alpha's nested door (${entered})`);
+  } catch(e){ bad('shared room reachable by its canonical key', e); }
+} finally {
+  await appC2.close();
+}
+
 // --- Phase D: walk UP a staircase that shares its wall with other doors ---
 // (regression: a variation import added a door to a stair's wall, and the clamp
 // only allowed ONE door per wall as walkable, blocking the stair at its base.)
