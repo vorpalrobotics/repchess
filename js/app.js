@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-93';
+const BUILD_TAG = '-94';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -118,7 +118,6 @@ let aqSuspended = false;         // true while a non-queue caller (analyzeChildN
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
 let aqAddCtx = null;             // {lineId, seqs} pending in the "Add to Analysis Queue" modal
-const AQ_THREAD_FRACTION = 0.5;
 const AQ_DEFAULT_DEPTH = 40;
 const AQ_DEFAULT_LINES = 4;
 
@@ -5633,16 +5632,19 @@ function queueChildrenForAnalysis(parentSeq, branchDiv){
 }
 
 /* ---------- background analysis queue ----------
-   Long-running, low-priority engine analysis queued from a move row's ⋮ menu
-   ("Add to Analysis Queue") or driven from the "Analysis Queue" hamburger
-   item. Items live in IDB store `analysisQueue`; each names a (lineId, seq)
-   node plus a target depth/multipv. Processed one at a time, in queue order
-   (oldest first), whenever the interactive engine is idle -- see
+   Long-running engine analysis queued from a move row's ⋮ menu ("Add to
+   Analysis Queue") or driven from the "Analysis Queue" hamburger item. Items
+   live in IDB store `analysisQueue`; each names a (lineId, seq) node plus a
+   target depth/multipv. Processed one at a time, in queue order (oldest
+   first), whenever the interactive engine is idle -- see
    maybeResumeAnalysisQueue(), hooked from setEngineUI('idle') and from
-   engine.init(). Runs at half the interactive thread count so it never
-   competes for cores with analysis the user is actually watching, and any
-   interactive engine.analyze() call automatically preempts it for free
-   (Engine._stopCurrent()) -- the queue just notices its search resolved
+   engine.init(). Always runs at the same Threads count init() picked --
+   asking for fewer used to hang the whole engine (see engine.js's analyze()
+   for why a mid-session Threads change is unsafe on a multi-threaded WASM
+   build), so this deliberately never overrides it, at the cost of the queue
+   competing for the same cores as analysis the user is actually watching.
+   Any interactive engine.analyze() call still automatically preempts it for
+   free (Engine._stopCurrent()) -- the queue just notices its search resolved
    short of the target depth and leaves the item queued to pick back up at
    the next idle transition. A finished item's result is written straight to
    PREFS via setPref() (not the CURRENT_LINE-coupled savePrefField(), since
@@ -5915,14 +5917,14 @@ async function processAnalysisQueueLoop(){
       const fen = fenForSeq(item.seq);
       const legalCount = new Chess(fen).moves().length;
       const multipv = Math.max(1, Math.min(item.multipv, legalCount || item.multipv));
-      const threads = Math.max(1, Math.round(engine.threads * AQ_THREAD_FRACTION));
 
       let result = null;
       try {
+        // no `threads` override -- always the same count init() picked, so
+        // this never triggers analyze()'s mid-session Threads-change path.
         result = await engine.analyze(fen, {
           multipv,
           depth: item.depth,
-          threads,
           onInfo: (d, lines) => {
             aqCurrentProgress = {depth: d, lines};
             renderAnalysisQueueModalIfOpen();
