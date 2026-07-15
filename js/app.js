@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-84';
+const BUILD_TAG = '-85';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -117,7 +117,7 @@ let aqProcessing = false;        // true while processAnalysisQueueLoop's loop i
 let aqSuspended = false;         // true while a non-queue caller (analyzeChildNodes) owns the engine outside engineState
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
-let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis List" modal
+let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis Queue" modal
 const AQ_THREAD_FRACTION = 0.5;
 const AQ_DEFAULT_DEPTH = 40;
 const AQ_DEFAULT_LINES = 4;
@@ -2156,7 +2156,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
+             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2190,6 +2190,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        </td>
        <td class="eval-col">
          <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
+         <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
          <span class="evaltag" style="display:none"></span>
        </td>
        <td class="name-col">
@@ -2509,7 +2510,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
+           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2528,6 +2529,7 @@ function renderBlackRoot(parent,games,trigger){
      <td class="cnt-col"></td>
      <td class="eval-col">
        <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
+       <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
        <span class="evaltag" style="display:none"></span>
      </td>
      <td class="name-col">
@@ -2898,6 +2900,7 @@ function renderTreeBody(line){
     }
   });
   refreshSystemStats();
+  refreshAnalysisQueueRowMarkers();
 
   if(keepFocusKey) reapplyFocus(keepFocusKey, keepFocusSeq);
 }
@@ -5519,7 +5522,7 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
 
 /* ---------- background analysis queue ----------
    Long-running, low-priority engine analysis queued from a move row's ⋮ menu
-   ("Add to Analysis List") or driven from the "Analysis Queue" hamburger
+   ("Add to Analysis Queue") or driven from the "Analysis Queue" hamburger
    item. Items live in IDB store `analysisQueue`; each names a (lineId, seq)
    node plus a target depth/multipv. Processed one at a time, in queue order
    (oldest first), whenever the interactive engine is idle -- see
@@ -5580,6 +5583,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
     }
     log('already queued for background analysis — target updated');
     renderAnalysisQueueModalIfOpen();
+    refreshAnalysisQueueRowMarkers();
     return;
   }
   const saved = await getPref(lineId, seq);
@@ -5598,6 +5602,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv){
   ANALYSIS_QUEUE.push(item);
   log('queued for background analysis');
   renderAnalysisQueueModalIfOpen();
+  refreshAnalysisQueueRowMarkers();
   maybeResumeAnalysisQueue();
 }
 
@@ -5612,13 +5617,41 @@ async function cancelAnalysisQueueItem(id){
   // processAnalysisQueueLoop re-checks the live array (by reference, not
   // index) before removing/requeuing, so it can't clobber a different item.
   renderAnalysisQueueModal();
+  refreshAnalysisQueueRowMarkers();
 }
 
 async function refreshAnalysisQueue(){
-  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); return; }
-  ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
-  const lines = await getLines(CURRENT_USER);
-  AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); }
+  else {
+    ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
+    const lines = await getLines(CURRENT_USER);
+    AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+  }
+  refreshAnalysisQueueRowMarkers();
+}
+
+/* toggles the small hourglass (⧗) marker on every currently-rendered move-tree
+   row that's in the background analysis queue for CURRENT_LINE -- static
+   while merely queued, pulsing (fa-fade) while it's the one actually being
+   searched right now. Driven purely from tr.dataset.seq (the same stable row
+   identity focus/search already rely on) against ANALYSIS_QUEUE/aqCurrentItem,
+   so it needs no per-row state of its own and is cheap to call on every queue
+   change. Rows for a different opening system than CURRENT_LINE simply aren't
+   in the DOM, so nothing to do for them. */
+function refreshAnalysisQueueRowMarkers(){
+  if(!CURRENT_LINE) return;
+  document.querySelectorAll('tr.data-row[data-seq]').forEach(tr => {
+    const icon = tr.querySelector('.aqQueuedIcon');
+    if(!icon) return;
+    const item = ANALYSIS_QUEUE.find(it => it.lineId === CURRENT_LINE.id && it.seq.join(',') === tr.dataset.seq);
+    if(!item){ icon.style.display = 'none'; return; }
+    const processing = aqCurrentItem?.id === item.id;
+    icon.style.display = '';
+    icon.querySelector('i').classList.toggle('fa-fade', processing);
+    icon.title = processing
+      ? `Background analysis in progress — target depth ${item.depth}, ${item.multipv} line(s)`
+      : `Queued for background analysis — target depth ${item.depth}, ${item.multipv} line(s)`;
+  });
 }
 
 function seqToNotation(seq){
@@ -5725,6 +5758,7 @@ async function processAnalysisQueueLoop(){
       aqCurrentProgress = null;
       item.status = 'processing';
       renderAnalysisQueueModalIfOpen();
+      refreshAnalysisQueueRowMarkers();
 
       const fen = fenForSeq(item.seq);
       const legalCount = new Chess(fen).moves().length;
@@ -5762,6 +5796,7 @@ async function processAnalysisQueueLoop(){
       aqCurrentItem = null;
       aqCurrentProgress = null;
       renderAnalysisQueueModalIfOpen();
+      refreshAnalysisQueueRowMarkers();
       if(!finished) break;   // engine got reclaimed (or errored) -- yield; next idle transition resumes
     }
   } finally {

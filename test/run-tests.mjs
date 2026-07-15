@@ -1420,6 +1420,26 @@ try {
     assert(after.evalLines.length === 3, `expected the same-depth-more-lines result to save 3 lines, got ${JSON.stringify(after.evalLines)}`);
     ok('same-depth-but-more-lines counts as an improvement and is saved');
   } catch(e){ bad('analysis queue: same-depth more-lines improves', e); }
+
+  // 50. Move-table row marker: queuing a node shows the hourglass icon on its
+  //     row; cancelling makes it disappear again.
+  try {
+    const iconVisible = () => app16.page.evaluate(() => {
+      const icon = document.querySelector('tr.data-row[data-seq="d4,Nf6"] .aqQueuedIcon');
+      return !!icon && icon.style.display !== 'none';
+    });
+    assert(!(await iconVisible()), 'expected no queue marker before queuing');
+
+    await app16.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','Nf6'], 40, 4));
+    assert(await iconVisible(), 'expected the queue marker to appear on the row after queuing');
+
+    const q = await app16.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const item = q.find(it => it.seq.join(',') === 'd4,Nf6');
+    assert(item, 'expected the queued item to be findable in the queue');
+    await app16.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), item.id);
+    assert(!(await iconVisible()), 'expected the queue marker to disappear after cancelling');
+    ok('the move table shows/hides an hourglass marker as a node is queued/cancelled');
+  } catch(e){ bad('analysis queue: row marker reflects queue state', e); }
 } finally {
   await app16.close();
 }
