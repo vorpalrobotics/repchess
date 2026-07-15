@@ -1602,5 +1602,168 @@ try {
   await app18.close();
 }
 
+// --- Phase S: "Search for a Variation" -- a not-found result pops up a
+//     clear "Variation not found" alert (in addition to the existing inline
+//     modal text) instead of silently doing nothing, and never touches the
+//     tree/focus state. ---
+const app19 = await launchApp();
+try {
+  await seedBackup(app19.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app19.page.click('.line-row');
+  await app19.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 56. A variation whose first move isn't even this system's opening pops
+  //     up "Variation not found" (with the specific reason) and leaves the
+  //     tree's focus state and DOM completely untouched.
+  try {
+    const treeHtmlBefore = await app19.page.evaluate(() => document.getElementById('tree').innerHTML);
+    const unfocusVisibleBefore = await app19.page.evaluate(() => document.getElementById('unfocusBtn').style.display);
+
+    await app19.page.evaluate(() => document.getElementById('menuSearchLine').click());
+    await app19.page.waitForFunction(
+      () => document.getElementById('searchLineOverlay').style.display === 'flex', { timeout: 5000 });
+    await app19.page.fill('#searchLineInput', '1. e4 e5');
+
+    let dialogMessage = null;
+    app19.page.once('dialog', d => { dialogMessage = d.message(); });
+    await app19.page.evaluate(() => document.getElementById('searchLineSaveBtn').click());
+    await app19.page.waitForFunction(() => document.getElementById('searchLineError').textContent.length > 0, { timeout: 5000 });
+
+    assert(dialogMessage && dialogMessage.startsWith('Variation not found'),
+      `expected a "Variation not found" popup, got: ${JSON.stringify(dialogMessage)}`);
+    assert(dialogMessage.includes('starts with 1. d4') && dialogMessage.includes('starts with 1. e4'),
+      `expected the popup to explain the mismatch, got: ${dialogMessage}`);
+
+    const overlayDisplay = await app19.page.evaluate(() => document.getElementById('searchLineOverlay').style.display);
+    assert(overlayDisplay === 'flex', `expected the search modal to stay open for an easy retry, got display="${overlayDisplay}"`);
+
+    const treeHtmlAfter = await app19.page.evaluate(() => document.getElementById('tree').innerHTML);
+    const unfocusVisibleAfter = await app19.page.evaluate(() => document.getElementById('unfocusBtn').style.display);
+    assert(treeHtmlAfter === treeHtmlBefore, 'expected the tree DOM to be completely untouched by a failed search');
+    assert(unfocusVisibleAfter === unfocusVisibleBefore, 'expected focus state to be untouched by a failed search');
+    ok('a not-found variation pops up a clear message and leaves the tree/focus state untouched');
+  } catch(e){ bad('search variation: not-found pops up a message, tree untouched', e); }
+} finally {
+  await app19.close();
+}
+
+// --- Phase T: cancelling the CURRENTLY PROCESSING analysis-queue item must
+//     stop its in-flight search immediately and move straight on to the next
+//     item -- not stall the whole queue waiting for the abandoned search to
+//     reach its full target depth on its own. No live Stockfish is available
+//     in this harness, so engine.analyze()/stop() are monkey-patched with a
+//     controllable fake (via __aqTestHooks.engine) that only resolves when
+//     stop() is called, driving the real scheduler/cancel logic against it. ---
+const app20 = await launchApp();
+try {
+  await seedBackup(app20.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app20.page.click('.line-row');
+  await app20.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  await app20.page.evaluate(() => {
+    window.__aqFakeEngine = { pending: null, callCount: 0 };
+    const { engine } = window.__aqTestHooks;
+    engine.ready = true;
+    engine.threads = 4;
+    engine.analyze = () => {
+      window.__aqFakeEngine.callCount++;
+      // never resolves on its own -- only engine.stop() (below) resolves it,
+      // exactly like a real search that's still short of its target depth.
+      return new Promise(resolve => {
+        window.__aqFakeEngine.pending = () =>
+          resolve({ depth: 10, lines: { 1: { score: { type:'cp', value:5 }, depth:10, pv:['e2e4'] } } });
+      });
+    };
+    engine.stop = () => {
+      if(window.__aqFakeEngine.pending){
+        const p = window.__aqFakeEngine.pending;
+        window.__aqFakeEngine.pending = null;
+        p();
+      }
+    };
+  });
+
+  // 57. Cancelling the item currently being searched stops that search right
+  //     away (via engine.stop()) and the scheduler picks up the next queued
+  //     item immediately, without waiting for an unrelated idle-transition event.
+  try {
+    await app20.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','Nf6'], 40, 1));
+    await app20.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','d5'], 40, 1));
+    await app20.page.evaluate(() => window.__aqTestHooks.maybeResumeAnalysisQueue());
+    await app20.page.waitForFunction(() => window.__aqFakeEngine.callCount === 1, { timeout: 5000 });
+
+    const firstItem = await app20.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(firstItem && firstItem.seq.join(',') === 'd4,Nf6',
+      `expected the first queued item (d4,Nf6) to start processing, got ${JSON.stringify(firstItem)}`);
+
+    await app20.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), firstItem.id);
+
+    // if the fix works, the abandoned search is stopped and the second item
+    // starts right away (a second engine.analyze() call); if the old bug is
+    // back, callCount stays at 1 forever and this times out.
+    await app20.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
+    const secondItem = await app20.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(secondItem && secondItem.seq.join(',') === 'd4,d5',
+      `expected the second queued item (d4,d5) to start processing next, got ${JSON.stringify(secondItem)}`);
+
+    const q = await app20.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q.length === 1 && q[0].seq.join(',') === 'd4,d5',
+      `expected only the still-processing second item left in the queue, got ${JSON.stringify(q)}`);
+
+    // let the second (still fake, still pending) search resolve too, so the
+    // background loop doesn't leave a dangling pending promise behind it.
+    await app20.page.evaluate(() => window.__aqTestHooks.engine.stop());
+
+    ok('cancelling the currently-processing item stops it and the queue moves on to the next item immediately');
+  } catch(e){ bad('analysis queue: cancelling the processing item does not stall the queue', e); }
+} finally {
+  await app20.close();
+}
+
+// --- Phase U: move-pair VR billboards show the move number ("N.") in the
+//     upper-left corner of whichever quadrant is White's move. ---
+const app21 = await launchApp();
+try {
+  await seedBackup(app21.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
+  });
+  await openVR(app21.page);
+
+  // 59. White's move (moveNumber set) gets the badge in ITS quadrant's
+  //     corner; Black's half (no moveNumber) never does -- checked both ways
+  //     round (opponent-is-White and response-is-White) since the pair's two
+  //     halves swap quadrants depending on which color the opponent is.
+  try {
+    const oppWhite = await app21.page.evaluate(() => window.__threeTestEdit.buildMnemPairInk({
+      opponent: { to:'f3', piece:'knight', san:'Nf3', moveNumber: 5 },
+      response: { to:'c6', piece:'knight', san:'Nc6' },
+    }));
+    assert(oppWhite.oppCorner === true, `expected the move-number badge in the opponent quadrant, got ${JSON.stringify(oppWhite)}`);
+    assert(oppWhite.respCorner === false, `expected no badge in the response quadrant (Black, no moveNumber), got ${JSON.stringify(oppWhite)}`);
+
+    const respWhite = await app21.page.evaluate(() => window.__threeTestEdit.buildMnemPairInk({
+      opponent: { to:'c6', piece:'knight', san:'Nc6' },
+      response: { to:'f3', piece:'knight', san:'Nf3', moveNumber: 6 },
+    }));
+    assert(respWhite.respCorner === true, `expected the move-number badge in the response quadrant, got ${JSON.stringify(respWhite)}`);
+    assert(respWhite.oppCorner === false, `expected no badge in the opponent quadrant (Black, no moveNumber), got ${JSON.stringify(respWhite)}`);
+
+    ok('the move-pair billboard shows "N." in the upper-left corner of whichever quadrant is White\'s move');
+  } catch(e){ bad('VR billboard: move-number badge in the correct quadrant', e); }
+} finally {
+  await app21.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
