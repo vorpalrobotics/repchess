@@ -1440,6 +1440,31 @@ try {
     assert(!(await iconVisible()), 'expected the queue marker to disappear after cancelling');
     ok('the move table shows/hides an hourglass marker as a node is queued/cancelled');
   } catch(e){ bad('analysis queue: row marker reflects queue state', e); }
+
+  // 51. Analysis Queue modal shows the first few PV moves (not just the eval
+  //     score), one row per rank, for whichever item is being processed.
+  try {
+    const item = { id: 'aq:test', lineId: 'L1', seq: ['d4','Nf6'], depth: 40, multipv: 2 };
+    const progress = {
+      depth: 32,
+      lines: {
+        1: { score: { type:'cp', value: 180 }, depth: 32, pv: ['c2c4','e7e6','b1c3','f8b4'] },
+        2: { score: { type:'cp', value: 50 },  depth: 32, pv: ['g1f3','d7d5'] },
+      },
+    };
+    const html = await app16.page.evaluate(({item,progress}) =>
+      window.__aqTestHooks.aqProgressHtml(item, item, progress), { item, progress });
+    assert(html.includes('processing — depth 32/40'), `expected the depth readout, got: ${html}`);
+    const rowCount = (html.match(/class="meta-pv-row"/g) || []).length;
+    assert(rowCount === 2, `expected one row per PV rank (2), got ${rowCount} in: ${html}`);
+    assert(html.includes('+1.8'), `expected rank 1's eval score +1.8, got: ${html}`);
+    assert(html.includes('2.c4') && html.includes('3.Nc3'), `expected the first few PV moves numbered, got: ${html}`);
+
+    const queuedHtml = await app16.page.evaluate(({item}) =>
+      window.__aqTestHooks.aqProgressHtml(item, null, null), { item });
+    assert(queuedHtml.includes('aq-status-queued'), `expected the plain "queued" state when not the current item, got: ${queuedHtml}`);
+    ok('the queue modal shows eval + the first few PV moves per rank for the item being processed');
+  } catch(e){ bad('analysis queue: progress display shows PV moves', e); }
 } finally {
   await app16.close();
 }

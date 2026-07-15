@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-86';
+const BUILD_TAG = '-87';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5677,12 +5677,19 @@ function aqProgressHtml(item){
   if(!aqCurrentProgress) return `<span class="aq-status-processing">starting…</span>`;
   const {depth, lines} = aqCurrentProgress;
   const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
-  const turn = fenForSeq(item.seq).split(' ')[1];
-  const evalBits = ranks
-    .map(idx => `<span class="meta-pv-score">${escapeHtml(formatScore(lines[idx].score, turn))}</span>`)
-    .join(' ');
+  const fen = fenForSeq(item.seq);
+  const turn = fen.split(' ')[1];
+  // one row per PV rank, eval badge + the first few moves (same ply count and
+  // tap-to-preview chips as the live engine panel), like evalContinuationHtml's
+  // saved multi-line display.
+  const pvRows = ranks.map(idx => {
+    const line = lines[idx];
+    const scoreTag = `<span class="meta-pv-score">${escapeHtml(formatScore(line.score, turn))}</span>`;
+    const pvHtml = line.pv?.length ? pvChipsFromUci(fen, line.pv, ENGINE_PV_PLIES) : '';
+    return `<div class="meta-pv-row">${scoreTag}<span class="meta-pv">${pvHtml}</span></div>`;
+  }).join('');
   return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}</div>` +
-    `<div class="aq-progress">${evalBits}</div>`;
+    `<div class="aq-progress">${pvRows}</div>`;
 }
 
 function aqModalOpen(){ return $('analysisQueueOverlay').style.display === 'flex'; }
@@ -6060,5 +6067,15 @@ if(localStorage.getItem('threeTestDebug')){
     seqToNotation: (seq) => seqToNotation(seq),
     saveAnalysisQueueResult: (item, fen, result) => saveAnalysisQueueResult(item, fen, result),
     getPref: (lineId, seq) => getPref(lineId, seq),
+    // aqProgressHtml reads the module-scoped aqCurrentItem/aqCurrentProgress
+    // rather than taking them as parameters (they're also what drives the
+    // live modal), so drive it the same way recordEvalIfDeeper's hook drives
+    // a throwaway bag: swap them in, render, restore.
+    aqProgressHtml: (item, currentItem, progress) => {
+      const savedItem = aqCurrentItem, savedProgress = aqCurrentProgress;
+      aqCurrentItem = currentItem; aqCurrentProgress = progress;
+      try { return aqProgressHtml(item); }
+      finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
+    },
   };
 }
