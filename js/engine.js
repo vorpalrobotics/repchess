@@ -168,8 +168,15 @@ export class Engine {
   // engine decides other (unrequested) moves are better, freezing its last
   // depth. searchmoves guarantees every listed move gets ranked among only
   // each other, so all of them keep reporting through to the target depth.
-  async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo } = {}) {
+  // `threads`, when given (multi-threaded builds only -- ignored otherwise),
+  // overrides the Threads option for just this search; defaults to the full
+  // count init() picked. Explicitly set on every call (not just when the
+  // caller passes it) so a low-priority background search's reduced thread
+  // count can never leak into the next, unrelated search that doesn't ask
+  // for an override -- e.g. an interactive analysis started right after it.
+  async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
     await this._stopCurrent();
+    if (this.multithreaded) this._send(`setoption name Threads value ${Math.max(1, Math.min(threads, this.threads))}`);
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);
 

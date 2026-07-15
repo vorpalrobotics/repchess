@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-83';
+const BUILD_TAG = '-84';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -105,6 +105,22 @@ $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
 /* ---------- globals ---------- */
 let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_LINE=null;
+
+// background analysis queue state (see the "background analysis queue"
+// section below, near analyzeChildNodes, for the functions that use these) --
+// declared here, ahead of the boot-time refreshAnalysisQueue() call further
+// down, so that call isn't reading these bindings before their own `let`
+// would otherwise have run.
+let ANALYSIS_QUEUE = [];         // mirrors the IDB store for CURRENT_USER, createdAt order
+let AQ_LINE_NAMES = new Map();   // lineId -> line name, for the queue modal's Position column
+let aqProcessing = false;        // true while processAnalysisQueueLoop's loop is actively running
+let aqSuspended = false;         // true while a non-queue caller (analyzeChildNodes) owns the engine outside engineState
+let aqCurrentItem = null;        // the queue item currently being searched, or null
+let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
+let aqAddCtx = null;             // {lineId, seq} pending in the "Add to Analysis List" modal
+const AQ_THREAD_FRACTION = 0.5;
+const AQ_DEFAULT_DEPTH = 40;
+const AQ_DEFAULT_LINES = 4;
 
 /* perf escape hatch: node/branch stats recompute the whole subtree on every
    render, which gets expensive on large systems. Flip to false to skip them
@@ -2140,6 +2156,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
+             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2357,6 +2374,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
     };
+    rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      openAnalysisQueueAddModal(CURRENT_LINE.id, lineSeq);
+    };
     rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -2487,6 +2509,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
+           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis List</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
@@ -2663,6 +2686,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(branchDiv) analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon);
+  };
+  rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    openAnalysisQueueAddModal(CURRENT_LINE.id, lineSeq);
   };
   rowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
     e.stopPropagation();
@@ -3189,6 +3217,11 @@ $('dlBtn').onclick = async ()=>{
 
 renderHome();
 
+// auto-start the background analysis queue: load whatever's left over from a
+// prior session and let it start chugging as soon as the engine is ready (see
+// the engine.init().then(...) call below) -- no manual "start" step needed.
+refreshAnalysisQueue().then(() => maybeResumeAnalysisQueue());
+
 /* ---------- hamburger menu ---------- */
 function collapseMenuSubs(){
   document.querySelectorAll('#menuList .menu-sub.open').forEach(el=>el.classList.remove('open'));
@@ -3336,6 +3369,10 @@ async function importBackup(data){
   if(!data.user) throw new Error('backup file has no user id');
 
   await clearAllData();
+  // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
+  // mirror so a lingering background loop can't keep processing/saving
+  // against lineIds this restore just replaced.
+  ANALYSIS_QUEUE = [];
 
   CURRENT_USER = data.user;
   localStorage.setItem(LS_ID, CURRENT_USER);
@@ -3478,11 +3515,6 @@ $('menuImport').onclick = ()=>{
   $('menuList').style.display='none';
   $('backupImport').click();
 };
-$('menuCompressImages').onclick = ()=>{
-  $('menuList').style.display='none';
-  compressAllImages();
-};
-
 /* estimate a data-URL's stored byte size from its base64 payload length. */
 function dataUrlBytes(u){
   if(typeof u !== 'string') return 0;
@@ -5185,6 +5217,9 @@ function setEngineUI(state){
     btn.style.display = 'none';
     btn.classList.remove('engine-resume');
   }
+  // the engine just freed up -- let the background analysis queue (if
+  // anything's in it) claim it. No-op if nothing's queued or it's already running.
+  if(state === 'idle') maybeResumeAnalysisQueue();
 }
 $('engineStopBtn').onclick = () => {
   if(engineState === 'running'){
@@ -5205,6 +5240,7 @@ engine.init().then(() => {
   if(!$('engineDepth').textContent){
     $('engineDepth').textContent = Chessboard ? `Engine ready${engineModeTag()}` : 'Engine not available';
   }
+  maybeResumeAnalysisQueue();
 }).catch(err => {
   console.error('[engine] init failed', err);
   $('engineDepth').textContent = 'Engine unavailable';
@@ -5441,6 +5477,10 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
   const depthSpan = icon.querySelector('.analyzingDepth');
   depthSpan.textContent = '';
 
+  // claims the shared engine outside of engineState (this doesn't go through
+  // runEngine) -- flagged so the background analysis queue's resume check
+  // (maybeResumeAnalysisQueue) knows not to steal it back mid-search.
+  aqSuspended = true;
   try {
     await engine.analyze(fen, {
       multipv: entries.length,
@@ -5468,10 +5508,266 @@ async function analyzeChildNodes(parentSeq, branchDiv, icon){
       }
     });
   } finally {
+    aqSuspended = false;
     if(activeChildAnalysisIcon === icon) activeChildAnalysisIcon = null;
     icon.style.display = 'none';
     icon.onclick = null;
     depthSpan.textContent = '';
+    maybeResumeAnalysisQueue();
+  }
+}
+
+/* ---------- background analysis queue ----------
+   Long-running, low-priority engine analysis queued from a move row's ⋮ menu
+   ("Add to Analysis List") or driven from the "Analysis Queue" hamburger
+   item. Items live in IDB store `analysisQueue`; each names a (lineId, seq)
+   node plus a target depth/multipv. Processed one at a time, in queue order
+   (oldest first), whenever the interactive engine is idle -- see
+   maybeResumeAnalysisQueue(), hooked from setEngineUI('idle') and from
+   engine.init(). Runs at half the interactive thread count so it never
+   competes for cores with analysis the user is actually watching, and any
+   interactive engine.analyze() call automatically preempts it for free
+   (Engine._stopCurrent()) -- the queue just notices its search resolved
+   short of the target depth and leaves the item queued to pick back up at
+   the next idle transition. A finished item's result is written straight to
+   PREFS via setPref() (not the CURRENT_LINE-coupled savePrefField(), since
+   the node being processed is often not the line the user has open) and the
+   item itself is then deleted from the queue -- the queue is a to-do list,
+   not a history log. State variables live up near CURRENT_USER/PREFS (not
+   here) since the boot-time auto-resume call runs before the module reaches
+   this point in top-to-bottom evaluation. */
+
+function openAnalysisQueueAddModal(lineId, seq){
+  aqAddCtx = {lineId, seq};
+  $('analysisAddDepth').value = AQ_DEFAULT_DEPTH;
+  $('analysisAddLines').value = AQ_DEFAULT_LINES;
+  $('analysisAddError').textContent = '';
+  $('analysisAddOverlay').style.display='flex';
+}
+$('analysisAddCancelBtn').onclick = () => {
+  $('analysisAddOverlay').style.display='none';
+  aqAddCtx = null;
+};
+$('analysisAddGoBtn').onclick = async () => {
+  if(!aqAddCtx) return;
+  const depth = parseInt($('analysisAddDepth').value, 10);
+  const multipv = parseInt($('analysisAddLines').value, 10);
+  if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
+  if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
+  const {lineId, seq} = aqAddCtx;
+  $('analysisAddOverlay').style.display='none';
+  aqAddCtx = null;
+  await addToAnalysisQueue(lineId, seq, depth, multipv);
+};
+
+function seqEq(a,b){
+  return a.length===b.length && a.every((m,i)=>m===b[i]);
+}
+
+/* de-dup: a still-queued/processing item for the same node is topped up in
+   place (raised to the max of its old and new target) instead of being
+   duplicated; a node already saved to at least this depth with at least
+   this many lines is a silent no-op -- nothing to queue. */
+async function addToAnalysisQueue(lineId, seq, depth, multipv){
+  const existing = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
+  if(existing){
+    const newDepth = Math.max(existing.depth, depth);
+    const newLines = Math.max(existing.multipv, multipv);
+    if(newDepth !== existing.depth || newLines !== existing.multipv){
+      existing.depth = newDepth;
+      existing.multipv = newLines;
+      await putAnalysisQueueItem(existing);
+    }
+    log('already queued for background analysis — target updated');
+    renderAnalysisQueueModalIfOpen();
+    return;
+  }
+  const saved = await getPref(lineId, seq);
+  const savedEval = saved?.eval;
+  const savedLineCount = saved?.evalLines?.length || (savedEval ? 1 : 0);
+  if(savedEval && savedEval.depth >= depth && savedLineCount >= multipv){
+    log(`already analyzed to depth ${savedEval.depth} with ${savedLineCount} line(s) — nothing to queue`);
+    return;
+  }
+  const item = {
+    id: `aq:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,
+    user: CURRENT_USER, lineId, seq: seq.slice(), depth, multipv,
+    status: 'queued', createdAt: Date.now(),
+  };
+  await putAnalysisQueueItem(item);
+  ANALYSIS_QUEUE.push(item);
+  log('queued for background analysis');
+  renderAnalysisQueueModalIfOpen();
+  maybeResumeAnalysisQueue();
+}
+
+async function cancelAnalysisQueueItem(id){
+  const idx = ANALYSIS_QUEUE.findIndex(it => it.id === id);
+  if(idx === -1) return;
+  ANALYSIS_QUEUE.splice(idx, 1);
+  await deleteAnalysisQueueItem(id);
+  // if this is the item currently being searched, just let the in-flight
+  // engine.analyze() run to its natural stop point -- whatever it saves is
+  // still a legitimate deeper result for that node, and
+  // processAnalysisQueueLoop re-checks the live array (by reference, not
+  // index) before removing/requeuing, so it can't clobber a different item.
+  renderAnalysisQueueModal();
+}
+
+async function refreshAnalysisQueue(){
+  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); return; }
+  ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
+  const lines = await getLines(CURRENT_USER);
+  AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+}
+
+function seqToNotation(seq){
+  if(!seq || !seq.length) return '(start)';
+  return seq.map((san,i) => (i%2===0 ? `${Math.floor(i/2)+1}.${san}` : san)).join(' ');
+}
+
+function aqPositionLabel(item){
+  const lineName = AQ_LINE_NAMES.get(item.lineId) || '(unknown opening)';
+  return `${escapeHtml(lineName)}<br><span class="aq-pos">${escapeHtml(seqToNotation(item.seq))}</span>`;
+}
+
+function aqProgressHtml(item){
+  if(!aqCurrentItem || aqCurrentItem.id !== item.id) return `<span class="aq-status-queued">queued</span>`;
+  if(!aqCurrentProgress) return `<span class="aq-status-processing">starting…</span>`;
+  const {depth, lines} = aqCurrentProgress;
+  const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
+  const turn = fenForSeq(item.seq).split(' ')[1];
+  const evalBits = ranks
+    .map(idx => `<span class="meta-pv-score">${escapeHtml(formatScore(lines[idx].score, turn))}</span>`)
+    .join(' ');
+  return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}</div>` +
+    `<div class="aq-progress">${evalBits}</div>`;
+}
+
+function aqModalOpen(){ return $('analysisQueueOverlay').style.display === 'flex'; }
+function renderAnalysisQueueModalIfOpen(){ if(aqModalOpen()) renderAnalysisQueueModal(); }
+
+function renderAnalysisQueueModal(){
+  const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
+  if(!ANALYSIS_QUEUE.length){
+    empty.style.display=''; table.style.display='none'; body.innerHTML='';
+    return;
+  }
+  empty.style.display='none'; table.style.display='';
+  body.innerHTML = ANALYSIS_QUEUE.map(item => `
+    <tr data-id="${escapeHtml(item.id)}">
+      <td><button type="button" class="aq-del" title="Cancel"><i class="fa-solid fa-trash"></i></button></td>
+      <td>${aqPositionLabel(item)}</td>
+      <td>depth ${item.depth}, ${item.multipv} line${item.multipv===1?'':'s'}</td>
+      <td>${aqProgressHtml(item)}</td>
+    </tr>`).join('');
+  body.querySelectorAll('.aq-del').forEach(btn => {
+    btn.onclick = () => cancelAnalysisQueueItem(btn.closest('tr').dataset.id);
+  });
+}
+
+$('menuAnalysisQueue').onclick = async () => {
+  $('menuList').style.display='none';
+  await refreshAnalysisQueue();
+  renderAnalysisQueueModal();
+  $('analysisQueueOverlay').style.display='flex';
+};
+$('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
+
+/* writes a completed (or partially-completed, if interrupted) search result
+   for one queue item straight to IDB, gated by the same "never regress"
+   rule as recordEvalIfDeeper -- but also treating "same depth, strictly more
+   lines saved than before" as an improvement, since a background item's
+   whole point can be raising the saved line count at a depth already
+   reached. If the node belongs to whatever line is currently open, patches
+   the in-memory PREFS cache too and re-renders the tree so the result shows
+   up immediately without waiting for the user to reopen the line. */
+async function saveAnalysisQueueResult(item, fen, result){
+  const {depth, lines} = result;
+  const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
+  if(!depth || !ranks.length) return;   // interrupted before anything was reported
+
+  const existing = await getPref(item.lineId, item.seq);
+  const existingEval = existing?.eval;
+  const existingLineCount = existing?.evalLines?.length || (existingEval ? 1 : 0);
+  const improves = !existingEval || depth > existingEval.depth ||
+    (depth === existingEval.depth && ranks.length > existingLineCount);
+  if(!improves) return;
+
+  const best = lines[ranks[0]];
+  const patch = { eval: toEvalLine(best.score, best.depth, best.pv, fen) };
+  if(ranks.length > 1){
+    patch.evalLines = ranks.map(idx => lines[idx]).filter(l => l?.score)
+      .map(l => toEvalLine(l.score, l.depth, l.pv, fen));
+  }
+  await setPref(item.lineId, item.seq, patch);
+
+  if(CURRENT_LINE && CURRENT_LINE.id === item.lineId){
+    const key = prefKey(item.lineId, item.seq);
+    PREFS[key] = {...(PREFS[key] ?? {key, lineId:item.lineId, seq:item.seq, reply:'', note:'', mnemonic:'', hidden:false}), ...patch};
+    renderTreeBody(CURRENT_LINE);
+  }
+}
+
+function maybeResumeAnalysisQueue(){
+  if(aqProcessing) return;
+  processAnalysisQueueLoop();
+}
+
+async function processAnalysisQueueLoop(){
+  if(aqProcessing) return;
+  aqProcessing = true;
+  try {
+    while(ANALYSIS_QUEUE.length){
+      if(engineState !== 'idle' || aqSuspended || !engine.ready) break;
+      const item = ANALYSIS_QUEUE[0];
+      aqCurrentItem = item;
+      aqCurrentProgress = null;
+      item.status = 'processing';
+      renderAnalysisQueueModalIfOpen();
+
+      const fen = fenForSeq(item.seq);
+      const legalCount = new Chess(fen).moves().length;
+      const multipv = Math.max(1, Math.min(item.multipv, legalCount || item.multipv));
+      const threads = Math.max(1, Math.round(engine.threads * AQ_THREAD_FRACTION));
+
+      let result = null;
+      try {
+        result = await engine.analyze(fen, {
+          multipv,
+          depth: item.depth,
+          threads,
+          onInfo: (d, lines) => {
+            aqCurrentProgress = {depth: d, lines};
+            renderAnalysisQueueModalIfOpen();
+          }
+        });
+      } catch(err){
+        console.error('[analysisQueue] search failed', err);
+      }
+
+      if(result) await saveAnalysisQueueResult(item, fen, result);
+
+      // finished (reached target depth) vs. interrupted (something else
+      // claimed the engine mid-search, e.g. interactive analysis) -- look the
+      // item up by reference rather than assuming index 0, since it may have
+      // been cancelled out from under this very search while it ran.
+      const finished = !!result && result.depth >= item.depth;
+      const idx = ANALYSIS_QUEUE.indexOf(item);
+      if(finished){
+        if(idx !== -1){ ANALYSIS_QUEUE.splice(idx,1); await deleteAnalysisQueueItem(item.id); }
+      } else if(idx !== -1){
+        item.status = 'queued';
+      }
+      aqCurrentItem = null;
+      aqCurrentProgress = null;
+      renderAnalysisQueueModalIfOpen();
+      if(!finished) break;   // engine got reclaimed (or errored) -- yield; next idle transition resumes
+    }
+  } finally {
+    aqProcessing = false;
+    aqCurrentItem = null;
+    aqCurrentProgress = null;
   }
 }
 
@@ -5702,5 +5998,24 @@ if(localStorage.getItem('threeTestDebug')){
       recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
       return bag;
     },
+  };
+}
+
+// test-only hook for the background analysis queue: add/dedup, cancel, and
+// the direct-IDB-write save/depth-gating path (saveAnalysisQueueResult) are
+// all plain data manipulation against real IDB (unlike the engine search
+// itself, IDB works fine in the offline harness) -- only the actual
+// engine.analyze() call inside processAnalysisQueueLoop needs a live
+// Stockfish, which this harness can't provide, so that loop stays untested
+// here (covered by manual verification instead).
+if(localStorage.getItem('threeTestDebug')){
+  window.__aqTestHooks = {
+    getQueue: () => ANALYSIS_QUEUE,
+    addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
+    cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
+    refreshAnalysisQueue: () => refreshAnalysisQueue(),
+    seqToNotation: (seq) => seqToNotation(seq),
+    saveAnalysisQueueResult: (item, fen, result) => saveAnalysisQueueResult(item, fen, result),
+    getPref: (lineId, seq) => getPref(lineId, seq),
   };
 }

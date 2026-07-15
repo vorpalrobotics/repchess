@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -64,6 +64,11 @@ function openDB(){
       }
       if(!db.objectStoreNames.contains('objectLists')){
         db.createObjectStore('objectLists', {keyPath:'id'});
+      }
+      if(!db.objectStoreNames.contains('analysisQueue')){
+        const aq = db.createObjectStore('analysisQueue', {keyPath:'id'});
+        aq.createIndex('status','status');
+        aq.createIndex('user','user');
       }
     };
     req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
@@ -174,6 +179,16 @@ async function getAllPrefs(lineId){
       resolve(map);
     };
     req.onerror = () => reject(req.error);
+  });
+}
+
+async function getPref(lineId, seq){
+  const db = await openDB();
+  const key = prefKey(lineId,seq);
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('prefs','readonly').objectStore('prefs').get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror   = () => reject(req.error);
   });
 }
 
@@ -336,6 +351,42 @@ async function clearObjectLists(){
   });
 }
 
+/* ---------- analysis queue (background multi-line engine analysis) ----------
+   One row per node the user asked to be deep-analyzed: {id, user, lineId, seq,
+   depth, multipv, status:'queued'|'processing', createdAt, progressDepth,
+   progressLines}. A finished item is deleted outright (its result lives in
+   PREFS[key].eval/evalLines on the node itself, not here) -- this store is a
+   to-do list, not a history log. */
+async function getAnalysisQueue(user){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const store = db.transaction('analysisQueue','readonly').objectStore('analysisQueue');
+    const req = store.index('user').getAll(user);
+    req.onsuccess = () => resolve(req.result.sort((a,b)=>a.createdAt-b.createdAt));
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function putAnalysisQueueItem(item){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('analysisQueue','readwrite');
+    txn.objectStore('analysisQueue').put(item);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+async function deleteAnalysisQueueItem(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('analysisQueue','readwrite');
+    txn.objectStore('analysisQueue').delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- meta (small flat key/value settings, e.g. mnemonics notes) ---------- */
 async function getMeta(key){
   const db = await openDB();
@@ -384,7 +435,7 @@ async function clearMnemonics(){
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();
-  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists'];
+  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists','analysisQueue'];
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();
