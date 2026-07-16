@@ -494,6 +494,14 @@ let ASSET_BY_ID = {};
 // shared across nested/linked castles for free, exactly like LAYOUT already is.
 const MEMORIZED_KEY = 'threeMemorizedRooms';
 let MEMORIZED = {};
+// "fully decorated" room tracking: every move-object slot has a real asset and
+// every forward door's target room is named. Unlike MEMORIZED (a manual user
+// toggle), this is COMPUTED -- persisted the same way, but only ever
+// (re)evaluated at one checkpoint (exiting edit mode, see setEditMode) rather
+// than kept continuously live, so it can go briefly stale if a room's target
+// gets renamed elsewhere later. { [roomKey]: msEpochWhenLastFlaggedComplete }.
+const DECORATED_KEY = 'threeDecoratedRooms';
+let DECORATED = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
@@ -996,6 +1004,46 @@ function toggleMemorized(){
   else MEMORIZED[currentRoomKey] = Date.now();
   persistMemorized();
   updateToolbar();
+}
+
+async function loadDecorated(){
+  const raw = await getMeta(DECORATED_KEY);
+  try { DECORATED = raw ? JSON.parse(raw) : {}; }
+  catch { DECORATED = {}; }
+}
+function persistDecorated(){ setMeta(DECORATED_KEY, JSON.stringify(DECORATED)); }
+// A room is fully decorated when every move-object slot has a real image
+// asset AND every forward (non-back) door leads to a named room. The shared
+// center/anchor pair is excluded unless this room hosts it in-room
+// (entryNoStreet) -- normally it's decorated at the street building's entry
+// instead (see buildSlots' matching skip). A door whose target isn't
+// registered this session (e.g. an unlinked foreign castle in a single-castle
+// preview) is skipped rather than counted as a failure -- that's session
+// state, not missing work. A room with nothing to fill is vacuously true.
+function computeFullyDecorated(roomKey){
+  const room = mergedRoom(roomKey);
+  if(!room) return false;
+  for(const slot of moveObjectSlots(roomKey)){
+    if(slot.side === 'center' && !room.entryNoStreet) continue;
+    const asset = slotAssetFor(roomKey, slot.id) || moveObjectListResolved(roomKey, slot)?.asset;
+    if(!asset) return false;
+  }
+  for(const ex of (room.exits || [])){
+    if(ex.back) continue;
+    if(!ROOMS[ex.target]) continue;
+    if(!roomNameFor(ex.target)) return false;
+  }
+  return true;
+}
+// (Re)computes and persists roomKey's decorated flag. Skips mainStreet/
+// buildings (no posKey -- nothing to decorate there), same gate toggleMemorized
+// uses for the same reason.
+function evaluateDecorated(roomKey){
+  const pk = ROOMS[roomKey] && ROOMS[roomKey].posKey;
+  if(!pk || !pk.includes('/')) return;
+  if(computeFullyDecorated(roomKey)) DECORATED[roomKey] = Date.now();
+  else delete DECORATED[roomKey];
+  persistDecorated();
 }
 
 function ensureRoomLayout(roomKey){
@@ -4470,6 +4518,18 @@ export async function refreshAssetsLive(){
   buildRoom(currentRoomKey);
 }
 
+// Jumps straight to roomKey in an ALREADY-OPEN VR session (e.g. "Jump to VR"
+// from the digraph's room-info modal). Returns false -- without doing
+// anything -- if VR isn't open, or if this session never registered the
+// room (e.g. a Preview-Castle session that doesn't include the target
+// castle); the caller falls back to (re)opening the main world with
+// openThreeTest's startRoomKey opt in that case.
+export function jumpToRoom(roomKey){
+  if(!scene || !ROOMS[roomKey]) return false;
+  enterRoom(roomKey, { x:0, z:0, yaw:0 });
+  return true;
+}
+
 function enterRoom(roomKey, spawn, preserveYaw){
   // remember where we came in *before* building, so floor props can face it
   entryPoint = { x: spawn.x, z: spawn.z };
@@ -5159,10 +5219,14 @@ function updateEditHud(){
 }
 
 function setEditMode(on){
+  const wasOn = editMode;
   editMode = on;
   if(!on) deselectProp();
   if(renderer) renderer.domElement.style.cursor = on ? 'crosshair' : 'default';
   updateEditHud();
+  // "fully decorated" is only (re)computed on the edit-mode-on -> off
+  // transition -- a simple, well-defined checkpoint (see DECORATED above).
+  if(wasOn && !on) evaluateDecorated(currentRoomKey);
   buildRoom(currentRoomKey);
 }
 
@@ -6226,6 +6290,7 @@ export async function openThreeTest(containerEl, opts){
   pointer = new THREE.Vector2();
   await loadLayout();
   await loadMemorized();
+  await loadDecorated();
   await refreshAssetMap();
   await refreshObjectLists();
 
@@ -6292,7 +6357,11 @@ export async function openThreeTest(containerEl, opts){
   const cas = threeOpts.castle
     ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, {})
     : null;
-  if(cas) enterRoom(cas.entryKey, cas.spawn);
+  // an explicit start room (e.g. "Jump to VR" from the digraph) wins over both
+  // -- it lands the freshly-opened world directly on the target room instead
+  // of the street or a castle's own entry.
+  if(threeOpts.startRoomKey && ROOMS[threeOpts.startRoomKey]) enterRoom(threeOpts.startRoomKey, { x:0, z:0, yaw:0 });
+  else if(cas) enterRoom(cas.entryKey, cas.spawn);
   else enterRoom(START_ROOM, START_SPAWN);
   tick();
 
@@ -6314,6 +6383,19 @@ export async function openThreeTest(containerEl, opts){
         updateToolbar();
       },
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
+      // "fully decorated" (Part A): read the computed flag, force a
+      // recompute of the current room without going through the real
+      // edit-mode-exit UI, or seed/clear a specific room's flag directly --
+      // mirrors the memorized/toggleMemorized/setMemorized hooks above.
+      decorated: () => DECORATED[currentRoomKey] || null,
+      evaluateDecorated: () => evaluateDecorated(currentRoomKey),
+      setDecorated: (key, val) => {
+        if(val) DECORATED[key] = Date.now(); else delete DECORATED[key];
+        persistDecorated();
+      },
+      // jumps to roomKey via the exported jumpToRoom fast path, for testing
+      // Part B ("Jump to VR") without going through the app's modal/button.
+      jumpToRoom: (key) => jumpToRoom(key),
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map) }); } }); return out; },
       entry: () => entryPoint,
@@ -6351,6 +6433,29 @@ export async function openThreeTest(containerEl, opts){
         buildRoom(currentRoomKey);
         return true;
       },
+      // the move-object slot ids a room resolves to (moveObjectSlots' own ids,
+      // e.g. "obj-L1") -- for testing Part A's "fully decorated" slot check
+      // without scraping placeholder sprites out of the scene by hand.
+      moveObjectSlotIds: (roomKey) => moveObjectSlots(roomKey).map(s => s.id),
+      // assigns (or clears, if assetId is falsy) a manual per-slot asset
+      // override -- the same mutation the real prop picker makes
+      // (setSlotOverride), but AWAITED end-to-end (setSlotOverride itself
+      // fires its applyEdit and returns immediately, same reason
+      // setAllDoorAssets above doesn't reuse the per-field setters) -- for
+      // testing Part A's "every slot has a real asset" check without a race
+      // against refreshAssetMap's async ASSET_BY_ID repopulate.
+      setSlotAsset: async (roomKey, slotId, assetId) => {
+        const r = ensureRoomLayout(roomKey);
+        if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
+        if(!assetId) delete r.slotXform[slotId];
+        persistLayout();
+        await refreshAssetMap();
+        buildRoom(currentRoomKey);
+      },
+      // names (or clears) a room the same way the Room Geometry dialog's
+      // "Room names" fields do (setRoomName) -- for testing Part A's "every
+      // forward door's target is named" check without driving that dialog.
+      setRoomName: (roomKey, name) => { setRoomName(roomKey, name); },
       // the room's EFFECTIVE size (static + any LAYOUT.geom override folded
       // in, same accessor every real read site uses) -- for testing that
       // mainStreet's auto-computed minimum can't be shrunk by a stale override.

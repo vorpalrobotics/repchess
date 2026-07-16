@@ -2507,5 +2507,288 @@ try {
   await appAB.close();
 }
 
+// --- Phase AC: "fully decorated" room flag -- computed on the edit-mode-on ->
+//     off transition (E key / Esc / toolbar pencil): every move-object slot
+//     has a real asset AND every forward door's target room is named. ---
+const appAC = await launchApp();
+try {
+  // a single (non-branching) reply chain collapses into ONE corridor room
+  // with 2 LEFT wall move-object slots (obj-L1/obj-L2) and no forward door
+  // (its own next reply, Qe7, is unbuilt) -- isolates the slot-fill half of
+  // the check from the door-naming half.
+  await seedBackup(appAC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+  });
+  await openVR(appAC.page);
+  const roomKey = await appAC.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAC.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAC.page.waitForTimeout(300);
+  const slotIds = await appAC.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const leftSlots = slotIds.filter(id => id !== 'obj-C1');
+  const exitEditMode = async (page) => {
+    await page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode ON
+    await page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode OFF -> evaluateDecorated fires
+  };
+
+  // 80. Both slots unfilled, no forward door -> not decorated on edit-exit.
+  try {
+    assert(leftSlots.length === 2, `test setup issue: expected 2 non-center move-object slots, got ${JSON.stringify(slotIds)}`);
+    await exitEditMode(appAC.page);
+    const dec = await appAC.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(!dec, `expected the room NOT decorated with both slots empty, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: a room with unfilled move-object slots is not decorated on edit-mode exit');
+  } catch(e){ bad('decorated: false with unfilled slots', e); }
+
+  // 81. Filling only ONE of two slots still isn't fully decorated.
+  try {
+    await appAC.page.evaluate(({ rk, sid, aid }) => window.__threeTestEdit.setSlotAsset(rk, sid, aid),
+      { rk: roomKey, sid: leftSlots[0], aid: 'testProp1' });
+    await exitEditMode(appAC.page);
+    const dec = await appAC.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(!dec, `expected the room NOT decorated with 1 of 2 slots filled, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: partially-filled slots still read as not decorated');
+  } catch(e){ bad('decorated: false with partially filled slots', e); }
+
+  // 82. Filling the SECOND slot too flips it to decorated.
+  try {
+    await appAC.page.evaluate(({ rk, sid, aid }) => window.__threeTestEdit.setSlotAsset(rk, sid, aid),
+      { rk: roomKey, sid: leftSlots[1], aid: 'testProp1' });
+    await exitEditMode(appAC.page);
+    const dec = await appAC.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(dec, `expected the room decorated once every slot has an asset, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: flips true once every move-object slot has a real asset');
+  } catch(e){ bad('decorated: true once every slot is filled', e); }
+
+  // 83. Persists to IndexedDB and survives a full reload (not just the
+  //     in-memory DECORATED map) -- same rigor as the memorized-flag test.
+  try {
+    assert(await appAC.page.evaluate(() => window.__threeTestEdit.decorated()), 'setup: room not decorated before reload');
+    await appAC.page.reload({ waitUntil: 'domcontentloaded' });
+    await appAC.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appAC.page);
+    await appAC.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appAC.page.waitForTimeout(200);
+    const survived = await appAC.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(survived, `expected the decorated flag to survive a reload, got ${JSON.stringify(survived)}`);
+    ok('fully-decorated flag persists in IndexedDB and survives a full reload');
+  } catch(e){ bad('decorated flag survives reload (real IDB round-trip)', e); }
+} finally {
+  await appAC.close();
+}
+
+// --- Phase AD: "fully decorated" -- the door-naming half of the check, and
+//     the vacuous-true case (a room with nothing left to decorate). ---
+const appAD = await launchApp();
+try {
+  // a branch (e6 vs g6) gives the root room two REAL forward doors (a single
+  // reply collapses into a doorless internal link -- see Phase X); root's
+  // own reply is the ONLY pair (side 'center'), so slot-fill is a non-issue
+  // here -- isolates the door-naming half of the check.
+  await seedBackup(appAD.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await openVR(appAD.page);
+  const keyFor = (moves) => appAD.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const r2 = await keyFor(['d4','Nf6','c4','e6','Nc3']);     // named via the 'e6' door
+  const r3 = await keyFor(['d4','Nf6','c4','g6','Nc3']);     // named via the 'g6' door
+  await appAD.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appAD.page.waitForTimeout(300);
+  const exitEditMode = async () => {
+    await appAD.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appAD.page.evaluate(() => window.__threeTestEdit.toggle());
+  };
+
+  // 84. Neither forward door's target is named -> not decorated.
+  try {
+    await exitEditMode();
+    const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(!dec, `expected the root room NOT decorated with both door targets unnamed, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: unnamed forward door targets keep a room undecorated');
+  } catch(e){ bad('decorated: false with unnamed door targets', e); }
+
+  // 85. Naming only ONE of the two target rooms still isn't enough.
+  try {
+    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: r2, n: 'E6 room' });
+    await exitEditMode();
+    const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(!dec, `expected the root room NOT decorated with only 1 of 2 door targets named, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: naming only some forward door targets is still not enough');
+  } catch(e){ bad('decorated: false with only some door targets named', e); }
+
+  // 86. Naming BOTH target rooms flips it to decorated.
+  try {
+    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: r3, n: 'G6 room' });
+    await exitEditMode();
+    const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(dec, `expected the root room decorated once every forward door target is named, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: flips true once every forward door target room is named');
+  } catch(e){ bad('decorated: true once every door target is named', e); }
+
+  // 87. A room with nothing to decorate (no slots but its own center pair,
+  //     no built forward doors -- its own next reply is unbuilt) is
+  //     vacuously fully decorated by default.
+  try {
+    await appAD.page.evaluate((k) => window.__threeTestEdit.enter(k), r2);
+    await appAD.page.waitForTimeout(300);
+    await exitEditMode();
+    const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(dec, `expected a room with nothing left to decorate to be vacuously decorated, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: a room with no slots and no forward doors is vacuously decorated');
+  } catch(e){ bad('decorated: vacuously true with nothing to decorate', e); }
+} finally {
+  await appAD.close();
+}
+
+// --- Phase AE: "fully decorated" rooms get a 🎨 glyph on their digraph node
+//     label, mirroring the memorized-room border (Phase Z). ---
+const appAE = await launchApp();
+try {
+  await seedBackup(appAE.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await appAE.page.click('.line-row');
+  await appAE.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  const roomFen = await appAE.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+
+  // 88. No glyph by default.
+  try {
+    const label = await appAE.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
+    assert(!/🎨/.test(label || ''), `expected no decorated glyph by default, got ${JSON.stringify(label)}`);
+    ok('a graph node label has no decorated glyph by default');
+  } catch(e){ bad('graph: no decorated glyph by default', e); }
+
+  // 89. Marking the room decorated (same IDB key evaluateDecorated writes)
+  //     and reopening the graph shows the glyph in the node's label.
+  try {
+    const roomKey = await appAE.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
+    assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
+    await appAE.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
+    await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const label = await appAE.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
+    assert(/🎨/.test(label || ''), `expected the decorated glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
+    ok('a decorated room shows the 🎨 glyph on its graph node label after reopening');
+  } catch(e){ bad('graph: decorated glyph reflects a marked room', e); }
+} finally {
+  await appAE.close();
+}
+
+// --- Phase AF: "Jump to VR" from the room-info modal (click a digraph node,
+//     then jump straight into that room in the VR walk). ---
+const appAF = await launchApp();
+try {
+  await seedBackup(appAF.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await appAF.page.click('.line-row');
+  await appAF.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAF.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appAF.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  const fens = await appAF.page.evaluate(() => {
+    const c1 = new Chess(); for(const m of ['d4']) c1.move(m, { sloppy: true });
+    const c2 = new Chess(); for(const m of ['d4','Nf6','c4']) c2.move(m, { sloppy: true });
+    return { preCastle: c1.fen(), room: c2.fen() };
+  });
+
+  // 90. A node with no owning castle (nothing built yet at that position) has
+  //     no roomKey, so the Jump button stays hidden -- there's no VR room to
+  //     jump to.
+  try {
+    await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.preCastle);
+    await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
+    const display = await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').style.display);
+    assert(display === 'none', `expected the Jump button hidden for a node with no roomKey, got display=${JSON.stringify(display)}`);
+    ok('room-info modal: Jump to VR is hidden for a node with no owning castle room');
+    await appAF.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
+  } catch(e){ bad('room-info modal: Jump to VR hidden without a roomKey', e); }
+
+  // 91. Clicking Jump with VR closed (re)builds the main world and lands
+  //     directly in the target room, closing the room-info modal.
+  try {
+    await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
+    await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
+    const display = await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').style.display);
+    assert(display !== 'none', `expected the Jump button visible for a real castle room, got display=${JSON.stringify(display)}`);
+    await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').click());
+    await appAF.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    const state = await appAF.page.evaluate(() => ({
+      room: window.__threeTestEdit.room(),
+      overlay: document.getElementById('roomInfoOverlay').style.display,
+    }));
+    assert(state.room === roomKey, `expected to land directly in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
+    ok('room-info modal: "Jump to VR" with VR closed builds the world and lands in the target room');
+  } catch(e){ bad('room-info modal: Jump to VR with VR closed', e); }
+
+  // 92. With VR already open (fast path via jumpToRoom, no rebuild), jumping
+  //     from a room-info modal opened UNDERNEATH the still-open VR overlay
+  //     lands in the target room instantly.
+  try {
+    // step 91 left VR open in the target room -- walk back out to Main Street
+    // first so this is a real jump, not a no-op re-entry into the same room.
+    await appAF.page.evaluate(() => window.__threeTestEdit.enter('mainStreet'));
+    await appAF.page.waitForTimeout(100);
+    await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
+    await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
+    await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').click());
+    await appAF.page.waitForTimeout(200);
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    const state = await appAF.page.evaluate(() => ({
+      room: window.__threeTestEdit.room(),
+      overlay: document.getElementById('roomInfoOverlay').style.display,
+      graphOverlay: document.getElementById('graphOverlay').style.display,
+    }));
+    assert(state.room === roomKey, `expected the fast path to land in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
+    assert(state.graphOverlay === 'flex', 'expected the digraph overlay to stay open underneath, not close on jump');
+    ok('room-info modal: "Jump to VR" with VR already open takes the fast path (no rebuild)');
+  } catch(e){ bad('room-info modal: Jump to VR fast path when VR already open', e); }
+} finally {
+  await appAF.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
