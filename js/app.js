@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-96';
+const BUILD_TAG = '-97';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1349,6 +1349,15 @@ async function showTranspositionGraph(){
           n.position({ x: p.x + dx, y: p.y + dy });
           n.emit('dragfree');
           return true;
+        },
+        // drives the real room-info click handler (cy.on('tap','node',...))
+        // via a synthetic tap, same as dragNodeBy drives the drag handler --
+        // exercises the actual showRoomInfoPanel code path, not a re-implementation.
+        openRoomInfo: (fen) => {
+          const n = cy.nodes().filter(x => x.data('fen') === fen);
+          if(!n.nonempty()) return false;
+          n.emit('tap');
+          return true;
         }
       };
     }
@@ -1548,7 +1557,16 @@ function attachGraphClickHandler(cy){
   });
   cy.on('tap', evt => { if(evt.target === cy) hideGraphHoverPreview(); });  // tap empty space dismisses the position preview
 }
-const mnemThumbHtml = img => img ? `<img class="room-info-img" src="${img}">` : '';
+// White's ply number ("N."), glued right onto the move's thumbnail image (in
+// the same nowrap wrapper) so it can't end up visually separated from the
+// icon it labels: the row already leads with plyLabel's "N. san" text, but on
+// a narrow modal that text and the image can land on different wrapped
+// lines, leaving the image with no number nearby. Only White's plies are
+// numbered -- the same rule plyLabel already applies to that leading text.
+const moveNumBadgeHtml = seq => (seq && seq.length % 2 === 1)
+  ? `<b class="room-info-num">${Math.ceil(seq.length / 2)}.</b>` : '';
+const mnemThumbHtml = (img, seq) => img
+  ? `<span class="room-info-thumb">${moveNumBadgeHtml(seq)}<img class="room-info-img" src="${img}"></span>` : '';
 
 /* ---------- mini board (from a FEN) ----------
    Renders a position's board field as an 8x8 grid using the SAME piece sprite
@@ -1630,7 +1648,7 @@ async function showRoomInfoPanel(roomEl){
     const img = mnemonicImgForSeq(edge.data('seq'), mnemonicsBySquare);
     return `<div class="room-info-exit">${escapeHtml(edge.data('label'))}` +
       (word ? ` <span class="room-info-word"><i class="fa-solid fa-brain"></i>${escapeHtml(word)}</span>` : '') +
-      mnemThumbHtml(img) +
+      mnemThumbHtml(img, edge.data('seq')) +
       `</div>`;
   });
   $('roomInfoExits').innerHTML = rows.length ? rows.join('') :

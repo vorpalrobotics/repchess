@@ -1957,5 +1957,111 @@ try {
   await app22.close();
 }
 
+// --- Phase W: room-info modal (click a graph node) -- move-number badge on
+//     the exit rows' thumbnails, and the exits list scrolls independently so
+//     a long list of replies can never push the Close button off-screen. ---
+const appW1 = await launchApp();
+try {
+  await seedBackup(appW1.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+    mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await appW1.page.click('.line-row');
+  await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  // 63. A White-repertoire room's exit rows are the OPPONENT's (Black's)
+  //     replies -- never numbered, same rule plyLabel already applies to
+  //     Black moves everywhere else. This room's Nf6 exit has an image.
+  try {
+    const rootFen = await appW1.page.evaluate(() => {
+      const c = new Chess(); c.move('d4', { sloppy: true });
+      return c.fen();
+    });
+    const opened = await appW1.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), rootFen);
+    assert(opened, 'could not open room info for the d4 room');
+    await appW1.page.waitForFunction(() => document.getElementById('roomInfoOverlay').style.display === 'flex', { timeout: 5000 });
+    const hasImg = await appW1.page.evaluate(() => !!document.querySelector('#roomInfoExits .room-info-img'));
+    const hasBadge = await appW1.page.evaluate(() => !!document.querySelector('#roomInfoExits .room-info-num'));
+    assert(hasImg, 'expected the Nf6 exit row to render its mnemonic image (test setup issue if not)');
+    assert(hasBadge === false, `a Black-move exit row should never show the "N." badge, but found one`);
+    ok('room-info exits: a White line\'s Black-move replies never show the move-number badge');
+  } catch(e){ bad('room-info exits: no badge on Black-move replies', e); }
+} finally {
+  await appW1.close();
+}
+
+const appW2 = await launchApp();
+try {
+  // a Black-repertoire room's exit rows are the OPPONENT's (White's) replies
+  // -- these DO get numbered. Twenty distinct replies from 1...e5, so the
+  // exits list is long enough to actually overflow a constrained modal.
+  const whiteReplies = ['Nf3','Nc3','Bc4','Bb5','d4','f4','c3','d3','Qh5','Qf3',
+                         'Ne2','Na3','Nh3','g3','g4','h3','h4','a3','a4','b3'];
+  const games = whiteReplies.map((m, i) => ({ id: `g${i}`, moves: `e4 e5 ${m} Nc6`, white: 'a', black: 'b', result: '*' }));
+  await seedBackup(appW2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L2', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+      { seq: ['e4'], reply: 'e5' },
+    ]}],
+    games,
+    mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await appW2.page.click('.line-row');
+  await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  let roomFen;
+  try {
+    roomFen = await appW2.page.evaluate(() => {
+      const c = new Chess(); c.move('e4', { sloppy: true }); c.move('e5', { sloppy: true });
+      return c.fen();
+    });
+    const opened = await appW2.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), roomFen);
+    assert(opened, 'could not open room info for the e4 e5 room');
+    await appW2.page.waitForFunction(() => document.getElementById('roomInfoOverlay').style.display === 'flex', { timeout: 5000 });
+
+    // 64. White's reply (2.Nf3, the one with an image) shows a "2." badge
+    //     glued to its thumbnail.
+    const badgeText = await appW2.page.evaluate(() => {
+      const el = document.querySelector('#roomInfoExits .room-info-num');
+      return el ? el.textContent : null;
+    });
+    assert(badgeText === '2.', `expected a "2." badge on the White reply, got ${JSON.stringify(badgeText)}`);
+    ok('room-info exits: a Black line\'s White-move replies show the "N." badge on the thumbnail');
+  } catch(e){ bad('room-info exits: numbered badge on White-move replies', e); }
+
+  // 65. Twenty exit rows overflow the constrained modal -- the exits list
+  //     scrolls independently (overflow-y) and the Close button stays fully
+  //     on-screen instead of being pushed past the viewport (the originally-
+  //     reported bug: an unconstrained modal could grow past the fold,
+  //     leaving no way to close it without scrolling the whole page).
+  try {
+    const layout = await appW2.page.evaluate(() => {
+      const exits = document.getElementById('roomInfoExits');
+      const closeBtn = document.getElementById('roomInfoCloseBtn');
+      const r = closeBtn.getBoundingClientRect();
+      return {
+        overflowY: getComputedStyle(exits).overflowY,
+        overflowing: exits.scrollHeight > exits.clientHeight,
+        closeTop: r.top, closeBottom: r.bottom, innerHeight: window.innerHeight,
+      };
+    });
+    assert(layout.overflowY === 'auto' || layout.overflowY === 'scroll',
+      `expected the exits list to be independently scrollable, got overflow-y=${layout.overflowY}`);
+    assert(layout.overflowing,
+      `expected 20 exit rows to overflow the constrained exits list (test setup issue if not): ${JSON.stringify(layout)}`);
+    assert(layout.closeTop >= 0 && layout.closeBottom <= layout.innerHeight,
+      `Close button was pushed outside the viewport: ${JSON.stringify(layout)}`);
+    ok('room-info modal: a long exits list scrolls independently, keeping the Close button on-screen');
+  } catch(e){ bad('room-info modal: exits list scrolls, Close button stays visible', e); }
+} finally {
+  await appW2.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
