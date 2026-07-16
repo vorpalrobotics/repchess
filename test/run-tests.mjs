@@ -2134,6 +2134,27 @@ try {
     assert(found, `expected a door panel oversized by baseline+20% (${w.toFixed(3)} x ${h.toFixed(3)}), none found`);
     ok('a door skin with a per-asset oversize % adds on top of the baseline');
   } catch(e){ bad('door skin: per-asset oversize adds to baseline', e); }
+
+  // 77. The door skin panel sits ~1cm proud of the wall's own face (not
+  //     coplanar with it) -- avoids z-fighting with the wall material where
+  //     an oversized/non-rectangular skin's edges would otherwise overlap
+  //     solid wall at the exact same depth, which read as the door being
+  //     "sunk into" the wall.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    const size = await appX.page.evaluate((rk) => window.__threeTestEdit.roomSize(rk), roomKey);
+    const doorPanel = await appX.page.evaluate(() => {
+      const m = window.__threeTestEdit.meshes().find(m => m.kind === 'door-panel');
+      return m ? { x: m.x, y: m.y, z: m.z, wall: m.wall } : null;
+    });
+    assert(doorPanel, 'expected to find a door panel mesh (test setup issue if not)');
+    const fixedFor = { north: -size.d/2, south: size.d/2, west: -size.w/2, east: size.w/2 }[doorPanel.wall];
+    const along = (doorPanel.wall === 'north' || doorPanel.wall === 'south') ? doorPanel.z : doorPanel.x;
+    const offset = (doorPanel.wall === 'north' || doorPanel.wall === 'west') ? along - fixedFor : fixedFor - along;
+    assert(Math.abs(offset - 0.01) < 0.001,
+      `expected the door panel ~1cm proud of the wall (${doorPanel.wall}), got offset ${offset.toFixed(4)}`);
+    ok('door skin panel sits 1cm proud of the wall face, not coplanar with it');
+  } catch(e){ bad('door skin: forward offset off the wall face', e); }
 } finally {
   await appX.close();
 }

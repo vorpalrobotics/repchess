@@ -3414,14 +3414,26 @@ function makeDoorPanelMesh(asset){
   });
   return mesh;
 }
+// A door skin sitting exactly flush with the wall's own face plane
+// z-fights with the wall material at every point the oversize margin
+// overlaps solid wall (see DOOR_SKIN_BASE_OVERSIZE) -- the two coplanar
+// surfaces flicker/clip against each other there instead of the door
+// skin cleanly covering it, which reads as the door being "sunk into"
+// the wall. Standing it 1cm proud of the wall face (toward the room,
+// same direction/sign convention buildDoorMarker's clearance already
+// uses) puts the whole panel unambiguously in front, so every detail
+// -- including the oversized edges -- renders cleanly.
+const DOOR_SKIN_FORWARD_OFFSET = 0.01;
 function buildDoorPanel(size, wall, offset, asset){
   const mesh = makeDoorPanelMesh(asset);
+  mesh.userData = { kind: 'door-panel', wall };
   const { fixed } = wallSpan(size, wall);
   const y = DOOR_H/2;
-  if(wall === 'north'){ mesh.position.set(offset, y, fixed); mesh.rotation.y = 0; }
-  if(wall === 'south'){ mesh.position.set(offset, y, fixed); mesh.rotation.y = Math.PI; }
-  if(wall === 'west'){  mesh.position.set(fixed, y, offset); mesh.rotation.y = Math.PI/2; }
-  if(wall === 'east'){  mesh.position.set(fixed, y, offset); mesh.rotation.y = -Math.PI/2; }
+  const f = DOOR_SKIN_FORWARD_OFFSET;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed + f); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed - f); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + f, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - f, y, offset); mesh.rotation.y = -Math.PI/2; }
   return mesh;
 }
 let doorMarkerMat = null;
