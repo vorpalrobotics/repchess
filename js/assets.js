@@ -1031,11 +1031,19 @@ export function cropImage(sourceDataUrl){
       if(eraseMode) setEraseMode(false);   // mutually exclusive tool modes
       initBrushCanvas();
       brushCanvas.style.display = 'block';
+      // the still-unmodified <img> sits directly behind the canvas -- a
+      // punched-out (transparent) hole in the canvas would otherwise just
+      // reveal the SAME un-erased pixel from the img underneath, so nothing
+      // visibly changes until commitBrushCanvas() later updates img itself.
+      // Hiding it lets a hole reveal the checkered stage background instead,
+      // live, the same way the flood-fill bucket tool already shows erasure.
+      img.style.visibility = 'hidden';
       img.style.cursor = 'none';
     } else {
       commitBrushCanvas();
       brushCanvas.style.display = 'none';
       brushCursor.style.display = 'none';
+      img.style.visibility = '';
       img.style.cursor = '';
     }
     brushMode = on;

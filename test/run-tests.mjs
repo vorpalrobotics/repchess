@@ -2426,6 +2426,32 @@ try {
     ok('brush erase: a click punches a transparent circle of the slider\'s diameter, nothing more');
   } catch(e){ bad('crop editor: brush erase punches the correct-radius circle', e); }
 
+  // 78b. Regression: erasing must be visible AS you drag, not only after
+  //      committing (Crop/Save). The still-unmodified <img> sits directly
+  //      behind the brush canvas -- a punched hole in the canvas used to just
+  //      reveal the SAME un-erased pixel from the img underneath, so nothing
+  //      appeared to happen until commitBrushCanvas() later updated the img
+  //      itself. The fix hides the img for the duration of brush mode so a
+  //      hole reveals the checkered stage backdrop live instead.
+  try {
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    const beforeBrush = await appAB.page.evaluate(() => document.getElementById('cropImg').style.visibility);
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    const duringBrush = await appAB.page.evaluate(() => document.getElementById('cropImg').style.visibility);
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());   // toggle back off
+    const afterBrush = await appAB.page.evaluate(() => document.getElementById('cropImg').style.visibility);
+    assert(beforeBrush !== 'hidden', `expected the image visible before entering brush mode, got visibility=${beforeBrush}`);
+    assert(duringBrush === 'hidden', `expected the image hidden WHILE brush mode is active (so a hole shows the checkered backdrop, not the stale image), got visibility=${duringBrush}`);
+    assert(afterBrush !== 'hidden', `expected the image visible again after leaving brush mode, got visibility=${afterBrush}`);
+    ok('brush erase gives live visual feedback: the stale image is hidden behind the canvas while brushing');
+    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => window.__cropTestHooks.result());
+  } catch(e){ bad('crop editor: brush erase shows live feedback while dragging', e); }
+
   // 78. The round cursor indicator tracks the pointer and is sized to the
   //     CURRENT slider value (scaled to display pixels), so the user can see
   //     the brush's real footprint before clicking.
