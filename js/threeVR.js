@@ -488,6 +488,12 @@ let inputLocked = false;       // true while a picker is open (suppresses moveme
 let foreignModalOpen = false;  // true while a modal outside threeTest (e.g. the asset manager) covers the canvas
 let LAYOUT = {};
 let ASSET_BY_ID = {};
+// "memorized" room tracking (progress, not decoration): { [roomKey]: msEpochWhenMarked }.
+// Persisted the same way as LAYOUT -- a flat 'meta' key, room keys are the
+// same cas:<instanceId>:<posKey> strings, so it survives regeneration and is
+// shared across nested/linked castles for free, exactly like LAYOUT already is.
+const MEMORIZED_KEY = 'threeMemorizedRooms';
+let MEMORIZED = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
@@ -510,7 +516,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -973,6 +979,24 @@ async function loadLayout(){
   catch { LAYOUT = {}; }
 }
 function persistLayout(){ setMeta(LAYOUT_KEY, JSON.stringify(LAYOUT)); }
+
+async function loadMemorized(){
+  const raw = await getMeta(MEMORIZED_KEY);
+  try { MEMORIZED = raw ? JSON.parse(raw) : {}; }
+  catch { MEMORIZED = {}; }
+}
+function persistMemorized(){ setMeta(MEMORIZED_KEY, JSON.stringify(MEMORIZED)); }
+// Toggles the CURRENT room's memorized flag. No-op outside a real castle room
+// (currentRoomFen() is null on mainStreet/buildings) -- the toolbar icon that
+// calls this is hidden there for the same reason. No scene rebuild needed:
+// nothing in the 3D scene itself depends on this flag, only the toolbar icon.
+function toggleMemorized(){
+  if(!currentRoomFen()) return;
+  if(MEMORIZED[currentRoomKey]) delete MEMORIZED[currentRoomKey];
+  else MEMORIZED[currentRoomKey] = Date.now();
+  persistMemorized();
+  updateToolbar();
+}
 
 function ensureRoomLayout(roomKey){
   if(!LAYOUT[roomKey]) LAYOUT[roomKey] = {};
@@ -5218,12 +5242,13 @@ function buildTopToolbar(){
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
   boardBtn    = makeIconBtn('fa-chess-board',    'Show this room’s board position', () => toggleMiniBoard());
+  memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
   wallListsBtn = makeIconBtn('fa-list-ol',        'Wall object lists', () => openWallListsDialog(currentRoomKey));
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
-  left.append(hintsBtn, editBtn, boardBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
+  left.append(hintsBtn, editBtn, boardBtn, memBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
   bar.append(left, closeBtn);
   return bar;
 }
@@ -5249,6 +5274,13 @@ function updateToolbar(){
     boardBtn.style.display = currentRoomFen() ? '' : 'none';
     const open = !!document.getElementById('miniBoardOverlay') && document.getElementById('miniBoardOverlay').style.display === 'flex';
     boardBtn.style.background = open ? 'rgba(21,101,192,.92)' : 'rgba(28,38,58,.78)';
+  }
+  // same gate boardBtn uses -- only real castle rooms have a position to memorize
+  if(memBtn){
+    memBtn.style.display = currentRoomFen() ? '' : 'none';
+    const on = !!MEMORIZED[currentRoomKey];
+    memBtn.style.background = on ? 'rgba(56,142,60,.92)' : 'rgba(28,38,58,.78)';
+    memBtn.title = on ? 'Memorized -- click to unmark' : 'Mark this room memorized';
   }
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
@@ -6181,6 +6213,7 @@ export async function openThreeTest(containerEl, opts){
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
   await loadLayout();
+  await loadMemorized();
   await refreshAssetMap();
   await refreshObjectLists();
 
@@ -6259,6 +6292,16 @@ export async function openThreeTest(containerEl, opts){
       toggle: () => setEditMode(!editMode),
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
+      // "memorized" toggle (Phase 1): drives the real toggleMemorized()/toolbar
+      // state so a test doesn't need to click the actual button DOM element.
+      memorized: () => MEMORIZED[currentRoomKey] || null,
+      toggleMemorized: () => toggleMemorized(),
+      setMemorized: (key, val) => {
+        if(val) MEMORIZED[key] = Date.now(); else delete MEMORIZED[key];
+        persistMemorized();
+        updateToolbar();
+      },
+      memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map) }); } }); return out; },
       entry: () => entryPoint,
@@ -6388,7 +6431,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;

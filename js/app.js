@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-80';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-81';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-63';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-98';
+const BUILD_TAG = '-99';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3453,6 +3453,7 @@ async function exportBackup(){
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
+    memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
     assets: await getAllAssets(),
     objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
@@ -3512,6 +3513,7 @@ async function importBackup(data){
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
+  if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);

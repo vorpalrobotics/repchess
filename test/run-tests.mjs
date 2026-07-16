@@ -2138,5 +2138,77 @@ try {
   await appX.close();
 }
 
+// --- Phase Y: "memorized" room toggle (VR toolbar icon) -- hidden outside
+//     real castle rooms, persisted to IDB per room, survives a full reload. ---
+const appY = await launchApp();
+try {
+  const keys = await appY.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appY.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await openVR(appY.page);
+
+  // 68. mainStreet has no chess position -- the memorized icon is hidden there
+  //     (same gate the board-position icon already uses).
+  try {
+    const style = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(style && style.display === 'none', `expected the memorized icon hidden on mainStreet, got ${JSON.stringify(style)}`);
+    ok('memorized icon is hidden outside real castle rooms (mainStreet)');
+  } catch(e){ bad('memorized icon hidden on mainStreet', e); }
+
+  // 69. Toggling in a real castle room shows/persists the flag and restyles
+  //     the icon; toggling again clears it.
+  try {
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    const styleBefore = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(styleBefore && styleBefore.display !== 'none', 'expected the memorized icon visible in a real castle room');
+    const before = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(!before, `expected the room to start unmemorized, got ${JSON.stringify(before)}`);
+
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const after = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(after, 'expected the room to be memorized after toggling');
+    const styleOn = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(styleOn.background !== styleBefore.background, "expected the icon's background to change once memorized");
+
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const cleared = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(!cleared, `expected toggling again to clear it, got ${JSON.stringify(cleared)}`);
+    ok('memorized toggle sets/clears per room and restyles the icon');
+  } catch(e){ bad('memorized toggle sets/clears per room', e); }
+
+  // 70. Marking a room memorized round-trips through real IndexedDB and
+  //     survives a full page reload (not just the in-memory MEMORIZED map).
+  try {
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    assert(await appY.page.evaluate(() => window.__threeTestEdit.memorized()), 'setup: room not memorized before reload');
+
+    await appY.page.reload({ waitUntil: 'domcontentloaded' });
+    await appY.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appY.page);
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    const survived = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(survived, `expected the memorized flag to survive a reload, got ${JSON.stringify(survived)}`);
+    ok('memorized flag persists in IndexedDB and survives a full reload');
+  } catch(e){ bad('memorized flag survives reload (real IDB round-trip)', e); }
+} finally {
+  await appY.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
