@@ -114,6 +114,18 @@ const ROOMS = {
 
 const DOOR_W = 2.2;
 const DOOR_H = 2.6;
+// Door skin art often isn't a perfectly rectangular door leaf -- columns,
+// bases, or a frame can extend past the plain-rectangle bounding box the
+// wall's opening is cut to. A door panel textured at exactly DOOR_W x DOOR_H
+// then leaves any transparent margin inside the image sitting INSIDE the
+// opening, showing the wall/bricks behind it through the gap. Rendering the
+// panel slightly larger than the opening lets that margin (if any) bleed
+// onto the surrounding wall instead, hiding the seam -- harmless for a
+// perfectly-rectangular asset (reads as a normal door casing/trim) and a
+// real fix for one that isn't. DOOR_SKIN_BASE_OVERSIZE is a small default
+// applied to every door; a per-asset `oversizePct` (Asset Manager, door
+// skins only) adds on top for assets that need more.
+const DOOR_SKIN_BASE_OVERSIZE = 0.03;   // 3%, applied to every door skin
 const WALL_THICK = 0.25;
 const EYE_HEIGHT = 1.6;
 const STAIR_STEP_RISE = 0.2;  // a stair-exit corridor's climbing steps, in meters
@@ -3360,13 +3372,15 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   return mesh;
 }
 
-// A cosmetic textured panel filling a doorway opening (DOOR_W x DOOR_H),
-// double-sided since the same opening is approached from both rooms it
-// connects. Only built when a door asset is assigned -- otherwise the
-// doorway stays the open gap it always was.
+// A cosmetic textured panel filling a doorway opening (DOOR_W x DOOR_H, plus
+// the oversize margin -- see DOOR_SKIN_BASE_OVERSIZE), double-sided since the
+// same opening is approached from both rooms it connects. Only built when a
+// door asset is assigned -- otherwise the doorway stays the open gap it
+// always was.
 function makeDoorPanelMesh(asset){
+  const oversize = DOOR_SKIN_BASE_OVERSIZE + (Number(asset.oversizePct) || 0) / 100;
   const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W, DOOR_H), mat);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * (1 + oversize), DOOR_H * (1 + oversize)), mat);
   const myGeneration = buildGeneration;
   textureLoader.load(asset.image, (tex) => {
     if(buildGeneration !== myGeneration) return;
@@ -6264,6 +6278,24 @@ export async function openThreeTest(containerEl, opts){
       // apply a room geometry resize exactly as the room-geometry dialog's Apply
       // button does (same setRoomGeom call), for testing the bounds auto-fix.
       resize: (roomKey, geom) => setRoomGeom(roomKey, geom),
+      // assigns `assetId` to EVERY door in `roomKey` and rebuilds it -- for
+      // testing door skin oversizing without needing to compute a specific
+      // door's exact wall/offset key by hand. Mutates LAYOUT directly and
+      // does a single refreshAssetMap()+buildRoom() pass (rather than calling
+      // setDoorOverride per door, each of which fires its own applyEdit ->
+      // refreshAssetMap that SYNCHRONOUSLY empties ASSET_BY_ID before its
+      // async re-populate resolves): with more than one door, those calls'
+      // empty windows can overlap a rebuild and drop every door's asset.
+      setAllDoorAssets: async (roomKey, assetId) => {
+        const r = mergedRoom(roomKey);
+        if(!r || !r.exits || !r.exits.length) return false;
+        const layout = ensureRoomLayout(roomKey);
+        for(const ex of r.exits) layout.doors[doorKey(ex.wall, ex.offset)] = assetId;
+        persistLayout();
+        await refreshAssetMap();
+        buildRoom(currentRoomKey);
+        return true;
+      },
       // the room's EFFECTIVE size (static + any LAYOUT.geom override folded
       // in, same accessor every real read site uses) -- for testing that
       // mainStreet's auto-computed minimum can't be shrunk by a stale override.

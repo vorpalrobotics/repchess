@@ -326,7 +326,11 @@ function renderTypeFields(type, a){
   } else if(kind === 'door'){
     box.innerHTML = `
       <p class="asset-hint">Skins an interior doorway panel (2.2m × 2.6m). The image
-      is stretched to fill the opening and is visible from both sides.</p>
+      is stretched to fill the opening and is visible from both sides. Every door skin
+      already renders 3% larger than the opening so a normal rectangular door hides its
+      own seam; if this asset has art (columns, a base) that extends past its own plain
+      rectangle and still shows a gap, add extra oversize here on top of that.</p>
+      <div class="field"><label>Extra oversize (%)</label><input type="number" step="1" min="0" id="assetOversizePct" value="${(a && a.oversizePct) || 0}"></div>
     `;
   } else {
     box.innerHTML = `
@@ -1053,7 +1057,7 @@ function readTypeFields(type){
     };
   }
   if(type === 'sign') return { size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 } };
-  if(type === 'door') return {};
+  if(type === 'door') return { oversizePct: Number($('assetOversizePct').value) || 0 };
   return {
     repeatPerMeter: Number($('assetRepeatPerMeter').value)||0,
     rotation: Number($('assetRotation').value)||0,
@@ -1118,7 +1122,8 @@ function assetToJson(a){
   } else if(a.type === 'sign'){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'door'){
-    // no extra fields — fixed-size panel, image is the whole skin
+    // fixed-size panel, image is the whole skin -- oversizePct only when set
+    if(a.oversizePct) json.oversizePct = a.oversizePct;
   } else {
     Object.assign(json, { repeatPerMeter: a.repeatPerMeter, rotation: a.rotation, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
   }

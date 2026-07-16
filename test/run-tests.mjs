@@ -2063,5 +2063,80 @@ try {
   await appW2.close();
 }
 
+// --- Phase X: door skin oversizing -- every door renders slightly larger
+//     than its opening (hides a non-rectangular asset's transparent margin
+//     from showing the wall behind it), and a per-asset "extra oversize %"
+//     adds on top of that baseline. ---
+const appX = await launchApp();
+try {
+  // the entry branches (e6 / g6) so it's a real junction with a rendered door --
+  // a single reply collapses into a doorless "corridor" room (an internal link,
+  // no separate door mesh), same reason Phase C's nested-castle test branches.
+  await seedBackup(appX.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'door-plain', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+      { id: 'door-columns', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=', oversizePct: 20 },
+    ],
+  });
+  await appX.page.click('.line-row');
+  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appX.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appX.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appX.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appX.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appX.page.waitForTimeout(400);
+
+  const DOOR_W = 2.2, DOOR_H = 2.6;
+
+  // 66. A plain door skin (no oversizePct) still renders larger than the
+  //     opening -- the 3% baseline applied to every door.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    const assigned = await appX.page.evaluate(
+      ({ rk, id }) => window.__threeTestEdit.setAllDoorAssets(rk, id), { rk: roomKey, id: 'door-plain' });
+    assert(assigned, 'setAllDoorAssets could not find a door in the entry room (test setup issue if not)');
+    await appX.page.waitForTimeout(300);
+    const w = DOOR_W * 1.03, h = DOOR_H * 1.03;
+    const found = await appX.page.evaluate(({ w, h }) => {
+      const m = window.__threeTestEdit.meshes().find(m =>
+        m.type === 'PlaneGeometry' && Math.abs(m.params.width - w) < 0.01 && Math.abs(m.params.height - h) < 0.01);
+      return !!m;
+    }, { w, h });
+    assert(found, `expected a door panel at the 3% baseline size (${w.toFixed(3)} x ${h.toFixed(3)}), none found`);
+    ok('a plain (perfectly-rectangular) door skin still renders at the 3% baseline oversize');
+  } catch(e){ bad('door skin: baseline oversize applied by default', e); }
+
+  // 67. A door skin with a per-asset oversizePct adds on top of the baseline.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    await appX.page.evaluate(
+      ({ rk, id }) => window.__threeTestEdit.setAllDoorAssets(rk, id), { rk: roomKey, id: 'door-columns' });
+    await appX.page.waitForTimeout(300);
+    const w = DOOR_W * 1.23, h = DOOR_H * 1.23;   // 3% baseline + 20% asset override
+    const found = await appX.page.evaluate(({ w, h }) => {
+      const m = window.__threeTestEdit.meshes().find(m =>
+        m.type === 'PlaneGeometry' && Math.abs(m.params.width - w) < 0.01 && Math.abs(m.params.height - h) < 0.01);
+      return !!m;
+    }, { w, h });
+    assert(found, `expected a door panel oversized by baseline+20% (${w.toFixed(3)} x ${h.toFixed(3)}), none found`);
+    ok('a door skin with a per-asset oversize % adds on top of the baseline');
+  } catch(e){ bad('door skin: per-asset oversize adds to baseline', e); }
+} finally {
+  await appX.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
