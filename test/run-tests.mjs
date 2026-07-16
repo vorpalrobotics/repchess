@@ -1957,5 +1957,258 @@ try {
   await app22.close();
 }
 
+// --- Phase W: room-info modal (click a graph node) -- move-number badge on
+//     the exit rows' thumbnails, and the exits list scrolls independently so
+//     a long list of replies can never push the Close button off-screen. ---
+const appW1 = await launchApp();
+try {
+  await seedBackup(appW1.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+    mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await appW1.page.click('.line-row');
+  await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  // 63. A White-repertoire room's exit rows are the OPPONENT's (Black's)
+  //     replies -- never numbered, same rule plyLabel already applies to
+  //     Black moves everywhere else. This room's Nf6 exit has an image.
+  try {
+    const rootFen = await appW1.page.evaluate(() => {
+      const c = new Chess(); c.move('d4', { sloppy: true });
+      return c.fen();
+    });
+    const opened = await appW1.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), rootFen);
+    assert(opened, 'could not open room info for the d4 room');
+    await appW1.page.waitForFunction(() => document.getElementById('roomInfoOverlay').style.display === 'flex', { timeout: 5000 });
+    const hasImg = await appW1.page.evaluate(() => !!document.querySelector('#roomInfoExits .room-info-img'));
+    const hasBadge = await appW1.page.evaluate(() => !!document.querySelector('#roomInfoExits .room-info-num'));
+    assert(hasImg, 'expected the Nf6 exit row to render its mnemonic image (test setup issue if not)');
+    assert(hasBadge === false, `a Black-move exit row should never show the "N." badge, but found one`);
+    ok('room-info exits: a White line\'s Black-move replies never show the move-number badge');
+  } catch(e){ bad('room-info exits: no badge on Black-move replies', e); }
+} finally {
+  await appW1.close();
+}
+
+const appW2 = await launchApp();
+try {
+  // a Black-repertoire room's exit rows are the OPPONENT's (White's) replies
+  // -- these DO get numbered. Twenty distinct replies from 1...e5, so the
+  // exits list is long enough to actually overflow a constrained modal.
+  const whiteReplies = ['Nf3','Nc3','Bc4','Bb5','d4','f4','c3','d3','Qh5','Qf3',
+                         'Ne2','Na3','Nh3','g3','g4','h3','h4','a3','a4','b3'];
+  const games = whiteReplies.map((m, i) => ({ id: `g${i}`, moves: `e4 e5 ${m} Nc6`, white: 'a', black: 'b', result: '*' }));
+  await seedBackup(appW2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L2', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+      { seq: ['e4'], reply: 'e5' },
+    ]}],
+    games,
+    mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await appW2.page.click('.line-row');
+  await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  let roomFen;
+  try {
+    roomFen = await appW2.page.evaluate(() => {
+      const c = new Chess(); c.move('e4', { sloppy: true }); c.move('e5', { sloppy: true });
+      return c.fen();
+    });
+    const opened = await appW2.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), roomFen);
+    assert(opened, 'could not open room info for the e4 e5 room');
+    await appW2.page.waitForFunction(() => document.getElementById('roomInfoOverlay').style.display === 'flex', { timeout: 5000 });
+
+    // 64. White's reply (2.Nf3, the one with an image) shows a "2." badge
+    //     glued to its thumbnail.
+    const badgeText = await appW2.page.evaluate(() => {
+      const el = document.querySelector('#roomInfoExits .room-info-num');
+      return el ? el.textContent : null;
+    });
+    assert(badgeText === '2.', `expected a "2." badge on the White reply, got ${JSON.stringify(badgeText)}`);
+    ok('room-info exits: a Black line\'s White-move replies show the "N." badge on the thumbnail');
+  } catch(e){ bad('room-info exits: numbered badge on White-move replies', e); }
+
+  // 65. Twenty exit rows overflow the constrained modal -- the exits list
+  //     scrolls independently (overflow-y) and the Close button stays fully
+  //     on-screen instead of being pushed past the viewport (the originally-
+  //     reported bug: an unconstrained modal could grow past the fold,
+  //     leaving no way to close it without scrolling the whole page).
+  try {
+    const layout = await appW2.page.evaluate(() => {
+      const exits = document.getElementById('roomInfoExits');
+      const closeBtn = document.getElementById('roomInfoCloseBtn');
+      const r = closeBtn.getBoundingClientRect();
+      return {
+        overflowY: getComputedStyle(exits).overflowY,
+        overflowing: exits.scrollHeight > exits.clientHeight,
+        closeTop: r.top, closeBottom: r.bottom, innerHeight: window.innerHeight,
+      };
+    });
+    assert(layout.overflowY === 'auto' || layout.overflowY === 'scroll',
+      `expected the exits list to be independently scrollable, got overflow-y=${layout.overflowY}`);
+    assert(layout.overflowing,
+      `expected 20 exit rows to overflow the constrained exits list (test setup issue if not): ${JSON.stringify(layout)}`);
+    assert(layout.closeTop >= 0 && layout.closeBottom <= layout.innerHeight,
+      `Close button was pushed outside the viewport: ${JSON.stringify(layout)}`);
+    ok('room-info modal: a long exits list scrolls independently, keeping the Close button on-screen');
+  } catch(e){ bad('room-info modal: exits list scrolls, Close button stays visible', e); }
+} finally {
+  await appW2.close();
+}
+
+// --- Phase X: door skin oversizing -- every door renders slightly larger
+//     than its opening (hides a non-rectangular asset's transparent margin
+//     from showing the wall behind it), and a per-asset "extra oversize %"
+//     adds on top of that baseline. ---
+const appX = await launchApp();
+try {
+  // the entry branches (e6 / g6) so it's a real junction with a rendered door --
+  // a single reply collapses into a doorless "corridor" room (an internal link,
+  // no separate door mesh), same reason Phase C's nested-castle test branches.
+  await seedBackup(appX.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'door-plain', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+      { id: 'door-columns', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=', oversizePct: 20 },
+    ],
+  });
+  await appX.page.click('.line-row');
+  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appX.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appX.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appX.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appX.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appX.page.waitForTimeout(400);
+
+  const DOOR_W = 2.2, DOOR_H = 2.6;
+
+  // 66. A plain door skin (no oversizePct) still renders larger than the
+  //     opening -- the 3% baseline applied to every door.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    const assigned = await appX.page.evaluate(
+      ({ rk, id }) => window.__threeTestEdit.setAllDoorAssets(rk, id), { rk: roomKey, id: 'door-plain' });
+    assert(assigned, 'setAllDoorAssets could not find a door in the entry room (test setup issue if not)');
+    await appX.page.waitForTimeout(300);
+    const w = DOOR_W * 1.03, h = DOOR_H * 1.03;
+    const found = await appX.page.evaluate(({ w, h }) => {
+      const m = window.__threeTestEdit.meshes().find(m =>
+        m.type === 'PlaneGeometry' && Math.abs(m.params.width - w) < 0.01 && Math.abs(m.params.height - h) < 0.01);
+      return !!m;
+    }, { w, h });
+    assert(found, `expected a door panel at the 3% baseline size (${w.toFixed(3)} x ${h.toFixed(3)}), none found`);
+    ok('a plain (perfectly-rectangular) door skin still renders at the 3% baseline oversize');
+  } catch(e){ bad('door skin: baseline oversize applied by default', e); }
+
+  // 67. A door skin with a per-asset oversizePct adds on top of the baseline.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    await appX.page.evaluate(
+      ({ rk, id }) => window.__threeTestEdit.setAllDoorAssets(rk, id), { rk: roomKey, id: 'door-columns' });
+    await appX.page.waitForTimeout(300);
+    const w = DOOR_W * 1.23, h = DOOR_H * 1.23;   // 3% baseline + 20% asset override
+    const found = await appX.page.evaluate(({ w, h }) => {
+      const m = window.__threeTestEdit.meshes().find(m =>
+        m.type === 'PlaneGeometry' && Math.abs(m.params.width - w) < 0.01 && Math.abs(m.params.height - h) < 0.01);
+      return !!m;
+    }, { w, h });
+    assert(found, `expected a door panel oversized by baseline+20% (${w.toFixed(3)} x ${h.toFixed(3)}), none found`);
+    ok('a door skin with a per-asset oversize % adds on top of the baseline');
+  } catch(e){ bad('door skin: per-asset oversize adds to baseline', e); }
+} finally {
+  await appX.close();
+}
+
+// --- Phase Y: "memorized" room toggle (VR toolbar icon) -- hidden outside
+//     real castle rooms, persisted to IDB per room, survives a full reload. ---
+const appY = await launchApp();
+try {
+  const keys = await appY.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appY.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await openVR(appY.page);
+
+  // 68. mainStreet has no chess position -- the memorized icon is hidden there
+  //     (same gate the board-position icon already uses).
+  try {
+    const style = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(style && style.display === 'none', `expected the memorized icon hidden on mainStreet, got ${JSON.stringify(style)}`);
+    ok('memorized icon is hidden outside real castle rooms (mainStreet)');
+  } catch(e){ bad('memorized icon hidden on mainStreet', e); }
+
+  // 69. Toggling in a real castle room shows/persists the flag and restyles
+  //     the icon; toggling again clears it.
+  try {
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    const styleBefore = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(styleBefore && styleBefore.display !== 'none', 'expected the memorized icon visible in a real castle room');
+    const before = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(!before, `expected the room to start unmemorized, got ${JSON.stringify(before)}`);
+
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const after = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(after, 'expected the room to be memorized after toggling');
+    const styleOn = await appY.page.evaluate(() => window.__threeTestEdit.memBtnStyle());
+    assert(styleOn.background !== styleBefore.background, "expected the icon's background to change once memorized");
+
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const cleared = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(!cleared, `expected toggling again to clear it, got ${JSON.stringify(cleared)}`);
+    ok('memorized toggle sets/clears per room and restyles the icon');
+  } catch(e){ bad('memorized toggle sets/clears per room', e); }
+
+  // 70. Marking a room memorized round-trips through real IndexedDB and
+  //     survives a full page reload (not just the in-memory MEMORIZED map).
+  try {
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    await appY.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    assert(await appY.page.evaluate(() => window.__threeTestEdit.memorized()), 'setup: room not memorized before reload');
+
+    await appY.page.reload({ waitUntil: 'domcontentloaded' });
+    await appY.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appY.page);
+    await appY.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await appY.page.waitForTimeout(200);
+    const survived = await appY.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(survived, `expected the memorized flag to survive a reload, got ${JSON.stringify(survived)}`);
+    ok('memorized flag persists in IndexedDB and survives a full reload');
+  } catch(e){ bad('memorized flag survives reload (real IDB round-trip)', e); }
+} finally {
+  await appY.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
