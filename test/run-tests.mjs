@@ -1260,6 +1260,36 @@ try {
     assert(emptyHtml.includes('not available'), `expected "not available" for a node with no saved eval, got: ${emptyHtml}`);
     ok('evalContinuationHtml renders all saved lines, falls back for a single eval, and handles none saved');
   } catch(e){ bad('eval: continuation display', e); }
+
+  // 38b. Each rendered variation (both the multi-line rows and the single-eval
+  //      span) gets its own "Import this variation" menu button, indexed so
+  //      the click handler can re-fetch the right saved line -- but only when
+  //      it actually carries a UCI PV to import from (a legacy pv-only eval,
+  //      saved before pvUci existed, gets no button since there'd be nothing
+  //      for the importer to replay).
+  try {
+    const multiHtml = await app14.page.evaluate((saved) =>
+      window.__evalTestHooks.evalContinuationHtml(saved, []), multi);
+    const idxs = [...multiHtml.matchAll(/data-pv-idx="(-?\d+)"/g)].map(m => m[0]);
+    assert(idxs.length === 3, `expected an import menu button beside each of the 3 saved lines, got ${idxs.length} in: ${multiHtml}`);
+    assert(multiHtml.includes('data-pv-idx="0"') && multiHtml.includes('data-pv-idx="1"') && multiHtml.includes('data-pv-idx="2"'),
+      `expected menu buttons indexed 0/1/2 matching evalLines order, got: ${multiHtml}`);
+
+    const singleHtml = await app14.page.evaluate((saved) =>
+      window.__evalTestHooks.evalContinuationHtml(saved, []), { eval: multi.eval });
+    assert((singleHtml.match(/meta-pv-menu/g) || []).length === 1 && singleHtml.includes('data-pv-idx="-1"'),
+      `expected exactly one import menu button (idx -1) for the single-eval case, got: ${singleHtml}`);
+
+    // legacy: an eval with a saved SAN pv but no pvUci (predates PV-UCI
+    // storage) still displays via pvChipsFromSan, but must NOT offer an
+    // import menu -- there's no UCI to replay.
+    const legacyHtml = await app14.page.evaluate((saved) =>
+      window.__evalTestHooks.evalContinuationHtml(saved, []),
+      { eval: { type: 'cp', value: 10, depth: 20, pv: '1.d4 d5' } });
+    assert(!legacyHtml.includes('meta-pv-menu'),
+      `expected no import menu for a legacy eval with no pvUci, got: ${legacyHtml}`);
+    ok('evalContinuationHtml offers an "Import this variation" menu per line, only when a UCI PV is available');
+  } catch(e){ bad('eval: continuation import menu buttons', e); }
 } finally {
   await app14.close();
 }
@@ -2827,6 +2857,64 @@ try {
   } catch(e){ bad('VR overlay z-index stacks above the digraph overlay left open underneath', e); }
 } finally {
   await appAF.close();
+}
+
+// --- Phase AG: "Import this variation" from a saved eval's expanded PV in
+//     the move table -- mirrors the live engine panel's own pvMenu ->
+//     "Import this variation" (see importEngineVariation/renderEngineLines),
+//     reusing the exact same import core, just triggered from a saved
+//     (not live) line. ---
+const appAG = await launchApp();
+try {
+  const midFen = await appAG.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+  const evalLines = [
+    { type: 'cp', value: 35, depth: 20, pv: '2.c4 e6', pvFen: midFen, pvUci: ['c2c4','e7e6'] },
+    { type: 'cp', value: 20, depth: 18, pv: '2.Nf3 d5', pvFen: midFen, pvUci: ['g1f3','d7d5'] },
+  ];
+  await seedBackup(appAG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], eval: evalLines[0], evalLines },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await appAG.page.click('.line-row');
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+  await appAG.page.waitForSelector(rowSel, { timeout: 10000 });
+
+  // 96. Expanding the saved eval (tapping its badge) shows an import
+  //     (three-dot) menu button beside EACH of the two saved lines.
+  try {
+    await appAG.page.evaluate((sel) => document.querySelector(`${sel} .evaltag`).click(), rowSel);
+    await appAG.page.waitForSelector(`${rowSel} + tr.meta-row .meta-pv-row`, { timeout: 5000 });
+    const menuCount = await appAG.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-pv-menu').length, rowSel);
+    assert(menuCount === 2, `expected an import menu button beside each of the 2 saved lines, got ${menuCount}`);
+    ok('expanding a multi-line saved eval shows an "Import this variation" menu beside each line');
+  } catch(e){ bad('eval continuation: import menu per saved line', e); }
+
+  // 97. Clicking the first line's menu, then "Import this variation" in the
+  //     popup, writes it into the tree -- the same importParsedLine core the
+  //     paste-import UI (test 7) and the live engine panel both delegate to.
+  try {
+    await appAG.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelector('.meta-pv-menu[data-pv-idx="0"]').click(), rowSel);
+    await appAG.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    const label = await appAG.page.textContent('#graphCtxMenu div');
+    assert(/Import this variation/.test(label || ''), `expected an "Import this variation" menu item, got ${JSON.stringify(label)}`);
+    await appAG.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    await appAG.page.waitForFunction((sel) => {
+      const row = document.querySelector(sel);
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
+    }, rowSel, { timeout: 10000 });
+    ok('"Import this variation" from a saved eval line writes it into the tree');
+  } catch(e){ bad('eval continuation: import this variation writes into tree', e); }
+} finally {
+  await appAG.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

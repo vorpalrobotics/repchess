@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-106';
+const BUILD_TAG = '-107';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2245,6 +2245,19 @@ const MOVE_QUALITY_CLASS = {
 };
 const moveQualityFor = (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.moveQuality || '';
 
+/* a "More" three-dot menu (mirrors the live engine panel's own pvMenu
+   button/icon) offering "Import this variation" for one saved PV -- idx -1
+   for the single-eval case, else its index into evalLines. Only rendered
+   when there's a real UCI PV to import from (canImport's "line.pvUci"
+   half) and an open opening system to import into (its "CURRENT_LINE"
+   half) -- same two-part gate importEngineVariation's own caller uses,
+   just checked per-line here since evalContinuationHtml can render several.
+   wireEvalContinuationMenus (below) attaches the click handler after this
+   HTML is inserted into the DOM. */
+function pvImportMenuHtml(idx, pvUci){
+  if(!CURRENT_LINE || !pvUci?.length) return '';
+  return `<button class="iconbtn pvMenu meta-pv-menu" data-pv-idx="${idx}" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>`;
+}
 /* the saved eval's PV as tappable move chips: one line when only a
    single-line (MultiPV=1) analysis produced it (unchanged from before
    evalLines existed), or one row per line -- each with its own eval badge,
@@ -2260,15 +2273,38 @@ function evalContinuationHtml(saved, lineSeq){
     const startFen = ev.pvFen || fenForSeq(lineSeq);
     const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
       || pvChipsFromSan(startFen, ev.pv);
-    return `<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+    return `${pvImportMenuHtml(-1, ev.pvUci)}<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
   }
-  return lines.map(line => {
+  return lines.map((line, idx) => {
     const startFen = line.pvFen || fenForSeq(lineSeq);
     const chips = (line.pvUci?.length && pvChipsFromUci(startFen, line.pvUci, line.pvUci.length))
       || pvChipsFromSan(startFen, line.pv);
     const scoreTag = `<span class="meta-pv-score ${evalClass(line, CURRENT_LINE.color)}">${formatEvalTag(line)}</span>`;
-    return `<div class="meta-pv-row">${scoreTag}<span class="meta-pv">${chips || escapeHtml(line.pv)}</span></div>`;
+    return `<div class="meta-pv-row">${pvImportMenuHtml(idx, line.pvUci)}${scoreTag}<span class="meta-pv">${chips || escapeHtml(line.pv)}</span></div>`;
   }).join('');
+}
+// Wires up the "Import this variation" menu(s) evalContinuationHtml just
+// rendered into metaTd -- called right after metaTd.innerHTML is set,
+// alongside the mnemEl/noteEl wiring both call sites already do the same
+// way. Re-reads the line data fresh from currentSaved() rather than
+// stashing it in the DOM (same reasoning saveField's re-fetch pattern
+// uses elsewhere), so a rebuild between render and click can't hand a
+// stale PV to the importer.
+function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
+  metaTd.querySelectorAll('.meta-pv-menu').forEach(btn => {
+    const idx = parseInt(btn.dataset.pvIdx, 10);
+    btn.onclick = e => {
+      e.stopPropagation();
+      const saved = currentSaved();
+      const line = idx < 0 ? saved?.eval : saved?.evalLines?.[idx];
+      if(!line?.pvUci?.length) return;
+      const startFen = line.pvFen || fenForSeq(lineSeq);
+      showGraphCtxMenu(e.clientX || 0, e.clientY || 0, [
+        { label: '⬇ Import this variation',
+          onClick: () => importEngineVariation(lineSeq, startFen, line.pvUci, line.pvUci.length) },
+      ]);
+    };
+  });
 }
 
 /* ---------- recursive branch renderer ----------
@@ -2428,6 +2464,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
       const noteEl = metaTd.querySelector('.meta-note');
       if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
     }
     refreshMeta();
     evalSpan.onclick = () => {
@@ -2764,6 +2801,7 @@ function renderBlackRoot(parent,games,trigger){
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     const noteEl = metaTd.querySelector('.meta-note');
     if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+    wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
   }
   refreshMeta();
   evalSpan.onclick = () => {
