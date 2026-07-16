@@ -3470,14 +3470,18 @@ function makeDoorPanelMesh(asset){
 // the wall. Standing it 1cm proud of the wall face (toward the room,
 // same direction/sign convention buildDoorMarker's clearance already
 // uses) puts the whole panel unambiguously in front, so every detail
-// -- including the oversized edges -- renders cleanly.
+// -- including the oversized edges -- renders cleanly. `fixed` (wallSpan)
+// is the wall's CENTERLINE, not its visible face -- the face is
+// WALL_THICK/2 further out, same as buildDoorMarker's own clearance --
+// so the offset must clear the half-thickness too, or the panel ends up
+// buried ~(WALL_THICK/2 - offset) inside the wall instead of in front of it.
 const DOOR_SKIN_FORWARD_OFFSET = 0.01;
 function buildDoorPanel(size, wall, offset, asset){
   const mesh = makeDoorPanelMesh(asset);
   mesh.userData = { kind: 'door-panel', wall };
   const { fixed } = wallSpan(size, wall);
   const y = DOOR_H/2;
-  const f = DOOR_SKIN_FORWARD_OFFSET;
+  const f = WALL_THICK/2 + DOOR_SKIN_FORWARD_OFFSET;
   if(wall === 'north'){ mesh.position.set(offset, y, fixed + f); mesh.rotation.y = 0; }
   if(wall === 'south'){ mesh.position.set(offset, y, fixed - f); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + f, y, offset); mesh.rotation.y = Math.PI/2; }

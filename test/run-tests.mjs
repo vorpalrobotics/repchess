@@ -2148,12 +2148,16 @@ try {
       return m ? { x: m.x, y: m.y, z: m.z, wall: m.wall } : null;
     });
     assert(doorPanel, 'expected to find a door panel mesh (test setup issue if not)');
-    const fixedFor = { north: -size.d/2, south: size.d/2, west: -size.w/2, east: size.w/2 }[doorPanel.wall];
+    // wallSpan's "fixed" is the wall's CENTERLINE, not its visible face -- the
+    // face is WALL_THICK/2 further out (matches threeVR.js's own WALL_THICK).
+    const WALL_THICK = 0.25;
+    const centerlineFor = { north: -size.d/2, south: size.d/2, west: -size.w/2, east: size.w/2 }[doorPanel.wall];
+    const faceFor = centerlineFor + { north: 1, south: -1, west: 1, east: -1 }[doorPanel.wall] * (WALL_THICK/2);
     const along = (doorPanel.wall === 'north' || doorPanel.wall === 'south') ? doorPanel.z : doorPanel.x;
-    const offset = (doorPanel.wall === 'north' || doorPanel.wall === 'west') ? along - fixedFor : fixedFor - along;
+    const offset = (doorPanel.wall === 'north' || doorPanel.wall === 'west') ? along - faceFor : faceFor - along;
     assert(Math.abs(offset - 0.01) < 0.001,
-      `expected the door panel ~1cm proud of the wall (${doorPanel.wall}), got offset ${offset.toFixed(4)}`);
-    ok('door skin panel sits 1cm proud of the wall face, not coplanar with it');
+      `expected the door panel ~1cm proud of the wall's visible face (${doorPanel.wall}), got offset ${offset.toFixed(4)} (raw mesh z/x ${along.toFixed(4)}, wall face ${faceFor.toFixed(4)})`);
+    ok('door skin panel sits 1cm proud of the wall\'s visible face, not buried inside its thickness');
   } catch(e){ bad('door skin: forward offset off the wall face', e); }
 } finally {
   await appX.close();
@@ -2231,8 +2235,10 @@ try {
   await appY.close();
 }
 
-// --- Phase Z: "memorized" rooms (Phase 2) get a border badge in the network
-//     digraph, so memorized branches are visible at a glance. ---
+// --- Phase Z: "memorized" rooms (Phase 2) get a 🧠 label glyph in the
+//     network digraph (mirroring the VR toolbar's fa-brain icon), and the
+//     thick green border is reserved for "all done" -- memorized AND fully
+//     decorated -- so it reads at a glance even too zoomed out for glyphs. ---
 const appZ = await launchApp();
 try {
   await seedBackup(appZ.page, {
@@ -2253,33 +2259,49 @@ try {
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
     return c.fen();
   });
+  const hasClass = (fen, cls) => appZ.page.evaluate(({ fen, cls }) => {
+    const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+    return n.nonempty() ? n.hasClass(cls) : null;
+  }, { fen, cls });
 
-  // 71. No memorized class by default.
+  // 71. No glyph or "all done" border by default.
   try {
-    const before = await appZ.page.evaluate((fen) => {
-      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
-      return n.nonempty() ? n.hasClass('memorized') : null;
-    }, roomFen);
-    assert(before === false, `expected the room to start without the memorized class, got ${before}`);
-    ok('a graph node has no memorized border by default');
-  } catch(e){ bad('graph: no memorized class by default', e); }
+    const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
+    assert(!/🧠/.test(label || ''), `expected no memorized glyph by default, got ${JSON.stringify(label)}`);
+    assert(await hasClass(roomFen, 'all-done') === false, 'expected no "all done" border by default');
+    ok('a graph node has no memorized glyph or "all done" border by default');
+  } catch(e){ bad('graph: no memorized glyph/border by default', e); }
 
-  // 72. Marking the room memorized (same IDB key the VR toolbar toggle writes)
-  //     and reopening the graph (fully idempotent -- always rebuilds from
-  //     scratch) shows the border.
+  // 72. Marking the room memorized ALONE (same IDB key the VR toolbar toggle
+  //     writes) shows the 🧠 glyph but NOT the "all done" border -- decorated
+  //     is still false.
   try {
     const roomKey = await appZ.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
     assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appZ.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
-    const after = await appZ.page.evaluate((fen) => {
-      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
-      return n.nonempty() ? n.hasClass('memorized') : null;
-    }, roomFen);
-    assert(after === true, `expected the memorized class after marking + reopening the graph, got ${after}`);
-    ok('a memorized room shows the border class in the network graph after reopening');
-  } catch(e){ bad('graph: memorized class reflects a marked room', e); }
+    const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
+    assert(/🧠/.test(label || ''), `expected the memorized glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
+    assert(await hasClass(roomFen, 'all-done') === false,
+      'expected NO "all done" border for memorized-only (not also decorated)');
+    ok('a memorized-only room shows the 🧠 glyph, not the "all done" border');
+  } catch(e){ bad('graph: memorized glyph reflects a marked room, no border alone', e); }
+
+  // 73. Also marking it decorated flips on the "all done" border (both
+  //     glyphs still show alongside it).
+  try {
+    const roomKey = await appZ.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
+    await appZ.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
+    await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
+    assert(/🧠/.test(label || '') && /🎨/.test(label || ''),
+      `expected both glyphs once memorized AND decorated, got ${JSON.stringify(label)}`);
+    assert(await hasClass(roomFen, 'all-done') === true,
+      'expected the "all done" border once the room is both memorized and decorated');
+    ok('a room that is both memorized and decorated shows the "all done" border plus both glyphs');
+  } catch(e){ bad('graph: "all done" border once both memorized and decorated', e); }
 } finally {
   await appZ.close();
 }
@@ -2786,6 +2808,23 @@ try {
     assert(state.graphOverlay === 'flex', 'expected the digraph overlay to stay open underneath, not close on jump');
     ok('room-info modal: "Jump to VR" with VR already open takes the fast path (no rebuild)');
   } catch(e){ bad('room-info modal: Jump to VR fast path when VR already open', e); }
+
+  // 93. With the digraph left open underneath (previous step), the VR
+  //     overlay must actually be the TOP-STACKED element -- both overlays
+  //     share the base .overlay z-index (20) with no tiebreak by DOM order
+  //     otherwise, so a click meant for the VR canvas silently hit the
+  //     graph's backdrop instead (the reported "Jump to VR doesn't quite
+  //     work" symptom). Checks real hit-testing, not just the CSS number.
+  try {
+    const hit = await appAF.page.evaluate(() => {
+      const wrap = document.getElementById('threeTestCanvasWrap');
+      const r = wrap.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2);
+      return { insideVR: !!(el && el.closest('#threeTestOverlay')), tag: el && el.tagName, id: el && el.id };
+    });
+    assert(hit.insideVR, `expected the VR canvas to be the top-stacked element under the digraph, got ${JSON.stringify(hit)}`);
+    ok('VR overlay stacks above a still-open digraph overlay (clicks reach the canvas, not the graph backdrop)');
+  } catch(e){ bad('VR overlay z-index stacks above the digraph overlay left open underneath', e); }
 } finally {
   await appAF.close();
 }
