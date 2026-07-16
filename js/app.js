@@ -2,7 +2,7 @@ import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-82';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-63';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-64';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
 
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-102';
+const BUILD_TAG = '-103';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6315,6 +6315,19 @@ if(localStorage.getItem('threeTestDebug')){
       recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
       return bag;
     },
+  };
+}
+
+// test-only hook for the crop/erase image editor (js/assets.js's cropImage):
+// its promise only resolves once the user clicks Save/Cancel, and it's
+// normally only reachable through the full asset-upload flow -- this opens
+// it directly against a synthetic data-URL and stashes the pending promise,
+// so a test can drive the real DOM (brush strokes, buttons) and then await
+// the actual result without needing to upload a file through the UI first.
+if(localStorage.getItem('threeTestDebug')){
+  window.__cropTestHooks = {
+    open: (dataUrl) => { window.__cropResult = cropImage(dataUrl); },
+    result: () => window.__cropResult,
   };
 }
 

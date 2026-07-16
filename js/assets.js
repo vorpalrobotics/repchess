@@ -849,6 +849,7 @@ export function cropImage(sourceDataUrl){
   let natW = 0, natH = 0;
 
   let eraseMode = false;
+  let brushMode = false;
 
   ov.innerHTML = `
     <div class="modal">
@@ -859,11 +860,13 @@ export function cropImage(sourceDataUrl){
       <div class="crop-stage">
         <div class="crop-wrap" id="cropWrap">
           <img id="cropImg" src="${work}" alt="">
+          <canvas id="cropBrushCanvas" class="crop-brush-canvas"></canvas>
           <div class="crop-sel" id="cropSel"></div>
           <div class="crop-bar l" data-edge="l"></div>
           <div class="crop-bar r" data-edge="r"></div>
           <div class="crop-bar t" data-edge="t"></div>
           <div class="crop-bar b" data-edge="b"></div>
+          <div class="crop-brush-cursor" id="cropBrushCursor"></div>
         </div>
       </div>
       <div class="crop-actions">
@@ -873,6 +876,11 @@ export function cropImage(sourceDataUrl){
         <span id="cropEraseTools" style="display:none;align-items:center;gap:.4rem;font-size:.85rem;color:#444">
           fuzz <input type="range" id="cropTol" min="0" max="120" value="32" style="width:120px">
           <span id="cropTolVal" style="font-family:ui-monospace,monospace;min-width:2.2em">32</span>
+        </span>
+        <button id="cropBrushBtn"><i class="fa-solid fa-paintbrush"></i> Brush erase</button>
+        <span id="cropBrushTools" style="display:none;align-items:center;gap:.4rem;font-size:.85rem;color:#444">
+          size <input type="range" id="cropBrushSizeInput" min="4" max="200" value="30" style="width:120px">
+          <span id="cropBrushSizeVal" style="font-family:ui-monospace,monospace;min-width:2.6em">30px</span>
         </span>
         <span class="spacer"></span>
         <button id="cropCancelBtn">Cancel</button>
@@ -932,10 +940,15 @@ export function cropImage(sourceDataUrl){
   }
 
   async function applyCrop(){
+    if(brushMode) commitBrushCanvas();   // flush any pending strokes into `work` first
     if(sel.l <= 0 && sel.t <= 0 && sel.r >= 1 && sel.b >= 1) return;   // full image — nothing to cut
     work = await cropDataUrl(work, sel);
     sel = { l:0, t:0, r:1, b:1 };
-    img.src = work;        // onload → recompute natW/H, refit, repaint
+    // wait for the reload (not just the assignment) -- callers that read natW/
+    // natH or draw from `img` right after (brush mode's initBrushCanvas) need
+    // them already updated to the post-crop size, not whatever they were a
+    // moment ago. The persistent onload=onImgReady handler still fires too.
+    await new Promise(resolve => { img.addEventListener('load', resolve, { once:true }); img.src = work; });
   }
 
   // Erase-background mode: clicking the image samples that pixel and flood-fills
@@ -979,18 +992,133 @@ export function cropImage(sourceDataUrl){
     dims.textContent = `erased ${n.toLocaleString()} px — click more or SAVE`;
   });
 
+  // Brush erase: a manual round eraser for the little artifacts flood-fill
+  // can't reach (an isolated fleck not colour-connected to wherever you'd
+  // click, or one that doesn't match the sampled colour within tolerance).
+  // Draws directly onto a same-resolution canvas overlaid on the image (fast,
+  // GPU-composited circles -- no per-pixel JS loop, unlike floodFillTransparent
+  // -- so it stays smooth while dragging), using 'destination-out' to punch
+  // the stroke to full transparency. The canvas is only synced back into
+  // `work`/`img` (commitBrushCanvas) when something else needs the current
+  // pixels -- leaving brush mode, Crop, Auto-crop, or SAVE -- not on every
+  // stroke, which would mean an expensive PNG re-encode per mouse-move.
+  const brushCanvas = ov.querySelector('#cropBrushCanvas');
+  const brushCursor = ov.querySelector('#cropBrushCursor');
+  const brushBtn = ov.querySelector('#cropBrushBtn');
+  const brushTools = ov.querySelector('#cropBrushTools');
+  const brushSizeInput = ov.querySelector('#cropBrushSizeInput');
+  const brushSizeVal = ov.querySelector('#cropBrushSizeVal');
+  let brushCtx = null;
+  let brushDrawing = false;
+  let brushLast = null;   // {x,y} in natural-pixel space, for gap-free interpolation between samples
+
+  const brushDiameter = () => Number(brushSizeInput.value) || 30;
+  function initBrushCanvas(){
+    brushCanvas.width = natW;
+    brushCanvas.height = natH;
+    brushCtx = brushCanvas.getContext('2d');
+    brushCtx.clearRect(0, 0, natW, natH);
+    brushCtx.drawImage(img, 0, 0, natW, natH);
+  }
+  function commitBrushCanvas(){
+    if(!brushCtx) return;
+    work = brushCanvas.toDataURL('image/png');
+    img.src = work;   // hidden behind the still-visible brush canvas; harmless
+  }
+  function setBrushMode(on){
+    if(on === brushMode) return;
+    if(on){
+      if(eraseMode) setEraseMode(false);   // mutually exclusive tool modes
+      initBrushCanvas();
+      brushCanvas.style.display = 'block';
+      img.style.cursor = 'none';
+    } else {
+      commitBrushCanvas();
+      brushCanvas.style.display = 'none';
+      brushCursor.style.display = 'none';
+      img.style.cursor = '';
+    }
+    brushMode = on;
+    brushTools.style.display = on ? 'inline-flex' : 'none';
+    brushBtn.style.background = on ? '#1565c0' : '';
+    brushBtn.style.color = on ? '#fff' : '';
+    if(on) dims.textContent = 'drag over the image to erase';
+    else paint();
+  }
+  brushSizeInput.oninput = () => { brushSizeVal.textContent = brushSizeInput.value + 'px'; };
+
+  function naturalPointFromEvent(e){
+    const r = wrap.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * natW, y: (e.clientY - r.top) / r.height * natH };
+  }
+  function updateBrushCursor(e){
+    const r = wrap.getBoundingClientRect();
+    const dia = brushDiameter() * (r.width / natW);   // natural px -> display px
+    brushCursor.style.width = dia + 'px';
+    brushCursor.style.height = dia + 'px';
+    brushCursor.style.left = (e.clientX - r.left) + 'px';
+    brushCursor.style.top = (e.clientY - r.top) + 'px';
+  }
+  function eraseCircle(x, y, radius){
+    brushCtx.globalCompositeOperation = 'destination-out';
+    brushCtx.beginPath();
+    brushCtx.arc(x, y, radius, 0, Math.PI * 2);
+    brushCtx.fill();
+    brushCtx.globalCompositeOperation = 'source-over';
+  }
+  // stamps circles along the segment from `from` to `to` (a raw jump between
+  // pointermove samples would otherwise leave gaps in a fast drag).
+  function eraseStroke(from, to, radius){
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    const steps = Math.max(1, Math.ceil(dist / Math.max(1, radius / 3)));
+    for(let i = 0; i <= steps; i++){
+      const t = i / steps;
+      eraseCircle(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t, radius);
+    }
+  }
+  wrap.addEventListener('pointermove', (e) => {
+    if(!brushMode || !natW) return;
+    brushCursor.style.display = 'block';
+    updateBrushCursor(e);
+    if(!brushDrawing || e.buttons !== 1) return;
+    const p = naturalPointFromEvent(e);
+    eraseStroke(brushLast || p, p, brushDiameter() / 2);
+    brushLast = p;
+  });
+  wrap.addEventListener('pointerdown', (e) => {
+    if(!brushMode || !natW || e.button !== 0) return;
+    try{ wrap.setPointerCapture?.(e.pointerId); }catch(_){}
+    brushDrawing = true;
+    const p = naturalPointFromEvent(e);
+    eraseCircle(p.x, p.y, brushDiameter() / 2);
+    brushLast = p;
+    e.preventDefault();
+  });
+  const endBrushStroke = () => { brushDrawing = false; brushLast = null; };
+  wrap.addEventListener('pointerup', endBrushStroke);
+  wrap.addEventListener('pointercancel', endBrushStroke);
+  wrap.addEventListener('pointerleave', () => { brushCursor.style.display = 'none'; });
+
   return new Promise((resolve) => {
     ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[crop] crop failed', err); });
     ov.querySelector('#cropAutoBtn').onclick = async () => {
       try{
+        if(brushMode) commitBrushCanvas();   // read the up-to-date pixels, not a stale pre-brush copy
         const b = await alphaBoundsFrac(work);
         if(!b){ dims.textContent = 'image is fully transparent — nothing to bound'; return; }
         sel = b; paint();
       }catch(err){ console.error('[crop] auto-crop bounds failed', err); }
     };
     eraseBtn.onclick = async () => {
-      if(!eraseMode){ await applyCrop().catch(err => console.error('[crop] crop failed', err)); }  // bake in any pending crop before erasing
+      if(!eraseMode){
+        if(brushMode) setBrushMode(false);   // mutually exclusive tool modes
+        await applyCrop().catch(err => console.error('[crop] crop failed', err));  // bake in any pending crop before erasing
+      }
       setEraseMode(!eraseMode);
+    };
+    brushBtn.onclick = async () => {
+      if(!brushMode){ await applyCrop().catch(err => console.error('[crop] crop failed', err)); }  // bake in any pending crop before erasing
+      setBrushMode(!brushMode);
     };
     ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; resolve(null); };
     ov.querySelector('#cropSaveBtn').onclick = async () => {

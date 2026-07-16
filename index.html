@@ -395,7 +395,11 @@
   .crop-bar:hover{opacity:1;background:#1e88e5}
   .crop-bar.l,.crop-bar.r{width:7px;margin-left:-3px;top:0;bottom:0;cursor:ew-resize}
   .crop-bar.t,.crop-bar.b{height:7px;margin-top:-3px;left:0;right:0;cursor:ns-resize}
-  .crop-actions{display:flex;align-items:center;gap:.6rem;margin-top:.7rem}
+  .crop-brush-canvas{position:absolute;top:0;left:0;width:100%;height:100%;display:none}
+  .crop-brush-cursor{position:absolute;border:1.5px solid #1565c0;border-radius:50%;
+    pointer-events:none;transform:translate(-50%,-50%);display:none;
+    box-shadow:0 0 0 1px rgba(255,255,255,.85);z-index:1}
+  .crop-actions{display:flex;align-items:center;gap:.6rem;margin-top:.7rem;flex-wrap:wrap}
   .crop-actions .spacer{flex:1 1 auto}
 
   #mnemonicsOverlay .modal{width:94vw;height:92vh;max-width:none;display:flex;flex-direction:column}
@@ -1230,6 +1234,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-102"></script>
+<script type="module" src="js/app.js?v=20260630-103"></script>
 </body>
 </html>
