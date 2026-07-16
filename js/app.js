@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-100';
+const BUILD_TAG = '-101';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -97,7 +97,7 @@ const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
-const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage';
+const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
 $('userId').value  = localStorage.getItem(LS_ID)  || '';
@@ -4023,7 +4023,7 @@ async function resolveCoverageSelection(val, lines){
     const line = opt && lines.find(l=>l.id===opt.lineId);
     if(!line) return null;
     const rootSeq = await findCastleRootSeq(line, opt.castleName);
-    return { line, rootSeq, isCastle: true };
+    return { line, rootSeq, isCastle: true, castleName: opt.castleName };
   }
   const line = lines.find(l=>l.id===val);
   return line ? { line, rootSeq: null, isCastle: false } : null;
@@ -4697,6 +4697,40 @@ function oqCoverageEligible(seq, candidates){
   return candidates.includes(forced) ? [forced] : [];
 }
 
+/* "only test memorized rooms" (VR toolbar toggle, see js/threeVR.js) support.
+   There's no single place "our reply" is chosen from a candidate list -- it's
+   always the deterministic PREFS[...].reply lookup in oqLoadStep. What IS
+   chosen from a candidate list is which opponent branch to walk down next, at
+   the three call sites that already wrap oqCoverageEligible -- so that's
+   where this filters too. */
+
+/* the room seq (ends in OUR move) that answering `candidate` from `seq`
+   would complete, or null if that reply isn't taught yet (nothing to check
+   memorized-status against). Two shapes, both driven by real call sites:
+   - seq=[] and OQ.color isn't 'black': `candidate` IS our own first move
+     (oqLoadStep's white-trigger branch) -- the room itself.
+   - otherwise `candidate` is the OPPONENT's move; our reply is the
+     deterministic PREFS lookup (oqPlayTrigger's black-trigger branch, and
+     oqAfterCorrect's every-other-step branch both have this shape). */
+function oqCandidateRoomSeq(seq, candidate){
+  if(seq.length === 0 && OQ.color !== 'black') return [candidate];
+  const reply = PREFS[prefKey(OQ.line.id, [...seq, candidate])]?.reply;
+  return reply ? [...seq, candidate, reply] : null;
+}
+function oqRoomMemorized(roomSeq){
+  // OQ.line.id, not CURRENT_LINE.id -- PREFS holds OQ.line's data for the
+  // session's duration (a quiz can run against a line other than whatever's
+  // open in the tree view), and inheritedCastle's PREFS lookups must match.
+  const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
+  if(!castle) return false;
+  const key = castleRoomKey(castleInstanceId(OQ.line.id, castle), positionKey(fenForSeq(roomSeq)));
+  return !!OQ.memorizedRooms[key];
+}
+function oqMemorizedFilter(seq, candidates){
+  if(!OQ.onlyMemorized) return candidates;
+  return candidates.filter(c => { const rs = oqCandidateRoomSeq(seq, c); return rs && oqRoomMemorized(rs); });
+}
+
 /* the engine's random pick from `candidates`, honoring a same-choices replay
    (OQ.replay) -- shared by every point where the engine (not the user)
    decides a move: the opponent's replies throughout, and (session mode only)
@@ -4789,7 +4823,7 @@ function oqLoadStep(){
   }
   if(OQ.mode === 'session' && OQ.seq.length === 0){
     if(OQ.color === 'black'){ oqPlayTrigger(); return; }
-    const triggers = oqCoverageEligible([], OQ.line.openingMoves || []);
+    const triggers = oqMemorizedFilter([], oqCoverageEligible([], OQ.line.openingMoves || []));
     if(!triggers.length){ oqFinish(); return; }
     OQ.expected = oqPickChoice(triggers);
     OQ.busy = false;
@@ -4811,7 +4845,7 @@ function oqLoadStep(){
    plays for you (same as any opponent move), never something you're tested
    on. Mirrors oqAfterCorrect's play-then-pause-then-advance choreography. */
 function oqPlayTrigger(){
-  const triggers = oqCoverageEligible([], OQ.line.openingMoves || []);
+  const triggers = oqMemorizedFilter([], oqCoverageEligible([], OQ.line.openingMoves || []));
   if(!triggers.length){ oqFinish(); return; }
   const trigger = oqPickChoice(triggers);
   const nextSeq = [trigger];
@@ -4871,7 +4905,7 @@ function oqInputHandler(event){
    animate it, then load the following step — or finish if the line ends. */
 function oqAfterCorrect(){
   const ourSeq = [...OQ.seq, OQ.expected];
-  const opps = oqCoverageEligible(ourSeq, oqVisibleOpps(ourSeq));
+  const opps = oqMemorizedFilter(ourSeq, oqCoverageEligible(ourSeq, oqVisibleOpps(ourSeq)));
   if(opps.length === 0){
     oqBoard.setPosition(fenForSeq(ourSeq), true);
     setTimeout(oqFinish, 500);
@@ -4998,6 +5032,7 @@ function restoreOqSetupFields(){
   if(savedN) $('oqNumQuestions').value = savedN;
   const savedDepth = localStorage.getItem(LS_OQ_MAXDEPTH);
   if(savedDepth) $('oqMaxDepth').value = savedDepth;
+  $('oqOnlyMemorized').checked = localStorage.getItem(LS_OQ_ONLYMEM) === '1';
   const savedCoverage = localStorage.getItem(LS_OQ_COVERAGE);
   if(!savedCoverage) return;
   let saved;
@@ -5035,7 +5070,7 @@ function oqCoverageIdentity(){
 
    Split out from the START button's handler so __oqTestHooks can drive it
    without a live board. */
-async function oqStartSession(coverageVal, n, depth){
+async function oqStartSession(coverageVal, n, depth, onlyMemorized){
   if(!Number.isFinite(n) || n < 1) return 'Enter a question count of 1 or more.';
   if(!Number.isFinite(depth) || depth < 1) return 'Enter a max depth of 1 or more.';
   if(!coverageVal) return 'Choose an opening system.';
@@ -5051,6 +5086,14 @@ async function oqStartSession(coverageVal, n, depth){
     coverageRootSeq: sel.isCastle ? sel.rootSeq : null,
     maxDepth: depth, questionsTotal: n, questionIndex: 1,
     oppChoices: [], hits: 0, misses: 0, savedPrefs,
+    // "only test memorized rooms": castleName is fixed for a castle-scoped
+    // session (no per-node ancestor walk needed -- every question stays
+    // inside that one castle's subtree, per oqCoverageEligible's own forced
+    // path); null for whole-system coverage, where oqRoomMemorized resolves
+    // each candidate's owning castle individually via inheritedCastle.
+    castleName: sel.isCastle ? sel.castleName : null,
+    onlyMemorized: !!onlyMemorized,
+    memorizedRooms: onlyMemorized ? JSON.parse(await getMeta('threeMemorizedRooms') || '{}') : {},
   };
   return null;
 }
@@ -5058,14 +5101,16 @@ $('oqStartBtn').onclick = async ()=>{
   const n = parseInt($('oqNumQuestions').value, 10);
   const depth = parseInt($('oqMaxDepth').value, 10);
   const coverageVal = $('oqCoverageSelect').value;
+  const onlyMemorized = $('oqOnlyMemorized').checked;
   const coverageIdentity = oqCoverageIdentity();
-  const err = await oqStartSession(coverageVal, n, depth);
+  const err = await oqStartSession(coverageVal, n, depth, onlyMemorized);
   if(err){ $('oqSetupError').textContent = err; return; }
   $('oqSetupError').textContent = '';
   // remember these settings for next time -- only once they're known-valid
   // (oqStartSession succeeded), so a bad/incomplete attempt is never saved.
   localStorage.setItem(LS_OQ_QUESTIONS, String(n));
   localStorage.setItem(LS_OQ_MAXDEPTH, String(depth));
+  localStorage.setItem(LS_OQ_ONLYMEM, onlyMemorized ? '1' : '0');
   if(coverageIdentity) localStorage.setItem(LS_OQ_COVERAGE, JSON.stringify(coverageIdentity));
   oqRun(false);
 };
@@ -5103,9 +5148,11 @@ if(localStorage.getItem('threeTestDebug')){
     setOQ: (patch) => { OQ = Object.assign(OQ || {}, patch); },
     getOQ: () => OQ && JSON.parse(JSON.stringify(OQ)),
     coverageEligible: (seq, candidates) => oqCoverageEligible(seq, candidates),
+    memorizedFilter: (seq, candidates) => oqMemorizedFilter(seq, candidates),
+    roomMemorized: (seq) => oqRoomMemorized(seq),
     pickChoice: (candidates) => oqPickChoice(candidates),
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
-    startSession: (coverageVal, n, depth) => oqStartSession(coverageVal, n, depth),
+    startSession: (coverageVal, n, depth, onlyMemorized) => oqStartSession(coverageVal, n, depth, onlyMemorized),
     restorePrefs: () => oqRestorePrefsIfSwapped(),
     getPrefs: () => JSON.parse(JSON.stringify(PREFS)),
     setPrefs: (p) => { PREFS = p; },

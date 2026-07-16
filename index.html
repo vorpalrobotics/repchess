@@ -1108,6 +1108,10 @@
         <label for="oqMaxDepth" title="Quiz plies up through this move number, then stop">Max Depth</label>
         <input type="number" id="oqMaxDepth" min="1" max="999" value="20">
       </div>
+      <div class="quiz-setup-row">
+        <label for="oqOnlyMemorized" title="Skip any branch whose room you haven't marked memorized in the VR walk">Only test memorized rooms</label>
+        <input type="checkbox" id="oqOnlyMemorized">
+      </div>
       <div id="oqSetupError"></div>
       <button id="oqStartBtn">START</button>
     </div>
@@ -1226,6 +1230,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260630-100"></script>
+<script type="module" src="js/app.js?v=20260630-101"></script>
 </body>
 </html>

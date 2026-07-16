@@ -2263,5 +2263,86 @@ try {
   await appZ.close();
 }
 
+// --- Phase AA: "only test memorized rooms" (Phase 3) -- a castle-scoped quiz
+//     session filters candidates down to only replies whose resulting room is
+//     marked memorized; off, it's a pure passthrough. ---
+const appAA = await launchApp();
+try {
+  const keys = await appAA.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { e6Room: pk(['d4','Nf6','c4','e6','Nc3']), g6Room: pk(['d4','Nf6','c4','g6','Nc3']) };
+  });
+  await seedBackup(appAA.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  // mark only the e6 branch's room memorized, via the same IDB key the VR
+  // toolbar toggle writes (setMeta is a bare global, same as getMeta elsewhere).
+  await appAA.page.evaluate((k) => setMeta('threeMemorizedRooms', JSON.stringify({ [k]: Date.now() })), keys.e6Room);
+
+  await appAA.page.click('.line-row');
+  await appAA.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAA.page.evaluate(() => window.__oqTestHooks.populateCoverage());
+  const castleVal = await appAA.page.evaluate(() => {
+    const opt = [...document.getElementById('oqCoverageSelect').options]
+      .find(o => o.value.startsWith('castle:') && o.textContent.includes('Alpha'));
+    return opt ? opt.value : null;
+  });
+  assert(castleVal, 'expected a real "↳ Alpha" castle option in the populated select (test setup issue if not)');
+
+  // 73. Starting a castle-scoped session with the checkbox on threads
+  //     castleName/onlyMemorized/memorizedRooms onto OQ correctly.
+  try {
+    const err = await appAA.page.evaluate((val) => window.__oqTestHooks.startSession(val, 5, 10, true), castleVal);
+    assert(err === null, `startSession should succeed, got error: ${err}`);
+    const oq = await appAA.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(oq.castleName === 'Alpha', `expected OQ.castleName 'Alpha', got ${JSON.stringify(oq.castleName)}`);
+    assert(oq.onlyMemorized === true, `expected OQ.onlyMemorized true, got ${oq.onlyMemorized}`);
+    assert(oq.memorizedRooms && oq.memorizedRooms[keys.e6Room], `expected OQ.memorizedRooms to contain the e6 room, got ${JSON.stringify(oq.memorizedRooms)}`);
+    ok('starting a session with "only memorized" checked loads castleName + the memorized-rooms map onto OQ');
+  } catch(e){ bad('oqStartSession: castleName/onlyMemorized/memorizedRooms', e); }
+
+  // 74. roomMemorized reflects exactly the one seeded room.
+  try {
+    const r = await appAA.page.evaluate(() => ({
+      e6: window.__oqTestHooks.roomMemorized(['d4','Nf6','c4','e6','Nc3']),
+      g6: window.__oqTestHooks.roomMemorized(['d4','Nf6','c4','g6','Nc3']),
+    }));
+    assert(r.e6 === true, `expected the e6 room to read as memorized, got ${r.e6}`);
+    assert(r.g6 === false, `expected the g6 room to read as NOT memorized, got ${r.g6}`);
+    ok('oqRoomMemorized reflects exactly the rooms marked in threeMemorizedRooms');
+  } catch(e){ bad('oqRoomMemorized', e); }
+
+  // 75. memorizedFilter narrows candidates to only the memorized branch, at
+  //     the castle root (the real call shape oqAfterCorrect uses).
+  try {
+    const filtered = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
+    assert(JSON.stringify(filtered) === JSON.stringify(['e6']), `expected only ['e6'], got ${JSON.stringify(filtered)}`);
+    ok('memorizedFilter narrows candidates to only the branch leading to a memorized room');
+  } catch(e){ bad('oqMemorizedFilter narrows to memorized branch', e); }
+
+  // 76. With the checkbox off, the filter is a pure passthrough -- existing
+  //     (pre-feature) behavior is unchanged byte-for-byte.
+  try {
+    await appAA.page.evaluate(() => window.__oqTestHooks.setOQ({ onlyMemorized: false }));
+    const passthrough = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
+    assert(JSON.stringify(passthrough) === JSON.stringify(['e6','g6']), `expected an unfiltered passthrough, got ${JSON.stringify(passthrough)}`);
+    ok('memorizedFilter is a no-op passthrough when "only memorized" is unchecked');
+  } catch(e){ bad('oqMemorizedFilter passthrough when off', e); }
+} finally {
+  await appAA.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
