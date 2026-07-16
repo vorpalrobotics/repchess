@@ -2792,13 +2792,15 @@ function drawQualityBadge(ctx, q){
 function drawMoveNumberBadge(ctx, qx, qy, boxSize, moveNumber){
   const text = `${moveNumber}.`;
   ctx.save();
-  ctx.font = 'bold 92px sans-serif';
+  ctx.font = 'bold 116px sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 12;
+  ctx.lineWidth = 15;
   ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-  const x = qx + 20, y = qy + boxSize / 2;
+  // flush left, sitting a third of the box's height up from the bottom edge
+  // (lower than dead-center, but clear of the bottom edge itself).
+  const x = qx + 20, y = qy + boxSize - boxSize / 3;
   ctx.strokeText(text, x, y);
   ctx.fillStyle = '#ffffff';
   ctx.fillText(text, x, y);
@@ -6290,28 +6292,35 @@ export async function openThreeTest(containerEl, opts){
           return false;
         };
         const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;
-        // sample a generous box around the badge's vertically-centered,
-        // left-edge position (qx+20, qy+MNEM_QUADRANT/2) rather than the
-        // old top-left corner.
-        const midY = MNEM_QUADRANT / 2;
+        // sample a box tight enough around the badge's actual ink (measured:
+        // y 292-373 at this font/position, vs. 207-288 at the old centered
+        // position -- a real gap, not just "lower") to actually distinguish
+        // "moved to the lower third" from "just got bigger in place".
+        const lowY = 300;
         return {
-          oppCorner: hasWhiteInk(14, midY - 60, 100, 120),
-          respCorner: hasWhiteInk(far + 14, far + midY - 60, 100, 120),
+          oppCorner: hasWhiteInk(14, lowY, 110, 70),
+          respCorner: hasWhiteInk(far + 14, far + lowY, 110, 70),
         };
       },
       // locates a real placed scene sprite by slotId and reports whether its
-      // canvas has white ink in the given region -- the real-sprite
-      // counterpart to buildMnemPairInk (which only builds synthetic,
-      // unplaced pairs), needed for sprites like the street-sign
-      // opening-move tile that aren't reachable that way.
-      spriteHasWhiteInk: (slotId, x0, y0, w, h) => {
+      // canvas has ink of the given `kind` in the given region -- the
+      // real-sprite counterpart to buildMnemPairInk (which only builds
+      // synthetic, unplaced pairs), needed for sprites like the street-sign
+      // opening-move tile that aren't reachable that way. 'white' is the
+      // move-number badge's fill; on a tile whose own background is already
+      // near-white (e.g. the opening-move tile's cream fill), that's not
+      // discriminating, so 'dark' checks for the badge's black stroke
+      // instead, which the plain background never has.
+      spriteHasWhiteInk: (slotId, x0, y0, w, h, kind) => {
         let found = null;
         scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
         const canvas = found && found.material && found.material.map && found.material.map.image;
         if(!canvas) return null;
         const d = canvas.getContext('2d').getImageData(x0, y0, w, h).data;
         for(let i = 0; i < d.length; i += 4){
-          if(d[i] > 220 && d[i+1] > 220 && d[i+2] > 220 && d[i+3] > 200) return true;
+          if(kind === 'dark'){
+            if(d[i] < 60 && d[i+1] < 60 && d[i+2] < 60 && d[i+3] > 150) return true;
+          } else if(d[i] > 220 && d[i+1] > 220 && d[i+2] > 220 && d[i+3] > 200) return true;
         }
         return false;
       },
