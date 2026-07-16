@@ -2365,5 +2365,121 @@ try {
   await appAA.close();
 }
 
+// --- Phase AB: crop/erase image editor -- brush erase (freehand round
+//     eraser, size slider) for cleaning up artifacts flood-fill can't reach. ---
+const appAB = await launchApp();
+try {
+  // a synthetic, fully-opaque 100x100 red square -- no file upload needed,
+  // the crop tool is driven directly via __cropTestHooks.open().
+  const srcUrl = await appAB.page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 100; c.height = 100;
+    const cx = c.getContext('2d');
+    cx.fillStyle = '#ff0000';
+    cx.fillRect(0, 0, 100, 100);
+    return c.toDataURL('image/png');
+  });
+  const alphaProbe = async (dataUrl, points) => appAB.page.evaluate(async ({ dataUrl, points }) => {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const cx = c.getContext('2d');
+    cx.drawImage(img, 0, 0);
+    const id = cx.getImageData(0, 0, c.width, c.height).data;
+    return { w: c.width, h: c.height, alphas: points.map(([x, y]) => id[(y * c.width + x) * 4 + 3]) };
+  }, { dataUrl, points });
+
+  // 77. Clicking (a zero-length drag) with the brush erases a circle of the
+  //     slider's diameter, centered on the cursor, leaving everything outside
+  //     that radius untouched.
+  try {
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    assert(await appAB.page.evaluate(() => document.getElementById('cropBrushCanvas').style.display === 'block'),
+      'expected the brush canvas visible after entering brush mode');
+
+    // default slider is 30px diameter (15px radius) in natural pixels; stamp
+    // a single click at the natural point (50,50).
+    await appAB.page.evaluate(() => {
+      const wrap = document.getElementById('cropWrap');
+      const r = wrap.getBoundingClientRect();
+      const clientX = r.left + (50/100) * r.width, clientY = r.top + (50/100) * r.height;
+      wrap.dispatchEvent(new PointerEvent('pointerdown', { clientX, clientY, buttons: 1, bubbles: true }));
+      wrap.dispatchEvent(new PointerEvent('pointerup', { clientX, clientY, bubbles: true }));
+    });
+    await appAB.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    const result = await appAB.page.evaluate(() => window.__cropTestHooks.result());
+    assert(typeof result === 'string' && result.startsWith('data:image/png'), `expected a saved PNG data-URL, got ${JSON.stringify(result)}`);
+
+    const probe = await alphaProbe(result, [[50,50], [50,62], [50,70], [5,5]]);
+    assert(probe.w === 100 && probe.h === 100, `expected the image to stay 100x100 (no accidental crop), got ${probe.w}x${probe.h}`);
+    const [center, within, outside, corner] = probe.alphas;
+    assert(center === 0, `expected the click center fully erased (alpha 0), got ${center}`);
+    assert(within === 0, `expected a point 12px from center (inside the 15px radius) erased, got alpha ${within}`);
+    assert(outside === 255, `expected a point 20px from center (outside the 15px radius) untouched, got alpha ${outside}`);
+    assert(corner === 255, `expected the far corner untouched, got alpha ${corner}`);
+    ok('brush erase: a click punches a transparent circle of the slider\'s diameter, nothing more');
+  } catch(e){ bad('crop editor: brush erase punches the correct-radius circle', e); }
+
+  // 78. The round cursor indicator tracks the pointer and is sized to the
+  //     CURRENT slider value (scaled to display pixels), so the user can see
+  //     the brush's real footprint before clicking.
+  try {
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    await appAB.page.evaluate(() => { document.getElementById('cropBrushSizeInput').value = '60'; document.getElementById('cropBrushSizeInput').dispatchEvent(new Event('input')); });
+    const cursor = await appAB.page.evaluate(() => {
+      const wrap = document.getElementById('cropWrap');
+      const r = wrap.getBoundingClientRect();
+      const clientX = r.left + (50/100) * r.width, clientY = r.top + (50/100) * r.height;
+      wrap.dispatchEvent(new PointerEvent('pointermove', { clientX, clientY, buttons: 0, bubbles: true }));
+      const c = document.getElementById('cropBrushCursor');
+      const expectedDia = 60 * (r.width / 100);
+      return { display: c.style.display, w: parseFloat(c.style.width), h: parseFloat(c.style.height), expectedDia, sizeLabel: document.getElementById('cropBrushSizeVal').textContent };
+    });
+    assert(cursor.display === 'block', `expected the cursor indicator visible on hover, got display=${cursor.display}`);
+    assert(Math.abs(cursor.w - cursor.expectedDia) < 0.5 && Math.abs(cursor.h - cursor.expectedDia) < 0.5,
+      `expected the cursor sized to the 60px slider value (${cursor.expectedDia.toFixed(1)} display px), got ${cursor.w}x${cursor.h}`);
+    assert(cursor.sizeLabel === '60px', `expected the size readout to show "60px", got ${JSON.stringify(cursor.sizeLabel)}`);
+    ok('brush erase: round cursor indicator tracks the pointer, sized to the current slider value');
+    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => window.__cropTestHooks.result());   // let the cancelled promise settle
+  } catch(e){ bad('crop editor: brush cursor size follows the slider', e); }
+
+  // 79. Brush and bucket (flood-fill) erase are mutually exclusive tools --
+  //     turning one on turns the other off.
+  try {
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    assert(await appAB.page.evaluate(() => document.getElementById('cropBrushCanvas').style.display === 'block'),
+      'expected brush mode on after clicking Brush erase');
+    await appAB.page.evaluate(() => document.getElementById('cropEraseBtn').click());
+    const state = await appAB.page.evaluate(() => ({
+      brushCanvasOn: document.getElementById('cropBrushCanvas').style.display === 'block',
+      eraseToolsOn: document.getElementById('cropEraseTools').style.display === 'inline-flex',
+    }));
+    assert(state.brushCanvasOn === false, 'expected brush mode to turn off when Erase BG (bucket) is turned on');
+    assert(state.eraseToolsOn === true, 'expected Erase BG (bucket) mode to be on');
+    ok('brush erase and bucket (flood-fill) erase are mutually exclusive');
+    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => window.__cropTestHooks.result());
+  } catch(e){ bad('crop editor: brush and bucket erase are mutually exclusive', e); }
+} finally {
+  await appAB.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
