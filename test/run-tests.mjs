@@ -2210,5 +2210,58 @@ try {
   await appY.close();
 }
 
+// --- Phase Z: "memorized" rooms (Phase 2) get a border badge in the network
+//     digraph, so memorized branches are visible at a glance. ---
+const appZ = await launchApp();
+try {
+  await seedBackup(appZ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
+  });
+  await appZ.page.click('.line-row');
+  await appZ.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  const roomFen = await appZ.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+
+  // 71. No memorized class by default.
+  try {
+    const before = await appZ.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.hasClass('memorized') : null;
+    }, roomFen);
+    assert(before === false, `expected the room to start without the memorized class, got ${before}`);
+    ok('a graph node has no memorized border by default');
+  } catch(e){ bad('graph: no memorized class by default', e); }
+
+  // 72. Marking the room memorized (same IDB key the VR toolbar toggle writes)
+  //     and reopening the graph (fully idempotent -- always rebuilds from
+  //     scratch) shows the border.
+  try {
+    const roomKey = await appZ.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
+    assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
+    await appZ.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
+    await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const after = await appZ.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.hasClass('memorized') : null;
+    }, roomFen);
+    assert(after === true, `expected the memorized class after marking + reopening the graph, got ${after}`);
+    ok('a memorized room shows the border class in the network graph after reopening');
+  } catch(e){ bad('graph: memorized class reflects a marked room', e); }
+} finally {
+  await appZ.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
