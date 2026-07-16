@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-99';
+const BUILD_TAG = '-100';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1142,6 +1142,16 @@ async function loadGraphLayout(){
 // reads this same key back -- without awaiting, that reload can race the
 // write and reload the stale pre-reset value.
 function persistGraphLayout(){ return setMeta('graphLayout', JSON.stringify(GRAPH_LAYOUT)); }
+// "memorized" room progress (see js/threeVR.js's own MEMORIZED, which this
+// mirrors) -- read here too so the graph can badge memorized branches.
+// Deliberately a small independent read rather than a shared module: this is
+// the same pattern threeLayout itself already uses (read directly, with no
+// shared helper, from both threeVR.js and app.js).
+let MEMORIZED_ROOMS = {};
+async function loadMemorizedRooms(){
+  try { MEMORIZED_ROOMS = JSON.parse(await getMeta('threeMemorizedRooms') || '{}'); }
+  catch { MEMORIZED_ROOMS = {}; }
+}
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -1165,6 +1175,7 @@ async function showTranspositionGraph(){
   try {
     const rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;   // graph-local focus (right-click) overrides the move-table focus
     await loadGraphLayout();
+    await loadMemorizedRooms();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
@@ -1215,9 +1226,18 @@ async function showTranspositionGraph(){
         const moveLabel = r.label + (q ? ' ' + q : '');
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
+        // does this room have a VR room to have been marked memorized? r.seq
+        // always ends in OUR move, same convention buildCastleGraph uses
+        // everywhere else -- inheritedCastle walks it back to the nearest
+        // castle root, same key scheme threeVR.js's own MEMORIZED map uses.
+        const ownCastle = inheritedCastle(r.seq);
+        const roomKey = ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
+        data.roomKey = roomKey;   // exposed for the test hook / future room-info panel use
+        const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
+        const baseClass = entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '');
         return {
           data,
-          classes: entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '')
+          classes: [baseClass, memorized ? 'memorized' : ''].filter(Boolean).join(' ')
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
@@ -1248,6 +1268,11 @@ async function showTranspositionGraph(){
         }},
         { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
         { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
+        // "memorized" (see js/threeVR.js's VR toolbar toggle) -- a border, not
+        // a background-color, so it composes with .root/.transposition
+        // instead of fighting them for the same channel (a memorized
+        // transposition room stays orange-filled with a green ring).
+        { selector:'node.memorized', style:{ 'border-width':3, 'border-color':'#66bb6a', 'border-style':'solid' } },
         { selector:'node.run-box', style:{
           'shape':'round-rectangle', 'background-color':'#ffcc80', 'background-opacity':0.18,
           'border-width':1.5, 'border-style':'dashed', 'border-color':'#e69a3c',
@@ -1349,6 +1374,20 @@ async function showTranspositionGraph(){
           n.position({ x: p.x + dx, y: p.y + dy });
           n.emit('dragfree');
           return true;
+        },
+        // writes straight to the same IDB key threeVR.js's memorized toggle
+        // uses -- lets a test seed/clear a room's memorized flag without
+        // driving the VR walk, then re-open the graph to see it reflected.
+        setMemorized: async (roomKey, val) => {
+          const map = JSON.parse(await getMeta('threeMemorizedRooms') || '{}');
+          if(val) map[roomKey] = Date.now(); else delete map[roomKey];
+          await setMeta('threeMemorizedRooms', JSON.stringify(map));
+        },
+        // the roomKey a node was classed against (null if it has no owning
+        // castle), for asserting the memorized class landed on the right node.
+        roomKeyOf: (fen) => {
+          const n = cy.nodes().filter(x => x.data('fen') === fen);
+          return n.nonempty() ? n.data('roomKey') : null;
         },
         // drives the real room-info click handler (cy.on('tap','node',...))
         // via a synthetic tap, same as dragNodeBy drives the drag handler --
@@ -1886,10 +1925,13 @@ function gatherLinkedCastles(startCastleName, startGenRooms){
   }
   return out;
 }
-/* nearest castle root on THIS seq's own lineage (the default/inherited owner) */
-function inheritedCastle(lineSeq){
+/* nearest castle root on THIS seq's own lineage (the default/inherited owner).
+   `lineId` defaults to CURRENT_LINE -- pass it explicitly when PREFS holds a
+   DIFFERENT line's data (e.g. mid-quiz-session, where PREFS is swapped to the
+   quizzed line, which can differ from whatever's open in the tree view). */
+function inheritedCastle(lineSeq, lineId = CURRENT_LINE?.id){
   for(let s = (lineSeq||[]).slice(); s.length; s = s.slice(0,-1)){
-    const p = PREFS[prefKey(CURRENT_LINE.id, s)];
+    const p = PREFS[prefKey(lineId, s)];
     if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
   }
   return '';
