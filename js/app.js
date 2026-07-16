@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen } from './threeVR.js?v=20260630-82';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260716-83';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-65';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-104';
+const BUILD_TAG = '-105';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1152,6 +1152,13 @@ async function loadMemorizedRooms(){
   try { MEMORIZED_ROOMS = JSON.parse(await getMeta('threeMemorizedRooms') || '{}'); }
   catch { MEMORIZED_ROOMS = {}; }
 }
+// "fully decorated" room progress (see js/threeVR.js's own DECORATED, which
+// this mirrors) -- same independent-read pattern as MEMORIZED_ROOMS above.
+let DECORATED_ROOMS = {};
+async function loadDecoratedRooms(){
+  try { DECORATED_ROOMS = JSON.parse(await getMeta('threeDecoratedRooms') || '{}'); }
+  catch { DECORATED_ROOMS = {}; }
+}
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -1176,6 +1183,7 @@ async function showTranspositionGraph(){
     const rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;   // graph-local focus (right-click) overrides the move-table focus
     await loadGraphLayout();
     await loadMemorizedRooms();
+    await loadDecoratedRooms();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
@@ -1222,17 +1230,19 @@ async function showTranspositionGraph(){
       ...(flat ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
-        const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
-        const moveLabel = r.label + (q ? ' ' + q : '');
-        const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
-        if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
-        // does this room have a VR room to have been marked memorized? r.seq
+        // does this room have a VR room, for memorized/decorated lookups? r.seq
         // always ends in OUR move, same convention buildCastleGraph uses
         // everywhere else -- inheritedCastle walks it back to the nearest
-        // castle root, same key scheme threeVR.js's own MEMORIZED map uses.
+        // castle root, same key scheme threeVR.js's own MEMORIZED/DECORATED
+        // maps use.
         const ownCastle = inheritedCastle(r.seq);
         const roomKey = ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
-        data.roomKey = roomKey;   // exposed for the test hook / future room-info panel use
+        const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
+        const decorated = roomKey ? !!DECORATED_ROOMS[roomKey] : false;
+        const moveLabel = r.label + (q ? ' ' + q : '') + (decorated ? ' 🎨' : '');
+        const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
+        if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
+        data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
         const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const baseClass = entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '');
         return {
@@ -1382,6 +1392,18 @@ async function showTranspositionGraph(){
           const map = JSON.parse(await getMeta('threeMemorizedRooms') || '{}');
           if(val) map[roomKey] = Date.now(); else delete map[roomKey];
           await setMeta('threeMemorizedRooms', JSON.stringify(map));
+        },
+        // same as setMemorized, for the "fully decorated" (Part A) flag.
+        setDecorated: async (roomKey, val) => {
+          const map = JSON.parse(await getMeta('threeDecoratedRooms') || '{}');
+          if(val) map[roomKey] = Date.now(); else delete map[roomKey];
+          await setMeta('threeDecoratedRooms', JSON.stringify(map));
+        },
+        // a node's rendered label (carries the moveQuality glyph and, once
+        // decorated, the 🎨 glyph appended in showTranspositionGraph).
+        labelOf: (fen) => {
+          const n = cy.nodes().filter(x => x.data('fen') === fen);
+          return n.nonempty() ? n.data('label') : null;
         },
         // the roomKey a node was classed against (null if it has no owning
         // castle), for asserting the memorized class landed on the right node.
@@ -1671,8 +1693,14 @@ function miniBoardGridHtml(fen, flip){
 // canvas-rendered room-info mini board can be checked without driving a real
 // cytoscape node click.
 if(localStorage.getItem('threeTestDebug')) window.__miniBoardGridHtml = miniBoardGridHtml;
+// the roomKey of whatever node showRoomInfoPanel most recently rendered --
+// read by roomInfoJumpBtn's click handler (kept as module state, same as
+// GRAPH_FOCUS_SEQ etc., rather than threaded through the DOM).
+let ROOM_INFO_ROOM_KEY = null;
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
+  ROOM_INFO_ROOM_KEY = roomEl.data('roomKey') || null;
+  $('roomInfoJumpBtn').style.display = ROOM_INFO_ROOM_KEY ? '' : 'none';
   const mnemonicsBySquare = await getAllMnemonics();
   const whiteWord = mnemonicWordForSeq(seq, mnemonicsBySquare);
   const whiteImg = mnemonicImgForSeq(seq, mnemonicsBySquare);
@@ -1710,6 +1738,19 @@ async function showRoomInfoPanel(roomEl){
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
+// "Jump to VR" (Part B): try the fast path first -- VR already open and this
+// room already registered in that session (jumpToRoom) -- and only fall back
+// to (re)building the whole main world when that's not possible (VR closed,
+// or open but missing this room's castle, e.g. a Preview-Castle session).
+// The digraph overlay is deliberately left open underneath; only this modal
+// closes (closing VR later returns to the still-open graph).
+$('roomInfoJumpBtn').onclick = async () => {
+  const roomKey = ROOM_INFO_ROOM_KEY;
+  if(!roomKey) return;
+  $('roomInfoOverlay').style.display = 'none';
+  if(jumpToRoom(roomKey)) return;
+  await openMainVRWorld(roomKey);
+};
 $('castleReportCloseBtn').onclick = () => { $('castleReportOverlay').style.display='none'; };
 /* G2a: walk the generated castle in VR — hand its room/exit structure to the
    three.js engine, which synthesizes navigable rooms and spawns us at the entry. */
@@ -3847,8 +3888,13 @@ async function gatherBuiltCastles(lines){
   return out;
 }
 
-$('menuThreeTest').onclick = async ()=>{
-  $('menuList').style.display='none';
+// Builds and opens the full main VR world (every built castle, one street per
+// opening system). Extracted from menuThreeTest's handler (mirrors this
+// codebase's oqStartSession precedent) so "Jump to VR" from the room-info
+// modal can drive the same flow, landing directly on startRoomKey instead of
+// Main Street, when the room wasn't already reachable via jumpToRoom's fast
+// path (VR not open yet, or open but missing that room's castle).
+async function openMainVRWorld(startRoomKey){
   const spinner = showSpinner('Building world…');
   let systems = [], castles = [];
   try {
@@ -3867,10 +3913,15 @@ $('menuThreeTest').onclick = async ()=>{
     systems,
     castles,
     piecesFile: PIECES_FILE,
+    startRoomKey,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
     onAssets: openThreeTestAssets
   });
+}
+$('menuThreeTest').onclick = async ()=>{
+  $('menuList').style.display='none';
+  await openMainVRWorld();
 };
 
 /* ---------- asset manager ---------- */
