@@ -2189,6 +2189,49 @@ try {
       `expected the door panel ~1cm proud of the wall's visible face (${doorPanel.wall}), got offset ${offset.toFixed(4)} (raw mesh z/x ${along.toFixed(4)}, wall face ${faceFor.toFixed(4)})`);
     ok('door skin panel sits 1cm proud of the wall\'s visible face, not buried inside its thickness');
   } catch(e){ bad('door skin: forward offset off the wall face', e); }
+
+  // 98. Regression: a large per-asset oversize must NOT widen the wall's own
+  //     cut opening (the gap two solid wall segments leave for the door) --
+  //     only the cosmetic skin panel grows. Confirmed by checking the actual
+  //     solid wall segment meshes flanking the door still meet at the fixed
+  //     DOOR_W/DOOR_H boundary regardless of a huge oversizePct.
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    await appX.page.evaluate(
+      ({ rk, id }) => window.__threeTestEdit.setAllDoorAssets(rk, id), { rk: roomKey, id: 'door-columns' });   // 20% oversizePct
+    await appX.page.waitForTimeout(300);
+    // the wall's own opening half-width is baked into every solid segment/
+    // lintel box via the constant DOOR_W (2.2), completely independent of
+    // any asset's oversizePct -- so a BoxGeometry wall segment whose width
+    // or depth is exactly DOOR_W confirms the cut is still at the fixed
+    // size, not the 20%-oversized 2.64 a widened-opening regression would
+    // produce instead.
+    const fixedWidthWallBox = await appX.page.evaluate((w) => {
+      const m = window.__threeTestEdit.meshes().find(m => m.kind === 'wall' && m.type === 'BoxGeometry' &&
+        (Math.abs(m.params.width - w) < 0.01 || Math.abs(m.params.depth - w) < 0.01));
+      return !!m;
+    }, DOOR_W);
+    assert(fixedWidthWallBox, `expected a solid wall/lintel box still cut at the fixed DOOR_W (${DOOR_W}) even with a 20% oversized skin assigned`);
+    ok('door skin oversize does not widen the wall\'s own cut opening, only the cosmetic panel');
+  } catch(e){ bad('door skin: oversize does not affect the wall opening', e); }
+
+  // 99. Regression: the door panel's material must be transparent -- without
+  //     it, three.js ignores the PNG's alpha channel and paints whatever RGB
+  //     sits in "transparent" pixels (often black) as solid opaque color.
+  //     Since oversize scales the WHOLE plane up, that black margin would
+  //     grow right along with it -- exactly the reported symptom ("black
+  //     artifacts coming off the sides" as the oversize % increases).
+  try {
+    const roomKey = await appX.page.evaluate(() => window.__threeTestEdit.room());
+    const doorPanel = await appX.page.evaluate(() => {
+      const m = window.__threeTestEdit.meshes().find(m => m.kind === 'door-panel');
+      return m ? { transparent: m.transparent } : null;
+    });
+    assert(doorPanel, 'expected to find a door panel mesh (test setup issue if not)');
+    assert(doorPanel.transparent === true,
+      'expected the door panel material to be transparent, so an oversized non-rectangular skin\'s alpha margin is honored instead of rendering as opaque black');
+    ok('door skin panel material is transparent (honors the PNG\'s alpha channel instead of rendering it as black)');
+  } catch(e){ bad('door skin: panel material is transparent', e); }
 } finally {
   await appX.close();
 }

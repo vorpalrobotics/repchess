@@ -3451,7 +3451,13 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
 // always was.
 function makeDoorPanelMesh(asset){
   const oversize = DOOR_SKIN_BASE_OVERSIZE + (Number(asset.oversizePct) || 0) / 100;
-  const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  // transparent:true is required for the PNG's own alpha channel to actually
+  // be honored -- without it three.js ignores alpha and paints whatever RGB
+  // is stored in "transparent" pixels (often black), so a non-rectangular
+  // door skin's margin renders as solid black instead of see-through. Since
+  // oversize scales the WHOLE plane up, that black margin grows right along
+  // with it -- the bigger the oversize, the more black shows.
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, transparent: true });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * (1 + oversize), DOOR_H * (1 + oversize)), mat);
   const myGeneration = buildGeneration;
   textureLoader.load(asset.image, (tex) => {
@@ -6401,7 +6407,7 @@ export async function openThreeTest(containerEl, opts){
       // Part B ("Jump to VR") without going through the app's modal/button.
       jumpToRoom: (key) => jumpToRoom(key),
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
-      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map) }); } }); return out; },
+      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
       pos: () => ({ x: pos.x, z: pos.z, yaw }),
