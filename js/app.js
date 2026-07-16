@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260716-83';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260716-84';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260630-65';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-105';
+const BUILD_TAG = '-106';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1238,16 +1238,22 @@ async function showTranspositionGraph(){
         const ownCastle = inheritedCastle(r.seq);
         const roomKey = ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
         const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
+        const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const decorated = roomKey ? !!DECORATED_ROOMS[roomKey] : false;
-        const moveLabel = r.label + (q ? ' ' + q : '') + (decorated ? ' 🎨' : '');
+        // 🧠 (memorized) / 🎨 (decorated) glyphs read at normal zoom; the
+        // "all done" border (below) is the zoomed-out signal, so both glyphs
+        // still show even when it's also on.
+        const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '');
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
-        const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const baseClass = entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '');
+        // thick green border: reserved for "all done" (both memorized AND
+        // decorated) so it reads at a glance even zoomed out too far to make
+        // out the glyphs -- memorized/decorated alone show only their glyph.
         return {
           data,
-          classes: [baseClass, memorized ? 'memorized' : ''].filter(Boolean).join(' ')
+          classes: [baseClass, (memorized && decorated) ? 'all-done' : ''].filter(Boolean).join(' ')
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
@@ -1278,11 +1284,13 @@ async function showTranspositionGraph(){
         }},
         { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
         { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
-        // "memorized" (see js/threeVR.js's VR toolbar toggle) -- a border, not
-        // a background-color, so it composes with .root/.transposition
-        // instead of fighting them for the same channel (a memorized
-        // transposition room stays orange-filled with a green ring).
-        { selector:'node.memorized', style:{ 'border-width':3, 'border-color':'#66bb6a', 'border-style':'solid' } },
+        // "all done" (memorized AND fully decorated -- see the 🧠/🎨 label
+        // glyphs for either alone) -- a border, not a background-color, so
+        // it composes with .root/.transposition instead of fighting them for
+        // the same channel (an all-done transposition room stays
+        // orange-filled with a green ring), and reads at a glance even
+        // zoomed out too far to make out the glyphs.
+        { selector:'node.all-done', style:{ 'border-width':3, 'border-color':'#66bb6a', 'border-style':'solid' } },
         { selector:'node.run-box', style:{
           'shape':'round-rectangle', 'background-color':'#ffcc80', 'background-opacity':0.18,
           'border-width':1.5, 'border-style':'dashed', 'border-color':'#e69a3c',
