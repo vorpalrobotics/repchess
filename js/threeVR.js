@@ -3227,11 +3227,11 @@ function makeRoomNameFloorTexture(name){
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
-// how far into the room (from the entrance wall) the floor label sits: 3.5m
+// how far into the room (from the entrance wall) the floor label sits: 4m
 // when the room is deep enough, otherwise clamped so it never crowds the far
 // wall -- a small room (ROOM_GEOM_MIN is 2m) still gets a sensibly-placed
 // label instead of one sitting on top of (or past) the opposite wall.
-const ROOM_NAME_FLOOR_DIST = 3.5;
+const ROOM_NAME_FLOOR_DIST = 4;
 const ROOM_NAME_FLOOR_FAR_MARGIN = 0.6;
 function roomNameFloorPos(size, wall){
   const along = (wall === 'north' || wall === 'south') ? size.d : size.w;

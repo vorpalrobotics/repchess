@@ -3287,7 +3287,7 @@ try {
   } catch(e){ bad('room name floor label: none without a name', e); }
 
   // 116. Naming the room shows exactly one label, lying flat (normal ~ world
-  //      up), positioned 3.5m in from the entrance (south wall here), centered
+  //      up), positioned 4m in from the entrance (south wall here), centered
   //      on the cross axis, just above the floor.
   let size;
   try {
@@ -3297,13 +3297,13 @@ try {
     size = await appAJ.page.evaluate((rk) => window.__threeTestEdit.roomSize(rk), root);
     const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
     assert(label && label.count === 1, `expected exactly one floor label, got ${JSON.stringify(label)}`);
-    const expectedZ = size.d / 2 - 3.5;   // south entrance, 3.5m in (room is deep enough)
+    const expectedZ = size.d / 2 - 4;   // south entrance, 4m in (room is deep enough)
     assert(Math.abs(label.x) < 0.05 && Math.abs(label.z - expectedZ) < 0.05,
-      `expected the label ~3.5m in from the south entrance (x~0, z~${expectedZ}), got x=${label.x} z=${label.z}`);
+      `expected the label ~4m in from the south entrance (x~0, z~${expectedZ}), got x=${label.x} z=${label.z}`);
     assert(label.y > 0 && label.y < 0.1, `expected the label just above the floor, got y=${label.y}`);
     assert(Math.abs(label.normal.x) < 0.01 && label.normal.y > 0.99 && Math.abs(label.normal.z) < 0.01,
       `expected the label lying flat (normal ~ (0,1,0)), got ${JSON.stringify(label.normal)}`);
-    ok('a named room shows exactly one floor label, lying flat, 3.5m in from the entrance');
+    ok('a named room shows exactly one floor label, lying flat, 4m in from the entrance');
   } catch(e){ bad('room name floor label: position/orientation for a named room', e); }
 
   // 117. Turning hints off hides it (a memory aid, not permanent decor);
@@ -3320,13 +3320,13 @@ try {
     ok('the room-name floor label is hint-gated (hidden/shown with the hints toggle)');
   } catch(e){ bad('room name floor label: hint-gated', e); }
 
-  // 118. Edge case: a room shallower than 3.5m + the far-wall margin clamps
+  // 118. Edge case: a room shallower than 4m + the far-wall margin clamps
   //      the label so it never crowds (or sits past) the far wall.
   try {
     await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 2.5, h: 6 }), root);
     await appAJ.page.waitForTimeout(200);
     const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
-    const expectedZ = 2.5/2 - (2.5 - 0.6);   // clamped to (depth - far-wall margin), not the full 3.5m
+    const expectedZ = 2.5/2 - (2.5 - 0.6);   // clamped to (depth - far-wall margin), not the full 4m
     assert(label && Math.abs(label.z - expectedZ) < 0.05,
       `expected the label clamped clear of the far wall in a 2.5m-deep room (z~${expectedZ}), got ${JSON.stringify(label)}`);
     ok('room name floor label: clamped to stay clear of the far wall in a shallow room');
