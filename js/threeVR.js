@@ -1046,6 +1046,22 @@ function evaluateDecorated(roomKey){
   persistDecorated();
 }
 
+// A room is "empty" when it has no forward (non-back) exits at all -- a
+// genuine dead end, nothing further has been built past it (an UNBUILT
+// continuation never gets a real exit -- see registerOneCastle's `fwd`
+// filter -- so a room whose only further move is still undecided reads as
+// empty too, same as one with no further move at all; either way there's
+// nothing to walk into). Computed live like DECORATED, not stored, so a
+// locked door unlocks itself automatically the moment that continuation
+// gets built. Ordinary (ROOMS-registered) rooms only -- an unregistered
+// foreign-castle target (single-castle preview) is never treated as empty,
+// since we can't know its real structure this session.
+function isRoomEmpty(roomKey){
+  const room = mergedRoom(roomKey);
+  if(!room) return false;
+  return !(room.exits || []).some(ex => !ex.back);
+}
+
 function ensureRoomLayout(roomKey){
   if(!LAYOUT[roomKey]) LAYOUT[roomKey] = {};
   const r = LAYOUT[roomKey];
@@ -1859,9 +1875,19 @@ function defaultDoorAsset(roomKey, isExit){
   const id = defaultFieldId(roomKey, isExit ? 'exitDoor' : 'door');
   return id ? ASSET_BY_ID[id] : null;
 }
+// the building-default skin for a LOCKED door (see isRoomEmpty) -- a distinct
+// category from the ordinary/exit door defaults so a castle's dead-end doors
+// (e.g. a "bank vault" skin) don't silently inherit its normal door style.
+// Deliberately does NOT fall back to defaultDoorAsset: an unset locked-door
+// default means the door stays an open, unskinned gap (with its lock icon),
+// not a normal-looking door.
+function defaultLockedDoorAsset(roomKey){
+  const id = defaultFieldId(roomKey, 'lockedDoor');
+  return id ? ASSET_BY_ID[id] : null;
+}
 // snapshot a room's *effective* surfaces into a style set (the shape shared by
 // building defaults and named presets): floor/ceiling/stairs, walls stored
-// relative to the entrance door, and two door styles (exit vs ordinary).
+// relative to the entrance door, and three door styles (exit / locked / ordinary).
 function snapshotRoomStyle(roomKey){
   const room = mergedRoom(roomKey);
   const ent = entranceWall(room);
@@ -1873,18 +1899,23 @@ function snapshotRoomStyle(roomKey){
     stairSurface: rawSurfaceId(roomKey, 'stairSurface'),
     door: null,
     exitDoor: null,
+    lockedDoor: null,
     walls: { entrance:null, opposite:null, left:null, right:null }
   };
   for(const wall of ['north','south','east','west']){
     const id = rawWallId(roomKey, wall);
     if(id) d.walls[wallRelative(ent, wall)] = id;
   }
-  // first back:true door -> exitDoor, first ordinary door -> door
+  // first back:true door -> exitDoor, first locked door -> lockedDoor, first
+  // ordinary door -> door
   for(const ex of (room.exits || [])){
     if(ex.type && ex.type !== 'door') continue;          // stairs/elevator have no door panel
-    const a = doorAssetFor(roomKey, doorKey(ex.wall, ex.offset)) || defaultDoorAsset(roomKey, !!ex.back);
+    const locked = !ex.back && isRoomEmpty(ex.target);
+    const a = doorAssetFor(roomKey, doorKey(ex.wall, ex.offset))
+      || (locked ? defaultLockedDoorAsset(roomKey) : defaultDoorAsset(roomKey, !!ex.back));
     if(!a) continue;
     if(ex.back){ if(!d.exitDoor) d.exitDoor = a.id; }
+    else if(locked){ if(!d.lockedDoor) d.lockedDoor = a.id; }
     else if(!d.door) d.door = a.id;
   }
   return d;
@@ -1920,10 +1951,13 @@ function applyPresetToBuilding(name, roomKey){
   });
 }
 // stamp a preset directly onto one room as per-room overrides -- walls are
-// rotated from relative back to this room's absolute walls, the exit-door style
-// goes on the back:true door and the ordinary style on the rest. Replaces the
-// room's current surface styling (props are left alone). A preset entry of null
-// means "no override" (so it falls back to the building default / procedural).
+// rotated from relative back to this room's absolute walls, the exit-door
+// style goes on the back:true door, the locked-door style on a door leading
+// to an empty room, and the ordinary style on the rest. Replaces the room's
+// current surface styling (props are left alone). A preset entry of null
+// means "no override" (so it falls back to the building default / procedural
+// -- for a locked door with no p.lockedDoor, that's an unskinned gap + lock
+// icon, deliberately not p.door; see defaultLockedDoorAsset).
 function applyPresetToRoom(name, roomKey){
   const p = LAYOUT.__presets && LAYOUT.__presets[name];
   if(!p) return;
@@ -1942,7 +1976,8 @@ function applyPresetToRoom(name, roomKey){
     r.doors = {};
     for(const ex of (room.exits || [])){
       if(ex.type && ex.type !== 'door') continue;
-      const id = ex.back ? p.exitDoor : p.door;
+      const locked = !ex.back && isRoomEmpty(ex.target);
+      const id = ex.back ? p.exitDoor : (locked ? p.lockedDoor : p.door);
       if(id) r.doors[doorKey(ex.wall, ex.offset)] = id;
     }
   });
@@ -3494,6 +3529,70 @@ function buildDoorPanel(size, wall, offset, asset){
   if(wall === 'east'){  mesh.position.set(fixed - f, y, offset); mesh.rotation.y = -Math.PI/2; }
   return mesh;
 }
+// a simple vector-drawn padlock (shackle arc + body + keyhole) rather than a
+// font glyph -- guaranteed to render identically everywhere, no dependence on
+// an emoji/webfont being available (Font Awesome is CDN-blocked in the
+// offline test harness, same class of gap as cm-chessboard). Drawn once and
+// cached; every locked-door instance reuses the same texture/material.
+function makeLockIconTexture(){
+  const px = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = px; canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = '#f2c14e';
+  ctx.lineWidth = px * 0.11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(px / 2, px * 0.42, px * 0.2, Math.PI, 0, false);
+  ctx.stroke();
+  const bodyW = px * 0.62, bodyH = px * 0.42, bodyX = (px - bodyW) / 2, bodyY = px * 0.4, r = px * 0.06;
+  ctx.fillStyle = '#f2c14e';
+  ctx.beginPath();
+  ctx.moveTo(bodyX + r, bodyY);
+  ctx.lineTo(bodyX + bodyW - r, bodyY);
+  ctx.quadraticCurveTo(bodyX + bodyW, bodyY, bodyX + bodyW, bodyY + r);
+  ctx.lineTo(bodyX + bodyW, bodyY + bodyH - r);
+  ctx.quadraticCurveTo(bodyX + bodyW, bodyY + bodyH, bodyX + bodyW - r, bodyY + bodyH);
+  ctx.lineTo(bodyX + r, bodyY + bodyH);
+  ctx.quadraticCurveTo(bodyX, bodyY + bodyH, bodyX, bodyY + bodyH - r);
+  ctx.lineTo(bodyX, bodyY + r);
+  ctx.quadraticCurveTo(bodyX, bodyY, bodyX + r, bodyY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#2b2410';
+  ctx.beginPath();
+  ctx.arc(px / 2, bodyY + bodyH * 0.4, px * 0.045, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(px / 2 - px * 0.018, bodyY + bodyH * 0.4, px * 0.036, bodyH * 0.34);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+let lockIconMat = null;
+function lockIconMaterial(){
+  if(!lockIconMat){
+    lockIconMat = new THREE.MeshBasicMaterial({ map: makeLockIconTexture(), transparent: true, side: THREE.DoubleSide });
+  }
+  return lockIconMat;
+}
+// floats a padlock in an unskinned locked door's open gap -- only built when
+// there's no assigned skin (see the wallExits loop): once a skin (e.g. a
+// vault image) covers the gap, the icon isn't needed to signal "locked".
+// Same wall-face-proud positioning convention as buildDoorPanel, sized well
+// inside the DOOR_W x DOOR_H opening so it doesn't crowd the door frame.
+function buildLockedDoorIcon(size, wall, offset){
+  const iconSize = 0.9;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(iconSize, iconSize), lockIconMaterial());
+  mesh.userData = { kind: 'locked-door-icon', wall };
+  const { fixed } = wallSpan(size, wall);
+  const y = DOOR_H / 2;
+  const f = WALL_THICK/2 + DOOR_SKIN_FORWARD_OFFSET;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed + f); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed - f); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + f, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - f, y, offset); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
 let doorMarkerMat = null;
 function doorMarkerMaterial(){
   if(!doorMarkerMat){
@@ -4302,13 +4401,27 @@ function buildRoom(roomKey){
         for(const ex of wallExits){
           const isStair = isStairType(ex.type);
           const dKey = doorKey(wall, ex.offset);
-          // room override wins, else the building's exit-door / ordinary-door default
-          const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex.back);
+          // a locked door: a forward, ordinary (not stair/elevator) door whose
+          // target has nothing further built past it -- see isRoomEmpty. Room
+          // override wins, else the locked-door building default (never the
+          // ordinary-door default -- an unset locked default stays an open,
+          // unskinned gap rather than silently looking like a normal door).
+          const locked = !ex.back && !isStair && ex.type !== 'elevator' && isRoomEmpty(ex.target);
+          const doorAsset = doorAssetFor(roomKey, dKey)
+            || (locked ? defaultLockedDoorAsset(roomKey) : defaultDoorAsset(roomKey, !!ex.back));
           const spawn = computeSpawnForExit(roomKey, room, ex);
           const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
-          exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
+          // a locked door gets no teleport trigger -- clampToRoom already keeps
+          // an ordinary doorway solid right up to the wall plane (the trigger is
+          // what normally lets you cross it before you'd hit that boundary), so
+          // simply not registering one is enough to make it impassable.
+          if(!locked) exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
+          // unskinned locked door: a floating lock icon in the open gap so it
+          // still reads as locked before you've assigned (or defaulted) a skin
+          // like a vault image -- once skinned, the icon steps aside for it.
+          else if(locked) scene.add(buildLockedDoorIcon(room.size, wall, ex.offset));
           if(isStair) scene.add(buildStairCorridor(room, wall, ex.offset, wallAssetFor(roomKey, wall), roomKey, stairDir(ex.type)));
           // forward-door hint: name plaque above the door, and the move-pair +
           // object for the room beyond, to the left of the door. The pair is
@@ -5735,7 +5848,7 @@ function defaultsBoxHtml(roomKey){
       <div style="font-size:.74rem;color:#555;line-height:1.45">
         <strong>Building defaults</strong> — floor ${m(d.floor)} · ceiling ${m(d.ceiling)} · stairs ${m(d.stairSurface)}<br>
         walls: ent ${m(d.walls&&d.walls.entrance)}, opp ${m(d.walls&&d.walls.opposite)}, L ${m(d.walls&&d.walls.left)}, R ${m(d.walls&&d.walls.right)} ·
-        doors: exit ${m(d.exitDoor)}, std ${m(d.door)}
+        doors: exit ${m(d.exitDoor)}, std ${m(d.door)}, locked ${m(d.lockedDoor)}
       </div>
       <button id="roomGeomClearDefaultsBtn" style="font-size:.68rem;white-space:nowrap;align-self:center">Clear defaults</button>
     </div>`;
@@ -5914,7 +6027,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <div id="roomGeomPresetsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${presetsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
         <input type="checkbox" id="roomGeomMakeDefault" style="margin-top:.15rem">
-        <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door keeps its own style).</span>
+        <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door and locked doors each keep their own style).</span>
       </label>
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <div style="display:flex;gap:.4rem">
@@ -6406,6 +6519,31 @@ export async function openThreeTest(containerEl, opts){
       // jumps to roomKey via the exported jumpToRoom fast path, for testing
       // Part B ("Jump to VR") without going through the app's modal/button.
       jumpToRoom: (key) => jumpToRoom(key),
+      // locked-door rooms: the computed "nothing built past here" flag, and
+      // whether a given target currently has a live teleport trigger (i.e. is
+      // actually walkable) -- the real signal a locked door removes, checked
+      // directly rather than driving a full WASD walk-into-the-wall simulation.
+      isRoomEmpty: (key) => isRoomEmpty(key),
+      canWalkTo: (targetKey) => exitMeta.some(m => m.target === targetKey),
+      // assigns a per-door override keyed by which TARGET the door leads to,
+      // rather than requiring the caller to hand-compute its wall/offset via
+      // doorKey() -- for testing locked-vs-ordinary door skin resolution.
+      setDoorAssetForTarget: (roomKey, targetKey, assetId) => {
+        const r = mergedRoom(roomKey);
+        const ex = r && r.exits && r.exits.find(e => e.target === targetKey);
+        if(!ex) return false;
+        setDoorOverride(roomKey, doorKey(ex.wall, ex.offset), assetId);
+        return true;
+      },
+      // drives the real "make default" capture the Room Geometry dialog's
+      // Apply button does (captureBuildingDefaults), persisted + rebuilt the
+      // same way that flow's commitRoomGeomDialog does right after -- for
+      // testing a castle-wide locked-door default without opening the dialog.
+      captureBuildingDefaults: (roomKey) => {
+        captureBuildingDefaults(roomKey);
+        persistLayout();
+        buildRoom(currentRoomKey);
+      },
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
       entry: () => entryPoint,
