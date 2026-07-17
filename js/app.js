@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-121';
+const BUILD_TAG = '-123';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -265,6 +265,18 @@ function computeNodeStats(games,seq){
     !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
 
   let nodeCount = 0, maxBranchFactor = visibleOpps.length;
+  // "complete to move N": the shallowest branch's move number, where a branch
+  // is measured by OUR last move in it. Reaching our own move N is enough --
+  // the opponent needn't have a reply to it. `seq` ends in our move, so its
+  // final ply IS our last move here; ceil(ply/2) is that move's number (ply 1
+  // & 2 = move 1, ply 3 & 4 = move 2, …), color-agnostic since the move number
+  // is absolute. A branch STOPS at this node -- and so is complete only to our
+  // move here -- when the opponent has no visible reply at all, or has a
+  // visible reply we haven't answered; a fully-answered node keeps going.
+  const ourMove = Math.ceil(seq.length / 2);
+  const stopsHere = visibleOpps.length === 0 ||
+    visibleOpps.some(opp => !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.reply);
+  let completeToMove = stopsHere ? ourMove : Infinity;
   for(const opp of visibleOpps){
     const lineSeq = [...seq,opp];
     const reply = PREFS[prefKey(CURRENT_LINE.id,lineSeq)]?.reply;
@@ -273,8 +285,9 @@ function computeNodeStats(games,seq){
     const sub = computeNodeStats(games,[...lineSeq,reply]);
     nodeCount += sub.nodeCount;
     maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
+    completeToMove = Math.min(completeToMove, sub.completeToMove);
   }
-  return {nodeCount, maxBranchFactor};
+  return {nodeCount, maxBranchFactor, completeToMove};
 }
 
 async function showNodeStats(games,seq){
@@ -286,7 +299,10 @@ async function showNodeStats(games,seq){
   } finally {
     hideSpinner(spinner);
   }
-  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}`);
+  const complete = Number.isFinite(stats.completeToMove)
+    ? `\nComplete to move: ${stats.completeToMove}`
+    : '';
+  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}${complete}`);
 }
 
 function formatNodeStats({nodeCount,maxBranchFactor}){
@@ -1221,6 +1237,30 @@ async function showTranspositionGraph(){
 
     console.log(`[graph] nodes=${rooms.length+leaves.length+(needsStartNode?1:0)} edges=${edges.length} boxes=${boxes.length} cyclic=${cyclic} → flat layout, boxes re-wrapped after`);
 
+    // which rooms have a real forward continuation -- an edge to another ROOM
+    // (built reply, incl. a transposition/back edge) or into another castle
+    // (foreignKey). A room with NONE is a VR dead-end: in the walk its
+    // doorway is a locked door you can't walk through (see threeVR.js's
+    // isRoomEmpty). Used to hide "Jump to VR" for such rooms -- landing inside
+    // a room you can only otherwise reach through a locked door is confusing
+    // (the castle ROOT is exempt: it's empty until built out, but you reach it
+    // from the street, never through a locked door).
+    const roomsWithForwardExit = new Set(
+      edges.filter(e => e.foreignKey || (typeof e.target === 'string' && e.target.startsWith('room')))
+           .map(e => e.source)
+    );
+    // the roomKey of a castle's own entry room -- reached from the street (a
+    // back door), so it's exempt from the locked-dead-end rule even when it's
+    // empty (a freshly-rooted, not-yet-built-out castle). Memoized per castle.
+    const _castleEntryKey = new Map();
+    const castleEntryRoomKey = name => {
+      if(_castleEntryKey.has(name)) return _castleEntryKey.get(name);
+      const rootSeq = castleRootRoomSeq(name);
+      const key = rootSeq ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, name), positionKey(fenForSeq(rootSeq))) : null;
+      _castleEntryKey.set(name, key);
+      return key;
+    };
+
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       // box compound parents are NEVER given to dagre (they crash it); they are
@@ -1245,6 +1285,13 @@ async function showTranspositionGraph(){
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
+        // a VR dead-end reached through a locked door -- empty (no forward
+        // continuation) and not its castle's own entry room (that one is
+        // reached from the street, not a locked door). "Jump to VR" is hidden
+        // for these, since landing inside a room you could otherwise only
+        // reach through a locked door is confusing.
+        const isCastleEntry = !!(roomKey && ownCastle && roomKey === castleEntryRoomKey(ownCastle));
+        data.lockedDeadEnd = !isCastleEntry && !roomsWithForwardExit.has(r.id);
         const baseClass = entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '');
         // thick green border: reserved for "all done" (both memorized AND
         // decorated) so it reads at a glance even zoomed out too far to make
@@ -1706,7 +1753,11 @@ let ROOM_INFO_ROOM_KEY = null;
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
   ROOM_INFO_ROOM_KEY = roomEl.data('roomKey') || null;
-  $('roomInfoJumpBtn').style.display = ROOM_INFO_ROOM_KEY ? '' : 'none';
+  // Jump is offered only for a room you could actually reach by walking: it
+  // needs a VR room (roomKey), and it must not be a locked-door dead end
+  // (jumping inside a room whose only entrance is a locked door is confusing).
+  const jumpable = ROOM_INFO_ROOM_KEY && !roomEl.data('lockedDeadEnd');
+  $('roomInfoJumpBtn').style.display = jumpable ? '' : 'none';
   const mnemonicsBySquare = await getAllMnemonics();
   const whiteWord = mnemonicWordForSeq(seq, mnemonicsBySquare);
   const whiteImg = mnemonicImgForSeq(seq, mnemonicsBySquare);
@@ -6370,5 +6421,15 @@ if(localStorage.getItem('threeTestDebug')){
       try { return aqProgressHtml(item); }
       finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
     },
+  };
+}
+
+// test-only hook for the move-table node statistics (three-dot menu → Node
+// Statistics), so the pure tree-walk math -- especially "complete to move N"
+// -- can be checked directly against the seeded PREFS without driving the
+// row menu and capturing an alert.
+if(localStorage.getItem('threeTestDebug')){
+  window.__statsTestHooks = {
+    computeNodeStats: (seq) => computeNodeStats(GAMES, seq),
   };
 }
