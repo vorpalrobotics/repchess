@@ -3227,11 +3227,11 @@ function makeRoomNameFloorTexture(name){
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
-// how far into the room (from the entrance wall) the floor label sits: 3.5m
+// how far into the room (from the entrance wall) the floor label sits: 4m
 // when the room is deep enough, otherwise clamped so it never crowds the far
 // wall -- a small room (ROOM_GEOM_MIN is 2m) still gets a sensibly-placed
 // label instead of one sitting on top of (or past) the opposite wall.
-const ROOM_NAME_FLOOR_DIST = 3.5;
+const ROOM_NAME_FLOOR_DIST = 4;
 const ROOM_NAME_FLOOR_FAR_MARGIN = 0.6;
 function roomNameFloorPos(size, wall){
   const along = (wall === 'north' || wall === 'south') ? size.d : size.w;
@@ -6671,6 +6671,45 @@ export async function openThreeTest(containerEl, opts){
       setDecorated: (key, val) => {
         if(val) DECORATED[key] = Date.now(); else delete DECORATED[key];
         persistDecorated();
+      },
+      // dumps everything computeFullyDecorated looks at for one room, straight
+      // to the console with a "[Debug]" prefix so it's easy to filter/copy --
+      // for diagnosing a "won't decorate" report against real (non-test) data
+      // without needing to add print statements and re-deploy. Safe to run in
+      // production once threeTestDebug is set (see the hooks above/below).
+      debugDecoration: (roomKeyArg) => {
+        const roomKey = roomKeyArg || currentRoomKey;
+        console.log('[Debug] room key:', roomKey);
+        const room = mergedRoom(roomKey);
+        if(!room){ console.log('[Debug] mergedRoom(roomKey) is null/undefined -- not a registered room this session'); return; }
+        console.log('[Debug] entryNoStreet:', !!room.entryNoStreet, '  posKey:', ROOMS[roomKey] && ROOMS[roomKey].posKey);
+        const slots = moveObjectSlots(roomKey);
+        console.log('[Debug] move-object slots:', slots.length ? slots.map(s => `${s.id}(${s.side})`).join(', ') : '(none)');
+        for(const slot of slots){
+          const exempt = slot.side === 'center' && !room.entryNoStreet;
+          const overrideId = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slot.id];
+          const override = slotAssetFor(roomKey, slot.id);
+          const listResolved = !override ? moveObjectListResolved(roomKey, slot) : null;
+          const asset = override || (listResolved && listResolved.asset);
+          console.log(`[Debug]   slot ${slot.id}: exempt=${exempt}, overrideAssetId=${overrideId || null}` +
+            (override === null && overrideId ? ' (!! set but does not resolve in ASSET_BY_ID !!)' : '') +
+            `, listWord=${listResolved ? JSON.stringify(listResolved.word) : null}, resolvedAsset=${asset ? asset.id : null}` +
+            `, COUNTS_AS_FILLED=${exempt ? 'N/A (exempt)' : !!asset}`);
+        }
+        const exits = room.exits || [];
+        console.log('[Debug] exits:', exits.length ? exits.map(e => `${e.wall}@${e.offset}->${e.target}${e.back?' [back]':''}${e.type?' type='+e.type:''}`).join(' | ') : '(none)');
+        for(const ex of exits){
+          if(ex.back) continue;
+          const registered = !!ROOMS[ex.target];
+          const empty = registered ? isRoomEmpty(ex.target) : null;
+          const name = registered ? roomNameFor(ex.target) : null;
+          const verdict = !registered ? 'skipped (target not registered this session)'
+            : empty ? 'skipped (target isRoomEmpty)'
+            : name ? 'OK (named)' : '!! BLOCKS decoration (unnamed) !!';
+          console.log(`[Debug]   forward exit -> ${ex.target}: registered=${registered}, isRoomEmpty=${empty}, targetName=${JSON.stringify(name)} -- ${verdict}`);
+        }
+        console.log('[Debug] computeFullyDecorated(roomKey) =', computeFullyDecorated(roomKey));
+        console.log('[Debug] cached DECORATED[roomKey] =', DECORATED[roomKey] || null, '(stale until evaluateDecorated() re-runs, e.g. on edit-mode exit)');
       },
       // jumps to roomKey via the exported jumpToRoom fast path, for testing
       // Part B ("Jump to VR") without going through the app's modal/button.

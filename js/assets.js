@@ -119,7 +119,9 @@ function buildShell(){
 }
 
 function showList(){
-  $('assetsGrid').style.display = '';
+  const grid = $('assetsGrid');
+  if(!grid) return;   // standalone (grid-less) editor context, e.g. the New Asset modal opened from the asset picker
+  grid.style.display = '';
   $('assetsEditor').style.display = 'none';
 }
 
@@ -130,6 +132,7 @@ async function refreshGrid(){
 
 function renderGrid(){
   const grid = $('assetsGrid');
+  if(!grid) return;   // standalone (grid-less) editor context -- nothing to render
   let visible = FILTER_TYPE === 'all' ? ASSETS : ASSETS.filter(a => a.type === FILTER_TYPE);
   if(FILTER_TEXT) visible = visible.filter(a => `${a.id} ${a.keywords || ''}`.toLowerCase().includes(FILTER_TEXT));
   $('assetsCount').textContent = `${visible.length} asset${visible.length===1?'':'s'}`;
@@ -152,21 +155,22 @@ function renderGrid(){
 }
 
 /* ---------- editor ---------- */
-function openEditor(id){
+function openEditor(id, initialType){
   EDIT_ID = id;
   const a = id ? ASSETS.find(x => x.id === id) : null;
   EDIT_IMAGE = (a && a.image) || '';
   EDIT_IMAGE_ORIG = '';                 // no original until a fresh upload this session
   EDIT_RESOLUTION = (a && a.resolution) || RESOLUTION_DEFAULT;
   EDIT_IMG_W = EDIT_IMG_H = 0;
-  renderEditor(a);
-  $('assetsGrid').style.display = 'none';
+  renderEditor(a, initialType);
+  const grid = $('assetsGrid');
+  if(grid) grid.style.display = 'none';
   $('assetsEditor').style.display = '';
   updateImgInfo();   // measure the staged image → fills the dims note (no size snap on open)
 }
 
-function renderEditor(a){
-  const type = (a && a.type) || 'extruded';
+function renderEditor(a, initialType){
+  const type = (a && a.type) || initialType || 'extruded';
   const editor = $('assetsEditor');
   editor.innerHTML = `
     <div class="field">
@@ -646,13 +650,6 @@ function alphaBoundsFrac(dataUrl){
     img.onerror = () => reject(new Error('could not decode image'));
     img.src = dataUrl;
   });
-}
-
-/* convenience for the picker's quick upload: file -> down-converted data-URL
-   for the given (type, tier) in one step. */
-async function importImageFile(file, type, tier){
-  const full = await fileToDataUrl(file);
-  return downscaleDataUrl(full, resolutionCap(type, tier));
 }
 
 const editorType = () => { const el = $('assetTypeInput'); return el ? el.value : 'extruded'; };
@@ -1287,6 +1284,7 @@ async function saveEditor(){
   await setAsset(id, patch);
   await refreshGrid();
   showList();
+  return id;   // lets a standalone caller (e.g. openNewAssetModal) know the save succeeded
 }
 
 async function deleteEditor(id){
@@ -1294,6 +1292,65 @@ async function deleteEditor(id){
   await deleteAsset(id);
   await refreshGrid();
   showList();
+}
+
+/* Standalone "New Asset" modal: the same id/type/keywords/resolution/image
+   (upload, Generate…, Crop/Erase BG…) /size-fields editor as the full Asset
+   Manager, but in its own focused overlay with no grid alongside it -- for
+   callers (the asset picker's "New Asset" button) that just need to create
+   one asset and get back its id, without detouring through the full manager.
+   Reuses openEditor/renderEditor/saveEditor unchanged by temporarily
+   repointing containerEl (and thus every $() lookup they make) at this
+   overlay's own #assetsEditor host; showList()/renderGrid() are guarded to
+   no-op when there's no #assetsGrid in the current container, so saveEditor's
+   normal post-save calls stay harmless here. Resolves the new asset's id on
+   Save, or null on Cancel. */
+function openNewAssetModal(initialType){
+  return new Promise((resolve) => {
+    const prevContainer = containerEl;
+    let ov = document.getElementById('assetNewOverlay');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'assetNewOverlay';
+      ov.className = 'overlay';
+      // above the asset picker (60) that opens it; below Crop/Erase (70) and
+      // Generate… (130), both of which can be opened from within this editor.
+      ov.style.zIndex = '62';
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = `
+      <div class="modal" style="width:min(38em,92vw);max-height:90vh;overflow:auto">
+        <div class="assets-header">
+          <h2>New Asset</h2>
+          <button id="assetNewCloseBtn">Cancel</button>
+        </div>
+        <div id="assetsEditor" class="assets-editor"></div>
+      </div>`;
+    ov.style.display = 'flex';
+    containerEl = ov;
+
+    let settled = false;
+    const finish = (id) => {
+      if(settled) return;
+      settled = true;
+      ov.style.display = 'none';
+      ov.innerHTML = '';
+      containerEl = prevContainer;
+      resolve(id || null);
+    };
+
+    openEditor(null, initialType);
+    // renderEditor (inside openEditor) already wired Save/Cancel to
+    // saveEditor()/showList() for the full-manager flow -- rewire both here
+    // so this standalone modal resolves instead of just sitting there.
+    ov.querySelector('#assetsSaveBtn').onclick = async () => {
+      const id = await saveEditor();
+      if(id) finish(id);
+    };
+    ov.querySelector('#assetsCancelBtn').onclick = () => finish(null);
+    ov.querySelector('#assetNewCloseBtn').onclick = () => finish(null);
+    ov.onclick = e => { if(e.target === ov) finish(null); };
+  });
 }
 
 /* ---------- export ----------
@@ -1373,13 +1430,9 @@ async function exportAllAsFiles(){
    }
 */
 let pickerOpts = null;
-let pickerUploadType = 'extruded';
-let pickerResolution = RESOLUTION_DEFAULT;
 
 export function openAssetPicker(opts){
   pickerOpts = opts || {};
-  pickerUploadType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
-  pickerResolution = RESOLUTION_DEFAULT;
   let ov = document.getElementById('assetPickerOverlay');
   if(!ov){
     ov = document.createElement('div');
@@ -1427,11 +1480,7 @@ async function renderPicker(ov){
       </div>
       <div class="assets-editor-actions">
         <div class="left">
-          <button id="pickerUploadBtn"><i class="fa-solid fa-upload"></i> Upload new…</button>
-          <select id="pickerResolution" title="Import resolution">
-            ${RESOLUTION_TIERS.map(t => `<option value="${t}" ${t===pickerResolution?'selected':''}>${t[0].toUpperCase()+t.slice(1)}</option>`).join('')}
-          </select>
-          <input type="file" id="pickerUploadFile" accept="image/*" style="display:none">
+          <button id="pickerNewAssetBtn"><i class="fa-solid fa-plus"></i> New Asset…</button>
         </div>
         ${pickerOpts.allowRemove ? `<button id="pickerRemoveBtn" style="background:#c62828;color:#fff">${removeLabel}</button>` : ''}
       </div>
@@ -1485,7 +1534,7 @@ async function renderPicker(ov){
   if(!list.length){
     const p = document.createElement('p');
     p.className = 'assets-empty';
-    p.textContent = 'No matching assets yet. Use "Upload new…" or add some via menu → Manage VR Assets.';
+    p.textContent = 'No matching assets yet. Use "New Asset…" or add some via menu → Manage VR Assets.';
     grid.appendChild(p);
   } else {
     for(const a of list){
@@ -1501,37 +1550,13 @@ async function renderPicker(ov){
     }
   }
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
-  ov.querySelector('#pickerResolution').onchange = e => { pickerResolution = e.target.value; };
-  ov.querySelector('#pickerUploadBtn').onclick = () => ov.querySelector('#pickerUploadFile').click();
-  ov.querySelector('#pickerUploadFile').onchange = async e => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    await pickerUpload(file, ov);
+  ov.querySelector('#pickerNewAssetBtn').onclick = async () => {
+    const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
+    const newId = await openNewAssetModal(initialType);
+    if(newId) await renderPicker(ov);   // refresh so the new asset shows up for the user to pick
   };
   if(pickerOpts.allowRemove){
     ov.querySelector('#pickerRemoveBtn').onclick = () => { const cb = pickerOpts.onRemove; closePicker(); if(cb) cb(); };
-  }
-}
-
-/* upload straight from the picker: derive an id from the filename, encode the
-   image, and stage it with default metadata for the first allowed type, then
-   re-render so it shows up in the grid for the user to place. */
-async function pickerUpload(file, ov){
-  if(!file) return;
-  if(!file.type.startsWith('image/')){ alert('that file is not an image'); return; }
-  if(file.size > IMG_MAX_FILE_BYTES){ alert(`image too large (max ${IMG_MAX_FILE_BYTES/1024/1024}MB)`); return; }
-  let base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if(!ID_RE.test(base)) base = 'asset';
-  const existing = await getAllAssets();
-  let id = base, n = 2;
-  while(existing.some(a => a.id === id)){ id = `${base}-${n++}`; }
-  try{
-    const image = await toWebpDataUrl(await importImageFile(file, pickerUploadType, pickerResolution));
-    await setAsset(id, { type: pickerUploadType, image, resolution: pickerResolution });
-    await renderPicker(ov);
-  }catch(err){
-    console.error('[assets] picker upload failed', err);
-    alert('could not read that image');
   }
 }
 
