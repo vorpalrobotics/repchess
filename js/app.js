@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-122';
+const BUILD_TAG = '-123';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -265,6 +265,18 @@ function computeNodeStats(games,seq){
     !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
 
   let nodeCount = 0, maxBranchFactor = visibleOpps.length;
+  // "complete to move N": the shallowest branch's move number, where a branch
+  // is measured by OUR last move in it. Reaching our own move N is enough --
+  // the opponent needn't have a reply to it. `seq` ends in our move, so its
+  // final ply IS our last move here; ceil(ply/2) is that move's number (ply 1
+  // & 2 = move 1, ply 3 & 4 = move 2, …), color-agnostic since the move number
+  // is absolute. A branch STOPS at this node -- and so is complete only to our
+  // move here -- when the opponent has no visible reply at all, or has a
+  // visible reply we haven't answered; a fully-answered node keeps going.
+  const ourMove = Math.ceil(seq.length / 2);
+  const stopsHere = visibleOpps.length === 0 ||
+    visibleOpps.some(opp => !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.reply);
+  let completeToMove = stopsHere ? ourMove : Infinity;
   for(const opp of visibleOpps){
     const lineSeq = [...seq,opp];
     const reply = PREFS[prefKey(CURRENT_LINE.id,lineSeq)]?.reply;
@@ -273,8 +285,9 @@ function computeNodeStats(games,seq){
     const sub = computeNodeStats(games,[...lineSeq,reply]);
     nodeCount += sub.nodeCount;
     maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
+    completeToMove = Math.min(completeToMove, sub.completeToMove);
   }
-  return {nodeCount, maxBranchFactor};
+  return {nodeCount, maxBranchFactor, completeToMove};
 }
 
 async function showNodeStats(games,seq){
@@ -286,7 +299,10 @@ async function showNodeStats(games,seq){
   } finally {
     hideSpinner(spinner);
   }
-  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}`);
+  const complete = Number.isFinite(stats.completeToMove)
+    ? `\nComplete to move: ${stats.completeToMove}`
+    : '';
+  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}${complete}`);
 }
 
 function formatNodeStats({nodeCount,maxBranchFactor}){
@@ -6405,5 +6421,15 @@ if(localStorage.getItem('threeTestDebug')){
       try { return aqProgressHtml(item); }
       finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
     },
+  };
+}
+
+// test-only hook for the move-table node statistics (three-dot menu → Node
+// Statistics), so the pure tree-walk math -- especially "complete to move N"
+// -- can be checked directly against the seeded PREFS without driving the
+// row menu and capturing an alert.
+if(localStorage.getItem('threeTestDebug')){
+  window.__statsTestHooks = {
+    computeNodeStats: (seq) => computeNodeStats(GAMES, seq),
   };
 }

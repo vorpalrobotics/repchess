@@ -4203,5 +4203,55 @@ try {
   await appAS.close();
 }
 
+// --- Phase AT: node statistics "complete to move N" -- the shallowest branch's
+//     move number, measured by OUR last move (reaching our move N counts even
+//     if the opponent has no reply to it). ---
+const appAT = await launchApp();
+try {
+  await seedBackup(appAT.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },                               // White move 2
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },                    // White move 3
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },        // White move 4
+      // g6 (the OTHER reply to c4) is deliberately left unanswered.
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAT.page.click('.line-row');
+  await appAT.page.waitForSelector('.data-row', { timeout: 10000 });
+  const stat = (seq) => appAT.page.evaluate((s) => window.__statsTestHooks.computeNodeStats(s).completeToMove, seq);
+
+  // 145. A node with one branch answered deep and a sibling reply left
+  //      unanswered is complete only to OUR move at that node (the shallow
+  //      branch drags it down), even though the other branch goes further.
+  try {
+    const n = await stat(['d4','Nf6','c4']);   // our c4 = White move 2; g6 unanswered
+    assert(n === 2, `expected complete-to-move 2 (g6 unanswered pins it to our move 2), got ${n}`);
+    ok('node stats: complete-to-move is the shallowest branch (an unanswered reply pins it to our move there)');
+  } catch(e){ bad('node stats: complete-to-move shallowest branch', e); }
+
+  // 146. A node all of whose branches are answered down to the same depth is
+  //      complete to that deeper move number.
+  try {
+    const n = await stat(['d4','Nf6','c4','e6','Nc3']);   // only Bb4 → Bd2, reaching White move 4
+    assert(n === 4, `expected complete-to-move 4 (every branch reaches our move 4), got ${n}`);
+    ok('node stats: complete-to-move reflects a uniformly deeper subtree');
+  } catch(e){ bad('node stats: complete-to-move uniform depth', e); }
+
+  // 147. A leaf node -- we've made our move and the opponent has no reply at
+  //      all -- still counts as complete to OUR move (black needn't answer).
+  try {
+    const n = await stat(['d4','Nf6','c4','e6','Nc3','Bb4','Bd2']);   // our Bd2 = White move 4, no black reply
+    assert(n === 4, `expected complete-to-move 4 for a leaf at our move 4 (no black reply needed), got ${n}`);
+    ok('node stats: reaching our own move counts even with no opponent reply after it');
+  } catch(e){ bad('node stats: complete-to-move leaf counts our move', e); }
+} finally {
+  await appAT.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
