@@ -839,6 +839,9 @@ function openGenerateModal(){
    data-URL on Save, or null on Cancel (caller's image is left untouched).
    Shared by the asset editor's own openCropModal below and by the mnemonics
    move-image editor in app.js. */
+const CROP_TOL_KEY = 'cropEraseTol';
+const CROP_BRUSH_SIZE_KEY = 'cropBrushSize';
+
 export function cropImage(sourceDataUrl){
   let ov = document.getElementById('cropOverlay');
   if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); }
@@ -850,6 +853,15 @@ export function cropImage(sourceDataUrl){
 
   let eraseMode = false;
   let brushMode = false;
+
+  // undo/redo: one entry per real committed mutation (crop, a bucket-erase
+  // click, or a batch of brush strokes) -- see pushHistory below.
+  let history = [work];
+  let historyIndex = 0;
+
+  let savedTol = 32, savedBrushSize = 30;
+  try{ const raw = localStorage.getItem(CROP_TOL_KEY); const t = raw == null ? NaN : Number(raw); if(Number.isFinite(t) && t >= 0 && t <= 120) savedTol = t; }catch(_){}
+  try{ const raw = localStorage.getItem(CROP_BRUSH_SIZE_KEY); const b = raw == null ? NaN : Number(raw); if(Number.isFinite(b) && b >= 4 && b <= 200) savedBrushSize = b; }catch(_){}
 
   ov.innerHTML = `
     <div class="modal">
@@ -870,17 +882,19 @@ export function cropImage(sourceDataUrl){
         </div>
       </div>
       <div class="crop-actions">
+        <button id="cropUndoBtn" title="Undo"><i class="fa-solid fa-rotate-left"></i></button>
+        <button id="cropRedoBtn" title="Redo"><i class="fa-solid fa-rotate-right"></i></button>
         <button id="cropAutoBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-crop</button>
         <button id="cropApplyBtn"><i class="fa-solid fa-scissors"></i> Crop</button>
         <button id="cropEraseBtn"><i class="fa-solid fa-eraser"></i> Erase BG</button>
         <span id="cropEraseTools" style="display:none;align-items:center;gap:.4rem;font-size:.85rem;color:#444">
-          fuzz <input type="range" id="cropTol" min="0" max="120" value="32" style="width:120px">
-          <span id="cropTolVal" style="font-family:ui-monospace,monospace;min-width:2.2em">32</span>
+          fuzz <input type="range" id="cropTol" min="0" max="120" value="${savedTol}" style="width:120px">
+          <span id="cropTolVal" style="font-family:ui-monospace,monospace;min-width:2.2em">${savedTol}</span>
         </span>
         <button id="cropBrushBtn"><i class="fa-solid fa-paintbrush"></i> Brush erase</button>
         <span id="cropBrushTools" style="display:none;align-items:center;gap:.4rem;font-size:.85rem;color:#444">
-          size <input type="range" id="cropBrushSizeInput" min="4" max="200" value="30" style="width:120px">
-          <span id="cropBrushSizeVal" style="font-family:ui-monospace,monospace;min-width:2.6em">30px</span>
+          size <input type="range" id="cropBrushSizeInput" min="4" max="200" value="${savedBrushSize}" style="width:120px">
+          <span id="cropBrushSizeVal" style="font-family:ui-monospace,monospace;min-width:2.6em">${savedBrushSize}px</span>
         </span>
         <span class="spacer"></span>
         <button id="cropCancelBtn">Cancel</button>
@@ -895,6 +909,32 @@ export function cropImage(sourceDataUrl){
   const dims  = ov.querySelector('#cropDims');
   const bars  = { l: ov.querySelector('.crop-bar.l'), r: ov.querySelector('.crop-bar.r'),
                   t: ov.querySelector('.crop-bar.t'), b: ov.querySelector('.crop-bar.b') };
+  const undoBtn = ov.querySelector('#cropUndoBtn');
+  const redoBtn = ov.querySelector('#cropRedoBtn');
+
+  function updateHistoryButtons(){
+    undoBtn.disabled = historyIndex <= 0;
+    redoBtn.disabled = historyIndex >= history.length - 1;
+  }
+  // records a new committed mutation as the next undo step, discarding any
+  // "future" redo entries once the user has branched off from an undone
+  // state by making a fresh edit (standard undo-stack behaviour).
+  function pushHistory(newWork){
+    if(newWork === history[historyIndex]) return;   // nothing actually changed
+    history = history.slice(0, historyIndex + 1);
+    history.push(newWork);
+    historyIndex = history.length - 1;
+    updateHistoryButtons();
+  }
+  async function gotoHistory(idx){
+    if(idx < 0 || idx >= history.length) return;
+    exitToolModesForHistoryNav();   // discard any uncommitted strokes/mode state first
+    historyIndex = idx;
+    work = history[historyIndex];
+    sel = { l:0, t:0, r:1, b:1 };
+    await new Promise(resolve => { img.addEventListener('load', resolve, { once:true }); img.src = work; });
+    updateHistoryButtons();
+  }
 
   function fitWrap(){
     if(!natW || !natH) return;
@@ -949,6 +989,7 @@ export function cropImage(sourceDataUrl){
     // them already updated to the post-crop size, not whatever they were a
     // moment ago. The persistent onload=onImgReady handler still fires too.
     await new Promise(resolve => { img.addEventListener('load', resolve, { once:true }); img.src = work; });
+    pushHistory(work);
   }
 
   // Erase-background mode: clicking the image samples that pixel and flood-fills
@@ -970,7 +1011,7 @@ export function cropImage(sourceDataUrl){
     if(on) dims.textContent = 'click a background area to erase it';
     else paint();   // restore the dimensions readout
   }
-  tolEl.oninput = () => { tolVal.textContent = tolEl.value; };
+  tolEl.oninput = () => { tolVal.textContent = tolEl.value; try{ localStorage.setItem(CROP_TOL_KEY, tolEl.value); }catch(_){} };
   img.addEventListener('pointerdown', (e) => {
     if(!eraseMode || !natW) return;
     const r = img.getBoundingClientRect();
@@ -989,6 +1030,7 @@ export function cropImage(sourceDataUrl){
     cx.putImageData(id, 0, 0);
     work = c.toDataURL('image/png');
     img.src = work;
+    pushHistory(work);
     dims.textContent = `erased ${n.toLocaleString()} px — click more or SAVE`;
   });
 
@@ -1011,6 +1053,7 @@ export function cropImage(sourceDataUrl){
   let brushCtx = null;
   let brushDrawing = false;
   let brushLast = null;   // {x,y} in natural-pixel space, for gap-free interpolation between samples
+  let brushDirty = false; // any stroke drawn since initBrushCanvas -- guards against pushing a no-op history entry
 
   const brushDiameter = () => Number(brushSizeInput.value) || 30;
   function initBrushCanvas(){
@@ -1019,11 +1062,35 @@ export function cropImage(sourceDataUrl){
     brushCtx = brushCanvas.getContext('2d');
     brushCtx.clearRect(0, 0, natW, natH);
     brushCtx.drawImage(img, 0, 0, natW, natH);
+    brushDirty = false;
   }
+  // batches every stroke drawn during one brush-mode session into a single
+  // undo step (pushHistory only fires when at least one stroke actually
+  // happened, via brushDirty -- exiting brush mode without drawing anything
+  // must not push a no-op history entry).
   function commitBrushCanvas(){
     if(!brushCtx) return;
     work = brushCanvas.toDataURL('image/png');
     img.src = work;   // hidden behind the still-visible brush canvas; harmless
+    if(brushDirty){ pushHistory(work); brushDirty = false; }
+  }
+  // exits brush/erase mode for an undo/redo navigation WITHOUT committing --
+  // any in-progress, uncommitted brush strokes are discarded rather than
+  // baked into `work` as a side effect of navigating history.
+  function exitToolModesForHistoryNav(){
+    if(brushMode){
+      brushMode = false;
+      brushCtx = null;
+      brushDirty = false;
+      brushCanvas.style.display = 'none';
+      brushCursor.style.display = 'none';
+      img.style.visibility = '';
+      img.style.cursor = '';
+      brushTools.style.display = 'none';
+      brushBtn.style.background = '';
+      brushBtn.style.color = '';
+    }
+    if(eraseMode) setEraseMode(false);   // erase clicks are already atomic/committed, so this has no pending state to discard
   }
   function setBrushMode(on){
     if(on === brushMode) return;
@@ -1053,7 +1120,7 @@ export function cropImage(sourceDataUrl){
     if(on) dims.textContent = 'drag over the image to erase';
     else paint();
   }
-  brushSizeInput.oninput = () => { brushSizeVal.textContent = brushSizeInput.value + 'px'; };
+  brushSizeInput.oninput = () => { brushSizeVal.textContent = brushSizeInput.value + 'px'; try{ localStorage.setItem(CROP_BRUSH_SIZE_KEY, brushSizeInput.value); }catch(_){} };
 
   function naturalPointFromEvent(e){
     const r = wrap.getBoundingClientRect();
@@ -1068,6 +1135,7 @@ export function cropImage(sourceDataUrl){
     brushCursor.style.top = (e.clientY - r.top) + 'px';
   }
   function eraseCircle(x, y, radius){
+    brushDirty = true;
     brushCtx.globalCompositeOperation = 'destination-out';
     brushCtx.beginPath();
     brushCtx.arc(x, y, radius, 0, Math.PI * 2);
@@ -1107,7 +1175,11 @@ export function cropImage(sourceDataUrl){
   wrap.addEventListener('pointercancel', endBrushStroke);
   wrap.addEventListener('pointerleave', () => { brushCursor.style.display = 'none'; });
 
+  updateHistoryButtons();
+
   return new Promise((resolve) => {
+    undoBtn.onclick = () => gotoHistory(historyIndex - 1);
+    redoBtn.onclick = () => gotoHistory(historyIndex + 1);
     ov.querySelector('#cropApplyBtn').onclick = () => applyCrop().catch(err => { console.error('[crop] crop failed', err); });
     ov.querySelector('#cropAutoBtn').onclick = async () => {
       try{

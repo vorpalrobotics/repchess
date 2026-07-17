@@ -3359,5 +3359,202 @@ try {
   await appAJ.close();
 }
 
+// --- Phase AK: crop/erase image editor -- fuzz/brush-size sliders persist to
+//     localStorage across modal reopens, and an undo/redo history stack
+//     (standard rotate-left/rotate-right icons) walks back/forward through
+//     each committed crop/erase/brush mutation. ---
+const appAK = await launchApp();
+try {
+  const srcUrl = await appAK.page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 100; c.height = 100;
+    const cx = c.getContext('2d');
+    cx.fillStyle = '#ff0000';
+    cx.fillRect(0, 0, 100, 100);
+    return c.toDataURL('image/png');
+  });
+  const waitReady = async () => appAK.page.waitForFunction(() => {
+    const img = document.getElementById('cropImg');
+    return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+  }, { timeout: 5000 });
+  const alphaProbe = async (dataUrl, points) => appAK.page.evaluate(async ({ dataUrl, points }) => {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const cx = c.getContext('2d');
+    cx.drawImage(img, 0, 0);
+    const id = cx.getImageData(0, 0, c.width, c.height).data;
+    return { w: c.width, h: c.height, alphas: points.map(([x, y]) => id[(y * c.width + x) * 4 + 3]) };
+  }, { dataUrl, points });
+  const bucketErase = async (x, y) => appAK.page.evaluate(({ x, y }) => {
+    const img = document.getElementById('cropImg');
+    const r = img.getBoundingClientRect();
+    const clientX = r.left + (x/100) * r.width, clientY = r.top + (y/100) * r.height;
+    img.dispatchEvent(new PointerEvent('pointerdown', { clientX, clientY, bubbles: true }));
+  }, { x, y });
+  const brushClick = async (x, y) => appAK.page.evaluate(({ x, y }) => {
+    const wrap = document.getElementById('cropWrap');
+    const r = wrap.getBoundingClientRect();
+    const clientX = r.left + (x/100) * r.width, clientY = r.top + (y/100) * r.height;
+    wrap.dispatchEvent(new PointerEvent('pointerdown', { clientX, clientY, buttons: 1, bubbles: true }));
+    wrap.dispatchEvent(new PointerEvent('pointerup', { clientX, clientY, bubbles: true }));
+  }, { x, y });
+  const historyState = () => appAK.page.evaluate(() => ({
+    undoDisabled: document.getElementById('cropUndoBtn').disabled,
+    redoDisabled: document.getElementById('cropRedoBtn').disabled,
+  }));
+
+  // 120. Fuzz (erase tolerance) and brush-size sliders default to the
+  //      documented hardcoded values (32 / 30px) the first time, before
+  //      anything has ever been saved.
+  try {
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    const defaults = await appAK.page.evaluate(() => ({
+      tol: document.getElementById('cropTol').value,
+      tolLabel: document.getElementById('cropTolVal').textContent,
+      brush: document.getElementById('cropBrushSizeInput').value,
+      brushLabel: document.getElementById('cropBrushSizeVal').textContent,
+    }));
+    assert(defaults.tol === '32' && defaults.tolLabel === '32', `expected fuzz to default to 32, got ${JSON.stringify(defaults)}`);
+    assert(defaults.brush === '30' && defaults.brushLabel === '30px', `expected brush size to default to 30px, got ${JSON.stringify(defaults)}`);
+    ok('crop editor: fuzz/brush-size sliders default to 32/30px with nothing saved yet');
+    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => window.__cropTestHooks.result());
+  } catch(e){ bad('crop editor: slider defaults before any save', e); }
+
+  // 121. Changing either slider persists it to localStorage, and reopening
+  //      the modal (a fresh cropImage() call, as happens each time the tool
+  //      is opened) restores the saved values instead of resetting to the
+  //      hardcoded defaults.
+  try {
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    await appAK.page.evaluate(() => {
+      const tol = document.getElementById('cropTol');
+      tol.value = '75'; tol.dispatchEvent(new Event('input'));
+      const brush = document.getElementById('cropBrushSizeInput');
+      brush.value = '90'; brush.dispatchEvent(new Event('input'));
+    });
+    const stored = await appAK.page.evaluate(() => ({
+      tol: localStorage.getItem('cropEraseTol'), brush: localStorage.getItem('cropBrushSize'),
+    }));
+    assert(stored.tol === '75' && stored.brush === '90', `expected the new slider values persisted to localStorage, got ${JSON.stringify(stored)}`);
+    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => window.__cropTestHooks.result());
+
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    const reopened = await appAK.page.evaluate(() => ({
+      tol: document.getElementById('cropTol').value,
+      tolLabel: document.getElementById('cropTolVal').textContent,
+      brush: document.getElementById('cropBrushSizeInput').value,
+      brushLabel: document.getElementById('cropBrushSizeVal').textContent,
+    }));
+    assert(reopened.tol === '75' && reopened.tolLabel === '75', `expected fuzz to restore to the saved 75, got ${JSON.stringify(reopened)}`);
+    assert(reopened.brush === '90' && reopened.brushLabel === '90px', `expected brush size to restore to the saved 90px, got ${JSON.stringify(reopened)}`);
+    ok('crop editor: fuzz/brush-size sliders persist to localStorage and restore on reopen');
+    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => window.__cropTestHooks.result());
+  } catch(e){ bad('crop editor: slider values persist across reopens', e); }
+
+  // 122. Undo/redo buttons start disabled (nothing to undo/redo yet); a real
+  //      crop mutation enables Undo, and clicking it restores the pre-crop
+  //      image (back to full 100x100) while enabling Redo.
+  try {
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    const initial = await historyState();
+    assert(initial.undoDisabled && initial.redoDisabled, `expected both undo/redo disabled on open, got ${JSON.stringify(initial)}`);
+
+    // drag the left crop bar in to 25% so a real (non-no-op) crop happens.
+    await appAK.page.evaluate(() => {
+      const bar = document.querySelector('.crop-bar.l');
+      const wrap = document.getElementById('cropWrap');
+      const r = wrap.getBoundingClientRect();
+      bar.dispatchEvent(new PointerEvent('pointerdown', { clientX: r.left, clientY: r.top + r.height/2, bubbles: true }));
+      bar.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + r.width*0.25, clientY: r.top + r.height/2, buttons: 1, bubbles: true }));
+    });
+    await appAK.page.evaluate(() => document.getElementById('cropApplyBtn').click());
+    await appAK.page.waitForFunction(() => document.getElementById('cropImg').naturalWidth === 75, { timeout: 5000 });
+    const afterCrop = await historyState();
+    assert(!afterCrop.undoDisabled && afterCrop.redoDisabled, `expected undo enabled/redo disabled right after a crop, got ${JSON.stringify(afterCrop)}`);
+
+    await appAK.page.evaluate(() => document.getElementById('cropUndoBtn').click());
+    await appAK.page.waitForFunction(() => document.getElementById('cropImg').naturalWidth === 100, { timeout: 5000 });
+    const afterUndo = await historyState();
+    assert(afterUndo.undoDisabled && !afterUndo.redoDisabled, `expected undo disabled/redo enabled after undoing back to the start, got ${JSON.stringify(afterUndo)}`);
+    ok('crop editor: undo restores the pre-crop image and flips the undo/redo enabled state');
+
+    await appAK.page.evaluate(() => document.getElementById('cropRedoBtn').click());
+    await appAK.page.waitForFunction(() => document.getElementById('cropImg').naturalWidth === 75, { timeout: 5000 });
+    const afterRedo = await historyState();
+    assert(!afterRedo.undoDisabled && afterRedo.redoDisabled, `expected redo to reapply the crop and re-disable redo, got ${JSON.stringify(afterRedo)}`);
+    ok('crop editor: redo reapplies the undone crop');
+    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => window.__cropTestHooks.result());
+  } catch(e){ bad('crop editor: undo/redo across a crop mutation', e); }
+
+  // 123. Undo also unwinds a bucket (flood-fill) erase click back to the
+  //      fully-opaque source image.
+  try {
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    await appAK.page.evaluate(() => document.getElementById('cropEraseBtn').click());
+    await bucketErase(50, 50);
+    await appAK.page.waitForFunction(() => document.getElementById('cropDims').textContent.startsWith('erased'), { timeout: 5000 });
+    const erasedResult = await appAK.page.evaluate(() => document.getElementById('cropImg').src);
+    const beforeUndo = await alphaProbe(erasedResult, [[50,50]]);
+    assert(beforeUndo.alphas[0] === 0, `expected the bucket erase to have punched a transparent hole, got alpha ${beforeUndo.alphas[0]}`);
+
+    await appAK.page.evaluate(() => document.getElementById('cropUndoBtn').click());
+    await appAK.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img.naturalWidth > 0;
+    }, { timeout: 5000 });
+    await appAK.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    const result = await appAK.page.evaluate(() => window.__cropTestHooks.result());
+    const afterUndo = await alphaProbe(result, [[50,50]]);
+    assert(afterUndo.alphas[0] === 255, `expected undo to restore the fully-opaque source image, got alpha ${afterUndo.alphas[0]}`);
+    ok('crop editor: undo unwinds a bucket-erase click back to the source image');
+  } catch(e){ bad('crop editor: undo unwinds a bucket erase', e); }
+
+  // 124. Undoing while brush mode is active with an uncommitted, in-progress
+  //      stroke discards that stroke rather than baking it in as a side
+  //      effect of navigating history -- and does not push a spurious extra
+  //      history entry for it.
+  try {
+    await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await waitReady();
+    // establish one real undo step first (a brush stroke), then re-enter
+    // brush mode and draw a SECOND, never-committed stroke before undoing.
+    await appAK.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    await brushClick(30, 30);
+    await appAK.page.evaluate(() => document.getElementById('cropBrushBtn').click());   // commit stroke #1
+    const afterFirstStroke = await historyState();
+    assert(!afterFirstStroke.undoDisabled, 'expected undo enabled after committing the first brush stroke');
+
+    await appAK.page.evaluate(() => document.getElementById('cropBrushBtn').click());   // back into brush mode
+    await brushClick(70, 70);   // draw stroke #2 but never exit brush mode to commit it
+
+    await appAK.page.evaluate(() => document.getElementById('cropUndoBtn').click());
+    await appAK.page.waitForTimeout(200);
+    const afterUndo = await historyState();
+    assert(afterUndo.undoDisabled, `expected undo to walk all the way back past stroke #1 (only one real step existed), got ${JSON.stringify(afterUndo)}`);
+    const brushModeOff = await appAK.page.evaluate(() => document.getElementById('cropBrushCanvas').style.display !== 'block');
+    assert(brushModeOff, 'expected undo to exit brush mode rather than leaving it active mid-navigation');
+
+    await appAK.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    const result = await appAK.page.evaluate(() => window.__cropTestHooks.result());
+    const probe = await alphaProbe(result, [[30,30], [70,70]]);
+    assert(probe.alphas[0] === 255, `expected undo to also discard the first committed stroke (fully back to source), got alpha ${probe.alphas[0]}`);
+    assert(probe.alphas[1] === 255, `expected the never-committed second stroke to be discarded entirely, got alpha ${probe.alphas[1]}`);
+    ok('crop editor: undo discards an uncommitted in-progress brush stroke instead of baking it in');
+  } catch(e){ bad('crop editor: undo discards uncommitted brush strokes', e); }
+} finally {
+  await appAK.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
