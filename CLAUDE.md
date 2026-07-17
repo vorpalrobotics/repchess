@@ -24,6 +24,14 @@ reuse `launchApp` / `seedBackup` / `openVR` from `test/harness.mjs` and inspect
 the scene via the app's `window.__threeTestEdit` hook. When a library **version**
 changes in the source, rerun `node test/build-vendor.mjs`.
 
+Run the suite **once** per feature/fix — a single clean run is enough
+confirmation. Don't repeat the full run 2+ times "for stability" as a matter
+of routine; that's real clock time with little payoff once a run is clean.
+Only repeat a run when there's an actual reason to suspect flakiness (e.g. a
+failure that looks timing-related, or you're specifically investigating a
+flaky test). An occasional full multi-run pass as a sanity check is fine, but
+it's not a required step for ordinary feature work.
+
 ## Version / cache-buster discipline
 
 Every deploy must be identifiable in the browser:
