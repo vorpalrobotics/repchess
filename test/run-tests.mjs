@@ -2960,5 +2960,124 @@ try {
   await appAG.close();
 }
 
+// --- Phase AH: locked doors -- a room with nothing built past it (no forward
+//     moves) gets a doorway that can't be walked through, with a lock icon
+//     until it's skinned (per-door or via a castle-wide default), mirroring
+//     the ordinary/exit-door "building defaults" mechanism. ---
+const appAH = await launchApp();
+try {
+  // root Alpha branches three ways: e6 leads to a room with a genuine BRANCH
+  // of its own (Bb4/Be7 -- 2 replies, so it gets 2 real forward doors and is
+  // NOT empty; a single continuing reply would instead just collapse into
+  // the same corridor room with no new door -- see Phase X). g6 and d5 are
+  // both genuine dead ends (EMPTY -- nothing built past either).
+  await seedBackup(appAH.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await openVR(appAH.page);
+  const keyFor = (moves) => appAH.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+  const g6Room = await keyFor(['d4','Nf6','c4','g6','Nc3']);
+  const d5Room = await keyFor(['d4','Nf6','c4','d5','Nc3']);
+  await appAH.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appAH.page.waitForTimeout(300);
+
+  // 105. isRoomEmpty correctly distinguishes the continuing branch (e6) from
+  //      the two genuine dead ends (g6, d5).
+  try {
+    const empty = await appAH.page.evaluate(({ e6, g6, d5 }) => ({
+      e6: window.__threeTestEdit.isRoomEmpty(e6),
+      g6: window.__threeTestEdit.isRoomEmpty(g6),
+      d5: window.__threeTestEdit.isRoomEmpty(d5),
+    }), { e6: e6Room, g6: g6Room, d5: d5Room });
+    assert(empty.e6 === false, `expected the e6 room (has a further move) NOT empty, got ${empty.e6}`);
+    assert(empty.g6 === true && empty.d5 === true, `expected both dead-end rooms empty, got g6=${empty.g6} d5=${empty.d5}`);
+    ok('isRoomEmpty distinguishes a room with further moves from a genuine dead end');
+  } catch(e){ bad('locked doors: isRoomEmpty detection', e); }
+
+  // 106. A locked door has no teleport trigger (can't be walked through); an
+  //      ordinary door to a non-empty room still does.
+  try {
+    const walk = await appAH.page.evaluate(({ e6, g6, d5 }) => ({
+      e6: window.__threeTestEdit.canWalkTo(e6),
+      g6: window.__threeTestEdit.canWalkTo(g6),
+      d5: window.__threeTestEdit.canWalkTo(d5),
+    }), { e6: e6Room, g6: g6Room, d5: d5Room });
+    assert(walk.e6 === true, 'expected the e6 door (non-empty target) to still be walkable');
+    assert(walk.g6 === false && walk.d5 === false, `expected both locked doors NOT walkable, got g6=${walk.g6} d5=${walk.d5}`);
+    ok('a locked door has no teleport trigger; an ordinary door to a built room still does');
+  } catch(e){ bad('locked doors: no teleport trigger', e); }
+
+  // 107. An unskinned locked door shows a lock icon; the ordinary (unlocked,
+  //      unskinned) door does not.
+  try {
+    const kinds = await appAH.page.evaluate(() => window.__threeTestEdit.scan().map(o => o.kind));
+    const lockIcons = kinds.filter(k => k === 'locked-door-icon').length;
+    assert(lockIcons === 2, `expected a lock icon on each of the 2 unskinned locked doors, got ${lockIcons}`);
+    ok('an unskinned locked door shows a lock icon; an ordinary door does not');
+  } catch(e){ bad('locked doors: lock icon on unskinned locked doors', e); }
+
+  // 108. Skinning ONE locked door (g6) directly removes ITS icon (replaced by
+  //      the door panel) while leaving the other locked door (d5) still
+  //      showing its icon, unskinned -- and g6 is still not walkable.
+  try {
+    const assigned = await appAH.page.evaluate(
+      ({ rk, tk, aid }) => window.__threeTestEdit.setDoorAssetForTarget(rk, tk, aid),
+      { rk: root, tk: g6Room, aid: 'vaultDoor' });
+    assert(assigned, 'setDoorAssetForTarget could not find the g6 door (test setup issue if not)');
+    await appAH.page.waitForTimeout(300);
+    const state = await appAH.page.evaluate(() => {
+      const scan = window.__threeTestEdit.scan();
+      return { lockIcons: scan.filter(o => o.kind === 'locked-door-icon').length };
+    });
+    assert(state.lockIcons === 1, `expected only d5's lock icon left after skinning g6's door, got ${state.lockIcons}`);
+    const stillLocked = await appAH.page.evaluate((k) => window.__threeTestEdit.canWalkTo(k), g6Room);
+    assert(stillLocked === false, 'expected the skinned g6 door to still be unwalkable (a skin does not unlock it)');
+    ok('skinning one locked door removes its icon (door panel shows instead) without unlocking it, leaving other locked doors unaffected');
+  } catch(e){ bad('locked doors: per-door skin removes its own icon only', e); }
+
+  // 109. A castle-wide default locked-door skin (captured the same way the
+  //      Room Geometry dialog's "make default" checkbox does) automatically
+  //      applies to a DIFFERENT locked door in the same castle that has no
+  //      per-door override of its own (d5) -- removing its icon too.
+  try {
+    await appAH.page.evaluate((k) => window.__threeTestEdit.captureBuildingDefaults(k), root);
+    await appAH.page.waitForTimeout(300);
+    const state = await appAH.page.evaluate(() => {
+      const scan = window.__threeTestEdit.scan();
+      const meshes = window.__threeTestEdit.meshes();
+      return {
+        lockIcons: scan.filter(o => o.kind === 'locked-door-icon').length,
+        doorPanels: meshes.filter(m => m.kind === 'door-panel').length,
+      };
+    });
+    assert(state.lockIcons === 0, `expected no lock icons left once the castle default covers every locked door, got ${state.lockIcons}`);
+    assert(state.doorPanels === 2, `expected exactly both locked doors (g6, d5) to now show a door panel, got ${state.doorPanels}`);
+    ok('a castle-wide default locked-door skin automatically covers other locked doors with no per-door override');
+  } catch(e){ bad('locked doors: castle-wide default locked-door skin', e); }
+} finally {
+  await appAH.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
