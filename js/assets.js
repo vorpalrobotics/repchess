@@ -155,22 +155,30 @@ function renderGrid(){
 }
 
 /* ---------- editor ---------- */
-function openEditor(id, initialType){
+function openEditor(id, initialType, allowTypes){
   EDIT_ID = id;
   const a = id ? ASSETS.find(x => x.id === id) : null;
   EDIT_IMAGE = (a && a.image) || '';
   EDIT_IMAGE_ORIG = '';                 // no original until a fresh upload this session
   EDIT_RESOLUTION = (a && a.resolution) || RESOLUTION_DEFAULT;
   EDIT_IMG_W = EDIT_IMG_H = 0;
-  renderEditor(a, initialType);
+  renderEditor(a, initialType, allowTypes);
   const grid = $('assetsGrid');
   if(grid) grid.style.display = 'none';
   $('assetsEditor').style.display = '';
   updateImgInfo();   // measure the staged image → fills the dims note (no size snap on open)
 }
 
-function renderEditor(a, initialType){
+function renderEditor(a, initialType, allowTypes){
   const type = (a && a.type) || initialType || 'extruded';
+  // when opened for a specific slot (e.g. the picker's "New Asset…" button),
+  // restrict the type choices to what that slot actually accepts -- picking
+  // something outside that set would save fine but then never show up back
+  // in the picker (its grid filters by the same allow list), with nothing
+  // telling the user why.
+  const typeEntries = (allowTypes && allowTypes.length)
+    ? Object.entries(ASSET_TYPES).filter(([t]) => allowTypes.includes(t))
+    : Object.entries(ASSET_TYPES);
   const editor = $('assetsEditor');
   editor.innerHTML = `
     <div class="field">
@@ -180,7 +188,7 @@ function renderEditor(a, initialType){
     <div class="field">
       <label>Type</label>
       <select id="assetTypeInput">
-        ${Object.entries(ASSET_TYPES).map(([t,info]) => `<option value="${t}" ${t===type?'selected':''}>${esc(info.label)}</option>`).join('')}
+        ${typeEntries.map(([t,info]) => `<option value="${t}" ${t===type?'selected':''}>${esc(info.label)}</option>`).join('')}
       </select>
     </div>
     <div class="field">
@@ -1305,7 +1313,7 @@ async function deleteEditor(id){
    no-op when there's no #assetsGrid in the current container, so saveEditor's
    normal post-save calls stay harmless here. Resolves the new asset's id on
    Save, or null on Cancel. */
-function openNewAssetModal(initialType){
+function openNewAssetModal(initialType, allowTypes){
   return new Promise((resolve) => {
     const prevContainer = containerEl;
     let ov = document.getElementById('assetNewOverlay');
@@ -1339,7 +1347,7 @@ function openNewAssetModal(initialType){
       resolve(id || null);
     };
 
-    openEditor(null, initialType);
+    openEditor(null, initialType, allowTypes);
     // renderEditor (inside openEditor) already wired Save/Cancel to
     // saveEditor()/showList() for the full-manager flow -- rewire both here
     // so this standalone modal resolves instead of just sitting there.
@@ -1552,7 +1560,7 @@ async function renderPicker(ov){
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
   ov.querySelector('#pickerNewAssetBtn').onclick = async () => {
     const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
-    const newId = await openNewAssetModal(initialType);
+    const newId = await openNewAssetModal(initialType, pickerOpts.allow);
     if(newId) await renderPicker(ov);   // refresh so the new asset shows up for the user to pick
   };
   if(pickerOpts.allowRemove){
