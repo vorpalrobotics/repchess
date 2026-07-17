@@ -3941,5 +3941,93 @@ try {
   await appAP.close();
 }
 
+// --- Phase AQ: Room Geometry's "Reset Room…" (formerly "Clear styles…") now
+//     wipes a room's ENTIRE LAYOUT entry -- including size, door positions/
+//     types, and object-list wall assignments, none of which the old
+//     narrower wipe touched -- back to exactly what a never-customized room
+//     would have (still inheriting building defaults). ---
+const appAQ = await launchApp();
+try {
+  const keys = await appAQ.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      root: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
+      // a room is keyed by the position right after OUR reply, not the
+      // opponent's move alone -- e6's own "room" is really e6+Nc3.
+      e6: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4','e6','Nc3']),
+    };
+  });
+  await seedBackup(appAQ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+    threeLayout: JSON.stringify({
+      [keys.root]: {
+        geom: { w: 20, d: 20, h: 8 },
+        exits: { [keys.e6]: { type: 'stair' } },
+        slots: { 'obj-C1': 'testProp1' },
+        slotXform: { 'obj-C1': { dx: 1.5 } },
+        wallLists: { all: { listId: 'nonexistent-list' } },
+      },
+    }),
+  });
+  await openVR(appAQ.page);
+  await appAQ.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.root);
+  await appAQ.page.waitForTimeout(300);
+
+  // 135. Sanity: the seeded customizations actually took effect before reset
+  //      (an unconditional pass here would prove nothing about the fix).
+  try {
+    const before = await appAQ.page.evaluate((k) => ({
+      size: window.__threeTestEdit.roomSize(k),
+      layout: window.__threeTestEdit.roomLayout(k),
+    }), keys.root);
+    assert(before.size.w === 20 && before.size.d === 20, `test setup issue: geom override didn't apply, got ${JSON.stringify(before.size)}`);
+    assert(before.layout.slots['obj-C1'] === 'testProp1', 'test setup issue: slot override missing');
+    assert(before.layout.wallLists && before.layout.wallLists.all, 'test setup issue: wallLists override missing');
+    ok('Reset Room test setup: geom/exits/slots/wallLists overrides all applied first');
+  } catch(e){ bad('Reset Room: test setup sanity check', e); }
+
+  // 136. Clicking "Reset Room…" (through the real dialog + confirm()) wipes
+  //      ALL of it: size back to the auto-computed natural size, the e6
+  //      door's type back to plain "door" (not stair), the slot's asset
+  //      override, its nudge, and the wallLists assignment all gone.
+  try {
+    await appAQ.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appAQ.page.waitForTimeout(60);
+    await appAQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const label = await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').textContent.trim());
+    assert(label === 'Reset Room…', `expected the button relabeled "Reset Room…", got "${label}"`);
+    await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').click());   // confirm() auto-accepted by the harness
+    await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAQ.page.waitForTimeout(300);
+
+    const after = await appAQ.page.evaluate((k) => ({
+      size: window.__threeTestEdit.roomSize(k),
+      exits: window.__threeTestEdit.exitsOf(k),
+      layout: window.__threeTestEdit.roomLayout(k),
+    }), keys.root);
+    assert(after.size.w !== 20 && after.size.d !== 20, `expected the size override gone (back to natural), still got ${JSON.stringify(after.size)}`);
+    const e6exit = after.exits.find(e => e.target === keys.e6);
+    assert(e6exit && (e6exit.type === 'door' || !e6exit.type), `expected the e6 door back to a plain door (not stair), got ${JSON.stringify(e6exit)}`);
+    assert(!after.layout.slots['obj-C1'], `expected the slot override gone, got ${JSON.stringify(after.layout.slots)}`);
+    assert(!after.layout.slotXform['obj-C1'], `expected the nudge gone, got ${JSON.stringify(after.layout.slotXform)}`);
+    assert(!after.layout.wallLists || !after.layout.wallLists.all, `expected the wallLists assignment gone, got ${JSON.stringify(after.layout.wallLists)}`);
+    ok('"Reset Room…" wipes size, door positions/types, and wallLists in addition to the old narrower scope');
+  } catch(e){ bad('Reset Room: comprehensive wipe via the real dialog', e); }
+} finally {
+  await appAQ.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -791,21 +791,29 @@ function setReciprocalStairType(bKey, aKey, type){
     if(type !== staticType) rb.exits[aKey].type = type;
   }
 }
-// wipe a room's styling and placed objects back to nothing -- floors, walls,
-// ceiling, stairs and door skins, plus every placed prop and its nudge/scale.
-// The room then falls back to the building defaults (or procedural). The room's
-// size and doorway positions (geom/exits) are deliberately kept -- this clears
-// look-and-contents, not structure. It never touches LAYOUT.__defaults, so a
-// building default previously captured from this room survives the wipe.
+// wipe a room's ENTIRE LAYOUT entry back to nothing -- as if it had never
+// been walked into or customized at all: floors, walls, ceiling, stairs and
+// door skins, every placed prop and its nudge/scale, wall-list (object-list)
+// assignments, and -- unlike the old narrower wipe -- the room's size, its
+// doors' positions/types, and any stray auto-reconciled nudge, all of which
+// used to be deliberately kept. Those turned out to be exactly what could go
+// stale after a resize (a manually-shrunk/regenerated room's stored geom no
+// longer matching its current move-pairs) and leave a room's contents
+// permanently scrambled with nothing short of this to put it back. The room
+// then falls back to the building defaults (or procedural) for floor/wall/
+// ceiling/door skins, same as a genuinely new room would. Never touches
+// LAYOUT.__defaults, so a building default previously captured from this
+// room survives the wipe.
 function clearRoomStyles(roomKey){
   if(selectedProp && selectedProp.roomKey === roomKey) deselectProp();
   applyEdit(() => {
     const r = LAYOUT[roomKey];
     if(!r) return;
-    delete r.floor; delete r.ceiling; delete r.stairSurface;
-    r.walls = {}; r.doors = {}; r.slots = {}; r.slotXform = {};
+    delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom;
+    r.walls = {}; r.doors = {}; r.slots = {}; r.slotXform = {}; r.exits = {}; r.wallLists = {};
     r.buildings = {}; r.signs = {}; r.signPos = {}; r.yards = {};   // outdoor maps; no-ops indoors
   });
+  evaluateDecorated(roomKey);   // every slot just emptied out -- refresh the cached flag now, not just on next edit-mode exit
 }
 // 3x3 grid of floor-standing spots, equally spaced, using the same compass
 // ids the four hand-placed corners already used (so existing layout
@@ -6212,7 +6220,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
         <div style="display:flex;gap:.4rem">
           <button id="roomGeomResetBtn">Reset size/doors</button>
-          <button id="roomGeomClearBtn" style="background:#c62828;color:#fff">Clear styles…</button>
+          <button id="roomGeomClearBtn" style="background:#c62828;color:#fff">Reset Room…</button>
         </div>
         <div>
           <button id="roomGeomCancelBtn">Cancel</button>
@@ -6479,10 +6487,12 @@ function renderRoomGeomDialog(ov, roomKey){
     // a wiped room must never be captured as the default, so drop the checkbox first
     ov.querySelector('#roomGeomMakeDefault').checked = false;
     if(!confirm(
-      `Clear ALL styling and placed objects in "${roomKey}"?\n\n` +
-      `The floor, walls, ceiling, stairs, door skins and every placed prop in this ` +
-      `room will be permanently removed and the room will revert to the building ` +
-      `defaults. The room's size and doorways are kept.\n\nThis cannot be undone.`
+      `Reset "${roomKey}" back to a brand-new, never-customized room?\n\n` +
+      `The floor, walls, ceiling, stairs, door skins, every placed prop and its ` +
+      `nudge, object-list wall assignments, the room's size, and its doors' ` +
+      `positions/types will ALL be permanently reset. The room falls back to the ` +
+      `building defaults (floor/wall/ceiling/door skins), same as a genuinely new ` +
+      `room. Room names and building defaults are kept.\n\nThis cannot be undone.`
     )) return;
     closeRoomGeomDialog();
     clearRoomStyles(roomKey);     // wipes this room only; LAYOUT.__defaults is untouched
@@ -6859,6 +6869,14 @@ export async function openThreeTest(containerEl, opts){
       // in, same accessor every real read site uses) -- for testing that
       // mainStreet's auto-computed minimum can't be shrunk by a stale override.
       roomSize: (roomKey) => { const r = mergedRoom(roomKey || currentRoomKey); return r ? { w: r.size.w, d: r.size.d, h: r.size.h } : null; },
+      // the raw (un-merged) LAYOUT entry for a room -- for testing that
+      // clearRoomStyles actually empties every field it claims to, not just
+      // the ones a real read-site would notice missing.
+      roomLayout: (roomKey) => LAYOUT[roomKey] ? JSON.parse(JSON.stringify(LAYOUT[roomKey])) : null,
+      // drives the real "Reset Room…" wipe (Room Geometry dialog's Clear
+      // button) without needing to click through the dialog/confirm() -- for
+      // testing clearRoomStyles's full scope directly.
+      clearRoomStyles: (roomKey) => clearRoomStyles(roomKey),
       // the raw buildings array mainStreet was generated with (positions/sizes
       // as placed, before any size guarantee) -- for checking every building
       // footprint actually fits inside roomSize('mainStreet').
