@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-118';
+const BUILD_TAG = '-119';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -107,14 +107,12 @@ $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_LINE=null;
 
 // background analysis queue state (see the "background analysis queue"
-// section below, near analyzeChildNodes, for the functions that use these) --
-// declared here, ahead of the boot-time refreshAnalysisQueue() call further
-// down, so that call isn't reading these bindings before their own `let`
-// would otherwise have run.
+// section below for the functions that use these) -- declared here, ahead
+// of the boot-time refreshAnalysisQueue() call further down, so that call
+// isn't reading these bindings before their own `let` would otherwise have run.
 let ANALYSIS_QUEUE = [];         // mirrors the IDB store for CURRENT_USER, createdAt order
 let AQ_LINE_NAMES = new Map();   // lineId -> line name, for the queue modal's Position column
 let aqProcessing = false;        // true while processAnalysisQueueLoop's loop is actively running
-let aqSuspended = false;         // true while a non-queue caller (analyzeChildNodes) owns the engine outside engineState
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
 let aqAddCtx = null;             // {lineId, seqs} pending in the "Add to Analysis Queue" modal
@@ -2406,7 +2404,6 @@ function renderBranch(parent,games,seq,depth,flip=false){
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
        </td>
        <td class="eval-col">
-         <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
          <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
          <span class="evaltag" style="display:none"></span>
        </td>
@@ -2435,7 +2432,6 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const evalSpan   = tr.querySelector('.evaltag');
     const nameSpan   = tr.querySelector('.branchName');
     const statsSpan  = tr.querySelector('.branchStats');
-    const analyzingIcon = tr.querySelector('.analyzingIcon');
 
     const lineSeq = [...seq,opp];
     tr.dataset.seq = lineSeq.join(',');     // stable row identity for focus re-application across rebuilds
@@ -2529,7 +2525,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       refreshRowMenuLabels(rowMenu, currentSaved());
       refreshBranchStats(statsSpan, games, childrenSeq);
       refreshSystemStats();
-      analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
+      queueChildrenForAnalysis(childrenSeq, branchDiv); // fill in sibling evals via the background analysis queue now that this branch is newly visible
     }
 
     /* restore reply from the preloaded PREFS map */
@@ -2746,7 +2742,6 @@ function renderBlackRoot(parent,games,trigger){
      </td>
      <td class="cnt-col"></td>
      <td class="eval-col">
-       <span class="analyzingIcon" style="display:none" title="Analyzing children — click to stop"><i class="fa-solid fa-calculator fa-fade"></i><span class="analyzingDepth"></span></span>
        <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
        <span class="evaltag" style="display:none"></span>
      </td>
@@ -2774,7 +2769,6 @@ function renderBlackRoot(parent,games,trigger){
   const evalSpan   = tr.querySelector('.evaltag');
   const nameSpan   = tr.querySelector('.branchName');
   const statsSpan  = tr.querySelector('.branchStats');
-  const analyzingIcon = tr.querySelector('.analyzingIcon');
 
   const lineSeq = [trigger];
   tr.dataset.seq = lineSeq.join(',');       // stable row identity for focus re-application across rebuilds
@@ -2855,7 +2849,7 @@ function renderBlackRoot(parent,games,trigger){
     refreshRowMenuLabels(rowMenu, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
     refreshSystemStats();
-    analyzeChildNodes(childrenSeq, branchDiv, analyzingIcon); // passive: fill in sibling evals now that this branch is newly visible
+    queueChildrenForAnalysis(childrenSeq, branchDiv); // fill in sibling evals via the background analysis queue now that this branch is newly visible
   }
 
   const savedRep = currentSaved()?.reply;
@@ -5725,32 +5719,9 @@ function sanToUci(fen, san){
    most-recently-changed rank happens to be at — otherwise a lagging rank gets
    stamped with a depth it hasn't actually reached, which then blocks all of
    its real future updates (existing.depth >= d looks "already deep enough"). */
-let analyzeChildrenResolve = null;
-function openAnalyzeChildrenModal(defaultDepth){
-  return new Promise(resolve => {
-    const select = $('analyzeChildrenDepthInput');
-    const opts = [...select.options].map(o=>o.value);
-    select.value = opts.includes(String(defaultDepth)) ? String(defaultDepth) : opts[opts.length-1];
-    $('analyzeChildrenOverlay').style.display='flex';
-    analyzeChildrenResolve = resolve;
-  });
-}
-$('analyzeChildrenCancelBtn').onclick = () => {
-  $('analyzeChildrenOverlay').style.display='none';
-  analyzeChildrenResolve?.(null);
-  analyzeChildrenResolve = null;
-};
-$('analyzeChildrenGoBtn').onclick = () => {
-  const depth = parseInt($('analyzeChildrenDepthInput').value, 10);
-  $('analyzeChildrenOverlay').style.display='none';
-  analyzeChildrenResolve?.(depth);
-  analyzeChildrenResolve = null;
-};
-
 // every direct child row (opponent replies) of a just-expanded branch, each
 // paired with its eval span and the legal UCI move for its SAN -- shared by
-// the passive instant-analysis path (analyzeChildNodes) and the explicit
-// "Analyze All Children" queueing action below.
+// every caller of queueChildrenForAnalysis below.
 function collectChildEntries(parentSeq, branchDiv){
   const fen = fenForSeq(parentSeq);
   const rows = [...branchDiv.querySelectorAll(':scope > table > tbody > tr.data-row')];
@@ -5761,81 +5732,13 @@ function collectChildEntries(parentSeq, branchDiv){
     .filter(e => e.uci);
 }
 
-let activeChildAnalysisIcon = null;
-async function analyzeChildNodes(parentSeq, branchDiv, icon){
-  const fen = fenForSeq(parentSeq);
-  const entries = collectChildEntries(parentSeq, branchDiv);
-  if(!entries.length) return;
-
-  const targetDepth = await openAnalyzeChildrenModal(engineMaxDepth());
-  if(!targetDepth) return;
-  const pending = entries.filter(({opp}) => {
-    const existing = PREFS[prefKey(CURRENT_LINE.id, [...parentSeq,opp])]?.eval;
-    return !existing || existing.depth < targetDepth;
-  });
-  if(!pending.length) return; // every child already analyzed to at least this depth
-
-  pending.forEach(({evalSpan}) => {
-    evalSpan.textContent = '…';
-    evalSpan.className = 'evaltag eval-neutral';
-    evalSpan.style.display = '';
-  });
-
-  if(activeChildAnalysisIcon && activeChildAnalysisIcon !== icon){
-    activeChildAnalysisIcon.style.display = 'none';
-  }
-  activeChildAnalysisIcon = icon;
-  icon.style.display = '';
-  icon.onclick = e => { e.stopPropagation(); engine.stop(); };
-  const depthSpan = icon.querySelector('.analyzingDepth');
-  depthSpan.textContent = '';
-
-  // claims the shared engine outside of engineState (this doesn't go through
-  // runEngine) -- flagged so the background analysis queue's resume check
-  // (maybeResumeAnalysisQueue) knows not to steal it back mid-search.
-  aqSuspended = true;
-  try {
-    await engine.analyze(fen, {
-      multipv: entries.length,
-      depth: targetDepth,
-      searchmoves: entries.map(e => e.uci),
-      onInfo: (d, lines) => {
-        // the slowest-deepening rank is the bottleneck for finishing the whole
-        // batch, so surface its depth (not the deepest, and not just `d`,
-        // which is only whichever rank most recently reported in)
-        const minDepth = Math.min(...Object.values(lines).map(l => l.depth));
-        depthSpan.textContent = ` ${minDepth}/${targetDepth}`;
-        for(const line of Object.values(lines)){
-          const uci = line.pv[0];
-          if(!uci) continue;
-          const entry = entries.find(e => e.uci === uci);
-          if(!entry) continue;
-          const childSeq = [...parentSeq, entry.opp];
-          const existing = PREFS[prefKey(CURRENT_LINE.id, childSeq)]?.eval;
-          if(existing && existing.depth >= line.depth) continue;
-          const pvSan = line.pv?.length ? pvToSan(fen, line.pv, EVAL_TAG_PV_PLIES) : '';
-          const evalObj = {...evalToWhiteRelative(line.score, fen), depth: line.depth, pv: pvSan};
-          savePrefField(childSeq, 'eval', evalObj);
-          refreshEvalSpan(entry.evalSpan, evalObj);
-        }
-      }
-    });
-  } finally {
-    aqSuspended = false;
-    if(activeChildAnalysisIcon === icon) activeChildAnalysisIcon = null;
-    icon.style.display = 'none';
-    icon.onclick = null;
-    depthSpan.textContent = '';
-    maybeResumeAnalysisQueue();
-  }
-}
-
-/* "Analyze All Children" (the explicit row-menu action): queues every child
-   of this branch for background analysis instead of running an instant
-   in-page search -- same depth/lines prompt as adding a single node via
-   openAnalysisQueueAddModal, just applied to every legal child move at once.
-   The passive auto-trigger in setStandardResponse still uses the instant
-   analyzeChildNodes() above; this is only the explicit menu action. */
+/* Queues every child of this branch for background analysis -- same depth/
+   lines prompt as adding a single node via openAnalysisQueueAddModal, just
+   applied to every legal child move at once. Used both by the explicit
+   "Analyze All Children" row-menu action and by setStandardResponse's
+   passive auto-trigger (fills in sibling evals as soon as a branch becomes
+   visible), so a fresh reply never kicks off a live search that ties up the
+   engine -- it just joins the same background queue as everything else. */
 function queueChildrenForAnalysis(parentSeq, branchDiv){
   const entries = collectChildEntries(parentSeq, branchDiv);
   if(!entries.length) return;
@@ -6125,7 +6028,7 @@ async function processAnalysisQueueLoop(){
       // an explicit user Stop, which hands the engine straight back to the
       // queue (resuming that live search later will transparently preempt
       // the queue again via analyze()'s own _stopCurrent()).
-      if(engineState === 'running' || aqSuspended || !engine.ready) break;
+      if(engineState === 'running' || !engine.ready) break;
       const item = ANALYSIS_QUEUE[0];
       aqCurrentItem = item;
       aqCurrentProgress = null;

@@ -3889,5 +3889,57 @@ try {
   await appAO.close();
 }
 
+// --- Phase AP: setting a standard response for the first time (the row's
+//     "Set Standard Response" action) now queues its newly-visible children
+//     for background analysis, same as the explicit "Analyze All Children"
+//     row-menu action -- it used to run an instant live search on the shared
+//     engine instead, via a since-removed separate "Analyze Child Nodes"
+//     modal. ---
+const appAP = await launchApp();
+try {
+  await seedBackup(appAP.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAP.page.click('.line-row');
+  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  // 133. Setting the response opens the SAME Add-to-Queue modal "Analyze All
+  //      Children" uses (Depth/Lines, titled with the child count) -- not an
+  //      instant search, and not the old dedicated depth-only modal.
+  try {
+    await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
+    await appAP.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    await appAP.page.fill('#fieldModalInput', 'c4');
+    await appAP.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+
+    await appAP.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    const title = await appAP.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+    assert(title === 'Add 2 Children to Analysis Queue', `expected the queue modal titled with the child count, got "${title}"`);
+    const oldModalGone = await appAP.page.evaluate(() => !document.getElementById('analyzeChildrenOverlay'));
+    assert(oldModalGone, 'expected the old dedicated "Analyze Child Nodes" modal to no longer exist at all');
+    ok('setting a standard response opens the analysis-queue Add modal, not an instant-search modal');
+  } catch(e){ bad('set standard response: opens the queue Add modal', e); }
+
+  // 134. Confirming queues both newly-visible children instead of running a
+  //      live search -- no engine.analyze() call, just two queue entries.
+  try {
+    await appAP.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appAP.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
+    const q = await appAP.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const seqs = q.map(it => it.seq.join(',')).sort();
+    assert(JSON.stringify(seqs) === JSON.stringify(['d4,Nf6,c4,e6','d4,Nf6,c4,g6']),
+      `expected both new children queued for background analysis, got ${JSON.stringify(seqs)}`);
+    ok('setting a standard response queues its children for background analysis');
+  } catch(e){ bad('set standard response: children land in the analysis queue', e); }
+} finally {
+  await appAP.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
