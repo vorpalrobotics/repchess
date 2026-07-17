@@ -3079,5 +3079,53 @@ try {
   await appAH.close();
 }
 
+// --- Phase AI: top VR toolbar icon order -- the edit-only buttons (room
+//     geometry / wall lists / assets) sit immediately right of the Edit
+//     button, with no buttons that also show outside edit mode (board
+//     position, memorize) wedged between them. ---
+const appAI = await launchApp();
+try {
+  await seedBackup(appAI.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await openVR(appAI.page);
+  const roomKey = await appAI.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAI.page.waitForTimeout(200);
+  const iconOrder = () => appAI.page.evaluate(() =>
+    [...document.querySelectorAll('#threeTestCanvasWrap i.fa-solid')].map(i =>
+      [...i.classList].find(c => c !== 'fa-solid')));
+
+  // 110. Edit-only buttons (fa-ruler-combined, fa-list-ol, fa-cubes) come
+  //      immediately after fa-pencil (Edit), before fa-chess-board (board
+  //      position) or fa-brain (memorize) -- both of which also show outside
+  //      edit mode and must not be wedged in between.
+  try {
+    const order = await iconOrder();
+    const editIdx = order.indexOf('fa-pencil');
+    const boardIdx = order.indexOf('fa-chess-board');
+    const brainIdx = order.indexOf('fa-brain');
+    const infoIdx = order.indexOf('fa-circle-info');
+    assert(editIdx >= 0 && boardIdx > editIdx && brainIdx > editIdx && infoIdx > editIdx,
+      `expected to find Edit, board, brain and info icons in order, got: ${JSON.stringify(order)}`);
+    for(const editOnly of ['fa-ruler-combined', 'fa-list-ol', 'fa-cubes']){
+      const idx = order.indexOf(editOnly);
+      assert(idx > editIdx && idx < boardIdx && idx < brainIdx && idx < infoIdx,
+        `expected ${editOnly} right after Edit and before board/brain/info, got order: ${JSON.stringify(order)}`);
+    }
+    ok('edit-only toolbar buttons sit immediately right of Edit, before board/brain/info');
+  } catch(e){ bad('toolbar: edit-only buttons grouped right after Edit', e); }
+} finally {
+  await appAI.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

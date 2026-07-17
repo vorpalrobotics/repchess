@@ -5447,7 +5447,10 @@ function buildTopToolbar(){
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
-  left.append(hintsBtn, editBtn, boardBtn, memBtn, roomGeomBtn, wallListsBtn, assetsBtn, infoBtn);
+  // edit-only buttons (roomGeom/wallLists/assets) sit immediately right of
+  // Edit, with nothing that also shows outside edit mode (board/memorize)
+  // wedged between them -- those come after, ahead of the always-present help.
+  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, boardBtn, memBtn, infoBtn);
   bar.append(left, closeBtn);
   return bar;
 }
