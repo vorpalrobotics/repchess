@@ -4873,7 +4873,7 @@ function tick(){
   move = Math.max(-1, Math.min(1, move));
   strafe = Math.max(-1, Math.min(1, strafe));
 
-  yaw += turn * TURN_SPEED * dt;
+  if(turn !== 0 && !inputLocked) yaw += turn * TURN_SPEED * dt;
   if((move !== 0 || strafe !== 0) && !inputLocked){
     const room = mergedRoom(currentRoomKey);
     // outdoors covers much more ground, so walk 50% faster out there; interiors
