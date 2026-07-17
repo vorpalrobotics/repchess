@@ -1,6 +1,17 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
 import { launchApp, seedBackup, openVR } from './harness.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// a tiny (1x1, red, opaque) real PNG file on disk -- for tests that drive a
+// real <input type=file> upload (setInputFiles needs an actual file, unlike
+// the crop editor's tests which can hand a data-URL straight to a JS hook).
+const FIXTURE_PNG_PATH = path.join(os.tmpdir(), 'repchess-test-fixture.png');
+fs.writeFileSync(FIXTURE_PNG_PATH, Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==',
+  'base64'));
 
 let passed = 0, failed = 0;
 const ok  = (name) => { passed++; console.log(`  ✓ ${name}`); };
@@ -3554,6 +3565,130 @@ try {
   } catch(e){ bad('crop editor: undo discards uncommitted brush strokes', e); }
 } finally {
   await appAK.close();
+}
+
+// --- Phase AL: the asset picker's "New Asset" button (replacing the old
+//     bare "Upload new…" quick-upload) opens the full asset editor -- id/
+//     type/size fields plus Upload/Generate…/Crop -- as its own overlay
+//     layered above the picker, with the Crop/Generate modals it can launch
+//     layered above THAT in turn. ---
+const appAL = await launchApp();
+try {
+  await seedBackup(appAL.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
+  });
+  await appAL.page.click('.line-row');
+  await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appAL.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appAL.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appAL.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appAL.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appAL.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appAL.page.waitForTimeout(400);
+  await appAL.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAL.page.waitForTimeout(60);
+
+  const zIndexOf = (sel) => appAL.page.evaluate((s) => {
+    const el = document.querySelector(s);
+    return el ? Number(getComputedStyle(el).zIndex) : null;
+  }, sel);
+
+  // 125. The picker no longer offers a bare quick-upload -- "New Asset…" is
+  //      the only creation entry point, and opens the full editor overlay
+  //      (id/type/resolution/image fields), pre-selecting the type the
+  //      picker itself was scoped to (a wall's picker is scoped to
+  //      "surface"), stacked above the still-visible picker underneath.
+  try {
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const noOldUploadBtn = await appAL.page.evaluate(() => !document.getElementById('pickerUploadBtn'));
+    assert(noOldUploadBtn, 'expected the old bare "Upload new…" button to be gone from the picker');
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    const pickerStillVisible = await appAL.page.evaluate(() =>
+      getComputedStyle(document.getElementById('assetPickerOverlay')).display !== 'none');
+    assert(pickerStillVisible, 'expected the picker to stay open underneath the New Asset modal');
+    const [pickerZ, newAssetZ] = await Promise.all([zIndexOf('#assetPickerOverlay'), zIndexOf('#assetNewOverlay')]);
+    assert(newAssetZ > pickerZ, `expected the New Asset modal (z=${newAssetZ}) to stack above the picker (z=${pickerZ})`);
+    const initialType = await appAL.page.evaluate(() => document.getElementById('assetTypeInput').value);
+    assert(initialType === 'surface', `expected the New Asset modal to default to the picker's own type (surface), got ${initialType}`);
+    ok('picker "New Asset…" opens the full editor, pre-typed, stacked above the still-open picker');
+    await appAL.page.click('#assetNewCloseBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('picker New Asset: opens above the picker, pre-typed', e); }
+
+  // 126. Generate… and Crop/Erase BG…, launched from inside the New Asset
+  //      modal, stack above IT in turn (Crop requires an image staged first;
+  //      Generate does not).
+  try {
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+
+    await appAL.page.click('#assetGenBtn');
+    await appAL.page.waitForSelector('#assetGenOverlay', { state: 'visible', timeout: 5000 });
+    const [newAssetZ1, genZ] = await Promise.all([zIndexOf('#assetNewOverlay'), zIndexOf('#assetGenOverlay')]);
+    assert(genZ > newAssetZ1, `expected Generate… (z=${genZ}) to stack above the New Asset modal (z=${newAssetZ1})`);
+    await appAL.page.click('#genCloseBtn');
+    await appAL.page.waitForSelector('#assetGenOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appAL.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAL.page.click('#assetCropBtn');
+    await appAL.page.waitForSelector('#cropOverlay', { state: 'visible', timeout: 5000 });
+    const [newAssetZ2, cropZ] = await Promise.all([zIndexOf('#assetNewOverlay'), zIndexOf('#cropOverlay')]);
+    assert(cropZ > newAssetZ2, `expected Crop/Erase BG… (z=${cropZ}) to stack above the New Asset modal (z=${newAssetZ2})`);
+    await appAL.page.click('#cropCancelBtn');
+    await appAL.page.waitForSelector('#cropOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Generate…/Crop launched from the New Asset modal stack above it');
+
+    await appAL.page.click('#assetNewCloseBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('picker New Asset: Generate/Crop stack above the New Asset modal', e); }
+
+  // 127. Saving a new asset from the picker's New Asset modal closes it and
+  //      refreshes the picker underneath so the new asset shows up right
+  //      away, ready to pick; Cancel discards without creating anything.
+  try {
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.fill('#assetIdInput', 'test-wall-skin-1');
+    await appAL.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAL.page.click('#assetsSaveBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const cardIds = await appAL.page.evaluate(() =>
+      [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(cardIds.some(t => t.includes('test-wall-skin-1')), `expected the new asset in the picker grid, got ${JSON.stringify(cardIds)}`);
+    ok('New Asset: Save closes the modal and the new asset appears in the picker grid');
+
+    // Cancel path: no second asset created.
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.fill('#assetIdInput', 'test-wall-skin-2');
+    await appAL.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAL.page.click('#assetsCancelBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    const cardIdsAfterCancel = await appAL.page.evaluate(() =>
+      [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(!cardIdsAfterCancel.some(t => t.includes('test-wall-skin-2')), 'expected Cancel to discard the in-progress new asset');
+    ok('New Asset: Cancel discards without creating an asset');
+    await appAL.page.click('#pickerCloseBtn');
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('picker New Asset: Save/Cancel outcomes', e); }
+} finally {
+  await appAL.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
