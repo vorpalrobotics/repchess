@@ -810,7 +810,7 @@ function clearRoomStyles(roomKey){
     const r = LAYOUT[roomKey];
     if(!r) return;
     delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom;
-    r.walls = {}; r.doors = {}; r.slots = {}; r.slotXform = {}; r.exits = {}; r.wallLists = {};
+    r.walls = {}; r.doors = {}; r.slots = {}; r.slotWords = {}; r.slotXform = {}; r.exits = {}; r.wallLists = {};
     r.buildings = {}; r.signs = {}; r.signPos = {}; r.yards = {};   // outdoor maps; no-ops indoors
   });
   evaluateDecorated(roomKey);   // every slot just emptied out -- refresh the cached flag now, not just on next edit-mode exit
@@ -1022,7 +1022,12 @@ async function loadDecorated(){
 }
 function persistDecorated(){ setMeta(DECORATED_KEY, JSON.stringify(DECORATED)); }
 // A room is fully decorated when every move-object slot has a real image
-// asset AND every forward (non-back) door leads to a named room -- EXCEPT a
+// asset (or a manual placeholder label -- LAYOUT.slotWords, set via the
+// picker's text field -- counts too, since the user is explicitly saying
+// "decorated, just not with an image yet"; a WALL-LIST item's word-only
+// fallback does NOT count, that's still "unfilled, showing whatever it can
+// in the meantime") AND every forward (non-back) door leads to a named room
+// -- EXCEPT a
 // locked door (see isRoomEmpty): its target is a genuine dead end with
 // nothing built past it, so there's nothing there worth naming or
 // remembering, and requiring a name would just block "decorated" on rooms
@@ -1039,8 +1044,8 @@ function computeFullyDecorated(roomKey){
   if(!room) return false;
   for(const slot of moveObjectSlots(roomKey)){
     if(slot.side === 'center' && !room.entryNoStreet) continue;
-    const asset = slotAssetFor(roomKey, slot.id) || moveObjectListResolved(roomKey, slot)?.asset;
-    if(!asset) return false;
+    const filled = slotAssetFor(roomKey, slot.id) || slotWordFor(roomKey, slot.id) || moveObjectListResolved(roomKey, slot)?.asset;
+    if(!filled) return false;
   }
   for(const ex of (room.exits || [])){
     if(ex.back) continue;
@@ -1082,6 +1087,7 @@ function ensureRoomLayout(roomKey){
   const r = LAYOUT[roomKey];
   if(!r.walls) r.walls = {};
   if(!r.slots) r.slots = {};
+  if(!r.slotWords) r.slotWords = {};
   if(!r.slotXform) r.slotXform = {};
   if(!r.buildings) r.buildings = {};
   if(!r.signs) r.signs = {};
@@ -1130,7 +1136,27 @@ function setSlotOverride(roomKey, slotId, assetId){
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
     if(!assetId) delete r.slotXform[slotId];   // removed prop loses its nudge/scale too
+    if(assetId) delete r.slotWords[slotId];    // a real image replaces any placeholder label
   });
+}
+// a manually-typed placeholder label for a move-object slot -- a lightweight
+// stand-in ("just the name of the thing") for when making a real image asset
+// isn't worth the time yet. Renders via the same word-plaque builder a wall-
+// list item's word-only entry already uses (buildMoveObjectWordLabel), and --
+// unlike that wall-list case -- counts as filled for "fully decorated"
+// purposes (see computeFullyDecorated), since the user is explicitly saying
+// "this is decorated, just not with an image yet." Mutually exclusive with a
+// real asset override: setting one clears the other.
+function setSlotWordOverride(roomKey, slotId, word){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(word) r.slotWords[slotId] = word; else delete r.slotWords[slotId];
+    if(word) delete r.slots[slotId];
+  });
+}
+function slotWordFor(roomKey, slotId){
+  const r = LAYOUT[roomKey];
+  return (r && r.slotWords && r.slotWords[slotId]) || null;
 }
 function slotXformFor(roomKey, slotId){
   const r = LAYOUT[roomKey];
@@ -2275,13 +2301,20 @@ function buildSlots(room, roomKey, slots){
       // the object pegged to a move-pair. Resolution order:
       //  1. a manual per-slot asset override (LAYOUT.slots[slotId]) — wins so a
       //     single item can be overridden without touching the list;
-      //  2. the wall list assigned to this slot's bucket (Phase 2): its item's
+      //  2. a manual placeholder label (LAYOUT.slotWords[slotId], set via the
+      //     picker's text field) — a "not worth making an image for yet" stand-in;
+      //  3. the wall list assigned to this slot's bucket (Phase 2): its item's
       //     image if bound, else the item's word as a text label;
-      //  3. a ghostly numbered L#/R# placeholder when no list drives the slot.
-      // All three stay visible with hints off — the object is the memory hook.
+      //  4. a ghostly numbered L#/R# placeholder when nothing else applies.
+      // All stay visible with hints off — the object is the memory hook.
       const override = slotAssetFor(roomKey, slot.id);
       if(override){
         scene.add(placeSlotAccessory(room, slot, override, slotXformFor(roomKey, slot.id)));
+        continue;
+      }
+      const manualWord = slotWordFor(roomKey, slot.id);
+      if(manualWord){
+        scene.add(buildMoveObjectWordLabel(slot, manualWord, slotXformFor(roomKey, slot.id)));
         continue;
       }
       const resolved = moveObjectListResolved(roomKey, slot);
@@ -3315,7 +3348,8 @@ function doorPairContent(target, exPair){
   const headSlot = moveObjectSlots(target).find(s => s.side === 'center');
   const slotId = headSlot ? headSlot.id : 'obj-C1';
   let asset = slotAssetFor(target, slotId), word = null;
-  if(!asset && headSlot){
+  if(!asset) word = slotWordFor(target, slotId);
+  if(!asset && !word && headSlot){
     const r = moveObjectListResolved(target, headSlot);
     if(r){ asset = r.asset; word = r.word; }
   }
@@ -5121,9 +5155,11 @@ function openPropManager(roomKey, slotId){
   const slot = slotById(mergedRoom(roomKey), roomKey, slotId);
   openAssetPicker({
     allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true,
+    allowWord: true, currentWord: slotWordFor(roomKey, slotId),
     onClose: () => { inputLocked = false; },
     onPick: id => setSlotOverride(roomKey, slotId, id),
-    onRemove: () => { deselectProp(); setSlotOverride(roomKey, slotId, null); }
+    onRemove: () => { deselectProp(); setSlotOverride(roomKey, slotId, null); },
+    onWordApply: word => { deselectProp(); setSlotWordOverride(roomKey, slotId, word); }
   });
 }
 
@@ -5345,9 +5381,11 @@ function handleEditTarget(ud){
     const current = slotAssetFor(owner, ud.slotId);
     openAssetPicker({
       allow: ud.allow || PROP_TYPES, allowRemove: !!current,
+      allowWord: true, currentWord: slotWordFor(owner, ud.slotId),
       onClose: () => { inputLocked = false; },
       onPick: id => setSlotOverride(owner, ud.slotId, id),
-      onRemove: () => setSlotOverride(owner, ud.slotId, null)
+      onRemove: () => setSlotOverride(owner, ud.slotId, null),
+      onWordApply: word => setSlotWordOverride(owner, ud.slotId, word)
     });
     return;
   }
@@ -5400,7 +5438,9 @@ function handleEditTarget(ud){
   } else if(ud.kind === 'slot'){
     openAssetPicker({
       allow: ud.allow, onClose,
-      onPick: id => setSlotOverride(roomKey, ud.slotId, id)
+      allowWord: true, currentWord: slotWordFor(roomKey, ud.slotId),
+      onPick: id => setSlotOverride(roomKey, ud.slotId, id),
+      onWordApply: word => setSlotWordOverride(roomKey, ud.slotId, word)
     });
   } else if(ud.kind === 'facade'){
     const current = buildingFacadeFor(ud.roomKey, ud.buildingKey);
@@ -6731,12 +6771,14 @@ export async function openThreeTest(containerEl, opts){
           const exempt = slot.side === 'center' && !room.entryNoStreet;
           const overrideId = LAYOUT[roomKey] && LAYOUT[roomKey].slots && LAYOUT[roomKey].slots[slot.id];
           const override = slotAssetFor(roomKey, slot.id);
-          const listResolved = !override ? moveObjectListResolved(roomKey, slot) : null;
+          const manualWord = slotWordFor(roomKey, slot.id);
+          const listResolved = (!override && !manualWord) ? moveObjectListResolved(roomKey, slot) : null;
           const asset = override || (listResolved && listResolved.asset);
+          const filled = override || manualWord || asset;
           console.log(`[Debug]   slot ${slot.id}: exempt=${exempt}, overrideAssetId=${overrideId || null}` +
             (override === null && overrideId ? ' (!! set but does not resolve in ASSET_BY_ID !!)' : '') +
-            `, listWord=${listResolved ? JSON.stringify(listResolved.word) : null}, resolvedAsset=${asset ? asset.id : null}` +
-            `, COUNTS_AS_FILLED=${exempt ? 'N/A (exempt)' : !!asset}`);
+            `, manualWord=${JSON.stringify(manualWord)}, listWord=${listResolved ? JSON.stringify(listResolved.word) : null}, resolvedAsset=${asset ? asset.id : null}` +
+            `, COUNTS_AS_FILLED=${exempt ? 'N/A (exempt)' : !!filled}`);
         }
         const exits = room.exits || [];
         console.log('[Debug] exits:', exits.length ? exits.map(e => `${e.wall}@${e.offset}->${e.target}${e.back?' [back]':''}${e.type?' type='+e.type:''}`).join(' | ') : '(none)');

@@ -4029,5 +4029,121 @@ try {
   await appAQ.close();
 }
 
+// --- Phase AR: the "Choose Asset" picker gets (1) a search box filtering by
+//     name/keyword, and (2) -- for move-object slots only -- a text field to
+//     assign a manual placeholder label instead of a real image, which
+//     counts as filled for "fully decorated" and gets cleared the moment a
+//     real image is assigned instead. ---
+const appAR = await launchApp();
+try {
+  await seedBackup(appAR.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    // a single forced reply beyond the castle root collapses into ONE
+    // corridor room with exactly one non-center move-object slot (obj-L1) --
+    // obj-C1 (the head/entry pair) is exempt from the decorated check, so
+    // filling just obj-L1 is enough to flip the room fully decorated.
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    assets: [
+      { id: 'grandfather-clock', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 1.2, d: 0.3 }, keywords: 'antique timepiece' },
+      { id: 'red-armchair', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.6, h: 0.7, d: 0.6 } },
+    ],
+  });
+  await openVR(appAR.page);
+  const roomKey = await appAR.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAR.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAR.page.waitForTimeout(300);
+  await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAR.page.waitForTimeout(60);
+  const slotIds = await appAR.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const slotId = slotIds.find(id => id !== 'obj-C1');
+  const openSlotPicker = () => appAR.page.evaluate((sid) =>
+    window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+
+  // 137. Search box: typing filters the grid by id/keyword; clearing it
+  //      brings everything back.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const before = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(before.some(t => t.includes('grandfather-clock')) && before.some(t => t.includes('red-armchair')),
+      `test setup issue: expected both assets listed before searching, got ${JSON.stringify(before)}`);
+    await appAR.page.fill('#pickerSearchInput', 'clock');
+    const filtered = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(filtered.some(t => t.includes('grandfather-clock')) && !filtered.some(t => t.includes('red-armchair')),
+      `expected only the clock after searching "clock", got ${JSON.stringify(filtered)}`);
+    await appAR.page.fill('#pickerSearchInput', 'antique');   // matches via keywords, not id
+    const byKeyword = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(byKeyword.some(t => t.includes('grandfather-clock')), `expected the keyword "antique" to match grandfather-clock, got ${JSON.stringify(byKeyword)}`);
+    await appAR.page.fill('#pickerSearchInput', '');
+    const restored = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(restored.length === before.length, `expected clearing the search to restore the full list, got ${JSON.stringify(restored)}`);
+    ok('Choose Asset: search box filters by id and keyword, clearing it restores the full list');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('Choose Asset: search filter', e); }
+
+  // 138. The placeholder-label field only shows for a move-object slot
+  //      picker (allowWord) -- not for e.g. a wall texture picker.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const hasWordFieldForSlot = await appAR.page.evaluate(() => !!document.getElementById('pickerWordInput'));
+    assert(hasWordFieldForSlot, 'expected the placeholder-label field for a move-object slot picker');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appAR.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const hasWordFieldForWall = await appAR.page.evaluate(() => !!document.getElementById('pickerWordInput'));
+    assert(!hasWordFieldForWall, 'expected NO placeholder-label field for a wall texture picker');
+    ok('Choose Asset: placeholder-label field only appears for move-object slots');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('Choose Asset: placeholder-label field scoped to move-object slots', e); }
+
+  // 139. Typing a label + Apply assigns it (LAYOUT.slotWords), it counts as
+  //      filled for "fully decorated" (the room's only other slot, obj-C1,
+  //      is the exempt center pair), and assigning a real image afterward
+  //      clears the label (mutually exclusive).
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.fill('#pickerWordInput', 'Grandmother Clock');
+    await appAR.page.click('#pickerWordApplyBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.waitForTimeout(200);
+
+    const afterWord = await appAR.page.evaluate((k) => window.__threeTestEdit.roomLayout(k), roomKey);
+    assert(afterWord.slotWords[slotId] === 'Grandmother Clock', `expected the label saved to slotWords, got ${JSON.stringify(afterWord.slotWords)}`);
+
+    await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode off -> evaluateDecorated fires
+    await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // back on, for the next step
+    const decorated = await appAR.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(decorated, 'expected a manually-labeled slot to count as fully decorated');
+    ok('Choose Asset: applying a placeholder label fills the slot and counts toward "fully decorated"');
+
+    // now assign a real image to the SAME slot -- the label should clear.
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.evaluate(() => document.querySelector('#pickerGrid .asset-id').closest('.asset-card').click());
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.waitForTimeout(200);
+    const afterAsset = await appAR.page.evaluate((k) => window.__threeTestEdit.roomLayout(k), roomKey);
+    assert(!afterAsset.slotWords[slotId], `expected the label cleared once a real asset was assigned, got ${JSON.stringify(afterAsset.slotWords)}`);
+    assert(afterAsset.slots[slotId], 'expected the real asset override to be set');
+    ok('Choose Asset: assigning a real image clears a slot\'s placeholder label');
+  } catch(e){ bad('Choose Asset: placeholder label fill/decorated/mutual-exclusion', e); }
+} finally {
+  await appAR.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
