@@ -505,6 +505,7 @@ let DECORATED = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
+let floorLabels = [];          // room-name floor labels: lie flat, spin per-frame to face the camera
 let editHud = null;
 let toastEl = null;
 let toastTimer = null;
@@ -524,7 +525,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, editGroup = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -1013,8 +1014,13 @@ async function loadDecorated(){
 }
 function persistDecorated(){ setMeta(DECORATED_KEY, JSON.stringify(DECORATED)); }
 // A room is fully decorated when every move-object slot has a real image
-// asset AND every forward (non-back) door leads to a named room. The shared
-// center/anchor pair is excluded unless this room hosts it in-room
+// asset AND every forward (non-back) door leads to a named room -- EXCEPT a
+// locked door (see isRoomEmpty): its target is a genuine dead end with
+// nothing built past it, so there's nothing there worth naming or
+// remembering, and requiring a name would just block "decorated" on rooms
+// deliberately left as plain passageways. Door SKIN is never checked here --
+// only naming and slot art matter for whether a room can be memorized. The
+// shared center/anchor pair is excluded unless this room hosts it in-room
 // (entryNoStreet) -- normally it's decorated at the street building's entry
 // instead (see buildSlots' matching skip). A door whose target isn't
 // registered this session (e.g. an unlinked foreign castle in a single-castle
@@ -1031,6 +1037,7 @@ function computeFullyDecorated(roomKey){
   for(const ex of (room.exits || [])){
     if(ex.back) continue;
     if(!ROOMS[ex.target]) continue;
+    if(isRoomEmpty(ex.target)) continue;
     if(!roomNameFor(ex.target)) return false;
   }
   return true;
@@ -1923,6 +1930,21 @@ function snapshotRoomStyle(roomKey){
 function captureBuildingDefaults(roomKey){
   if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
   LAYOUT.__defaults[buildingIdFor(roomKey)] = snapshotRoomStyle(roomKey);
+}
+// sets just the lockedDoor field of this room's building defaults (leaving
+// every other captured style untouched, or creating a blank default set if
+// none exists yet) -- the lightweight counterpart to captureBuildingDefaults'
+// full-room snapshot, for the "make this the locked door default for this
+// building?" prompt offered right after skinning a locked door (see the
+// door-click handler below).
+function setLockedDoorBuildingDefault(roomKey, assetId){
+  if(!LAYOUT.__defaults) LAYOUT.__defaults = {};
+  const id = buildingIdFor(roomKey);
+  if(!LAYOUT.__defaults[id]){
+    LAYOUT.__defaults[id] = { floor:null, ceiling:null, stairSurface:null, door:null, exitDoor:null, lockedDoor:null,
+      walls:{ entrance:null, opposite:null, left:null, right:null } };
+  }
+  LAYOUT.__defaults[id].lockedDoor = assetId;
 }
 
 /* ---------- named presets ----------
@@ -3170,6 +3192,73 @@ function makeMoveDecorationMesh(move, sizeM){
   return new THREE.Mesh(new THREE.PlaneGeometry(sizeM, sizeM), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
 }
 
+// A room's OWN name, floating just above the floor a little way in from the
+// entrance, so it reads naturally as you first walk in -- doors already show
+// the name of the room BEYOND them (buildDoorHint), but nothing inside a
+// room showed its own name until now. Semi-transparent dark backdrop so the
+// text stays legible against any floor texture/color.
+function makeRoomNameFloorTexture(name){
+  const cw = 640, ch = 220;
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  const r = 28;
+  ctx.fillStyle = 'rgba(15,15,20,0.6)';
+  ctx.beginPath();
+  ctx.moveTo(r, 4);
+  ctx.lineTo(cw - r, 4);
+  ctx.quadraticCurveTo(cw - 4, 4, cw - 4, r);
+  ctx.lineTo(cw - 4, ch - r);
+  ctx.quadraticCurveTo(cw - 4, ch - 4, cw - r, ch - 4);
+  ctx.lineTo(r, ch - 4);
+  ctx.quadraticCurveTo(4, ch - 4, 4, ch - r);
+  ctx.lineTo(4, r);
+  ctx.quadraticCurveTo(4, 4, r, 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let font = 96;
+  ctx.font = `bold ${font}px sans-serif`;
+  while(font > 24 && ctx.measureText(name).width > cw - 56){ font -= 4; ctx.font = `bold ${font}px sans-serif`; }
+  ctx.fillText(name, cw / 2, ch / 2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// how far into the room (from the entrance wall) the floor label sits: 3.5m
+// when the room is deep enough, otherwise clamped so it never crowds the far
+// wall -- a small room (ROOM_GEOM_MIN is 2m) still gets a sensibly-placed
+// label instead of one sitting on top of (or past) the opposite wall.
+const ROOM_NAME_FLOOR_DIST = 3.5;
+const ROOM_NAME_FLOOR_FAR_MARGIN = 0.6;
+function roomNameFloorPos(size, wall){
+  const along = (wall === 'north' || wall === 'south') ? size.d : size.w;
+  const dist = Math.min(ROOM_NAME_FLOOR_DIST, Math.max(0.5, along - ROOM_NAME_FLOOR_FAR_MARGIN));
+  if(wall === 'north') return { x: 0, z: -size.d / 2 + dist };
+  if(wall === 'south') return { x: 0, z: size.d / 2 - dist };
+  if(wall === 'west')  return { x: -size.w / 2 + dist, z: 0 };
+  return { x: size.w / 2 - dist, z: 0 };   // east
+}
+// Builds the flat floor-plane mesh (unrotated -- floorLabels' per-frame tick
+// keeps it lying flat and turning to face the camera, same "always readable"
+// idea as the cylindrical billboards, just spinning in the ground plane
+// instead of standing upright). Returns null if the room has no name.
+function buildRoomNameFloorLabel(room, roomKey){
+  const name = roomNameFor(roomKey);
+  if(!name) return null;
+  const tex = makeRoomNameFloorTexture(name);
+  const w = 2.4, h = w * 220 / 640;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const wall = entranceWall(room);
+  const p = roomNameFloorPos(room.size, wall);
+  const floorY = floorHeightAt(room, p.z);
+  mesh.position.set(p.x, floorY + 0.015, p.z);
+  mesh.userData = { kind: 'room-name-floor-label' };
+  return mesh;
+}
+
 // Hint over a forward door: just the small name plaque for the room beyond,
 // immediately above the lintel, centered on the doorway. (The opponent-move icon
 // that used to sit above it is gone -- the move now lives in the door-side pair,
@@ -4292,6 +4381,7 @@ function buildRoom(roomKey){
   const myGeneration = buildGeneration;
   scene.clear();
   billboards = [];
+  floorLabels = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
   const sun = new THREE.DirectionalLight(0xffffff, room.outdoor ? 0.9 : 0.7);
@@ -4433,6 +4523,13 @@ function buildRoom(roomKey){
       }
     }
     if(room.stairs) scene.add(buildStairs(room, roomKey));
+    // this room's OWN name on the floor a little way in from the entrance --
+    // hint-gated (same toggle as door hints/wall-list plaques) since it's a
+    // memory-aid, not part of the room's permanent decor.
+    if(hintsOn){
+      const nameLabel = buildRoomNameFloorLabel(room, roomKey);
+      if(nameLabel){ scene.add(nameLabel); floorLabels.push(nameLabel); }
+    }
     if(room.label){
       let labelY;
       if(room.stairs){
@@ -4782,6 +4879,22 @@ function tick(){
   // cylindrical billboards: rotate to face the camera horizontally each frame
   for(const b of billboards){
     b.rotation.y = Math.atan2(camera.position.x - b.position.x, camera.position.z - b.position.z);
+  }
+
+  // room-name floor labels: lie flat (local normal = world up) and spin
+  // around that normal so they read right-side-up to the camera's CURRENT
+  // position -- the floor-bound counterpart to the cylindrical billboards
+  // above. Like a floor decal/rug read by someone standing over it and
+  // looking down-and-forward, the text's "up" edge points AWAY from the
+  // viewer (the far edge reads last), not toward them -- otherwise it's
+  // upside down from the viewer's own vantage.
+  for(const f of floorLabels){
+    const awayFromCam = new THREE.Vector3(f.position.x - camera.position.x, 0, f.position.z - camera.position.z);
+    if(awayFromCam.lengthSq() < 1e-6) continue;   // directly overhead -- keep the previous facing rather than divide by zero
+    awayFromCam.normalize();
+    const normal = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(awayFromCam, normal);
+    f.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, awayFromCam, normal));
   }
 
   // gear icon tracks the selected prop's upper-right corner from the
@@ -5276,8 +5389,9 @@ function handleEditTarget(ud){
     const room = mergedRoom(ud.roomKey);
     const ex = (room.exits || []).find(e => doorKey(e.wall, e.offset) === ud.doorKey);
     const isExit = !!(ex && ex.back);
+    const locked = !!(ex && !ex.back && isRoomEmpty(ex.target));
     const override = doorAssetFor(ud.roomKey, ud.doorKey);     // raw override (asset or null)
-    const def = defaultDoorAsset(ud.roomKey, isExit);
+    const def = locked ? defaultLockedDoorAsset(ud.roomKey) : defaultDoorAsset(ud.roomKey, isExit);
     const eff = override || def;
     openAssetPicker({
       allow: ['door'], onClose,
@@ -5285,7 +5399,19 @@ function handleEditTarget(ud){
       currentId: (eff && eff.id) || null,
       currentSource: override ? 'room' : (eff ? 'default' : null),
       defaultExists: !!def,
-      onPick: id => setDoorOverride(ud.roomKey, ud.doorKey, id),
+      // a locked door's skin is offered as this castle's locked-door default
+      // right away (confirm), rather than requiring the separate Room
+      // Geometry "make default" step every other door category needs --
+      // dead-end doors are usually meant to share one look (e.g. a vault)
+      // castle-wide, so this is the common case, not the exception.
+      onPick: id => {
+        setDoorOverride(ud.roomKey, ud.doorKey, id);
+        if(locked && id && confirm('Make this the locked door default for this building?')){
+          setLockedDoorBuildingDefault(ud.roomKey, id);
+          persistLayout();
+          buildRoom(currentRoomKey);
+        }
+      },
       onRemove: () => setDoorOverride(ud.roomKey, ud.doorKey, null)
     });
   }
@@ -5453,10 +5579,17 @@ function buildTopToolbar(){
   decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
   memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
-  // edit-only buttons (roomGeom/wallLists/assets) sit immediately right of
-  // Edit, with nothing that also shows outside edit mode (board) wedged
-  // between them.
-  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, boardBtn, infoBtn);
+  // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
+  // bordered "chip" so they read as a single grouped tool cluster, distinct
+  // from the standalone hints/board/info icons around them. The wrapper's
+  // own visibility never changes -- individual buttons inside it still show/
+  // hide via updateToolbar() same as before, so it simply grows/shrinks
+  // around whichever of them are currently visible.
+  editGroup = document.createElement('div');
+  editGroup.style.cssText = 'display:flex;gap:6px;padding:4px;border-radius:10px;'
+    + 'border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.06);pointer-events:none;';
+  editGroup.append(editBtn, roomGeomBtn, wallListsBtn, assetsBtn);
+  left.append(hintsBtn, editGroup, boardBtn, infoBtn);
   // memorize is the rightmost status badge (right next to Close); decorated,
   // when shown, sits immediately to its left.
   right.append(decoratedBadge, memBtn, closeBtn);
@@ -6522,6 +6655,13 @@ export async function openThreeTest(containerEl, opts){
       },
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
+      // the bordered "chip" wrapping Edit + its edit-only buttons -- whether
+      // it actually has a visible border, and which icons it contains (in
+      // order), for testing the grouping without depending on exact colors.
+      editGroupInfo: () => editGroup ? {
+        hasBorder: editGroup.style.border !== '' && editGroup.style.border !== 'none',
+        icons: [...editGroup.querySelectorAll('i.fa-solid')].map(i => [...i.classList].find(c => c !== 'fa-solid')),
+      } : null,
       // "fully decorated" (Part A): read the computed flag, force a
       // recompute of the current room without going through the real
       // edit-mode-exit UI, or seed/clear a specific room's flag directly --
@@ -6540,7 +6680,31 @@ export async function openThreeTest(containerEl, opts){
       // actually walkable) -- the real signal a locked door removes, checked
       // directly rather than driving a full WASD walk-into-the-wall simulation.
       isRoomEmpty: (key) => isRoomEmpty(key),
+      // the room-name floor label currently in the scene (null if hints are
+      // off, the room has no name, or -- normally -- there's more than
+      // zero): position, and its local normal/"up" (text-top direction) in
+      // world space, so a test can confirm it lies flat (normal ~ (0,1,0))
+      // and spins to face wherever the camera currently is.
+      roomNameFloorLabel: () => {
+        const f = floorLabels[0];
+        if(!f) return null;
+        const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(f.quaternion);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(f.quaternion);
+        return {
+          x: f.position.x, y: f.position.y, z: f.position.z,
+          normal: { x: normal.x, y: normal.y, z: normal.z },
+          up: { x: up.x, y: up.y, z: up.z },
+          count: floorLabels.length,
+        };
+      },
       canWalkTo: (targetKey) => exitMeta.some(m => m.target === targetKey),
+      // a room's exits (wall/offset/target/back), each with its doorKey()
+      // pre-computed -- for driving target({kind:'door', roomKey, doorKey})
+      // against a specific exit by target without reaching into internals.
+      exitsOf: (roomKey) => {
+        const r = mergedRoom(roomKey);
+        return r ? (r.exits || []).map(e => ({ wall: e.wall, offset: e.offset, target: e.target, back: !!e.back, doorKey: doorKey(e.wall, e.offset) })) : null;
+      },
       // assigns a per-door override keyed by which TARGET the door leads to,
       // rather than requiring the caller to hand-compute its wall/offset via
       // doorKey() -- for testing locked-vs-ordinary door skin resolution.
@@ -6560,7 +6724,7 @@ export async function openThreeTest(containerEl, opts){
         persistLayout();
         buildRoom(currentRoomKey);
       },
-      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h }); }); return out; },
+      scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h, doorKey:o.userData.doorKey }); }); return out; },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
@@ -6701,6 +6865,7 @@ export function closeThreeTest(){
   editMode = false;
   inputLocked = false;
   billboards = [];
+  floorLabels = [];
   selectedProp = null;
   selectionOutline = null;
   selectionGear = null;
@@ -6712,7 +6877,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = editGroup = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;

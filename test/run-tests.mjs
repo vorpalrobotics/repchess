@@ -2685,24 +2685,29 @@ try {
   await appAC.close();
 }
 
-// --- Phase AD: "fully decorated" -- the door-naming half of the check, and
-//     the vacuous-true case (a room with nothing left to decorate). ---
+// --- Phase AD: "fully decorated" -- the door-naming half of the check
+//     (only for a door whose target is NOT empty/locked -- see isRoomEmpty
+//     and the locked-doors feature), and the vacuous-true case. ---
 const appAD = await launchApp();
 try {
-  // a branch (e6 vs g6) gives the root room two REAL forward doors (a single
-  // reply collapses into a doorless internal link -- see Phase X); root's
-  // own reply is the ONLY pair (side 'center'), so slot-fill is a non-issue
-  // here -- isolates the door-naming half of the check.
+  // root has two forward doors: 'e6' leads to a room with its OWN branch
+  // (Bb4/Be7 -- 2 replies, so it's NOT empty and its door is an ordinary,
+  // not locked, door -- naming IS required for root's decoration); 'g6'
+  // leads to a genuine dead end (EMPTY -- see Phase AH) whose door is
+  // LOCKED, so naming its target must NOT be required.
   await seedBackup(appAD.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
     ]}],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
   });
   await openVR(appAD.page);
@@ -2712,8 +2717,8 @@ try {
     return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
-  const r2 = await keyFor(['d4','Nf6','c4','e6','Nc3']);     // named via the 'e6' door
-  const r3 = await keyFor(['d4','Nf6','c4','g6','Nc3']);     // named via the 'g6' door
+  const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);   // NOT empty -- naming required
+  const g6Room = await keyFor(['d4','Nf6','c4','g6','Nc3']);   // EMPTY/locked -- naming NOT required
   await appAD.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAD.page.waitForTimeout(300);
   const exitEditMode = async () => {
@@ -2721,7 +2726,8 @@ try {
     await appAD.page.evaluate(() => window.__threeTestEdit.toggle());
   };
 
-  // 84. Neither forward door's target is named -> not decorated.
+  // 84. Neither forward door's target is named -> not decorated (e6Room, the
+  //     non-empty one, still needs it).
   try {
     await exitEditMode();
     const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
@@ -2729,29 +2735,33 @@ try {
     ok('fully-decorated: unnamed forward door targets keep a room undecorated');
   } catch(e){ bad('decorated: false with unnamed door targets', e); }
 
-  // 85. Naming only ONE of the two target rooms still isn't enough.
+  // 85. Naming ONLY the non-empty door's target (e6Room) -- and deliberately
+  //     leaving the locked door's target (g6Room) unnamed -- already flips
+  //     the room to decorated. This is the key differentiator: without the
+  //     locked-target exemption, g6Room's missing name would still block it.
   try {
-    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: r2, n: 'E6 room' });
+    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: e6Room, n: 'E6 room' });
     await exitEditMode();
     const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
-    assert(!dec, `expected the root room NOT decorated with only 1 of 2 door targets named, got ${JSON.stringify(dec)}`);
-    ok('fully-decorated: naming only some forward door targets is still not enough');
-  } catch(e){ bad('decorated: false with only some door targets named', e); }
+    assert(dec, `expected the root room decorated once the non-empty door's target is named, even with the locked door's (empty) target still unnamed, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: naming the non-empty door\'s target is enough; a locked door\'s target is exempt from naming');
+  } catch(e){ bad('decorated: true once the required target is named, locked target exempt', e); }
 
-  // 86. Naming BOTH target rooms flips it to decorated.
+  // 86. Naming the locked door's target too (g6Room) doesn't change anything
+  //     -- still decorated, confirming its name was never load-bearing.
   try {
-    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: r3, n: 'G6 room' });
+    await appAD.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: g6Room, n: 'G6 room' });
     await exitEditMode();
     const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
-    assert(dec, `expected the root room decorated once every forward door target is named, got ${JSON.stringify(dec)}`);
-    ok('fully-decorated: flips true once every forward door target room is named');
-  } catch(e){ bad('decorated: true once every door target is named', e); }
+    assert(dec, `expected the root room to remain decorated after also naming the locked door's target, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: also naming a locked door\'s target is harmless (never required)');
+  } catch(e){ bad('decorated: still true after also naming the locked target', e); }
 
   // 87. A room with nothing to decorate (no slots but its own center pair,
   //     no built forward doors -- its own next reply is unbuilt) is
   //     vacuously fully decorated by default.
   try {
-    await appAD.page.evaluate((k) => window.__threeTestEdit.enter(k), r2);
+    await appAD.page.evaluate((k) => window.__threeTestEdit.enter(k), g6Room);
     await appAD.page.waitForTimeout(300);
     await exitEditMode();
     const dec = await appAD.page.evaluate(() => window.__threeTestEdit.decorated());
@@ -3079,6 +3089,83 @@ try {
   await appAH.close();
 }
 
+// --- Phase AH2: skinning a locked door through the real in-world picker
+//     offers to make it this castle's locked-door default right away (a
+//     confirm prompt), instead of requiring the separate Room Geometry
+//     "make default" step every other door category needs. ---
+const appAH2 = await launchApp();
+try {
+  await seedBackup(appAH2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
+  });
+  await openVR(appAH2.page);
+  const root = await appAH2.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  const g6Room = await appAH2.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','g6','Nc3']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAH2.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appAH2.page.waitForTimeout(300);
+  await appAH2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAH2.page.waitForTimeout(60);
+  const g6DoorKey = await appAH2.page.evaluate(({ root, g6Room }) =>
+    window.__threeTestEdit.exitsOf(root).find(e => e.target === g6Room)?.doorKey,
+    { root, g6Room });
+  assert(g6DoorKey, 'test setup issue: could not find g6\'s doorKey');
+
+  // 114. Picking an asset for a locked door pops the "make this the locked
+  //      door default for this building?" confirm (auto-accepted by the
+  //      harness's global dialog handler, i.e. "Yes") -- and it takes
+  //      effect immediately: a DIFFERENT, untouched locked door (d5) in the
+  //      same castle now shows the same skin too, no separate "make
+  //      default" step needed.
+  try {
+    await appAH2.page.evaluate(({ rk, dk }) => window.__threeTestEdit.target({ kind: 'door', roomKey: rk, doorKey: dk }),
+      { rk: root, dk: g6DoorKey });
+    await appAH2.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAH2.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+        .find(c => !c.classList.contains('asset-card-color') && c.textContent.includes('vaultDoor'));
+      card.click();
+    });
+    await appAH2.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAH2.page.waitForTimeout(300);
+    const state = await appAH2.page.evaluate(() => {
+      const scan = window.__threeTestEdit.scan();
+      const meshes = window.__threeTestEdit.meshes();
+      return {
+        lockIcons: scan.filter(o => o.kind === 'locked-door-icon').length,
+        doorPanels: meshes.filter(m => m.kind === 'door-panel').length,
+      };
+    });
+    assert(state.lockIcons === 0, `expected no lock icons left -- the confirmed default should cover d5 too, got ${state.lockIcons}`);
+    assert(state.doorPanels === 2, `expected both locked doors (g6, d5) to show a door panel after confirming the default, got ${state.doorPanels}`);
+    ok('skinning a locked door through the real picker offers, and (on Yes) immediately applies, a castle-wide locked-door default');
+  } catch(e){ bad('locked doors: picker offers to set the castle-wide default on skin assignment', e); }
+} finally {
+  await appAH2.close();
+}
+
 // --- Phase AI: top VR toolbar icon order -- the edit-only buttons (room
 //     geometry / wall lists / assets) sit immediately right of the Edit
 //     button, with no buttons that also show outside edit mode (board
@@ -3154,8 +3241,122 @@ try {
     assert(after && after.display !== 'none', `expected the decorated badge visible once the room is fully decorated, got ${JSON.stringify(after)}`);
     ok('the decorated badge shows in the VR toolbar exactly when the current room is fully decorated');
   } catch(e){ bad('toolbar: decorated badge reflects the room\'s fully-decorated flag', e); }
+
+  // 113. Edit and its edit-only buttons (room geometry, wall lists, asset
+  //      library) are wrapped in a single bordered "chip" -- visually one
+  //      grouped cluster -- containing exactly those four icons, in order,
+  //      and nothing else (hints/board/info stay outside it).
+  try {
+    const info = await appAI.page.evaluate(() => window.__threeTestEdit.editGroupInfo());
+    assert(info, 'expected an editGroup wrapper element (test setup issue if not)');
+    assert(info.hasBorder, `expected the edit-tools group to have a visible border, got ${JSON.stringify(info)}`);
+    assert(JSON.stringify(info.icons) === JSON.stringify(['fa-pencil', 'fa-ruler-combined', 'fa-list-ol', 'fa-cubes']),
+      `expected exactly Edit + its 3 edit-only icons inside the group, in order, got ${JSON.stringify(info.icons)}`);
+    ok('Edit and its edit-only buttons are wrapped in a single bordered group');
+  } catch(e){ bad('toolbar: edit-tools bordered group', e); }
 } finally {
   await appAI.close();
+}
+
+// --- Phase AJ: a room's own name on the floor, a little way in from the
+//     entrance -- hint-gated, clamped to stay clear of the far wall in a
+//     shallow room, and spins to keep facing the camera as you walk. ---
+const appAJ = await launchApp();
+try {
+  await seedBackup(appAJ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await openVR(appAJ.page);
+  const root = await appAJ.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAJ.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appAJ.page.waitForTimeout(300);
+
+  // 115. No label on an unnamed room, even with hints on.
+  try {
+    const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    assert(label === null, `expected no floor label on an unnamed room, got ${JSON.stringify(label)}`);
+    ok('no room-name floor label when the room has no name');
+  } catch(e){ bad('room name floor label: none without a name', e); }
+
+  // 116. Naming the room shows exactly one label, lying flat (normal ~ world
+  //      up), positioned 3.5m in from the entrance (south wall here), centered
+  //      on the cross axis, just above the floor.
+  let size;
+  try {
+    await appAJ.page.evaluate((k) => window.__threeTestEdit.setRoomName(k, 'Vault Room'), root);
+    await appAJ.page.evaluate((k) => window.__threeTestEdit.enter(k), root);   // rebuild
+    await appAJ.page.waitForTimeout(200);
+    size = await appAJ.page.evaluate((rk) => window.__threeTestEdit.roomSize(rk), root);
+    const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    assert(label && label.count === 1, `expected exactly one floor label, got ${JSON.stringify(label)}`);
+    const expectedZ = size.d / 2 - 3.5;   // south entrance, 3.5m in (room is deep enough)
+    assert(Math.abs(label.x) < 0.05 && Math.abs(label.z - expectedZ) < 0.05,
+      `expected the label ~3.5m in from the south entrance (x~0, z~${expectedZ}), got x=${label.x} z=${label.z}`);
+    assert(label.y > 0 && label.y < 0.1, `expected the label just above the floor, got y=${label.y}`);
+    assert(Math.abs(label.normal.x) < 0.01 && label.normal.y > 0.99 && Math.abs(label.normal.z) < 0.01,
+      `expected the label lying flat (normal ~ (0,1,0)), got ${JSON.stringify(label.normal)}`);
+    ok('a named room shows exactly one floor label, lying flat, 3.5m in from the entrance');
+  } catch(e){ bad('room name floor label: position/orientation for a named room', e); }
+
+  // 117. Turning hints off hides it (a memory aid, not permanent decor);
+  //      turning them back on brings it back.
+  try {
+    await appAJ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appAJ.page.waitForTimeout(300);
+    const off = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    assert(off === null, `expected no floor label with hints off, got ${JSON.stringify(off)}`);
+    await appAJ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appAJ.page.waitForTimeout(300);
+    const on = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    assert(on !== null, 'expected the floor label back once hints are re-enabled');
+    ok('the room-name floor label is hint-gated (hidden/shown with the hints toggle)');
+  } catch(e){ bad('room name floor label: hint-gated', e); }
+
+  // 118. Edge case: a room shallower than 3.5m + the far-wall margin clamps
+  //      the label so it never crowds (or sits past) the far wall.
+  try {
+    await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 2.5, h: 6 }), root);
+    await appAJ.page.waitForTimeout(200);
+    const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    const expectedZ = 2.5/2 - (2.5 - 0.6);   // clamped to (depth - far-wall margin), not the full 3.5m
+    assert(label && Math.abs(label.z - expectedZ) < 0.05,
+      `expected the label clamped clear of the far wall in a 2.5m-deep room (z~${expectedZ}), got ${JSON.stringify(label)}`);
+    ok('room name floor label: clamped to stay clear of the far wall in a shallow room');
+  } catch(e){ bad('room name floor label: shallow-room clamping', e); }
+
+  // 119. The label spins so its "up" (readable-top) edge points AWAY from
+  //      the camera's current position (like a floor decal read by someone
+  //      standing over/behind it looking down-and-forward -- the far edge
+  //      reads last, not the near edge), while staying flat (normal
+  //      unchanged) -- teleporting to two different spots changes which way
+  //      it faces.
+  try {
+    await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 13, h: 6 }), root);   // back to normal depth
+    await appAJ.page.waitForTimeout(200);
+    const before = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    await appAJ.page.evaluate(({ x, z }) => window.__threeTestEdit.teleport(x, z, 0), { x: before.x + 5, z: before.z });
+    await appAJ.page.waitForTimeout(300);
+    const facingA = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    await appAJ.page.evaluate(({ x, z }) => window.__threeTestEdit.teleport(x, z, 0), { x: before.x, z: before.z + 5 });
+    await appAJ.page.waitForTimeout(300);
+    const facingB = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
+    assert(facingA.up.x < -0.9 && Math.abs(facingA.up.z) < 0.1,
+      `expected "up" to point away from the camera at +x (i.e. toward -x), got ${JSON.stringify(facingA.up)}`);
+    assert(facingB.up.z < -0.9 && Math.abs(facingB.up.x) < 0.1,
+      `expected "up" to point away from the camera at +z after moving (i.e. toward -z), got ${JSON.stringify(facingB.up)}`);
+    assert(facingA.normal.y > 0.99 && facingB.normal.y > 0.99, 'expected the label to stay flat while spinning to face the camera');
+    ok('room name floor label spins to read right-side-up from the camera\'s position, staying flat');
+  } catch(e){ bad('room name floor label: faces the camera as you move', e); }
+} finally {
+  await appAJ.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
