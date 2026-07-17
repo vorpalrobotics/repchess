@@ -2283,11 +2283,11 @@ function buildSlots(room, roomKey, slots){
           // caption the image with its word (hint-gated) so picture ↔ concept read together
           if(hintsOn) scene.add(buildMoveObjectSubtitle(slot, resolved.word, slotXformFor(roomKey, slot.id)));
         } else {
-          scene.add(buildMoveObjectWordLabel(slot, resolved.word));
+          scene.add(buildMoveObjectWordLabel(slot, resolved.word, slotXformFor(roomKey, slot.id)));
         }
         continue;
       }
-      scene.add(buildMoveObjectPlaceholder(slot));
+      scene.add(buildMoveObjectPlaceholder(slot, slotXformFor(roomKey, slot.id)));
       continue;
     }
     const asset = slotAssetFor(roomKey, slot.id);
@@ -2302,7 +2302,8 @@ function buildSlots(room, roomKey, slots){
 // ghostly numbered placeholder sprite (L1/R2/...) for an unfilled move-object
 // slot. Clickable in edit mode (kind 'slot'): opens the asset picker and fills
 // the slot, replacing the placeholder with the chosen prop.
-function buildMoveObjectPlaceholder(slot){
+function buildMoveObjectPlaceholder(slot, xform){
+  xform = xform || {};
   const px = 256;
   const canvas = document.createElement('canvas');
   canvas.width = px; canvas.height = px;
@@ -2326,7 +2327,7 @@ function buildMoveObjectPlaceholder(slot){
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   sprite.scale.set(0.9, 0.9, 1);
-  sprite.position.set(slot.x, slot.y, slot.z);
+  sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
   // route an edit-mode click through the existing slot picker (onCanvasClick
   // only fires in edit mode, so this is inert during a normal walk)
   sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
@@ -2338,7 +2339,8 @@ function buildMoveObjectPlaceholder(slot){
 // stand-in object until an image is bound. Like the placeholder it routes an
 // edit-mode click to the asset picker (which sets a per-slot override), and it
 // stays visible with hints off (the word is the memory hook, not the move).
-function buildMoveObjectWordLabel(slot, word){
+function buildMoveObjectWordLabel(slot, word, xform){
+  xform = xform || {};
   const W = 512, H = 256;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -2373,7 +2375,7 @@ function buildMoveObjectWordLabel(slot, word){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   // 2:1 canvas -> keep aspect; ~1.1 m wide plaque hovering at the object spot
   sprite.scale.set(1.1, 0.55, 1);
-  sprite.position.set(slot.x, slot.y + 0.15, slot.z);
+  sprite.position.set(slot.x + (xform.dx || 0), slot.y + 0.15 + (xform.dy || 0), slot.z + (xform.dz || 0));
   sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
   return sprite;
 }
@@ -3348,11 +3350,11 @@ function buildPairAt(roomKey, room, x, z, target, exPair){
     if(asset.type === 'billboard-cylindrical') billboards.push(obj);   // faces the camera each frame
     group.add(obj);
   } else if(word && hintsOn){
-    const label = buildMoveObjectWordLabel({ x, y: MNEM_OBJ_Y, z, id: slotId }, word);
+    const label = buildMoveObjectWordLabel({ x, y: MNEM_OBJ_Y, z, id: slotId }, word, slotXformFor(roomKey, doorId));
     label.userData = emptyUd;
     group.add(label);
   } else if(editMode){                                   // empty slot: a clickable stand-in to fill
-    const ph = buildMoveObjectPlaceholder({ x, y: MNEM_OBJ_Y, z, tag: '?', id: slotId });
+    const ph = buildMoveObjectPlaceholder({ x, y: MNEM_OBJ_Y, z, tag: '?', id: slotId }, slotXformFor(roomKey, doorId));
     ph.userData = emptyUd;
     group.add(ph);
   }
@@ -4324,8 +4326,7 @@ function reconcileRoomBounds(roomKey){
   const room = mergedRoom(roomKey);
   if(!room || room.outdoor) return 0;   // streets/lawns aren't resizable "rooms"
   const layoutRoom = LAYOUT[roomKey];
-  const xforms = layoutRoom && layoutRoom.slotXform;
-  if(!xforms) return 0;
+  const xforms = (layoutRoom && layoutRoom.slotXform) || {};
   let fixed = 0;
   for(const slotId of Object.keys(xforms)){
     const xform = xforms[slotId];
@@ -4368,6 +4369,28 @@ function reconcileRoomBounds(roomKey){
       }
     }
     if(changed){ xforms[slotId] = next; fixed++; }
+  }
+  // Base (never-nudged) move-object/mnemonic slots: their position is purely
+  // computed from the room's CURRENT size (mnemPairLayout), so in the common
+  // case a resize moves them automatically -- but a STALE, too-small saved
+  // room geometry (LAYOUT[roomKey].geom left over from before a later move-
+  // pair was added, or a manual shrink after the fact) can leave a later
+  // pair's computed position sitting behind a wall with no nudge involved at
+  // all, so the loop above never sees it (nothing in xforms to re-check yet).
+  // Check every such slot's base position directly and synthesize a
+  // corrective dx/dz -- the same effect an auto-applied nudge would have --
+  // so it becomes visible/reachable again instead of silently staying lost.
+  // (buildMoveObjectPlaceholder/buildMoveObjectWordLabel/placeMnemonicSlot
+  // all apply slotXformFor, so this correction actually shows up even for a
+  // still-unfilled slot -- not just once something is placed in it.)
+  for(const slot of roomSlots(room, roomKey)){
+    if(slot.kind !== 'moveObject' && slot.kind !== 'mnemonic') continue;
+    if(xforms[slot.id]) continue;   // already covered by the loop above
+    const clamped = clampFloorXZ(room.size, slot.x, slot.z);
+    if(clamped.x !== slot.x || clamped.z !== slot.z){
+      ensureRoomLayout(roomKey).slotXform[slot.id] = { dx: clamped.x - slot.x, dz: clamped.z - slot.z };
+      fixed++;
+    }
   }
   if(fixed) persistLayout();
   return fixed;
@@ -6084,6 +6107,14 @@ function wirePresetsBox(ov, roomKey){
 function renderRoomGeomDialog(ov, roomKey){
   const room = mergedRoom(roomKey);
   const { w, d, h } = room.size;
+  // the room's own freshly-computed size (ROOMS[roomKey].size, NOT the merged/
+  // overridden one) already reflects the true minimum needed to fit its actual
+  // content -- move-pairs marching along the walls and doors spread across
+  // the front -- so the dialog uses it as a per-room floor on top of the flat
+  // ROOM_GEOM_MIN, keeping a shrink from clipping something in the first
+  // place (the reconciler still catches anything that slips through, e.g.
+  // already-saved data from before this floor existed).
+  const contentMin = (ROOMS[roomKey] && ROOMS[roomKey].size) || room.size;
   // read straight off the static ROOMS config: exits, stairs and (outdoor)
   // building footprints don't move when the room is resized, so the live
   // preview overlays them on whatever width/depth the user is typing.
@@ -6153,17 +6184,18 @@ function renderRoomGeomDialog(ov, roomKey){
   ov.innerHTML = `
     <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
       <h2 title="${escHtml(roomKey)}">Room Geometry — ${escHtml(roomTitle)}</h2>
-      <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.7rem">
+      <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.2rem">
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
-          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomW" value="${w}" style="width:6em">
+          <input type="number" step="0.1" min="${Math.max(ROOM_GEOM_MIN, contentMin.w)}" id="roomGeomW" value="${w}" style="width:6em">
         </label>
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Depth (m)
-          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomD" value="${d}" style="width:6em">
+          <input type="number" step="0.1" min="${Math.max(ROOM_GEOM_MIN, contentMin.d)}" id="roomGeomD" value="${d}" style="width:6em">
         </label>
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Height (m)
-          <input type="number" step="0.1" min="${ROOM_GEOM_MIN}" id="roomGeomH" value="${h}" style="width:6em">
+          <input type="number" step="0.1" min="${Math.max(ROOM_GEOM_MIN, contentMin.h)}" id="roomGeomH" value="${h}" style="width:6em">
         </label>
       </div>
+      <p style="margin:0 0 .5rem;font-size:.68rem;color:#888">Won't go below ${contentMin.w.toFixed(1)}×${contentMin.d.toFixed(1)}×${contentMin.h.toFixed(1)}m -- the size this room's own moves and doors need to fit without crowding.</p>
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
       ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
@@ -6456,9 +6488,9 @@ function renderRoomGeomDialog(ov, roomKey){
     clearRoomStyles(roomKey);     // wipes this room only; LAYOUT.__defaults is untouched
   };
   ov.querySelector('#roomGeomApplyBtn').onclick = () => {
-    const w2 = Math.max(ROOM_GEOM_MIN, Number(wEl.value) || room.size.w);
-    const d2 = Math.max(ROOM_GEOM_MIN, Number(dEl.value) || room.size.d);
-    const h2 = Math.max(ROOM_GEOM_MIN, Number(hEl.value) || room.size.h);
+    const w2 = Math.max(ROOM_GEOM_MIN, contentMin.w, Number(wEl.value) || room.size.w);
+    const d2 = Math.max(ROOM_GEOM_MIN, contentMin.d, Number(dEl.value) || room.size.d);
+    const h2 = Math.max(ROOM_GEOM_MIN, contentMin.h, Number(hEl.value) || room.size.h);
     const makeDefault = ov.querySelector('#roomGeomMakeDefault').checked;
     closeRoomGeomDialog();
     if(makeDefault) captureBuildingDefaults(roomKey);   // snapshot before the rebuild so the readout/rooms pick it up

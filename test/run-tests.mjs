@@ -3691,5 +3691,123 @@ try {
   await appAL.close();
 }
 
+// --- Phase AM: a resize that leaves a room too small for its OWN move-pairs
+//     (not just a manually-nudged item) used to strand the later pair(s)
+//     behind a wall with nothing to bring them back -- reconcileRoomBounds
+//     only ever re-checked slots that already had a stored nudge, so a
+//     never-nudged, purely formula-positioned pair (mnemPairLayout) was
+//     invisible until someone thought to enlarge the room again. Fixed two
+//     ways: (1) reconcileRoomBounds now also checks un-nudged move-object/
+//     mnemonic slots directly, and the placeholder/word-label/mnemonic
+//     renderers now actually apply the correction it writes; (2) the Room
+//     Geometry dialog won't let a resize go below the room's own
+//     content-driven minimum in the first place. ---
+const appAM = await launchApp();
+try {
+  // same corridor shape as Phase AC: a forced (non-branching) reply chain
+  // collapses into ONE room with 2 LEFT-wall move-pairs (obj-L1/obj-L2,
+  // mnem-L1/mnem-L2) -- multiple pairs in one room is exactly the shape
+  // where a later pair can end up deeper than an undersized room reaches.
+  await seedBackup(appAM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+  });
+  await openVR(appAM.page);
+  const roomKey = await appAM.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAM.page.waitForTimeout(300);
+
+  // 128. Shrinking the room via setRoomGeom (the same call the real dialog's
+  //      Apply button makes) well below what 2 pairs need pulls BOTH the
+  //      never-nudged move-object placeholders and their mnemonic billboards
+  //      back inside the new bounds, not just whichever had a prior nudge.
+  try {
+    const before = await appAM.page.evaluate((k) => ({
+      slotIds: window.__threeTestEdit.moveObjectSlotIds(k),
+      posL2: window.__threeTestEdit.posOf('obj-L2'),
+    }), roomKey);
+    assert(before.slotIds.includes('obj-L1') && before.slotIds.includes('obj-L2'),
+      `test setup issue: expected obj-L1/obj-L2, got ${JSON.stringify(before.slotIds)}`);
+    assert(before.posL2 && Math.abs(before.posL2.z) < 6, `test setup issue: obj-L2 already unexpectedly far out, ${JSON.stringify(before.posL2)}`);
+
+    await appAM.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 6, h: 6 }), roomKey);
+    await appAM.page.waitForTimeout(300);
+
+    const bound = 6/2 - 0.3;   // clampFloorXZ's margin, same math the reconciler uses
+    const after = await appAM.page.evaluate((k) => ({
+      posL1: window.__threeTestEdit.posOf('obj-L1'),
+      posL2: window.__threeTestEdit.posOf('obj-L2'),
+      posMnemL1: window.__threeTestEdit.posOf('mnem-L1'),
+      posMnemL2: window.__threeTestEdit.posOf('mnem-L2'),
+    }), roomKey);
+    for(const [name, p] of Object.entries(after)){
+      assert(p && Math.abs(p.z) <= bound + 0.01,
+        `expected ${name} pulled back inside the shrunk room (|z| <= ${bound}), got ${JSON.stringify(p)}`);
+    }
+    ok('reconcileRoomBounds pulls never-nudged move-pairs (object AND billboard) back inside a shrunk room');
+  } catch(e){ bad('reconcile: un-nudged move-pairs follow a shrink, not just previously-nudged ones', e); }
+} finally {
+  await appAM.close();
+}
+
+// --- Phase AN: the Room Geometry dialog itself now refuses to shrink a room
+//     below the size its OWN move-pairs/doors need, instead of relying
+//     entirely on after-the-fact reconciliation. ---
+const appAN = await launchApp();
+try {
+  await seedBackup(appAN.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+  });
+  await openVR(appAN.page);
+  const roomKey = await appAN.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAN.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAN.page.waitForTimeout(300);
+  await appAN.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on -- Room Geometry only shows then
+  await appAN.page.waitForTimeout(60);
+
+  // 129. The dialog's depth input has a real (>2m) floor reflecting this
+  //      room's own content, and typing something smaller and clicking
+  //      Apply clamps back up to it instead of honoring the smaller value.
+  try {
+    await appAN.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const minAttr = await appAN.page.evaluate(() => Number(document.getElementById('roomGeomD').getAttribute('min')));
+    assert(minAttr > 3, `expected the depth field's min to reflect real 2-pair content (>3m), got ${minAttr}`);
+
+    await appAN.page.fill('#roomGeomD', '2.5');   // well under the content minimum
+    await appAN.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAN.page.waitForTimeout(200);
+
+    const applied = await appAN.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+    assert(applied.d >= minAttr - 0.01, `expected depth clamped up to the content minimum (~${minAttr}), got ${applied.d}`);
+    assert(applied.d !== 2.5, `expected the dialog to reject 2.5m outright, but it was applied as-is`);
+    ok('Room Geometry dialog clamps a resize up to this room\'s own content-driven minimum size');
+  } catch(e){ bad('Room Geometry dialog: minimum size reflects the room\'s own content', e); }
+} finally {
+  await appAN.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
