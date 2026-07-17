@@ -3079,5 +3079,84 @@ try {
   await appAH.close();
 }
 
+// --- Phase AI: top VR toolbar icon order -- the edit-only buttons (room
+//     geometry / wall lists / assets) sit immediately right of the Edit
+//     button, with no buttons that also show outside edit mode (board
+//     position, memorize) wedged between them. ---
+const appAI = await launchApp();
+try {
+  await seedBackup(appAI.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await openVR(appAI.page);
+  const roomKey = await appAI.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAI.page.waitForTimeout(200);
+  const iconOrder = () => appAI.page.evaluate(() =>
+    [...document.querySelectorAll('#threeTestCanvasWrap i.fa-solid')].map(i =>
+      [...i.classList].find(c => c !== 'fa-solid')));
+
+  // 110. Edit-only buttons (fa-ruler-combined, fa-list-ol, fa-cubes) come
+  //      immediately after fa-pencil (Edit), before fa-chess-board (board
+  //      position) or fa-brain (memorize) -- both of which also show outside
+  //      edit mode and must not be wedged in between.
+  try {
+    const order = await iconOrder();
+    const editIdx = order.indexOf('fa-pencil');
+    const boardIdx = order.indexOf('fa-chess-board');
+    const brainIdx = order.indexOf('fa-brain');
+    const infoIdx = order.indexOf('fa-circle-info');
+    assert(editIdx >= 0 && boardIdx > editIdx && brainIdx > editIdx && infoIdx > editIdx,
+      `expected to find Edit, board, brain and info icons in order, got: ${JSON.stringify(order)}`);
+    for(const editOnly of ['fa-ruler-combined', 'fa-list-ol', 'fa-cubes']){
+      const idx = order.indexOf(editOnly);
+      assert(idx > editIdx && idx < boardIdx && idx < brainIdx && idx < infoIdx,
+        `expected ${editOnly} right after Edit and before board/brain/info, got order: ${JSON.stringify(order)}`);
+    }
+    ok('edit-only toolbar buttons sit immediately right of Edit, before board/brain/info');
+  } catch(e){ bad('toolbar: edit-only buttons grouped right after Edit', e); }
+
+  // 111. Memorize (fa-brain) is the rightmost status icon -- immediately left
+  //      of Close (fa-circle-xmark); the decorated badge (fa-palette), when
+  //      present in the DOM, sits immediately to memorize's own left. Order
+  //      holds regardless of either badge's current show/hide state.
+  try {
+    const order = await iconOrder();
+    const paletteIdx = order.indexOf('fa-palette');
+    const brainIdx = order.indexOf('fa-brain');
+    const closeIdx = order.indexOf('fa-circle-xmark');
+    assert(paletteIdx >= 0 && brainIdx >= 0 && closeIdx >= 0,
+      `expected to find the palette, brain and close icons, got: ${JSON.stringify(order)}`);
+    assert(closeIdx - brainIdx === 1, `expected brain immediately left of close, got order: ${JSON.stringify(order)}`);
+    assert(brainIdx - paletteIdx === 1, `expected the decorated badge immediately left of brain, got order: ${JSON.stringify(order)}`);
+    ok('memorize is the rightmost status icon (next to Close); the decorated badge sits immediately to its left');
+  } catch(e){ bad('toolbar: memorize rightmost, decorated badge immediately left of it', e); }
+
+  // 112. The decorated badge is hidden until the current room's "fully
+  //      decorated" flag (see evaluateDecorated) is actually true, then
+  //      shows on the very same badge once it is -- no page/room reopen
+  //      beyond the normal room rebuild needed.
+  try {
+    const before = await appAI.page.evaluate(() => window.__threeTestEdit.decoratedBadgeStyle());
+    assert(before && before.display === 'none', `expected the decorated badge hidden by default, got ${JSON.stringify(before)}`);
+    await appAI.page.evaluate((k) => window.__threeTestEdit.setDecorated(k, true), roomKey);
+    await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);   // rebuild -> updateToolbar reads DECORATED fresh
+    await appAI.page.waitForTimeout(150);
+    const after = await appAI.page.evaluate(() => window.__threeTestEdit.decoratedBadgeStyle());
+    assert(after && after.display !== 'none', `expected the decorated badge visible once the room is fully decorated, got ${JSON.stringify(after)}`);
+    ok('the decorated badge shows in the VR toolbar exactly when the current room is fully decorated');
+  } catch(e){ bad('toolbar: decorated badge reflects the room\'s fully-decorated flag', e); }
+} finally {
+  await appAI.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
