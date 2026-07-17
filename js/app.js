@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-121';
+const BUILD_TAG = '-122';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1221,6 +1221,30 @@ async function showTranspositionGraph(){
 
     console.log(`[graph] nodes=${rooms.length+leaves.length+(needsStartNode?1:0)} edges=${edges.length} boxes=${boxes.length} cyclic=${cyclic} → flat layout, boxes re-wrapped after`);
 
+    // which rooms have a real forward continuation -- an edge to another ROOM
+    // (built reply, incl. a transposition/back edge) or into another castle
+    // (foreignKey). A room with NONE is a VR dead-end: in the walk its
+    // doorway is a locked door you can't walk through (see threeVR.js's
+    // isRoomEmpty). Used to hide "Jump to VR" for such rooms -- landing inside
+    // a room you can only otherwise reach through a locked door is confusing
+    // (the castle ROOT is exempt: it's empty until built out, but you reach it
+    // from the street, never through a locked door).
+    const roomsWithForwardExit = new Set(
+      edges.filter(e => e.foreignKey || (typeof e.target === 'string' && e.target.startsWith('room')))
+           .map(e => e.source)
+    );
+    // the roomKey of a castle's own entry room -- reached from the street (a
+    // back door), so it's exempt from the locked-dead-end rule even when it's
+    // empty (a freshly-rooted, not-yet-built-out castle). Memoized per castle.
+    const _castleEntryKey = new Map();
+    const castleEntryRoomKey = name => {
+      if(_castleEntryKey.has(name)) return _castleEntryKey.get(name);
+      const rootSeq = castleRootRoomSeq(name);
+      const key = rootSeq ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, name), positionKey(fenForSeq(rootSeq))) : null;
+      _castleEntryKey.set(name, key);
+      return key;
+    };
+
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       // box compound parents are NEVER given to dagre (they crash it); they are
@@ -1245,6 +1269,13 @@ async function showTranspositionGraph(){
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
+        // a VR dead-end reached through a locked door -- empty (no forward
+        // continuation) and not its castle's own entry room (that one is
+        // reached from the street, not a locked door). "Jump to VR" is hidden
+        // for these, since landing inside a room you could otherwise only
+        // reach through a locked door is confusing.
+        const isCastleEntry = !!(roomKey && ownCastle && roomKey === castleEntryRoomKey(ownCastle));
+        data.lockedDeadEnd = !isCastleEntry && !roomsWithForwardExit.has(r.id);
         const baseClass = entryRoomIds.includes(r.id) ? 'root' : (indegree.get(r.id)>1 ? 'transposition' : '');
         // thick green border: reserved for "all done" (both memorized AND
         // decorated) so it reads at a glance even zoomed out too far to make
@@ -1706,7 +1737,11 @@ let ROOM_INFO_ROOM_KEY = null;
 async function showRoomInfoPanel(roomEl){
   const seq = roomEl.data('seq');
   ROOM_INFO_ROOM_KEY = roomEl.data('roomKey') || null;
-  $('roomInfoJumpBtn').style.display = ROOM_INFO_ROOM_KEY ? '' : 'none';
+  // Jump is offered only for a room you could actually reach by walking: it
+  // needs a VR room (roomKey), and it must not be a locked-door dead end
+  // (jumping inside a room whose only entrance is a locked door is confusing).
+  const jumpable = ROOM_INFO_ROOM_KEY && !roomEl.data('lockedDeadEnd');
+  $('roomInfoJumpBtn').style.display = jumpable ? '' : 'none';
   const mnemonicsBySquare = await getAllMnemonics();
   const whiteWord = mnemonicWordForSeq(seq, mnemonicsBySquare);
   const whiteImg = mnemonicImgForSeq(seq, mnemonicsBySquare);

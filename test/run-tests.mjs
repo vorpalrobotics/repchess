@@ -4145,5 +4145,63 @@ try {
   await appAR.close();
 }
 
+// --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
+//     built room with no forward continuation of its own, whose only entrance
+//     in the walk is a locked door. Jumping inside a room you can otherwise
+//     only reach through a locked door is confusing, so the button is hidden
+//     there (but stays shown for the castle root, which is also "empty" until
+//     built out yet is reached from the street, not a locked door). ---
+const appAS = await launchApp();
+try {
+  await seedBackup(appAS.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      // e6 is a BUILT reply (has a standard response Nc3), so the room after
+      // Nc3 exists in VR -- but nothing is built past it, making it a genuine
+      // forward dead-end (a locked door leads into it).
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+  });
+  await appAS.page.click('.line-row');
+  await appAS.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAS.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appAS.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  const fens = await appAS.page.evaluate(() => {
+    const root = new Chess(); for(const m of ['d4','Nf6','c4']) root.move(m, { sloppy: true });
+    const deadEnd = new Chess(); for(const m of ['d4','Nf6','c4','e6','Nc3']) deadEnd.move(m, { sloppy: true });
+    return { root: root.fen(), deadEnd: deadEnd.fen() };
+  });
+
+  // 143. The root room (empty but reached from the street) still offers Jump.
+  try {
+    const opened = await appAS.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.root);
+    assert(opened, 'test setup issue: could not open the root room-info panel');
+    await appAS.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
+    const display = await appAS.page.evaluate(() => document.getElementById('roomInfoJumpBtn').style.display);
+    assert(display !== 'none', `expected Jump visible for the castle root, got display=${JSON.stringify(display)}`);
+    ok('room-info modal: Jump to VR stays shown for the castle root (empty but street-reached)');
+    await appAS.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
+  } catch(e){ bad('room-info modal: Jump shown for root', e); }
+
+  // 144. The locked-door dead-end room hides Jump, even though it has a
+  //      roomKey (it's a real, built, decoratable room).
+  try {
+    const opened = await appAS.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.deadEnd);
+    assert(opened, 'test setup issue: could not open the dead-end room-info panel');
+    await appAS.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
+    const info = await appAS.page.evaluate((fen) => ({
+      display: document.getElementById('roomInfoJumpBtn').style.display,
+      roomKey: window.__graphTestHooks.roomKeyOf(fen),
+    }), fens.deadEnd);
+    assert(info.roomKey, `test setup issue: expected the dead-end room to have a roomKey, got ${JSON.stringify(info.roomKey)}`);
+    assert(info.display === 'none', `expected Jump hidden for a locked-door dead-end room, got display=${JSON.stringify(info.display)}`);
+    ok('room-info modal: Jump to VR is hidden for a locked-door dead-end room');
+  } catch(e){ bad('room-info modal: Jump hidden for locked-door dead-end', e); }
+} finally {
+  await appAS.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
