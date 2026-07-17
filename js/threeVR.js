@@ -524,7 +524,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -5429,29 +5429,38 @@ function makeIconBtn(faClass, title, onTap){
   b.title = title;
   return b;
 }
-// icon controls overlaid on the canvas: a flush-left group (hints, edit, and
-// the edit-only room/asset buttons, then help) plus the close (✕) pushed flush
-// right. The bar spans the top width with the empty middle clicking through.
+// icon controls overlaid on the canvas: a flush-left group (hints, edit, the
+// edit-only room/asset buttons, board, then help) and a flush-right group --
+// the room-status badges (decorated, memorized) immediately left of the
+// close (✕), so status indicators read together at the right edge instead of
+// scattered through the left cluster. The bar spans the top width with the
+// empty middle clicking through.
 function buildTopToolbar(){
   const bar = document.createElement('div');
   bar.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;display:flex;'
     + 'justify-content:space-between;align-items:flex-start;z-index:6;pointer-events:none;';
   const left = document.createElement('div');
   left.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
+  const right = document.createElement('div');
+  right.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
   boardBtn    = makeIconBtn('fa-chess-board',    'Show this room’s board position', () => toggleMiniBoard());
-  memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
   wallListsBtn = makeIconBtn('fa-list-ol',        'Wall object lists', () => openWallListsDialog(currentRoomKey));
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
+  decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
+  memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   // edit-only buttons (roomGeom/wallLists/assets) sit immediately right of
-  // Edit, with nothing that also shows outside edit mode (board/memorize)
-  // wedged between them -- those come after, ahead of the always-present help.
-  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, boardBtn, memBtn, infoBtn);
-  bar.append(left, closeBtn);
+  // Edit, with nothing that also shows outside edit mode (board) wedged
+  // between them.
+  left.append(hintsBtn, editBtn, roomGeomBtn, wallListsBtn, assetsBtn, boardBtn, infoBtn);
+  // memorize is the rightmost status badge (right next to Close); decorated,
+  // when shown, sits immediately to its left.
+  right.append(decoratedBadge, memBtn, closeBtn);
+  bar.append(left, right);
   return bar;
 }
 // reflect hints/edit state; show the edit-only buttons only while editing
@@ -5484,6 +5493,9 @@ function updateToolbar(){
     memBtn.style.background = on ? 'rgba(56,142,60,.92)' : 'rgba(28,38,58,.78)';
     memBtn.title = on ? 'Memorized -- click to unmark' : 'Mark this room memorized';
   }
+  // decorated is a computed, read-only badge (see evaluateDecorated) -- shown
+  // only when true, so it never competes with memorize's on/off toggle look.
+  if(decoratedBadge) decoratedBadge.style.display = DECORATED[currentRoomKey] ? '' : 'none';
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
 function setHintsOn(on){
@@ -6509,6 +6521,7 @@ export async function openThreeTest(containerEl, opts){
         updateToolbar();
       },
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
+      decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
       // "fully decorated" (Part A): read the computed flag, force a
       // recompute of the current room without going through the real
       // edit-mode-exit UI, or seed/clear a specific room's flag directly --

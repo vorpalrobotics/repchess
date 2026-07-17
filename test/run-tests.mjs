@@ -3123,6 +3123,37 @@ try {
     }
     ok('edit-only toolbar buttons sit immediately right of Edit, before board/brain/info');
   } catch(e){ bad('toolbar: edit-only buttons grouped right after Edit', e); }
+
+  // 111. Memorize (fa-brain) is the rightmost status icon -- immediately left
+  //      of Close (fa-circle-xmark); the decorated badge (fa-palette), when
+  //      present in the DOM, sits immediately to memorize's own left. Order
+  //      holds regardless of either badge's current show/hide state.
+  try {
+    const order = await iconOrder();
+    const paletteIdx = order.indexOf('fa-palette');
+    const brainIdx = order.indexOf('fa-brain');
+    const closeIdx = order.indexOf('fa-circle-xmark');
+    assert(paletteIdx >= 0 && brainIdx >= 0 && closeIdx >= 0,
+      `expected to find the palette, brain and close icons, got: ${JSON.stringify(order)}`);
+    assert(closeIdx - brainIdx === 1, `expected brain immediately left of close, got order: ${JSON.stringify(order)}`);
+    assert(brainIdx - paletteIdx === 1, `expected the decorated badge immediately left of brain, got order: ${JSON.stringify(order)}`);
+    ok('memorize is the rightmost status icon (next to Close); the decorated badge sits immediately to its left');
+  } catch(e){ bad('toolbar: memorize rightmost, decorated badge immediately left of it', e); }
+
+  // 112. The decorated badge is hidden until the current room's "fully
+  //      decorated" flag (see evaluateDecorated) is actually true, then
+  //      shows on the very same badge once it is -- no page/room reopen
+  //      beyond the normal room rebuild needed.
+  try {
+    const before = await appAI.page.evaluate(() => window.__threeTestEdit.decoratedBadgeStyle());
+    assert(before && before.display === 'none', `expected the decorated badge hidden by default, got ${JSON.stringify(before)}`);
+    await appAI.page.evaluate((k) => window.__threeTestEdit.setDecorated(k, true), roomKey);
+    await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);   // rebuild -> updateToolbar reads DECORATED fresh
+    await appAI.page.waitForTimeout(150);
+    const after = await appAI.page.evaluate(() => window.__threeTestEdit.decoratedBadgeStyle());
+    assert(after && after.display !== 'none', `expected the decorated badge visible once the room is fully decorated, got ${JSON.stringify(after)}`);
+    ok('the decorated badge shows in the VR toolbar exactly when the current room is fully decorated');
+  } catch(e){ bad('toolbar: decorated badge reflects the room\'s fully-decorated flag', e); }
 } finally {
   await appAI.close();
 }
