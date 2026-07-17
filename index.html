@@ -39,9 +39,6 @@
   .branchName{font-weight:600;font-style:italic;color:#444}
   .branchStats{font-size:.85em;color:#888}
   .systemStats{font-size:.85em;color:#666;margin-left:.6em}
-  .analyzingIcon{margin-right:.4em;cursor:pointer;color:#1565c0}
-  .analyzingIcon:hover{color:#0d47a1}
-  .analyzingDepth{font-size:.8em;font-weight:700;font-family:'Courier New',monospace}
   /* background analysis queue marker: static while queued, pulses (fa-fade,
      toggled in JS) while this exact node is the one currently being searched */
   .aqQueuedIcon{margin-right:.4em;color:#7b1fa2}
@@ -918,24 +915,6 @@
   </div>
 </div>
 
-<!-- analyze child nodes depth modal -->
-<div id="analyzeChildrenOverlay" class="overlay">
-  <div class="modal">
-    <h2>Analyze Child Nodes</h2>
-    <div class="field">
-      <label>Depth:</label>
-      <select id="analyzeChildrenDepthInput">
-        <option>15</option><option>20</option><option>25</option>
-        <option>30</option><option>35</option><option>40</option>
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button id="analyzeChildrenCancelBtn">Cancel</button>
-      <button id="analyzeChildrenGoBtn">GO</button>
-    </div>
-  </div>
-</div>
-
 <!-- add-to-analysis-queue modal (a move row's ⋮ menu) -->
 <div id="analysisAddOverlay" class="overlay">
   <div class="modal" style="max-width:26em">
@@ -1242,6 +1221,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260717-118"></script>
+<script type="module" src="js/app.js?v=20260717-121"></script>
 </body>
 </html>

@@ -3889,5 +3889,261 @@ try {
   await appAO.close();
 }
 
+// --- Phase AP: setting a standard response for the first time (the row's
+//     "Set Standard Response" action) now queues its newly-visible children
+//     for background analysis, same as the explicit "Analyze All Children"
+//     row-menu action -- it used to run an instant live search on the shared
+//     engine instead, via a since-removed separate "Analyze Child Nodes"
+//     modal. ---
+const appAP = await launchApp();
+try {
+  await seedBackup(appAP.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAP.page.click('.line-row');
+  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  // 133. Setting the response opens the SAME Add-to-Queue modal "Analyze All
+  //      Children" uses (Depth/Lines, titled with the child count) -- not an
+  //      instant search, and not the old dedicated depth-only modal.
+  try {
+    await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
+    await appAP.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    await appAP.page.fill('#fieldModalInput', 'c4');
+    await appAP.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+
+    await appAP.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    const title = await appAP.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+    assert(title === 'Add 2 Children to Analysis Queue', `expected the queue modal titled with the child count, got "${title}"`);
+    const oldModalGone = await appAP.page.evaluate(() => !document.getElementById('analyzeChildrenOverlay'));
+    assert(oldModalGone, 'expected the old dedicated "Analyze Child Nodes" modal to no longer exist at all');
+    ok('setting a standard response opens the analysis-queue Add modal, not an instant-search modal');
+  } catch(e){ bad('set standard response: opens the queue Add modal', e); }
+
+  // 134. Confirming queues both newly-visible children instead of running a
+  //      live search -- no engine.analyze() call, just two queue entries.
+  try {
+    await appAP.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appAP.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
+    const q = await appAP.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const seqs = q.map(it => it.seq.join(',')).sort();
+    assert(JSON.stringify(seqs) === JSON.stringify(['d4,Nf6,c4,e6','d4,Nf6,c4,g6']),
+      `expected both new children queued for background analysis, got ${JSON.stringify(seqs)}`);
+    ok('setting a standard response queues its children for background analysis');
+  } catch(e){ bad('set standard response: children land in the analysis queue', e); }
+} finally {
+  await appAP.close();
+}
+
+// --- Phase AQ: Room Geometry's "Reset Room…" (formerly "Clear styles…") now
+//     wipes a room's ENTIRE LAYOUT entry -- including size, door positions/
+//     types, and object-list wall assignments, none of which the old
+//     narrower wipe touched -- back to exactly what a never-customized room
+//     would have (still inheriting building defaults). ---
+const appAQ = await launchApp();
+try {
+  const keys = await appAQ.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      root: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
+      // a room is keyed by the position right after OUR reply, not the
+      // opponent's move alone -- e6's own "room" is really e6+Nc3.
+      e6: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4','e6','Nc3']),
+    };
+  });
+  await seedBackup(appAQ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+    threeLayout: JSON.stringify({
+      [keys.root]: {
+        geom: { w: 20, d: 20, h: 8 },
+        exits: { [keys.e6]: { type: 'stair' } },
+        slots: { 'obj-C1': 'testProp1' },
+        slotXform: { 'obj-C1': { dx: 1.5 } },
+        wallLists: { all: { listId: 'nonexistent-list' } },
+      },
+    }),
+  });
+  await openVR(appAQ.page);
+  await appAQ.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.root);
+  await appAQ.page.waitForTimeout(300);
+
+  // 135. Sanity: the seeded customizations actually took effect before reset
+  //      (an unconditional pass here would prove nothing about the fix).
+  try {
+    const before = await appAQ.page.evaluate((k) => ({
+      size: window.__threeTestEdit.roomSize(k),
+      layout: window.__threeTestEdit.roomLayout(k),
+    }), keys.root);
+    assert(before.size.w === 20 && before.size.d === 20, `test setup issue: geom override didn't apply, got ${JSON.stringify(before.size)}`);
+    assert(before.layout.slots['obj-C1'] === 'testProp1', 'test setup issue: slot override missing');
+    assert(before.layout.wallLists && before.layout.wallLists.all, 'test setup issue: wallLists override missing');
+    ok('Reset Room test setup: geom/exits/slots/wallLists overrides all applied first');
+  } catch(e){ bad('Reset Room: test setup sanity check', e); }
+
+  // 136. Clicking "Reset Room…" (through the real dialog + confirm()) wipes
+  //      ALL of it: size back to the auto-computed natural size, the e6
+  //      door's type back to plain "door" (not stair), the slot's asset
+  //      override, its nudge, and the wallLists assignment all gone.
+  try {
+    await appAQ.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appAQ.page.waitForTimeout(60);
+    await appAQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const label = await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').textContent.trim());
+    assert(label === 'Reset Room…', `expected the button relabeled "Reset Room…", got "${label}"`);
+    await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').click());   // confirm() auto-accepted by the harness
+    await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAQ.page.waitForTimeout(300);
+
+    const after = await appAQ.page.evaluate((k) => ({
+      size: window.__threeTestEdit.roomSize(k),
+      exits: window.__threeTestEdit.exitsOf(k),
+      layout: window.__threeTestEdit.roomLayout(k),
+    }), keys.root);
+    assert(after.size.w !== 20 && after.size.d !== 20, `expected the size override gone (back to natural), still got ${JSON.stringify(after.size)}`);
+    const e6exit = after.exits.find(e => e.target === keys.e6);
+    assert(e6exit && (e6exit.type === 'door' || !e6exit.type), `expected the e6 door back to a plain door (not stair), got ${JSON.stringify(e6exit)}`);
+    assert(!after.layout.slots['obj-C1'], `expected the slot override gone, got ${JSON.stringify(after.layout.slots)}`);
+    assert(!after.layout.slotXform['obj-C1'], `expected the nudge gone, got ${JSON.stringify(after.layout.slotXform)}`);
+    assert(!after.layout.wallLists || !after.layout.wallLists.all, `expected the wallLists assignment gone, got ${JSON.stringify(after.layout.wallLists)}`);
+    ok('"Reset Room…" wipes size, door positions/types, and wallLists in addition to the old narrower scope');
+  } catch(e){ bad('Reset Room: comprehensive wipe via the real dialog', e); }
+} finally {
+  await appAQ.close();
+}
+
+// --- Phase AR: the "Choose Asset" picker gets (1) a search box filtering by
+//     name/keyword, and (2) -- for move-object slots only -- a text field to
+//     assign a manual placeholder label instead of a real image, which
+//     counts as filled for "fully decorated" and gets cleared the moment a
+//     real image is assigned instead. ---
+const appAR = await launchApp();
+try {
+  await seedBackup(appAR.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    // a single forced reply beyond the castle root collapses into ONE
+    // corridor room with exactly one non-center move-object slot (obj-L1) --
+    // obj-C1 (the head/entry pair) is exempt from the decorated check, so
+    // filling just obj-L1 is enough to flip the room fully decorated.
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    assets: [
+      { id: 'grandfather-clock', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 1.2, d: 0.3 }, keywords: 'antique timepiece' },
+      { id: 'red-armchair', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.6, h: 0.7, d: 0.6 } },
+    ],
+  });
+  await openVR(appAR.page);
+  const roomKey = await appAR.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAR.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAR.page.waitForTimeout(300);
+  await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAR.page.waitForTimeout(60);
+  const slotIds = await appAR.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const slotId = slotIds.find(id => id !== 'obj-C1');
+  const openSlotPicker = () => appAR.page.evaluate((sid) =>
+    window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+
+  // 137. Search box: typing filters the grid by id/keyword; clearing it
+  //      brings everything back.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const before = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(before.some(t => t.includes('grandfather-clock')) && before.some(t => t.includes('red-armchair')),
+      `test setup issue: expected both assets listed before searching, got ${JSON.stringify(before)}`);
+    await appAR.page.fill('#pickerSearchInput', 'clock');
+    const filtered = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(filtered.some(t => t.includes('grandfather-clock')) && !filtered.some(t => t.includes('red-armchair')),
+      `expected only the clock after searching "clock", got ${JSON.stringify(filtered)}`);
+    await appAR.page.fill('#pickerSearchInput', 'antique');   // matches via keywords, not id
+    const byKeyword = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(byKeyword.some(t => t.includes('grandfather-clock')), `expected the keyword "antique" to match grandfather-clock, got ${JSON.stringify(byKeyword)}`);
+    await appAR.page.fill('#pickerSearchInput', '');
+    const restored = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(restored.length === before.length, `expected clearing the search to restore the full list, got ${JSON.stringify(restored)}`);
+    ok('Choose Asset: search box filters by id and keyword, clearing it restores the full list');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('Choose Asset: search filter', e); }
+
+  // 138. The placeholder-label field only shows for a move-object slot
+  //      picker (allowWord) -- not for e.g. a wall texture picker.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const hasWordFieldForSlot = await appAR.page.evaluate(() => !!document.getElementById('pickerWordInput'));
+    assert(hasWordFieldForSlot, 'expected the placeholder-label field for a move-object slot picker');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appAR.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    const hasWordFieldForWall = await appAR.page.evaluate(() => !!document.getElementById('pickerWordInput'));
+    assert(!hasWordFieldForWall, 'expected NO placeholder-label field for a wall texture picker');
+    ok('Choose Asset: placeholder-label field only appears for move-object slots');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('Choose Asset: placeholder-label field scoped to move-object slots', e); }
+
+  // 139. Typing a label + Apply assigns it (LAYOUT.slotWords), it counts as
+  //      filled for "fully decorated" (the room's only other slot, obj-C1,
+  //      is the exempt center pair), and assigning a real image afterward
+  //      clears the label (mutually exclusive).
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.fill('#pickerWordInput', 'Grandmother Clock');
+    await appAR.page.click('#pickerWordApplyBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.waitForTimeout(200);
+
+    const afterWord = await appAR.page.evaluate((k) => window.__threeTestEdit.roomLayout(k), roomKey);
+    assert(afterWord.slotWords[slotId] === 'Grandmother Clock', `expected the label saved to slotWords, got ${JSON.stringify(afterWord.slotWords)}`);
+
+    await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode off -> evaluateDecorated fires
+    await appAR.page.evaluate(() => window.__threeTestEdit.toggle());   // back on, for the next step
+    const decorated = await appAR.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(decorated, 'expected a manually-labeled slot to count as fully decorated');
+    ok('Choose Asset: applying a placeholder label fills the slot and counts toward "fully decorated"');
+
+    // now assign a real image to the SAME slot -- the label should clear.
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.evaluate(() => document.querySelector('#pickerGrid .asset-id').closest('.asset-card').click());
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.waitForTimeout(200);
+    const afterAsset = await appAR.page.evaluate((k) => window.__threeTestEdit.roomLayout(k), roomKey);
+    assert(!afterAsset.slotWords[slotId], `expected the label cleared once a real asset was assigned, got ${JSON.stringify(afterAsset.slotWords)}`);
+    assert(afterAsset.slots[slotId], 'expected the real asset override to be set');
+    ok('Choose Asset: assigning a real image clears a slot\'s placeholder label');
+  } catch(e){ bad('Choose Asset: placeholder label fill/decorated/mutual-exclusion', e); }
+} finally {
+  await appAR.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

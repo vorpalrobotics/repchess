@@ -1432,15 +1432,23 @@ async function exportAllAsFiles(){
    opts = {
      allow:       array of asset types to show (null = all),
      allowRemove: show a "Remove" button (e.g. to clear a surface/slot),
+     allowWord:   show a text-label field (move-object slots only) -- a
+                  lightweight placeholder ("just the name of the thing") for
+                  when making a real image isn't worth the time yet,
+     currentWord: the slot's current manual label, if any (prefills the field),
      onPick:      fn(assetId)  — chosen an asset,
      onRemove:    fn()         — clicked Remove,
+     onWordApply: fn(word)     — typed a label and clicked Apply (word may be
+                  '' to clear it back to unfilled),
      onClose:     fn()         — always called once the picker closes
    }
 */
 let pickerOpts = null;
+let pickerSearchText = '';   // persists across re-renders within one open picker session, reset on each fresh open
 
 export function openAssetPicker(opts){
   pickerOpts = opts || {};
+  pickerSearchText = '';
   let ov = document.getElementById('assetPickerOverlay');
   if(!ov){
     ov = document.createElement('div');
@@ -1461,11 +1469,11 @@ function closePicker(){
   if(cb) cb();
 }
 
+let pickerAllAssets = [];   // cached from the current picker session's getAllAssets() call, so the search filter doesn't re-hit IDB per keystroke
+
 async function renderPicker(ov){
-  const all = await getAllAssets();
+  pickerAllAssets = await getAllAssets();
   const allow = pickerOpts.allow;
-  const list = allow ? all.filter(a => allow.includes(a.type)) : all;
-  list.sort((a,b) => a.id.localeCompare(b.id));
   const typeLabel = allow ? allow.map(t => (ASSET_TYPES[t]||{}).label || t).join(' / ') : 'any';
   // current selection + where it comes from (a per-room override vs an inherited
   // building default), so the user can tell custom from inherited at a glance.
@@ -1482,10 +1490,16 @@ async function renderPicker(ov){
         <button id="pickerCloseBtn">Cancel</button>
       </div>
       <p style="margin:.2rem 0 .2rem;font-size:.8rem;color:#666">Showing: ${esc(typeLabel)}</p>
-      <p style="margin:0 0 .6rem;font-size:.8rem;color:#666">${curLine}</p>
+      <p style="margin:0 0 .4rem;font-size:.8rem;color:#666">${curLine}</p>
+      <input type="text" id="pickerSearchInput" class="assets-search" placeholder="Search name / keywords…" value="${esc(pickerSearchText)}" style="width:100%;box-sizing:border-box;margin-bottom:.5rem">
       <div class="assets-body" style="overflow:auto">
         <div class="assets-grid" id="pickerGrid"></div>
       </div>
+      ${pickerOpts.allowWord ? `
+      <div style="display:flex;align-items:center;gap:.4rem;margin-top:.6rem">
+        <input type="text" id="pickerWordInput" placeholder="…or just type a placeholder label (no image)" value="${esc(pickerOpts.currentWord || '')}" style="flex:1 1 auto;min-width:0">
+        <button id="pickerWordApplyBtn">Apply</button>
+      </div>` : ''}
       <div class="assets-editor-actions">
         <div class="left">
           <button id="pickerNewAssetBtn"><i class="fa-solid fa-plus"></i> New Asset…</button>
@@ -1494,69 +1508,87 @@ async function renderPicker(ov){
       </div>
     </div>
   `;
-  const grid = ov.querySelector('#pickerGrid');
-  if(pickerOpts.allowColor){
-    const curIsColor = curId && curId[0] === '#';
-    const card = document.createElement('div');
-    card.className = 'asset-card asset-card-color' + (curIsColor ? ' asset-card-current' : '');
-    card.innerHTML = `
-      <div class="asset-thumb color-tile-thumb">${curIsColor ? `<div class="color-tile-current" style="background:${esc(curId)}"></div>` : '<i class="fa-solid fa-palette"></i>'}</div>
-      <div class="asset-id">Color…${curIsColor ? ` ${esc(curId)} ✓` : ''}</div>
-      <div class="asset-type">Flat color</div>
-    `;
-    card.onclick = () => {
-      const { onPick, onRemove, allowRemove } = pickerOpts;
-      closePicker();
-      openColorSwatchPicker({
-        current: curIsColor ? curId : null,
-        onPick: hex => { if(onPick) onPick(hex); },
-        onRemove: allowRemove ? () => { if(onRemove) onRemove(); } : null,
-      });
-    };
-    grid.appendChild(card);
-  }
-  // "Tint…" recolors whatever real asset is already assigned, in place, as a
-  // per-placement override -- distinct from "Color…" above, which replaces
-  // the surface with a flat color outright. Only offered once a real asset
-  // (not a flat color, not empty) is actually assigned to recolor.
-  if(pickerOpts.allowTint && curId && curId[0] !== '#'){
-    const curTint = pickerOpts.currentTint || null;
-    const card = document.createElement('div');
-    card.className = 'asset-card asset-card-tint' + (curTint ? ' asset-card-current' : '');
-    card.innerHTML = `
-      <div class="asset-thumb color-tile-thumb">${curTint ? `<div class="color-tile-current" style="background:${esc(curTint)}"></div>` : '<i class="fa-solid fa-fill-drip"></i>'}</div>
-      <div class="asset-id">Tint…${curTint ? ` ${esc(curTint)} ✓` : ''}</div>
-      <div class="asset-type">Recolor this asset</div>
-    `;
-    card.onclick = () => {
-      const { onTintPick, onTintRemove } = pickerOpts;
-      closePicker();
-      openColorSwatchPicker({
-        current: curTint,
-        onPick: hex => { if(onTintPick) onTintPick(hex); },
-        onRemove: curTint ? () => { if(onTintRemove) onTintRemove(); } : null,
-      });
-    };
-    grid.appendChild(card);
-  }
-  if(!list.length){
-    const p = document.createElement('p');
-    p.className = 'assets-empty';
-    p.textContent = 'No matching assets yet. Use "New Asset…" or add some via menu → Manage VR Assets.';
-    grid.appendChild(p);
-  } else {
-    for(const a of list){
+
+  // rebuilds just #pickerGrid's contents from the current search text --
+  // split out so typing in the search box doesn't tear down and rebuild the
+  // whole modal (which would drop focus/cursor position every keystroke).
+  function renderGridBody(){
+    const grid = ov.querySelector('#pickerGrid');
+    grid.innerHTML = '';
+    let list = allow ? pickerAllAssets.filter(a => allow.includes(a.type)) : pickerAllAssets;
+    if(pickerSearchText) list = list.filter(a => `${a.id} ${a.keywords || ''}`.toLowerCase().includes(pickerSearchText));
+    list.sort((a,b) => a.id.localeCompare(b.id));
+    if(pickerOpts.allowColor){
+      const curIsColor = curId && curId[0] === '#';
       const card = document.createElement('div');
-      card.className = 'asset-card' + (a.id === curId ? ' asset-card-current' : '');
+      card.className = 'asset-card asset-card-color' + (curIsColor ? ' asset-card-current' : '');
       card.innerHTML = `
-        <div class="asset-thumb">${a.image ? `<img src="${a.image}" alt="">` : ''}</div>
-        <div class="asset-id">${esc(a.id)}${a.id === curId ? ' ✓' : ''}</div>
-        <div class="asset-type">${esc((ASSET_TYPES[a.type]||{}).label || a.type)}</div>
+        <div class="asset-thumb color-tile-thumb">${curIsColor ? `<div class="color-tile-current" style="background:${esc(curId)}"></div>` : '<i class="fa-solid fa-palette"></i>'}</div>
+        <div class="asset-id">Color…${curIsColor ? ` ${esc(curId)} ✓` : ''}</div>
+        <div class="asset-type">Flat color</div>
       `;
-      card.onclick = () => { const cb = pickerOpts.onPick; closePicker(); if(cb) cb(a.id); };
+      card.onclick = () => {
+        const { onPick, onRemove, allowRemove } = pickerOpts;
+        closePicker();
+        openColorSwatchPicker({
+          current: curIsColor ? curId : null,
+          onPick: hex => { if(onPick) onPick(hex); },
+          onRemove: allowRemove ? () => { if(onRemove) onRemove(); } : null,
+        });
+      };
       grid.appendChild(card);
     }
+    // "Tint…" recolors whatever real asset is already assigned, in place, as a
+    // per-placement override -- distinct from "Color…" above, which replaces
+    // the surface with a flat color outright. Only offered once a real asset
+    // (not a flat color, not empty) is actually assigned to recolor.
+    if(pickerOpts.allowTint && curId && curId[0] !== '#'){
+      const curTint = pickerOpts.currentTint || null;
+      const card = document.createElement('div');
+      card.className = 'asset-card asset-card-tint' + (curTint ? ' asset-card-current' : '');
+      card.innerHTML = `
+        <div class="asset-thumb color-tile-thumb">${curTint ? `<div class="color-tile-current" style="background:${esc(curTint)}"></div>` : '<i class="fa-solid fa-fill-drip"></i>'}</div>
+        <div class="asset-id">Tint…${curTint ? ` ${esc(curTint)} ✓` : ''}</div>
+        <div class="asset-type">Recolor this asset</div>
+      `;
+      card.onclick = () => {
+        const { onTintPick, onTintRemove } = pickerOpts;
+        closePicker();
+        openColorSwatchPicker({
+          current: curTint,
+          onPick: hex => { if(onTintPick) onTintPick(hex); },
+          onRemove: curTint ? () => { if(onTintRemove) onTintRemove(); } : null,
+        });
+      };
+      grid.appendChild(card);
+    }
+    if(!list.length){
+      const p = document.createElement('p');
+      p.className = 'assets-empty';
+      p.textContent = pickerSearchText
+        ? `No assets match "${pickerSearchText}".`
+        : 'No matching assets yet. Use "New Asset…" or add some via menu → Manage VR Assets.';
+      grid.appendChild(p);
+    } else {
+      for(const a of list){
+        const card = document.createElement('div');
+        card.className = 'asset-card' + (a.id === curId ? ' asset-card-current' : '');
+        card.innerHTML = `
+          <div class="asset-thumb">${a.image ? `<img src="${a.image}" alt="">` : ''}</div>
+          <div class="asset-id">${esc(a.id)}${a.id === curId ? ' ✓' : ''}</div>
+          <div class="asset-type">${esc((ASSET_TYPES[a.type]||{}).label || a.type)}</div>
+        `;
+        card.onclick = () => { const cb = pickerOpts.onPick; closePicker(); if(cb) cb(a.id); };
+        grid.appendChild(card);
+      }
+    }
   }
+  renderGridBody();
+
+  ov.querySelector('#pickerSearchInput').oninput = e => {
+    pickerSearchText = e.target.value.trim().toLowerCase();
+    renderGridBody();
+  };
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
   ov.querySelector('#pickerNewAssetBtn').onclick = async () => {
     const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
@@ -1565,6 +1597,14 @@ async function renderPicker(ov){
   };
   if(pickerOpts.allowRemove){
     ov.querySelector('#pickerRemoveBtn').onclick = () => { const cb = pickerOpts.onRemove; closePicker(); if(cb) cb(); };
+  }
+  if(pickerOpts.allowWord){
+    ov.querySelector('#pickerWordApplyBtn').onclick = () => {
+      const word = ov.querySelector('#pickerWordInput').value.trim();
+      const cb = pickerOpts.onWordApply;
+      closePicker();
+      if(cb) cb(word);
+    };
   }
 }
 
