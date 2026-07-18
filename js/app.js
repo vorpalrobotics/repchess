@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-129';
+const BUILD_TAG = '-130';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3983,7 +3983,9 @@ function openThreeTestAssets(){
    called explicitly at every write path that can add, move, remove, or
    relabel a room:
      - setStandardResponse (both copies: renderBranch/renderBlackRoot)
-     - importLine (paste-import writes standard responses the same way)
+     - importLine (paste-import) and importEngineVariation (the three-dot
+       "Import this variation" menu on a saved eval's PV) -- both write
+       standard responses via the same importParsedLine
      - addManualReply/removeManualReply (a manual opponent try can open or
        close an exit)
      - the Attributes modal's save (both copies) -- isCastleRoot/castleName/
@@ -6311,6 +6313,7 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   if(!pv.length){ log('nothing to import from that engine line', true); return; }
   try {
     const count = await importParsedLine([...startSeq, ...pv]);
+    if(count) invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
     await openLine(CURRENT_LINE);
   } catch(err){
