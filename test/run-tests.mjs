@@ -4549,5 +4549,99 @@ try {
   await appAX.close();
 }
 
+// --- Phase AY: "complete to move N" is now shown as an always-on [N] badge
+//     on every move-table row with a reply set (next to the frequency-stats
+//     column), not just via the on-demand Node Statistics modal -- same
+//     values as Phase AT's computeNodeStats checks, reused here, but read
+//     straight off the rendered DOM instead of the test hook, and with an
+//     unanswered row confirmed to show no badge at all. ---
+const appAY = await launchApp();
+try {
+  await seedBackup(appAY.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },                               // White move 2
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },                    // White move 3
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },        // White move 4
+      // g6 (the OTHER reply to c4) is deliberately left unanswered.
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAY.page.click('.line-row');
+  await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+  const badge = (seq) => appAY.page.evaluate((s) => {
+    const el = document.querySelector(`tr.data-row[data-seq="${s.join(',')}"] .completeBadge`);
+    return el ? { text: el.textContent, hidden: el.style.display === 'none', title: el.title } : null;
+  }, seq);
+
+  // 161. The 'd4,Nf6' row's badge reflects its own children's completeness
+  //      (c4's subtree) -- the unanswered g6 branch pins it to [2], same
+  //      value as Phase AT's equivalent computeNodeStats check.
+  try {
+    const b = await badge(['d4','Nf6']);
+    assert(b && !b.hidden && b.text === '[2]', `expected badge "[2]" on the d4,Nf6 row, got ${JSON.stringify(b)}`);
+    assert(/move 2/.test(b.title), `expected the tooltip to mention move 2, got ${JSON.stringify(b.title)}`);
+    ok('complete-to-move badge: shallow branch (unanswered sibling) shows [2]');
+  } catch(e){ bad('complete-to-move badge: shallow branch', e); }
+
+  // 162. The unanswered g6 row has no reply yet, so it shows no badge at all
+  //      (not "[]" or a stray dash) -- it's inherently incomplete, already
+  //      visible from its blank "our reply" field.
+  try {
+    const b = await badge(['d4','Nf6','c4','g6']);
+    assert(b && b.hidden && b.text === '', `expected no badge for the unanswered g6 row, got ${JSON.stringify(b)}`);
+    ok('complete-to-move badge: an unanswered row shows no badge');
+  } catch(e){ bad('complete-to-move badge: unanswered row hides badge', e); }
+
+  // 163. The 'e6' row's badge reflects its own deeper, fully-answered
+  //      subtree: [4], matching Phase AT's uniform-depth check.
+  try {
+    const b = await badge(['d4','Nf6','c4','e6']);
+    assert(b && !b.hidden && b.text === '[4]', `expected badge "[4]" on the e6 row, got ${JSON.stringify(b)}`);
+    ok('complete-to-move badge: uniformly-answered deeper subtree shows [4]');
+  } catch(e){ bad('complete-to-move badge: deeper subtree', e); }
+
+  // 164. The leaf 'Bb4' row (our Bd2, no further opponent data) still shows
+  //      [4] -- reaching our own move is enough, matching Phase AT's leaf
+  //      check.
+  try {
+    const b = await badge(['d4','Nf6','c4','e6','Nc3','Bb4']);
+    assert(b && !b.hidden && b.text === '[4]', `expected badge "[4]" on the leaf Bb4 row, got ${JSON.stringify(b)}`);
+    ok('complete-to-move badge: a leaf with no opponent reply still shows its own move');
+  } catch(e){ bad('complete-to-move badge: leaf row', e); }
+
+  // 165. A HIDDEN branch's own badge still reflects its own subtree, but it
+  //      doesn't drag down its parent's aggregate -- re-seeded so g6 (still
+  //      answered with a SHALLOW reply and nothing past it) is hidden: with
+  //      it excluded, 'd4,Nf6' should read the deeper e6 branch's [4]
+  //      instead of g6's shallow [3].
+  try {
+    await seedBackup(appAY.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4' },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+        { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3', hidden: true },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
+      ],
+    });
+    await appAY.page.click('.line-row');
+    await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+    const parentBadge = await badge(['d4','Nf6']);
+    assert(parentBadge && !parentBadge.hidden && parentBadge.text === '[4]',
+      `expected the hidden g6 branch to be excluded, giving [4] from e6's branch, got ${JSON.stringify(parentBadge)}`);
+    ok("complete-to-move badge: a hidden branch doesn't drag down its parent's aggregate");
+  } catch(e){ bad('complete-to-move badge: hidden branch excluded from aggregate', e); }
+} finally {
+  await appAY.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
