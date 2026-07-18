@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-130';
+const BUILD_TAG = '-131';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2222,6 +2222,20 @@ function visibleOppsAt(games,seq){
   return keys;
 }
 
+/* shows (or hides, for an unanswered row with nothing to report) a row's
+   "complete to move N" badge -- the shallowest branch-move number below this
+   row's own reply, per computeNodeStats's definition. Shared by renderBranch,
+   renderBlackRoot, and renderCompactRunRow's own row, all of which display
+   the completeToMove value returned by their own expandWith-style
+   renderBranch call the same way. */
+function updateCompleteBadge(span, completeToMove){
+  if(!span) return;
+  if(!Number.isFinite(completeToMove)){ span.style.display='none'; span.textContent=''; return; }
+  span.textContent = `[${completeToMove}]`;
+  span.title = `Complete through move ${completeToMove} — every branch below this point has a chosen reply at least this deep`;
+  span.style.display='';
+}
+
 /* walks forward from `seq` while every position along the way has exactly
    one visible opponent reply *and* an already-chosen standard response with
    no annotations of its own — annotated moves (note/mnemonic/name/etc) keep
@@ -2274,7 +2288,7 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
        <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
        ${compactRunLabel(runMoves,flip)}
      </td>
-     <td class="cnt-col"></td>
+     <td class="cnt-col"><span class="completeBadge"></span></td>
      <td class="eval-col"></td>
      <td class="name-col"></td>`;
   tb.appendChild(tr);
@@ -2287,7 +2301,9 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
   const tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
   const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
   const div = document.createElement('div'); div.className='branch'; td1.appendChild(div);
-  renderBranch(div,games,endSeq,endDepth,flip);
+  const sub = renderBranch(div,games,endSeq,endDepth,flip);
+  updateCompleteBadge(tr.querySelector('.completeBadge'), sub.completeToMove);
+  return sub;
 }
 
 /* opponent-move quality annotations (chess glyphs). Kept in one place so the
@@ -2373,6 +2389,22 @@ function renderBranch(parent,games,seq,depth,flip=false){
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
 
+  // "complete to move N" for THIS position (seq, which ends in our move) --
+  // same definition computeNodeStats uses (see its doc comment), computed as
+  // a byproduct of this same recursive render pass instead of a second
+  // full-tree walk, so an always-on per-row badge costs nothing beyond what
+  // rendering already does. Only visible (non-hidden) opponent replies
+  // count. Each row folds its own children's value (returned by
+  // expandWith's/the compact-run row's renderBranch call) in below as it's
+  // expanded; the aggregate is this function's return value, read by
+  // whichever row owns this table (if any).
+  const ourMove = Math.ceil(seq.length / 2);
+  const visibleForComplete = Object.keys(counts).filter(opp=>
+    !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
+  const stopsHere = visibleForComplete.length === 0 ||
+    visibleForComplete.some(opp => !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.reply);
+  let completeToMove = stopsHere ? ourMove : Infinity;
+
   const tbl=document.createElement('table');
   parent.appendChild(tbl);
 
@@ -2383,7 +2415,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        three-dot menu instead (wired in that row's expandWith closure); only
        the absolute root table (depth 0, no owning row) needs this fallback */
     if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
-    return;
+    return {completeToMove};
   }
 
   if(!flip && depth===0){
@@ -2403,9 +2435,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
   if(compactMode){
     const run = computeCompactRun(games,seq,depth,flip);
     if(run){
-      renderCompactRunRow(tb,games,depth,flip,run,indentLevel);
+      const sub = renderCompactRunRow(tb,games,depth,flip,run,indentLevel);
+      completeToMove = Math.min(completeToMove, sub.completeToMove);
       if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
-      return;
+      return {completeToMove};
     }
   }
 
@@ -2459,6 +2492,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
        </td>
        <td class="cnt-col" style="padding-left:${indentLevel}em">
          <span class="cnt">${c} (${tot ? ((c/tot)*100).toFixed(1) : '0.0'}%)</span>
+         <span class="completeBadge" style="display:none"></span>
        </td>
        <td class="eval-col">
          <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
@@ -2489,6 +2523,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const evalSpan   = tr.querySelector('.evaltag');
     const nameSpan   = tr.querySelector('.branchName');
     const statsSpan  = tr.querySelector('.branchStats');
+    const completeSpan = tr.querySelector('.completeBadge');
 
     const lineSeq = [...seq,opp];
     tr.dataset.seq = lineSeq.join(',');     // stable row identity for focus re-application across rebuilds
@@ -2569,7 +2604,15 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
-      renderBranch(div,games,childrenSeq,depth+1,flip);
+      const sub = renderBranch(div,games,childrenSeq,depth+1,flip);
+      updateCompleteBadge(completeSpan, sub.completeToMove);
+      // a hidden row's own badge still reflects its subtree, but it doesn't
+      // count toward the OWNING seq's aggregate -- matches visibleForComplete
+      // above (and computeNodeStats's visibleOpps) excluding hidden opponents.
+      // a hidden row's own badge still reflects its subtree, but it doesn't
+      // count toward the OWNING seq's aggregate -- matches visibleForComplete
+      // above (and computeNodeStats's visibleOpps) excluding hidden opponents.
+      if(!currentSaved()?.hidden) completeToMove = Math.min(completeToMove, sub.completeToMove);
       makeToggle(toggleBtn,tr1,startExpanded,lineSeq);
     }
 
@@ -2676,7 +2719,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
       openFieldModal('addMove', '', v=>{
         addManualReply(childrenSeq,v);
         branchDiv.innerHTML='';
-        renderBranch(branchDiv,games,childrenSeq,depth+1,flip);
+        const sub = renderBranch(branchDiv,games,childrenSeq,depth+1,flip);
+        updateCompleteBadge(completeSpan, sub.completeToMove);
       }, v=>{
         if(!v) return {ok:false, error:'enter a move'};
         v = canonicalizeMoveCase(v);
@@ -2729,6 +2773,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
   });
 
   if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
+  return {completeToMove};
 }
 
 /* lets the user record an opponent move that hasn't appeared in any imported
@@ -2803,7 +2848,7 @@ function renderBlackRoot(parent,games,trigger){
        <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
        1. ${trigger} <span class="ourReply">...</span>
      </td>
-     <td class="cnt-col"></td>
+     <td class="cnt-col"><span class="completeBadge" style="display:none"></span></td>
      <td class="eval-col">
        <span class="aqQueuedIcon" style="display:none"><i class="fa-solid fa-hourglass-half"></i></span>
        <span class="evaltag" style="display:none"></span>
@@ -2832,6 +2877,7 @@ function renderBlackRoot(parent,games,trigger){
   const evalSpan   = tr.querySelector('.evaltag');
   const nameSpan   = tr.querySelector('.branchName');
   const statsSpan  = tr.querySelector('.branchStats');
+  const completeSpan = tr.querySelector('.completeBadge');
 
   const lineSeq = [trigger];
   tr.dataset.seq = lineSeq.join(',');       // stable row identity for focus re-application across rebuilds
@@ -2899,7 +2945,8 @@ function renderBlackRoot(parent,games,trigger){
     const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
     childrenSeq = [...lineSeq,reply];
     branchDiv = div;
-    renderBranch(div,games,childrenSeq,1,true);
+    const sub = renderBranch(div,games,childrenSeq,1,true);
+    updateCompleteBadge(completeSpan, sub.completeToMove);
     makeToggle(toggleBtn,tr1,startExpanded);
   }
 
@@ -2994,7 +3041,8 @@ function renderBlackRoot(parent,games,trigger){
     openFieldModal('addMove', '', v=>{
       addManualReply(childrenSeq,v);
       branchDiv.innerHTML='';
-      renderBranch(branchDiv,games,childrenSeq,1,true);
+      const sub = renderBranch(branchDiv,games,childrenSeq,1,true);
+      updateCompleteBadge(completeSpan, sub.completeToMove);
     }, v=>{
       if(!v) return {ok:false, error:'enter a move'};
       v = canonicalizeMoveCase(v);
