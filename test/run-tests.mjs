@@ -4498,5 +4498,56 @@ try {
   await appAW.close();
 }
 
+// --- Phase AX: "Import this variation" from a saved eval's PV (the
+//     three-dot menu on the main move table, see Phase AG) invalidates the
+//     cache -- it calls importParsedLine directly, the same core importLine
+//     uses, but through a different entry point (importEngineVariation) that
+//     needed its own invalidate call. ---
+const appAX = await launchApp();
+try {
+  const midFen = await appAX.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+  await seedBackup(appAX.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], eval: { type: 'cp', value: 35, depth: 20, pv: '2.c4 e6', pvFen: midFen, pvUci: ['c2c4','e7e6'] } },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await appAX.page.click('.line-row');
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+  await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+
+  await openVR(appAX.page);
+  await appAX.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
+  await appAX.page.evaluate(() => {
+    const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+    btn && btn.click();
+  });
+  await appAX.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+
+  // 160. "Import this variation" from the three-dot menu on the main move
+  //      table invalidates the cache.
+  try {
+    await appAX.page.evaluate((sel) => document.querySelector(sel).querySelector('.evaltag').click(), rowSel);
+    await appAX.page.waitForSelector(`${rowSel} + tr.meta-row .meta-pv-menu`, { timeout: 5000 });
+    await appAX.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-pv-menu').click(), rowSel);
+    await appAX.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    await appAX.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    await appAX.page.waitForFunction((sel) => {
+      const row = document.querySelector(sel);
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
+    }, rowSel, { timeout: 10000 });
+    assert((await appAX.page.evaluate(() => window.__vrCacheTestHooks.isCached())) === false,
+      'expected "Import this variation" from the move table to invalidate the cache');
+    ok('VR cache: "Import this variation" from the move table invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by importing an engine variation', e); }
+} finally {
+  await appAX.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
