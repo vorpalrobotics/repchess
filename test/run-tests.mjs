@@ -4421,5 +4421,82 @@ try {
   await appAV.close();
 }
 
+// --- Phase AW: two more "obvious cases" found by auditing every PREFS/GAMES
+//     write path against what buildGeneratedCastle actually reads: the
+//     Generate Castle modal's OWN street-number save (a second, separate
+//     write site from the Attributes modal's), the move-quality glyph
+//     (baked into a room's move-pair billboard data at build time, so it's
+//     VR-visible even though it isn't structural), and importing new games
+//     via the local file import (their move-frequency counts decide which
+//     opponent replies are visible/built, same as a manual reply). ---
+const appAW = await launchApp();
+try {
+  await seedBackup(appAW.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAW.page.click('.line-row');
+  await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  const isCached = () => appAW.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  const closeVR = async () => {
+    await appAW.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAW.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+  const primeCache = async () => {
+    await openVR(appAW.page);
+    await appAW.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
+    await closeVR();
+  };
+
+  // 157. Changing a castle's street number via the Generate Castle modal
+  //      invalidates the cache -- a second, separate write site from the
+  //      Attributes modal's own castleStreetNumber save.
+  try {
+    await primeCache();
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="generateCastle"]').click());
+    await appAW.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 5000 });
+    await appAW.page.fill('#castleGenStreetNumber', '2');
+    await appAW.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+    await appAW.page.waitForFunction(() => document.getElementById('castleGenOverlay').style.display === 'none', { timeout: 5000 });
+    assert((await isCached()) === false, "expected Generate Castle's own street-number save to invalidate the cache");
+    ok("VR cache: Generate Castle's own street-number save invalidates the cache");
+  } catch(e){ bad('VR cache: invalidated by Generate Castle street number', e); }
+
+  // 158. Setting a move-quality glyph invalidates the cache -- it's baked
+  //      into the room's move-pair billboard data at build time.
+  try {
+    await primeCache();
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rmq[data-q="!"]').click());
+    assert((await isCached()) === false, 'expected setting a move-quality glyph to invalidate the cache');
+    ok('VR cache: setting a move-quality glyph invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by move-quality glyph', e); }
+
+  // 159. Importing games via the local NDJSON file import invalidates the
+  //      cache -- a changed game set can change which opponent replies are
+  //      frequent enough to be visible/built.
+  try {
+    await primeCache();
+    await appAW.page.setInputFiles('#fileImport', {
+      name: 'games.ndjson', mimeType: 'application/x-ndjson',
+      buffer: Buffer.from(JSON.stringify({ id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' }) + '\n'),
+    });
+    await appAW.page.waitForFunction(() => window.__vrCacheTestHooks.isCached() === false, { timeout: 5000 });
+    ok('VR cache: importing games via the local file import invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by local file import', e); }
+} finally {
+  await appAW.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
