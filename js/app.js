@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-178';
+const BUILD_TAG = '-179';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -180,6 +180,57 @@ async function ccFetch(url){
   if(!resp.ok) throw new Error(`chess.com returned ${resp.status} for ${url}`);
   return resp.json();
 }
+/* the human opening name out of a chess.com ECO URL, e.g.
+   ".../openings/Caro-Kann-Defense-Advance-Variation-3.e5" -> "Caro-Kann
+   Defense Advance Variation". Best-effort/optional -- returns null if the URL
+   isn't in that shape. */
+function openingNameFromEcoUrl(url){
+  if(typeof url !== 'string') return null;
+  const tail = url.split('/openings/')[1];
+  if(!tail) return null;
+  return decodeURIComponent(tail).replace(/-/g,' ').replace(/\s*\d.*$/,'').trim() || null;
+}
+
+/* Normalize one chess.com monthly-archive game object (+ its already-parsed
+   SAN move string) into the SAME shape the app reads for Lichess games, so
+   everything downstream (and any future "games with this position" view) can
+   treat both sources uniformly. Tagged source:'chesscom' so re-imports can
+   replace just these. The one field chess.com's public API never exposes is
+   the per-game rating change (Lichess's ratingDiff) -- everything else maps.
+   Pure (no network / no DOM) so it's unit-testable with a synthetic object. */
+function normalizeChessComGame(g, moves){
+  const idFromUrl = typeof g.url === 'string' ? g.url.split('/').filter(Boolean).pop() : null;
+  const wRes = g.white && g.white.result, bRes = g.black && g.black.result;
+  const winner = wRes === 'win' ? 'white' : bRes === 'win' ? 'black' : undefined;
+  // the decisive reason lives on the losing side ('win' is the winner's code);
+  // for a draw both sides carry the same draw reason, so either works.
+  const reason = winner === 'white' ? bRes : winner === 'black' ? wRes : (wRes || bRes);
+  const STATUS = {
+    checkmated:'mate', resigned:'resign', timeout:'outoftime', abandoned:'aborted',
+    stalemate:'stalemate', agreed:'draw', repetition:'draw', insufficient:'draw',
+    '50move':'draw', timevsinsufficient:'draw',
+  };
+  const status = STATUS[reason] || (winner ? 'resign' : 'draw');
+  const num = v => (typeof v === 'number' ? v : (v == null || v === '' ? undefined : Number(v) || undefined));
+  const name = openingNameFromEcoUrl(g.eco);
+  return {
+    id: g.uuid || idFromUrl || null,
+    source: 'chesscom',
+    url: g.url || null,
+    rated: !!g.rated,
+    speed: g.time_class || null,                     // bullet / blitz / rapid / daily
+    createdAt: g.end_time ? g.end_time * 1000 : undefined,
+    winner,
+    status,
+    players: {
+      white: { user: { name: (g.white && g.white.username) || null }, rating: num(g.white && g.white.rating) },
+      black: { user: { name: (g.black && g.black.username) || null }, rating: num(g.black && g.black.rating) },
+    },
+    ...(name ? { opening: { name } } : {}),
+    moves,
+  };
+}
+
 async function fetchChessCom(user,months,onProgress){
   const archivesUrl = `https://api.chess.com/pub/player/${encodeURIComponent(user)}/games/archives`;
   console.log(`[fetchChessCom] requesting ${archivesUrl}`);
@@ -195,7 +246,7 @@ async function fetchChessCom(user,months,onProgress){
       const chess = new Chess();
       if(!chess.load_pgn(g.pgn)) continue;
       const moves = chess.history().join(' ');
-      if(moves) games.push({moves});
+      if(moves) games.push(normalizeChessComGame(g, moves));
     }
     onProgress?.(games.length, i+1, chosen.length);
   }
@@ -3800,6 +3851,12 @@ $('dlBtn').onclick = async ()=>{
       logDl('fetching…');
       fetched = await fetchChessCom(fetchUser,months,
         (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
+      // chess.com re-import REPLACES (not merges) this user's chess.com games:
+      // the metadata enrichment changed their id scheme, so a merge would leave
+      // the old, sparser copies behind as duplicates. Only runs after a
+      // successful fetch, and only touches chess.com games -- Lichess untouched.
+      const wiped = await clearChessComGames(CURRENT_USER);
+      if(wiped) logDl(`replaced ${wiped} existing chess.com game(s)…`);
     } else {
       const max=+$('maxGames').value||300;
       localStorage.setItem(LS_MAX,max);
@@ -7302,5 +7359,17 @@ if(localStorage.getItem('threeTestDebug')){
     offer: () => maybeOfferDefaultMnemonics(),
     offeredKey: MNEM_DEFAULT_OFFERED_KEY,
     getOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+  };
+}
+
+// test-only hook for the games importer -- the chess.com normalization is a
+// pure function (unit-testable with synthetic archive objects, no network),
+// and the source-selective clear is real IDB (works in the offline harness).
+if(localStorage.getItem('threeTestDebug')){
+  window.__importTestHooks = {
+    normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
+    clearChessComGames: (user) => clearChessComGames(user),
+    putGames: (user, games) => putGames(user, games),
+    getGames: (user) => getGames(user),
   };
 }

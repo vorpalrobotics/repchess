@@ -4971,7 +4971,75 @@ try {
 } finally {
   await appAU.close();
 }
+}
+// --- Phase BA: chess.com importer keeps full metadata (normalized to the same
+//     shape Lichess games use), and a re-import clears ONLY chess.com games,
+//     leaving Lichess untouched. ---
+if(shouldRunPhase(['import-export'])){
+const appBA = await launchApp();
+try {
+  // 148b. normalizeChessComGame maps an archive object to the Lichess-shaped
+  //      record: winner/status from the per-side result codes, players with
+  //      names+ratings, createdAt from end_time, tagged source:'chesscom',
+  //      moves passed through unchanged.
+  try {
+    const norm = await appBA.page.evaluate(() => {
+      const g = {
+        uuid: 'CC-UUID-1', url: 'https://www.chess.com/game/live/999',
+        rated: true, time_class: 'blitz', end_time: 1700000000,
+        white: { username: 'Me', rating: 1620, result: 'win' },
+        black: { username: 'Them', rating: 1585, result: 'resigned' },
+        eco: 'https://www.chess.com/openings/Caro-Kann-Defense-Advance-Variation-3.e5',
+      };
+      return window.__importTestHooks.normalizeChessComGame(g, 'e4 c6 d4 d5 e5');
+    });
+    assert(norm.source === 'chesscom', `expected source chesscom, got ${norm.source}`);
+    assert(norm.id === 'CC-UUID-1', `expected id from uuid, got ${norm.id}`);
+    assert(norm.winner === 'white' && norm.status === 'resign',
+      `expected winner white by resign, got ${norm.winner}/${norm.status}`);
+    assert(norm.players.white.user.name === 'Me' && norm.players.white.rating === 1620, `white player mismap: ${JSON.stringify(norm.players.white)}`);
+    assert(norm.players.black.user.name === 'Them' && norm.players.black.rating === 1585, `black player mismap: ${JSON.stringify(norm.players.black)}`);
+    assert(norm.createdAt === 1700000000 * 1000, `expected createdAt from end_time, got ${norm.createdAt}`);
+    assert(norm.rated === true && norm.speed === 'blitz', `expected rated blitz, got ${norm.rated}/${norm.speed}`);
+    assert(norm.opening && norm.opening.name === 'Caro Kann Defense Advance Variation', `expected opening name from ecoUrl, got ${JSON.stringify(norm.opening)}`);
+    assert(norm.moves === 'e4 c6 d4 d5 e5', `expected moves passed through unchanged, got ${JSON.stringify(norm.moves)}`);
+    ok('chess.com importer: normalizeChessComGame maps to the Lichess-shaped record');
+  } catch(e){ bad('chess.com importer: normalization mapping', e); }
 
+  // 149b. A draw maps to winner undefined / status draw.
+  try {
+    const norm = await appBA.page.evaluate(() => window.__importTestHooks.normalizeChessComGame({
+      uuid: 'CC-2', time_class: 'rapid', end_time: 1700000001,
+      white: { username: 'A', rating: 1500, result: 'agreed' },
+      black: { username: 'B', rating: 1500, result: 'agreed' },
+    }, 'd4 d5'));
+    assert(norm.winner === undefined && norm.status === 'draw', `expected a draw, got ${norm.winner}/${norm.status}`);
+    ok('chess.com importer: a drawn game maps to no winner / status draw');
+  } catch(e){ bad('chess.com importer: draw mapping', e); }
+
+  // 150b. clearChessComGames removes ONLY chess.com games -- both the new
+  //      source-tagged ones AND legacy bare {moves} objects -- while leaving
+  //      Lichess-shaped games (which always carry `players`) untouched.
+  try {
+    await appBA.page.evaluate(async () => {
+      const H = window.__importTestHooks;
+      await H.putGames('u1', [
+        { id: 'li-1', players: { white: { user: { name: 'x' } } }, createdAt: 123, moves: 'e4 e5' },   // Lichess
+        { moves: 'd4 d5' },                                                                             // legacy bare chess.com
+        { id: 'cc-1', source: 'chesscom', players: { white: { user: { name: 'y' } } }, moves: 'c4 c5' },// new enriched chess.com
+      ]);
+    });
+    const before = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
+    assert(before.length === 3, `test setup issue: expected 3 games stored, got ${before.length}`);
+    const removed = await appBA.page.evaluate(() => window.__importTestHooks.clearChessComGames('u1'));
+    assert(removed === 2, `expected 2 chess.com games removed (legacy + enriched), got ${removed}`);
+    const after = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
+    assert(after.length === 1 && after[0].id === 'li-1', `expected only the Lichess game to survive, got ${JSON.stringify(after.map(g=>g.id||g.moves))}`);
+    ok('chess.com importer: clear removes only chess.com games (tagged + legacy), leaving Lichess untouched');
+  } catch(e){ bad('chess.com importer: source-selective clear', e); }
+} finally {
+  await appBA.close();
+}
 }
 // --- Phase AV: the specific in-session repertoire edits called out as
 //     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
