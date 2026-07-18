@@ -4253,5 +4253,62 @@ try {
   await appAT.close();
 }
 
+// --- Phase AU: gatherBuiltCastles' in-memory cache -- a second "Run VR" in
+//     the same page load reuses the first one's result instead of rebuilding
+//     every castle from scratch, and a full backup restore drops the cache
+//     (it can swap in a different user's repertoire entirely). ---
+const appAU = await launchApp();
+try {
+  await seedBackup(appAU.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+  });
+  const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  const closeVR = async () => {
+    await appAU.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAU.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+
+  // 148. Nothing cached before the first "Run VR"; cached immediately after.
+  try {
+    assert((await isCached()) === false, 'expected no cache before the first VR open');
+    await openVR(appAU.page);
+    assert((await isCached()) === true, 'expected gatherBuiltCastles to populate the cache on first open');
+    ok('VR cache: first "Run VR" populates the gatherBuiltCastles cache');
+  } catch(e){ bad('VR cache: populated on first open', e); }
+
+  // 149. Closing and reopening VR (no reload, no data change) keeps the cache
+  //      -- the second open must not have wiped it to rebuild from scratch.
+  try {
+    await closeVR();
+    assert((await isCached()) === true, 'expected the cache to survive closing VR');
+    await openVR(appAU.page);
+    assert((await isCached()) === true, 'expected the cache to still be populated after reopening VR');
+    ok('VR cache: surviving close/reopen within the same page load');
+  } catch(e){ bad('VR cache: survives close/reopen', e); }
+
+  // 150. A full backup restore drops the cache -- otherwise a second restore
+  //      (e.g. a different user, or the same user with a changed repertoire)
+  //      would show stale castles from before the restore.
+  try {
+    await closeVR();
+    await seedBackup(appAU.page, {
+      version: 6, user: 'tester2',
+      lines: [{ id: 'L2', name: 'Test2', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Gamma', castleStreetNumber: 1 },
+      ]}],
+    });
+    assert((await isCached()) === false, 'expected importBackup to invalidate the gatherBuiltCastles cache');
+    ok('VR cache: a full backup restore invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by backup restore', e); }
+} finally {
+  await appAU.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-124';
+const BUILD_TAG = '-125';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3654,6 +3654,11 @@ async function importBackup(data){
   // mirror so a lingering background loop can't keep processing/saving
   // against lineIds this restore just replaced.
   ANALYSIS_QUEUE = [];
+  // a restore replaces the whole repertoire (possibly under a different user
+  // entirely) without a page reload -- drop the cached VR world-build result
+  // so the next "Run VR" rebuilds against the restored data instead of
+  // showing whatever was cached from before the restore.
+  invalidateBuiltCastlesCache();
 
   CURRENT_USER = data.user;
   localStorage.setItem(LS_ID, CURRENT_USER);
@@ -3952,8 +3957,28 @@ function openThreeTestAssets(){
 }
 /* every BUILT castle across all opening systems (a castle is built once its
    root move has a configured reply — an entry room exists). Returns
-   {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout. */
+   {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout.
+
+   This rebuild is the dominant cost of opening VR, and it doesn't change
+   between opens unless the repertoire itself does -- so the result is cached
+   for the lifetime of the current page load. A plain module-level variable
+   is enough: it's always empty right after a browser refresh (no separate
+   "clear on startup" step needed), and it's explicitly dropped by
+   invalidateBuiltCastlesCache() wherever the whole repertoire can change
+   out from under it without a refresh (currently just importBackup's full
+   restore). Deliberately NOT wired to individual PREFS edits (renaming a
+   room, adding a standard response, etc.) -- covering every one of those
+   write paths correctly is real work with a real cost of getting it wrong
+   (stale VR data with no visible symptom); a full refresh is the safe,
+   always-available way to force a rebuild after editing your repertoire. */
+let _builtCastlesCache = null;
+function invalidateBuiltCastlesCache(){ _builtCastlesCache = null; }
 async function gatherBuiltCastles(lines){
+  if(_builtCastlesCache){
+    console.log('[VR] gatherBuiltCastles: cache hit, 0ms');
+    return _builtCastlesCache;
+  }
+  const t0 = performance.now();
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
   // one prefs swap per line, done concurrently rather than one-line-at-a-time:
   // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
@@ -3983,6 +4008,8 @@ async function gatherBuiltCastles(lines){
                  instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
     }
   });
+  _builtCastlesCache = out;
+  console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
   return out;
 }
 
@@ -6438,5 +6465,15 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__statsTestHooks = {
     computeNodeStats: (seq) => computeNodeStats(GAMES, seq),
+  };
+}
+
+// test-only hook for the gatherBuiltCastles in-memory cache, so a test can
+// confirm a second "Run VR" reuses the cached result (no rebuild) and that
+// importBackup's restore correctly drops it.
+if(localStorage.getItem('threeTestDebug')){
+  window.__vrCacheTestHooks = {
+    isCached: () => _builtCastlesCache !== null,
+    invalidate: () => invalidateBuiltCastlesCache(),
   };
 }
