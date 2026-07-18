@@ -4310,5 +4310,85 @@ try {
   await appAU.close();
 }
 
+// --- Phase AV: the specific in-session repertoire edits called out as
+//     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
+//     a standard response, importing a variation, and adding/removing a
+//     manual opponent try. Each case re-primes the cache (open VR, close it)
+//     immediately beforehand so the assertion is specifically "this action
+//     dropped it," not "it just happened to already be empty." ---
+const appAV = await launchApp();
+try {
+  await seedBackup(appAV.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAV.page.click('.line-row');
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  const closeVR = async () => {
+    await appAV.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAV.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+  const primeCache = async () => {
+    await openVR(appAV.page);
+    // openVR's own readiness check (window.__threeTestEdit/__threeTestState)
+    // is set once and never cleared on close, so on a re-prime after an
+    // invalidation it resolves instantly on stale globals from the FIRST
+    // open, racing ahead of THIS open's (now cache-missing) rebuild -- wait
+    // on the cache flag itself, which is unambiguous per-open.
+    await appAV.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(),
+      { timeout: 5000 });
+    await closeVR();
+  };
+
+  // 151. Setting a standard response invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
+    await appAV.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.fill('#fieldModalInput', 'c4');
+    await appAV.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    assert((await isCached()) === false, 'expected setting a standard response to invalidate the cache');
+    await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
+    ok('VR cache: setting a standard response invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by setting a standard response', e); }
+
+  // 152. Importing a variation (paste-import) invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
+    await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    assert((await isCached()) === false, 'expected importing a variation to invalidate the cache');
+    ok('VR cache: importing a variation invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by importing a variation', e); }
+
+  // 153. Adding a manual opponent try invalidates the cache; removing one
+  //      does too (checked independently, re-priming in between).
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => window.__vrCacheTestHooks.addManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
+    assert((await isCached()) === false, 'expected addManualReply to invalidate the cache');
+    ok('VR cache: adding a manual opponent try invalidates the cache');
+
+    await primeCache();
+    await appAV.page.evaluate(() => window.__vrCacheTestHooks.removeManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
+    assert((await isCached()) === false, 'expected removeManualReply to invalidate the cache');
+    ok('VR cache: removing a manual opponent try invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by manual reply add/remove', e); }
+} finally {
+  await appAV.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

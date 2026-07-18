@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-125';
+const BUILD_TAG = '-126';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2572,6 +2572,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
 
     function setStandardResponse(reply){
+      invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
       setPref(CURRENT_LINE.id,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
       const replySpan = tr.querySelector('.ourReply');
@@ -2896,6 +2897,7 @@ function renderBlackRoot(parent,games,trigger){
   }
 
   function setStandardResponse(reply){
+    invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
     setPref(CURRENT_LINE.id,lineSeq,{reply});
     (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
     const replySpan = tr.querySelector('.ourReply');
@@ -3267,6 +3269,7 @@ async function importLine(text){
   }
 
   if(importedLines){
+    invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
     $('importLineOverlay').style.display='none';
     log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
       + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
@@ -3963,14 +3966,17 @@ function openThreeTestAssets(){
    between opens unless the repertoire itself does -- so the result is cached
    for the lifetime of the current page load. A plain module-level variable
    is enough: it's always empty right after a browser refresh (no separate
-   "clear on startup" step needed), and it's explicitly dropped by
-   invalidateBuiltCastlesCache() wherever the whole repertoire can change
-   out from under it without a refresh (currently just importBackup's full
-   restore). Deliberately NOT wired to individual PREFS edits (renaming a
-   room, adding a standard response, etc.) -- covering every one of those
-   write paths correctly is real work with a real cost of getting it wrong
-   (stale VR data with no visible symptom); a full refresh is the safe,
-   always-available way to force a rebuild after editing your repertoire. */
+   "clear on startup" step needed), and invalidateBuiltCastlesCache() is
+   called explicitly at every write path that can add, move, or remove a
+   room -- setStandardResponse (both copies: renderBranch/renderBlackRoot),
+   importLine (paste-import writes standard responses the same way), and
+   addManualReply/removeManualReply (a manual opponent try can open or close
+   an exit) -- plus importBackup's full restore, which can swap in a
+   different user's repertoire entirely. This deliberately does NOT cover
+   every PREFS write (renaming a room, a note, hiding a branch, an engine
+   eval, etc. don't change castle structure and are left uncached-through);
+   if a future write path turns out to change room/exit shape too, a full
+   browser refresh remains the always-available fallback to force a rebuild. */
 let _builtCastlesCache = null;
 function invalidateBuiltCastlesCache(){ _builtCastlesCache = null; }
 async function gatherBuiltCastles(lines){
@@ -5779,11 +5785,13 @@ function savePrefField(seq,field,value){
 function addManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   if(existing.includes(move)) return Promise.resolve();
+  invalidateBuiltCastlesCache();   // a new opponent try can open a new exit/room
   return savePrefField(seq,'manualReplies',[...existing,move]);
 }
 
 function removeManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  invalidateBuiltCastlesCache();   // symmetric with addManualReply -- removing a try can drop a room/exit too
   return savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
 }
 
@@ -6475,5 +6483,11 @@ if(localStorage.getItem('threeTestDebug')){
   window.__vrCacheTestHooks = {
     isCached: () => _builtCastlesCache !== null,
     invalidate: () => invalidateBuiltCastlesCache(),
+    // direct calls into the manual-reply write path (same functions the
+    // row menu's "Add opponent's move" / "Remove" actions call), so cache
+    // invalidation there can be checked without choreographing the full
+    // branch-expand UI.
+    addManualReply: (seq, move) => addManualReply(seq, move),
+    removeManualReply: (seq, move) => removeManualReply(seq, move),
   };
 }
