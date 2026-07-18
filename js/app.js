@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-128';
+const BUILD_TAG = '-129';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -971,6 +971,7 @@ $('castleGenGoBtn').onclick = async () => {
       return;
     }
     if(parseInt(ctx.rootPref.castleStreetNumber, 10) !== num){
+      invalidateBuiltCastlesCache();   // street position feeds street layout
       await savePrefField(ctx.seq.slice(0,-1), 'castleStreetNumber', num);
     }
   }
@@ -2637,6 +2638,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelectorAll('.rmq').forEach(btn => {
       btn.onclick = e => {
         e.stopPropagation();
+        invalidateBuiltCastlesCache();   // baked into the room's move-pair billboard at build time
         savePrefField(lineSeq, 'moveQuality', btn.dataset.q);   // '' clears
         refreshMoveQuality();
         rowMenu.classList.remove('show');
@@ -3036,6 +3038,7 @@ $('fileImport').addEventListener('change', async e=>{
     .map(l=>{ try{ return JSON.parse(l); }catch{ return null; } })
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
+  invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
   clr();
   if(CURRENT_LINE) openLine(CURRENT_LINE);  // re-run automatically
 });
@@ -3500,6 +3503,7 @@ $('dlBtn').onclick = async ()=>{
     logDl(`fetched ${fetched.length}, writing to database…`);
     await putGames(CURRENT_USER,fetched);
     GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
+    invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     if(CURRENT_LINE) await openLine(CURRENT_LINE);
@@ -3989,13 +3993,26 @@ function openThreeTestAssets(){
        written from inside the walk instead of the move table)
      - hideBtn's toggle (both copies) -- hidden/shown changes which opponent
        replies are visible, i.e. which exits/rooms exist
+     - castleGenGoBtn's street-number save -- a second, separate write site
+       for castleStreetNumber (the Generate Castle modal), bypassing the
+       Attributes modal's own hook
+     - the row-menu's move-quality buttons (.rmq) -- baked into the room's
+       move-pair billboard data (pairFor's p.opponent.quality) at build
+       time, so it's VR-visible even though it isn't structural
+     - importing games (local file import, and Lichess/chess.com download)
+       -- replies(games,seq)'s move-frequency counts decide which opponent
+       tries are visible/built, so a changed game set can add or remove
+       exits the same way a manual reply does
      - importBackup's full restore, which can swap in a different user's
        repertoire entirely
    Deliberately still NOT covering every PREFS write -- a note, an engine
-   eval, move-quality, castleOwner (display-only) etc. don't change castle
-   structure or its VR-visible labels, so they're left uncached-through. If
-   a future write path turns out to change room/exit shape or labels too, a
-   full browser refresh remains the always-available fallback to force a
+   eval, castleOwner (display-only), collapsed (move-table UI state) etc.
+   don't change castle structure or anything VR-visible, so they're left
+   uncached-through. Mnemonic words/images on VR billboards are read through
+   a separate cache that's unconditionally refreshed on every VR open, so
+   they were never part of this staleness problem. If a future write path
+   turns out to change room/exit shape or VR-visible content too, a full
+   browser refresh remains the always-available fallback to force a
    rebuild. */
 let _builtCastlesCache = null;
 function invalidateBuiltCastlesCache(){
