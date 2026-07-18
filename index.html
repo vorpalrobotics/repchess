@@ -168,6 +168,39 @@
   .room-info-exits{margin-top:.6rem;display:flex;flex-direction:column;gap:.4rem;overflow-y:auto;flex:1 1 auto;min-height:0}
   .room-info-exit{padding:.3rem .5rem;border:1px solid #ddd;border-radius:4px;font-size:.9rem;display:flex;align-items:center;flex-wrap:wrap}
   .room-info-empty{color:#888;font-style:italic;border-style:dashed}
+  /* games-with-this-position modal */
+  #gamesListOverlay{z-index:40}
+  .games-list-toggle{display:flex;gap:.4rem;margin:.5rem 0 .3rem}
+  .games-mode-btn{font-size:.82rem;padding:.25rem .7rem}
+  .games-mode-btn.active{background:#1565c0;color:#fff;border-color:#1565c0}
+  .games-list-summary{font-size:.9rem;margin:.2rem 0 .5rem;color:#333;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem}
+  .games-score-bar{display:inline-flex;height:.7rem;width:9rem;border-radius:4px;overflow:hidden;border:1px solid #ccc}
+  .games-score-bar i{display:block;height:100%}
+  .games-score-bar .gw{background:#2e7d32}
+  .games-score-bar .gd{background:#bdbdbd}
+  .games-score-bar .gl{background:#c62828}
+  .games-list-body{overflow-y:auto;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:.3rem}
+  .games-row{display:grid;grid-template-columns:5.5em 1.4em 1fr auto auto;align-items:center;gap:.5rem;
+    padding:.35rem .5rem;border:1px solid #e0e0e0;border-radius:5px;font-size:.85rem;cursor:pointer;text-decoration:none;color:inherit}
+  .games-row:hover{border-color:#1565c0;background:#f5f9ff}
+  .games-row.no-link{cursor:default}
+  .games-row.no-link:hover{border-color:#e0e0e0;background:none}
+  .games-col-date{color:#666;font-size:.8rem}
+  .games-col-side{font-weight:700;text-align:center}
+  .games-col-side.w{color:#8a6d00}
+  .games-col-side.b{color:#333}
+  .games-col-opp{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .games-col-opp .grating{color:#888;font-size:.8rem}
+  .games-col-move{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem;color:#333;white-space:nowrap}
+  .games-col-move .gyou{color:#1565c0;font-weight:600}
+  .games-res{font-weight:700;width:1.3em;text-align:center;border-radius:3px}
+  .games-res.win{color:#2e7d32}
+  .games-res.loss{color:#c62828}
+  .games-res.draw{color:#777}
+  .games-res.unk{color:#aaa;font-weight:400}
+  .games-how{color:#999;font-size:.78rem;white-space:nowrap}
+  .games-list-empty{color:#888;font-style:italic;padding:1rem;text-align:center}
+  .games-list-more{color:#888;font-size:.8rem;text-align:center;padding:.4rem}
   .room-info-thumb{display:inline-flex;align-items:center;white-space:nowrap;margin-left:.5em}
   .room-info-num{font-size:.85em;font-weight:700;color:#333;margin-right:.25em}
   .room-info-img{width:50px;height:50px;object-fit:contain;border:1px solid #ddd;border-radius:4px;vertical-align:middle}
@@ -845,6 +878,22 @@
   </div>
 </div>
 
+<!-- games-with-this-position modal (three-dot menu → Games with this Position) -->
+<div id="gamesListOverlay" class="overlay">
+  <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div class="crop-header">
+      <h2>Games with this Position</h2>
+      <button id="gamesListCloseBtn">Close</button>
+    </div>
+    <div class="games-list-toggle">
+      <button type="button" id="gamesModePos" class="games-mode-btn">Any transposition</button>
+      <button type="button" id="gamesModeLine" class="games-mode-btn">This line only</button>
+    </div>
+    <div id="gamesListSummary" class="games-list-summary"></div>
+    <div id="gamesListBody" class="games-list-body"></div>
+  </div>
+</div>
+
 <!-- node attributes modal (Set Attributes on a row) -->
 <div id="attributesOverlay" class="overlay">
   <div class="modal attr-modal">
@@ -1221,6 +1270,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260717-124"></script>
+<script type="module" src="js/app.js?v=20260717-125"></script>
 </body>
 </html>

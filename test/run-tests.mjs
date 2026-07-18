@@ -4321,5 +4321,95 @@ try {
   await appAU.close();
 }
 
+// --- Phase AV: "Games with this Position" -- matching (transposition vs exact
+//     line), result-from-your-perspective, and the modal itself. ---
+const appAV = await launchApp();
+try {
+  await seedBackup(appAV.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [
+      // Lichess-shaped (has players+id): user 'tester' is White in each.
+      { id: 'lg1', moves: 'd4 Nf6 c4 e6 Nc3', createdAt: 3000, winner: 'white', status: 'resign',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp1' }, rating: 1580 } } },
+      { id: 'lg2', moves: 'd4 Nf6 c4 g6 Nc3', createdAt: 2000, winner: 'black', status: 'mate',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp2' }, rating: 1620 } } },
+      // a TRANSPOSITION into the same "d4 Nf6 c4 g6" position by a different order.
+      { id: 'lg3', moves: 'c4 Nf6 d4 g6 Nc3', createdAt: 1000, status: 'draw',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp3' }, rating: 1590 } } },
+      // a legacy bare game (no players / no id): reaches "d4 Nf6" but has no details.
+      { moves: 'd4 Nf6 Bf4' },
+    ],
+  });
+  await appAV.page.click('.line-row');
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const H = (fn, arg) => appAV.page.evaluate(({fn,arg}) => window.__gamesListHooks[fn](arg), {fn,arg});
+
+  // 151. Position (transposition) matching finds a game that reached the
+  //      position by a DIFFERENT move order; exact-line matching does not.
+  try {
+    const fen = await H('fenForSeq', ['d4','Nf6','c4','g6']);
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const byLine = await appAV.page.evaluate(() => window.__gamesListHooks.gamesAlongLine(['d4','Nf6','c4','g6']));
+    const posIds = byPos.map(m => m.id).sort();
+    const lineIds = byLine.map(m => m.id).sort();
+    assert(JSON.stringify(posIds) === JSON.stringify(['lg2','lg3']), `expected both orders (lg2,lg3) by position, got ${JSON.stringify(posIds)}`);
+    assert(JSON.stringify(lineIds) === JSON.stringify(['lg2']), `expected only the same-order game (lg2) by line, got ${JSON.stringify(lineIds)}`);
+    assert(byPos.every(m => m.move === 'Nc3'), `expected the move-from-here to be Nc3 for both, got ${JSON.stringify(byPos.map(m=>m.move))}`);
+    ok('games-list: transposition matching finds other move orders; exact-line does not');
+  } catch(e){ bad('games-list: transposition vs exact-line matching', e); }
+
+  // 152. Result is reported from the signed-in user's perspective, both colors,
+  //      draws, and unknown (bare) games.
+  try {
+    const win  = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}}, winner:'white' });
+    const loss = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}}, winner:'black' });
+    const bwin = await H('outcome', { players:{white:{user:{name:'x'}},black:{user:{name:'tester'}}}, winner:'black' });
+    const draw = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}} });
+    const unk  = await H('outcome', { moves:'e4' });
+    assert(win==='win' && loss==='loss', `expected win/loss as White, got ${win}/${loss}`);
+    assert(bwin==='win', `expected a Black win from the user's perspective, got ${bwin}`);
+    assert(draw==='draw', `expected a drawn (no winner) game to read as draw, got ${draw}`);
+    assert(unk===null, `expected an unknown-color (bare) game to read as null, got ${unk}`);
+    ok('games-list: result is computed from the user\'s own color, incl. draws and unknown games');
+  } catch(e){ bad('games-list: perspective outcome', e); }
+
+  // 153. Click-out link: Lichess id → lichess.org, chess.com → its own url,
+  //      bare game → none.
+  try {
+    const li = await H('link', { id: 'abc12345' });
+    const cc = await H('link', { source: 'chesscom', url: 'https://www.chess.com/game/live/9', id: 'x' });
+    const none = await H('link', { moves: 'e4' });
+    assert(li === 'https://lichess.org/abc12345', `expected a lichess link, got ${li}`);
+    assert(cc === 'https://www.chess.com/game/live/9', `expected the chess.com url, got ${cc}`);
+    assert(none === null, `expected no link for a bare game, got ${none}`);
+    ok('games-list: click-out link resolves per source (lichess id / chess.com url / none)');
+  } catch(e){ bad('games-list: game link resolution', e); }
+
+  // 154. The modal opens from the three-dot menu and lists the games reaching
+  //      the shallow "d4 Nf6" position (lg1, lg2, and the bare game), with a
+  //      clickable lichess link on a Lichess row.
+  try {
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
+    await appAV.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const info = await appAV.page.evaluate(() => ({
+      rows: document.querySelectorAll('#gamesListBody .games-row').length,
+      summary: document.getElementById('gamesListSummary').textContent,
+      hasLichessLink: !!document.querySelector('#gamesListBody a.games-row[href^="https://lichess.org/"]'),
+    }));
+    assert(info.rows === 3, `expected 3 games reaching d4 Nf6 (lg1, lg2, bare), got ${info.rows}`);
+    assert(/\b3\b/.test(info.summary), `expected the summary to report 3 games, got "${info.summary}"`);
+    assert(info.hasLichessLink, 'expected at least one clickable lichess-linked row');
+    ok('games-list: modal opens from the menu and lists the games reaching this position');
+    await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+  } catch(e){ bad('games-list: modal open + render', e); }
+} finally {
+  await appAV.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
