@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-124';
+const BUILD_TAG = '-128';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -907,6 +907,7 @@ function makeRoomRenamer(index){
   return async (roomKey, name) => {
     const t = index[roomKey];
     if(!t || !t.nameSeq) return;
+    invalidateBuiltCastlesCache();   // renamed rooms feed VR room labels
     await setPref(t.lineId, t.nameSeq, { name });
     if(CURRENT_LINE && t.lineId === CURRENT_LINE.id){
       const k = prefKey(t.lineId, t.nameSeq);
@@ -2572,6 +2573,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
 
     function setStandardResponse(reply){
+      invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
       setPref(CURRENT_LINE.id,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
       const replySpan = tr.querySelector('.ourReply');
@@ -2611,6 +2613,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     hideBtn.onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
+      invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
       saveField('hidden', !currentSaved()?.hidden);
       refreshSystemStats();
     };
@@ -2685,6 +2688,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       openAttributesModal(currentSaved(), v=>{
+        // the room's display name, and whether/where it's a castle root, all
+        // feed VR room labels and street layout
+        invalidateBuiltCastlesCache();
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
         saveField('castleOwner', v.castleOwner);
@@ -2896,6 +2902,7 @@ function renderBlackRoot(parent,games,trigger){
   }
 
   function setStandardResponse(reply){
+    invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
     setPref(CURRENT_LINE.id,lineSeq,{reply});
     (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
     const replySpan = tr.querySelector('.ourReply');
@@ -2932,6 +2939,7 @@ function renderBlackRoot(parent,games,trigger){
   hideBtn.onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
+    invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
     saveField('hidden', !currentSaved()?.hidden);
     refreshSystemStats();
   };
@@ -2998,6 +3006,9 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openAttributesModal(currentSaved(), v=>{
+      // the room's display name, and whether/where it's a castle root, all
+      // feed VR room labels and street layout
+      invalidateBuiltCastlesCache();
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
       saveField('castleOwner', v.castleOwner);
@@ -3267,6 +3278,7 @@ async function importLine(text){
   }
 
   if(importedLines){
+    invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
     $('importLineOverlay').style.display='none';
     log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
       + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
@@ -3654,6 +3666,11 @@ async function importBackup(data){
   // mirror so a lingering background loop can't keep processing/saving
   // against lineIds this restore just replaced.
   ANALYSIS_QUEUE = [];
+  // a restore replaces the whole repertoire (possibly under a different user
+  // entirely) without a page reload -- drop the cached VR world-build result
+  // so the next "Run VR" rebuilds against the restored data instead of
+  // showing whatever was cached from before the restore.
+  invalidateBuiltCastlesCache();
 
   CURRENT_USER = data.user;
   localStorage.setItem(LS_ID, CURRENT_USER);
@@ -3952,8 +3969,45 @@ function openThreeTestAssets(){
 }
 /* every BUILT castle across all opening systems (a castle is built once its
    root move has a configured reply — an entry room exists). Returns
-   {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout. */
+   {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout.
+
+   This rebuild is the dominant cost of opening VR, and it doesn't change
+   between opens unless the repertoire itself does -- so the result is cached
+   for the lifetime of the current page load. A plain module-level variable
+   is enough: it's always empty right after a browser refresh (no separate
+   "clear on startup" step needed), and invalidateBuiltCastlesCache() is
+   called explicitly at every write path that can add, move, remove, or
+   relabel a room:
+     - setStandardResponse (both copies: renderBranch/renderBlackRoot)
+     - importLine (paste-import writes standard responses the same way)
+     - addManualReply/removeManualReply (a manual opponent try can open or
+       close an exit)
+     - the Attributes modal's save (both copies) -- isCastleRoot/castleName/
+       castleStreetNumber reshape street layout, and the room name feeds VR
+       room labels
+     - makeRoomRenamer (the in-VR rename callback -- same room-name field,
+       written from inside the walk instead of the move table)
+     - hideBtn's toggle (both copies) -- hidden/shown changes which opponent
+       replies are visible, i.e. which exits/rooms exist
+     - importBackup's full restore, which can swap in a different user's
+       repertoire entirely
+   Deliberately still NOT covering every PREFS write -- a note, an engine
+   eval, move-quality, castleOwner (display-only) etc. don't change castle
+   structure or its VR-visible labels, so they're left uncached-through. If
+   a future write path turns out to change room/exit shape or labels too, a
+   full browser refresh remains the always-available fallback to force a
+   rebuild. */
+let _builtCastlesCache = null;
+function invalidateBuiltCastlesCache(){
+  _builtCastlesCache = null;
+  console.log('[VR cache] Cleared');
+}
 async function gatherBuiltCastles(lines){
+  if(_builtCastlesCache){
+    console.log('[VR] gatherBuiltCastles: cache hit, 0ms');
+    return _builtCastlesCache;
+  }
+  const t0 = performance.now();
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
   // one prefs swap per line, done concurrently rather than one-line-at-a-time:
   // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
@@ -3983,6 +4037,8 @@ async function gatherBuiltCastles(lines){
                  instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
     }
   });
+  _builtCastlesCache = out;
+  console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
   return out;
 }
 
@@ -5752,11 +5808,13 @@ function savePrefField(seq,field,value){
 function addManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   if(existing.includes(move)) return Promise.resolve();
+  invalidateBuiltCastlesCache();   // a new opponent try can open a new exit/room
   return savePrefField(seq,'manualReplies',[...existing,move]);
 }
 
 function removeManualReply(seq,move){
   const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+  invalidateBuiltCastlesCache();   // symmetric with addManualReply -- removing a try can drop a room/exit too
   return savePrefField(seq,'manualReplies',existing.filter(m=>m!==move));
 }
 
@@ -6438,5 +6496,21 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__statsTestHooks = {
     computeNodeStats: (seq) => computeNodeStats(GAMES, seq),
+  };
+}
+
+// test-only hook for the gatherBuiltCastles in-memory cache, so a test can
+// confirm a second "Run VR" reuses the cached result (no rebuild) and that
+// importBackup's restore correctly drops it.
+if(localStorage.getItem('threeTestDebug')){
+  window.__vrCacheTestHooks = {
+    isCached: () => _builtCastlesCache !== null,
+    invalidate: () => invalidateBuiltCastlesCache(),
+    // direct calls into the manual-reply write path (same functions the
+    // row menu's "Add opponent's move" / "Remove" actions call), so cache
+    // invalidation there can be checked without choreographing the full
+    // branch-expand UI.
+    addManualReply: (seq, move) => addManualReply(seq, move),
+    removeManualReply: (seq, move) => removeManualReply(seq, move),
   };
 }

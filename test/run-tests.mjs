@@ -4253,5 +4253,173 @@ try {
   await appAT.close();
 }
 
+// --- Phase AU: gatherBuiltCastles' in-memory cache -- a second "Run VR" in
+//     the same page load reuses the first one's result instead of rebuilding
+//     every castle from scratch, and a full backup restore drops the cache
+//     (it can swap in a different user's repertoire entirely). ---
+const appAU = await launchApp();
+try {
+  await seedBackup(appAU.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+  });
+  const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  const closeVR = async () => {
+    await appAU.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAU.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+
+  // 148. Nothing cached before the first "Run VR"; cached immediately after.
+  try {
+    assert((await isCached()) === false, 'expected no cache before the first VR open');
+    await openVR(appAU.page);
+    assert((await isCached()) === true, 'expected gatherBuiltCastles to populate the cache on first open');
+    ok('VR cache: first "Run VR" populates the gatherBuiltCastles cache');
+  } catch(e){ bad('VR cache: populated on first open', e); }
+
+  // 149. Closing and reopening VR (no reload, no data change) keeps the cache
+  //      -- the second open must not have wiped it to rebuild from scratch.
+  try {
+    await closeVR();
+    assert((await isCached()) === true, 'expected the cache to survive closing VR');
+    await openVR(appAU.page);
+    assert((await isCached()) === true, 'expected the cache to still be populated after reopening VR');
+    ok('VR cache: surviving close/reopen within the same page load');
+  } catch(e){ bad('VR cache: survives close/reopen', e); }
+
+  // 150. A full backup restore drops the cache -- otherwise a second restore
+  //      (e.g. a different user, or the same user with a changed repertoire)
+  //      would show stale castles from before the restore.
+  try {
+    await closeVR();
+    await seedBackup(appAU.page, {
+      version: 6, user: 'tester2',
+      lines: [{ id: 'L2', name: 'Test2', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Gamma', castleStreetNumber: 1 },
+      ]}],
+    });
+    assert((await isCached()) === false, 'expected importBackup to invalidate the gatherBuiltCastles cache');
+    ok('VR cache: a full backup restore invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by backup restore', e); }
+} finally {
+  await appAU.close();
+}
+
+// --- Phase AV: the specific in-session repertoire edits called out as
+//     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
+//     a standard response, importing a variation, adding/removing a manual
+//     opponent try, renaming a room (+ castle attributes) via the move
+//     table, and hiding/unhiding a branch. Each case re-primes the cache
+//     (open VR, close it) immediately beforehand so the assertion is
+//     specifically "this action dropped it," not "it just happened to
+//     already be empty." ---
+const appAV = await launchApp();
+try {
+  await seedBackup(appAV.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appAV.page.click('.line-row');
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  const closeVR = async () => {
+    await appAV.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAV.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+  const primeCache = async () => {
+    await openVR(appAV.page);
+    // openVR's own readiness check (window.__threeTestEdit/__threeTestState)
+    // is set once and never cleared on close, so on a re-prime after an
+    // invalidation it resolves instantly on stale globals from the FIRST
+    // open, racing ahead of THIS open's (now cache-missing) rebuild -- wait
+    // on the cache flag itself, which is unambiguous per-open.
+    await appAV.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(),
+      { timeout: 5000 });
+    await closeVR();
+  };
+
+  // 151. Setting a standard response invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
+    await appAV.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.fill('#fieldModalInput', 'c4');
+    await appAV.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    assert((await isCached()) === false, 'expected setting a standard response to invalidate the cache');
+    await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
+    ok('VR cache: setting a standard response invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by setting a standard response', e); }
+
+  // 152. Importing a variation (paste-import) invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
+    await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    assert((await isCached()) === false, 'expected importing a variation to invalidate the cache');
+    ok('VR cache: importing a variation invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by importing a variation', e); }
+
+  // 153. Adding a manual opponent try invalidates the cache; removing one
+  //      does too (checked independently, re-priming in between).
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => window.__vrCacheTestHooks.addManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
+    assert((await isCached()) === false, 'expected addManualReply to invalidate the cache');
+    ok('VR cache: adding a manual opponent try invalidates the cache');
+
+    await primeCache();
+    await appAV.page.evaluate(() => window.__vrCacheTestHooks.removeManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
+    assert((await isCached()) === false, 'expected removeManualReply to invalidate the cache');
+    ok('VR cache: removing a manual opponent try invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by manual reply add/remove', e); }
+
+  // 155. Renaming a room via the Attributes modal invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="attributes"]').click());
+    await appAV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.fill('#attrRoomName', 'Foyer');
+    await appAV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appAV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+    assert((await isCached()) === false, 'expected renaming a room (Attributes modal) to invalidate the cache');
+    ok('VR cache: renaming a room via the Attributes modal invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by room rename', e); }
+
+  // 156. Hiding (and unhiding) a branch invalidates the cache -- it changes
+  //      which opponent replies are visible, i.e. which exits/rooms exist.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
+    assert((await isCached()) === false, 'expected hiding a branch to invalidate the cache');
+    ok('VR cache: hiding a branch invalidates the cache');
+
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
+    assert((await isCached()) === false, 'expected un-hiding a branch to invalidate the cache');
+    ok('VR cache: un-hiding a branch invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by hide/unhide toggle', e); }
+} finally {
+  await appAV.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
