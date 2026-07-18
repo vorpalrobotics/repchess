@@ -1458,7 +1458,20 @@ function makeCanvasTexture(draw, size){
   return tex;
 }
 
+// Pure function of tintHex -- callers always .clone() before setting .repeat
+// (see buildWallGroup's materialFor), so the base texture returned here is
+// never mutated in place and is safe to hand out from a cache. Main Street
+// hands every castle building the same tint, so without this cache each one
+// redraws and re-uploads an identical canvas texture from scratch.
+const _brickTexCache = new Map();
 function makeBrickTexture(tintHex){
+  const cached = _brickTexCache.get(tintHex);
+  if(cached) return cached;
+  const tex = makeBrickTextureUncached(tintHex);
+  _brickTexCache.set(tintHex, tex);
+  return tex;
+}
+function makeBrickTextureUncached(tintHex){
   return makeCanvasTexture((ctx, size) => {
     const tint = new THREE.Color(tintHex);
     ctx.fillStyle = `rgb(${tint.r*255},${tint.g*255},${tint.b*255})`;
@@ -6641,11 +6654,10 @@ export async function openThreeTest(containerEl, opts){
   inputLocked = false;
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
-  await loadLayout();
-  await loadMemorized();
-  await loadDecorated();
-  await refreshAssetMap();
-  await refreshObjectLists();
+  // five independent IDB reads, each populating its own module global with no
+  // cross-dependency on the others' results -- run concurrently rather than
+  // one round-trip after another.
+  await Promise.all([loadLayout(), loadMemorized(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });

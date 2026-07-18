@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-1';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260717-95';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260717-96';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260717-69';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-123';
+const BUILD_TAG = '-124';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1059,6 +1059,10 @@ function analyzeCastleStructure(graph){
   // two-track rooms: a node with exactly two children, each a non-merge run head
   const runByHead = new Map();
   runs.forEach(run => runByHead.set(run[0], run));
+  // run-head -> its index in `runs`, so consuming a matched run below is a
+  // lookup instead of an indexOf scan (runs.indexOf was O(runs.length) per
+  // hit, making this loop O(rooms * runs) on a castle with many two-tracks).
+  const runIndexByHead = new Map(runs.map((run, i) => [run[0], i]));
   const boxOf = new Map(), boxes = [], consumed = new Set();
   let twoTrackCount = 0;
   rooms.forEach(H => {
@@ -1073,8 +1077,8 @@ function analyzeCastleStructure(graph){
     boxOf.set(H.id, bid);
     runA.forEach(id=>boxOf.set(id, bid));
     runB.forEach(id=>boxOf.set(id, bid));
-    consumed.add(runs.indexOf(runA));
-    consumed.add(runs.indexOf(runB));
+    consumed.add(runIndexByHead.get(t1));
+    consumed.add(runIndexByHead.get(t2));
   });
   runs.forEach((run, i) => {
     if(consumed.has(i)) return;
@@ -3951,31 +3955,34 @@ function openThreeTestAssets(){
    {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout. */
 async function gatherBuiltCastles(lines){
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
-  const out = [];
-  for(const line of lines){
-    // one prefs swap per line: enumerate its castles, resolve each built root,
-    // read its street number, and generate its room model — all synchronous
-    // against that line's PREFS.
-    const built = await withLinePrefs(line, () =>
-      definedCastles().map(name => {
-        const rootSeq = castleRootRoomSeq(name);
-        if(!rootSeq) return null;   // named but not built yet — skip
-        let streetNumber = null;
-        for(const key in PREFS){
-          const p = PREFS[key];
-          if(p?.isCastleRoot && p.castleName?.trim() === name){
-            const n = parseInt(p.castleStreetNumber, 10);
-            if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
-          }
+  // one prefs swap per line, done concurrently rather than one-line-at-a-time:
+  // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
+  // so the "swap in this line's PREFS, run fn, restore" sequence for each line
+  // always completes atomically once its getAllPrefs() resolves — no other
+  // line's continuation can interleave in between, so running every line's
+  // getAllPrefs() IDB read in parallel instead of serially is safe.
+  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () =>
+    definedCastles().map(name => {
+      const rootSeq = castleRootRoomSeq(name);
+      if(!rootSeq) return null;   // named but not built yet — skip
+      let streetNumber = null;
+      for(const key in PREFS){
+        const p = PREFS[key];
+        if(p?.isCastleRoot && p.castleName?.trim() === name){
+          const n = parseInt(p.castleStreetNumber, 10);
+          if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
         }
-        return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
-      }).filter(Boolean)
-    );
-    for(const c of built){
+      }
+      return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
+    }).filter(Boolean)
+  )));
+  const out = [];
+  lines.forEach((line, i) => {
+    for(const c of perLine[i]){
       out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber,
                  instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
     }
-  }
+  });
   return out;
 }
 
