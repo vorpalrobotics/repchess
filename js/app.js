@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-179';
+const BUILD_TAG = '-180';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -404,6 +404,171 @@ function refreshSystemStats(){
   if(!ENABLE_NODE_STATS){ span.textContent = ''; return; }
   if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
   span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
+}
+
+/* ---------- games with this position (three-dot menu → Games with this Position) ----------
+   Lists the user's own games that reached a given position, with date / players
+   / ratings / result and the move they played from it. Two match modes: any
+   transposition (the exact position by any move order, anywhere in the DB --
+   the default) or this line only (games that followed exactly this move
+   sequence). Rich columns show for Lichess and (post-enrichment) chess.com
+   games; legacy bare {moves} games still count but show moves only. */
+
+// positionKey -> [{ g:gameIndex, move:SAN|null }] for EVERY position in every
+// game (`move` is the one played FROM that position; null at game's end).
+// Cached against the GAMES array identity, same pattern as the reply trie --
+// so the first query pays the replay cost once and the rest are instant.
+let _posIndex = { games: null, map: null };
+function buildPositionIndex(games){
+  const map = new Map();
+  const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
+  games.forEach((game, gi) => {
+    const chess = new Chess();
+    const sans = (game.moves || '').split(' ').filter(Boolean);
+    for(let i=0;i<sans.length;i++){
+      add(positionKey(chess.fen()), { g: gi, move: sans[i] });
+      if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
+    }
+    add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
+  });
+  return map;
+}
+function positionIndex(games){
+  if(_posIndex.games !== games) _posIndex = { games, map: buildPositionIndex(games) };
+  return _posIndex.map;
+}
+// games (+ the move played from here) that reached `fen`'s position by ANY move order.
+function gamesAtPosition(games, fen){
+  const hits = positionIndex(games).get(positionKey(fen)) || [];
+  return hits.map(h => ({ game: games[h.g], move: h.move }));
+}
+// games that followed EXACTLY `seq` (a prefix match on the SAN move list), with
+// the move each played immediately after — the strict "this line only" view.
+function gamesAlongLine(games, seq){
+  const lower = seq.map(m => m.toLowerCase());
+  const out = [];
+  for(const game of games){
+    const sans = (game.moves || '').split(' ').filter(Boolean);
+    if(sans.length < lower.length) continue;
+    let ok = true;
+    for(let i=0;i<lower.length;i++){ if(sans[i].toLowerCase() !== lower[i]){ ok=false; break; } }
+    if(ok) out.push({ game, move: sans[lower.length] || null });
+  }
+  return out;
+}
+
+// which side the signed-in user played (CURRENT_USER vs the player names), or
+// null when unknown (a legacy bare {moves} game, or someone else's game).
+function userColorInGame(game){
+  const u = (CURRENT_USER || '').toLowerCase();
+  if(!u) return null;
+  const w = game.players?.white?.user?.name?.toLowerCase();
+  const b = game.players?.black?.user?.name?.toLowerCase();
+  if(w && w === u) return 'white';
+  if(b && b === u) return 'black';
+  return null;
+}
+// win / loss / draw from the user's perspective, or null when the user's color
+// in this game is unknown (bare games) — a known color plus no winner is a
+// genuine draw.
+function gameOutcomeForUser(game, color){
+  if(!color) return null;
+  if(game.winner === 'white' || game.winner === 'black') return game.winner === color ? 'win' : 'loss';
+  return 'draw';
+}
+// the click-out URL for a game, if we have one (Lichess id → lichess.org/<id>;
+// chess.com carries its own url). Null for bare games with nothing to link to.
+function gameLink(game){
+  if(game.url) return game.url;                               // chess.com (normalized) carries the full url
+  if(game.source === 'chesscom') return null;
+  if(typeof game.id === 'string' && game.id) return `https://lichess.org/${game.id}`;
+  return null;
+}
+// a short, human "how it ended" from the (Lichess-style) status field.
+const GAME_STATUS_LABEL = { mate:'checkmate', resign:'resignation', outoftime:'time', stalemate:'stalemate', draw:'draw', aborted:'aborted', timeout:'time' };
+
+let _gamesModalState = null;   // { seq, fen } for the currently open modal, so the toggle can re-render
+function showGamesAtNode(seq){
+  if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
+  _gamesModalState = { seq: seq.slice(), fen: fenForSeq(seq) };
+  $('gamesListOverlay').style.display = 'flex';
+  renderGamesList('pos');
+}
+async function renderGamesList(mode){
+  const { seq, fen } = _gamesModalState;
+  $('gamesModePos').classList.toggle('active', mode === 'pos');
+  $('gamesModeLine').classList.toggle('active', mode === 'line');
+
+  const body = $('gamesListBody');
+  // the position index build can take a moment on a big DB — show a spinner the
+  // first time (subsequent opens reuse the cache).
+  const needsIndex = mode === 'pos' && _posIndex.games !== GAMES;
+  if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
+
+  const matches = mode === 'pos' ? gamesAtPosition(GAMES, fen) : gamesAlongLine(GAMES, seq);
+  const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
+
+  // summary: count + result tally (from the user's perspective, where known) +
+  // "played your repertoire move in X of Y" when a reply is configured here.
+  let win=0, loss=0, draw=0, known=0;
+  const reply = PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply;
+  let yourTurnGames=0, followedReply=0;
+  for(const { game, move } of matches){
+    const color = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, color);
+    if(oc){ known++; if(oc==='win') win++; else if(oc==='loss') loss++; else draw++; }
+    if(color && color[0] === sideToMove){   // it was the user's move from here
+      yourTurnGames++;
+      if(reply && move && move.toLowerCase() === reply.toLowerCase()) followedReply++;
+    }
+  }
+  const pct = known ? Math.round((win + draw*0.5) / known * 100) : null;
+  const bar = known ? `<span class="games-score-bar" title="${win}W ${draw}D ${loss}L">`+
+      `<i class="gw" style="width:${win/known*100}%"></i><i class="gd" style="width:${draw/known*100}%"></i><i class="gl" style="width:${loss/known*100}%"></i></span>` : '';
+  $('gamesListSummary').innerHTML =
+    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'}</span>` +
+    (known ? `<span>+${win} =${draw} −${loss}${pct!=null?` (${pct}%)`:''}</span>${bar}` : '') +
+    (reply && yourTurnGames ? `<span>played your move <strong>${escapeHtml(reply)}</strong> in ${followedReply}/${yourTurnGames}</span>` : '');
+
+  if(!matches.length){
+    body.innerHTML = `<div class="games-list-empty">${mode==='line'
+      ? 'None of your games followed exactly this line.'
+      : 'None of your games reached this position.'}</div>`;
+    return;
+  }
+
+  // newest first when we have dates; undated (bare) games sort to the end.
+  matches.sort((a,b) => (b.game.createdAt||0) - (a.game.createdAt||0));
+  const CAP = 200;
+  const shown = matches.slice(0, CAP);
+
+  body.innerHTML = shown.map(({ game, move }) => {
+    const color = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, color);
+    const date = game.createdAt ? new Date(game.createdAt).toLocaleDateString() : '—';
+    const sideChip = color === 'white' ? '<span class="games-col-side w" title="you played White">W</span>'
+      : color === 'black' ? '<span class="games-col-side b" title="you played Black">B</span>' : '<span class="games-col-side">·</span>';
+    const oppColor = color === 'white' ? 'black' : color === 'black' ? 'white' : null;
+    const opp = oppColor ? game.players?.[oppColor]?.user?.name : null;
+    const oppRating = oppColor ? game.players?.[oppColor]?.rating : null;
+    const oppHtml = opp ? `${escapeHtml(opp)}${oppRating?` <span class="grating">${oppRating}</span>`:''}`
+      : (game.source === 'chesscom' || (!game.players) ? '<span class="grating">— no details —</span>' : '');
+    const resTxt = oc==='win'?'1':oc==='loss'?'0':oc==='draw'?'½':'?';
+    const resCls = oc || 'unk';
+    const how = oc && game.status && GAME_STATUS_LABEL[game.status] ? `<span class="games-how">${GAME_STATUS_LABEL[game.status]}</span>` : '';
+    const moveIsUsers = color && color[0] === sideToMove;
+    const moveHtml = move
+      ? `<span class="games-col-move">${moveIsUsers?'<span class="gyou">':''}${escapeHtml(move)}${moveIsUsers?'</span>':''}</span>`
+      : '<span class="games-col-move">·</span>';
+    const link = gameLink(game);
+    return `<${link?`a class="games-row" href="${escapeHtml(link)}" target="_blank" rel="noopener"`:'div class="games-row no-link"'}>
+      <span class="games-col-date">${date}</span>
+      ${sideChip}
+      <span class="games-col-opp">${oppHtml}</span>
+      <span style="display:flex;align-items:center;gap:.4rem">${moveHtml}${how}</span>
+      <span class="games-res ${resCls}">${resTxt}</span>
+    </${link?'a':'div'}>`;
+  }).join('') + (matches.length > CAP ? `<div class="games-list-more">showing ${CAP} of ${matches.length}</div>` : '');
 }
 
 /* ---------- FEN for a move sequence ---------- */
@@ -2019,6 +2184,12 @@ async function showRoomInfoPanel(roomEl){
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
+
+// games-with-this-position modal wiring
+$('gamesListCloseBtn').onclick = () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; };
+$('gamesListOverlay').addEventListener('click', e => { if(e.target === $('gamesListOverlay')){ $('gamesListOverlay').style.display='none'; _gamesModalState=null; } });
+$('gamesModePos').onclick = () => renderGamesList('pos');
+$('gamesModeLine').onclick = () => renderGamesList('line');
 // "Jump to VR" (Part B): try the fast path first -- VR already open and this
 // room already registered in that session (jumpToRoom) -- and only fall back
 // to (re)building the whole main world when that's not possible (VR closed,
@@ -2746,6 +2917,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
                <span class="rmq-label">Move quality</span>
@@ -2981,6 +3153,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(childrenSeq) showNodeStats(games,childrenSeq);
     };
+    rowMenu.querySelector('[data-act="gamesHere"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      showGamesAtNode(lineSeq);
+    };
     rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -3123,6 +3300,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
@@ -3308,6 +3486,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(childrenSeq) showNodeStats(games,childrenSeq);
+  };
+  rowMenu.querySelector('[data-act="gamesHere"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    showGamesAtNode(lineSeq);
   };
   rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
     e.stopPropagation();
@@ -7359,6 +7542,19 @@ if(localStorage.getItem('threeTestDebug')){
     offer: () => maybeOfferDefaultMnemonics(),
     offeredKey: MNEM_DEFAULT_OFFERED_KEY,
     getOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+  };
+}
+
+// test-only hook for the "Games with this Position" matching/perspective math
+// (pure functions over the in-memory GAMES array, no DOM/network needed).
+if(localStorage.getItem('threeTestDebug')){
+  window.__gamesListHooks = {
+    gamesAtPosition: (fen) => gamesAtPosition(GAMES, fen).map(m => ({ id: m.game.id || null, source: m.game.source || null, move: m.move })),
+    gamesAlongLine: (seq) => gamesAlongLine(GAMES, seq).map(m => ({ id: m.game.id || null, move: m.move })),
+    outcome: (game) => gameOutcomeForUser(game, userColorInGame(game)),
+    color: (game) => userColorInGame(game),
+    link: (game) => gameLink(game),
+    fenForSeq: (seq) => fenForSeq(seq),
   };
 }
 
