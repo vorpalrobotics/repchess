@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-127';
+const BUILD_TAG = '-128';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3998,7 +3998,10 @@ function openThreeTestAssets(){
    full browser refresh remains the always-available fallback to force a
    rebuild. */
 let _builtCastlesCache = null;
-function invalidateBuiltCastlesCache(){ _builtCastlesCache = null; }
+function invalidateBuiltCastlesCache(){
+  _builtCastlesCache = null;
+  console.log('[VR cache] Cleared');
+}
 async function gatherBuiltCastles(lines){
   if(_builtCastlesCache){
     console.log('[VR] gatherBuiltCastles: cache hit, 0ms');
