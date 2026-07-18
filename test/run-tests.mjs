@@ -4312,10 +4312,12 @@ try {
 
 // --- Phase AV: the specific in-session repertoire edits called out as
 //     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
-//     a standard response, importing a variation, and adding/removing a
-//     manual opponent try. Each case re-primes the cache (open VR, close it)
-//     immediately beforehand so the assertion is specifically "this action
-//     dropped it," not "it just happened to already be empty." ---
+//     a standard response, importing a variation, adding/removing a manual
+//     opponent try, renaming a room (+ castle attributes) via the move
+//     table, and hiding/unhiding a branch. Each case re-primes the cache
+//     (open VR, close it) immediately beforehand so the assertion is
+//     specifically "this action dropped it," not "it just happened to
+//     already be empty." ---
 const appAV = await launchApp();
 try {
   await seedBackup(appAV.page, {
@@ -4386,6 +4388,35 @@ try {
     assert((await isCached()) === false, 'expected removeManualReply to invalidate the cache');
     ok('VR cache: removing a manual opponent try invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by manual reply add/remove', e); }
+
+  // 155. Renaming a room via the Attributes modal invalidates the cache.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="attributes"]').click());
+    await appAV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.fill('#attrRoomName', 'Foyer');
+    await appAV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appAV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+    assert((await isCached()) === false, 'expected renaming a room (Attributes modal) to invalidate the cache');
+    ok('VR cache: renaming a room via the Attributes modal invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by room rename', e); }
+
+  // 156. Hiding (and unhiding) a branch invalidates the cache -- it changes
+  //      which opponent replies are visible, i.e. which exits/rooms exist.
+  try {
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
+    assert((await isCached()) === false, 'expected hiding a branch to invalidate the cache');
+    ok('VR cache: hiding a branch invalidates the cache');
+
+    await primeCache();
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
+    assert((await isCached()) === false, 'expected un-hiding a branch to invalidate the cache');
+    ok('VR cache: un-hiding a branch invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by hide/unhide toggle', e); }
 } finally {
   await appAV.close();
 }

@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-126';
+const BUILD_TAG = '-127';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -907,6 +907,7 @@ function makeRoomRenamer(index){
   return async (roomKey, name) => {
     const t = index[roomKey];
     if(!t || !t.nameSeq) return;
+    invalidateBuiltCastlesCache();   // renamed rooms feed VR room labels
     await setPref(t.lineId, t.nameSeq, { name });
     if(CURRENT_LINE && t.lineId === CURRENT_LINE.id){
       const k = prefKey(t.lineId, t.nameSeq);
@@ -2612,6 +2613,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     hideBtn.onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
+      invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
       saveField('hidden', !currentSaved()?.hidden);
       refreshSystemStats();
     };
@@ -2686,6 +2688,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       openAttributesModal(currentSaved(), v=>{
+        // the room's display name, and whether/where it's a castle root, all
+        // feed VR room labels and street layout
+        invalidateBuiltCastlesCache();
         saveField('isCastleRoot', v.isCastleRoot);
         saveField('castleName', v.castleName);
         saveField('castleOwner', v.castleOwner);
@@ -2934,6 +2939,7 @@ function renderBlackRoot(parent,games,trigger){
   hideBtn.onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
+    invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
     saveField('hidden', !currentSaved()?.hidden);
     refreshSystemStats();
   };
@@ -3000,6 +3006,9 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openAttributesModal(currentSaved(), v=>{
+      // the room's display name, and whether/where it's a castle root, all
+      // feed VR room labels and street layout
+      invalidateBuiltCastlesCache();
       saveField('isCastleRoot', v.isCastleRoot);
       saveField('castleName', v.castleName);
       saveField('castleOwner', v.castleOwner);
@@ -3967,16 +3976,27 @@ function openThreeTestAssets(){
    for the lifetime of the current page load. A plain module-level variable
    is enough: it's always empty right after a browser refresh (no separate
    "clear on startup" step needed), and invalidateBuiltCastlesCache() is
-   called explicitly at every write path that can add, move, or remove a
-   room -- setStandardResponse (both copies: renderBranch/renderBlackRoot),
-   importLine (paste-import writes standard responses the same way), and
-   addManualReply/removeManualReply (a manual opponent try can open or close
-   an exit) -- plus importBackup's full restore, which can swap in a
-   different user's repertoire entirely. This deliberately does NOT cover
-   every PREFS write (renaming a room, a note, hiding a branch, an engine
-   eval, etc. don't change castle structure and are left uncached-through);
-   if a future write path turns out to change room/exit shape too, a full
-   browser refresh remains the always-available fallback to force a rebuild. */
+   called explicitly at every write path that can add, move, remove, or
+   relabel a room:
+     - setStandardResponse (both copies: renderBranch/renderBlackRoot)
+     - importLine (paste-import writes standard responses the same way)
+     - addManualReply/removeManualReply (a manual opponent try can open or
+       close an exit)
+     - the Attributes modal's save (both copies) -- isCastleRoot/castleName/
+       castleStreetNumber reshape street layout, and the room name feeds VR
+       room labels
+     - makeRoomRenamer (the in-VR rename callback -- same room-name field,
+       written from inside the walk instead of the move table)
+     - hideBtn's toggle (both copies) -- hidden/shown changes which opponent
+       replies are visible, i.e. which exits/rooms exist
+     - importBackup's full restore, which can swap in a different user's
+       repertoire entirely
+   Deliberately still NOT covering every PREFS write -- a note, an engine
+   eval, move-quality, castleOwner (display-only) etc. don't change castle
+   structure or its VR-visible labels, so they're left uncached-through. If
+   a future write path turns out to change room/exit shape or labels too, a
+   full browser refresh remains the always-available fallback to force a
+   rebuild. */
 let _builtCastlesCache = null;
 function invalidateBuiltCastlesCache(){ _builtCastlesCache = null; }
 async function gatherBuiltCastles(lines){
