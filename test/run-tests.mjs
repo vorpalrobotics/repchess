@@ -4767,5 +4767,98 @@ try {
   await appAZ.close();
 }
 
+// --- Phase BA: the gatherBuiltCastles cache now persists to IndexedDB (not
+//     just an in-memory, refresh-loses-it cache), and "Run VR" gained a
+//     Shift+click/right-click gesture to force a fresh rebuild even when a
+//     valid cached copy (memory or persisted) already exists. ---
+const appBA = await launchApp();
+try {
+  await seedBackup(appBA.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+  });
+  const state = () => appBA.page.evaluate(async () => ({
+    isCached: window.__vrCacheTestHooks.isCached(),
+    isPersisted: await window.__vrCacheTestHooks.isPersisted(),
+    buildCount: window.__vrCacheTestHooks.buildCount(),
+  }));
+  const closeVR = async () => {
+    await appBA.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appBA.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+
+  // 169. First open: cache miss, one real build, persisted to IndexedDB.
+  try {
+    const before = await state();
+    assert(!before.isCached && !before.isPersisted && before.buildCount === 0,
+      `expected a clean slate before the first open, got ${JSON.stringify(before)}`);
+    await openVR(appBA.page);
+    const after = await state();
+    assert(after.isCached && after.isPersisted && after.buildCount === 1,
+      `expected the first open to build once and persist, got ${JSON.stringify(after)}`);
+    ok('VR cache: first open builds once and persists to IndexedDB');
+    await closeVR();
+  } catch(e){ bad('VR cache: first open builds and persists', e); }
+
+  // 170. Reloading the page (simulating a browser refresh) clears the
+  //      in-memory cache but NOT the persisted one -- the next open reuses
+  //      the persisted data instead of rebuilding. This is the key
+  //      behavior change: the cache used to be memory-only and always lost
+  //      on refresh.
+  try {
+    await appBA.page.reload();
+    await appBA.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    const justAfterReload = await state();
+    assert(!justAfterReload.isCached && justAfterReload.isPersisted && justAfterReload.buildCount === 0,
+      `expected memory cache empty but IDB still populated right after reload, got ${JSON.stringify(justAfterReload)}`);
+    await openVR(appBA.page);
+    const afterReopen = await state();
+    assert(afterReopen.isCached && afterReopen.buildCount === 0,
+      `expected the post-reload open to reuse the persisted cache (no rebuild), got ${JSON.stringify(afterReopen)}`);
+    ok('VR cache: survives a reload by reading the persisted copy instead of rebuilding');
+  } catch(e){ bad('VR cache: survives reload', e); }
+
+  // 171. Shift+click on "Run VR" forces a rebuild even though a valid
+  //      (persisted) cache already exists. Waits on buildCount directly
+  //      rather than window.__threeTestEdit, which is set once and never
+  //      cleared on close -- on a re-open it would resolve instantly on
+  //      stale truthy state, racing ahead of the actual rebuild (a real
+  //      race found and fixed the same way in an earlier phase).
+  try {
+    const before = await state();
+    assert(before.isCached, 'setup: expected a cache to already exist before testing the force gesture');
+    await appBA.page.evaluate(() => {
+      document.getElementById('menuThreeTest')
+        .dispatchEvent(new MouseEvent('click', { shiftKey: true, bubbles: true }));
+    });
+    await appBA.page.waitForFunction((expected) => window.__vrCacheTestHooks.buildCount() === expected,
+      before.buildCount + 1, { timeout: 20000 });
+    ok('VR cache: Shift+click on "Run VR" forces a fresh rebuild despite a valid cache');
+    await closeVR();
+  } catch(e){ bad('VR cache: Shift+click forces rebuild', e); }
+
+  // 172. Right-click on "Run VR" does the same thing.
+  try {
+    const before = await state();
+    await appBA.page.evaluate(() => {
+      document.getElementById('menuThreeTest')
+        .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    await appBA.page.waitForFunction((expected) => window.__vrCacheTestHooks.buildCount() === expected,
+      before.buildCount + 1, { timeout: 20000 });
+    ok('VR cache: right-click on "Run VR" forces a fresh rebuild despite a valid cache');
+  } catch(e){ bad('VR cache: right-click forces rebuild', e); }
+} finally {
+  await appBA.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-133';
+const BUILD_TAG = '-134';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4045,12 +4045,13 @@ function openThreeTestAssets(){
    {lineId, castleName, streetNumber, instanceId, genRooms}[] for street layout.
 
    This rebuild is the dominant cost of opening VR, and it doesn't change
-   between opens unless the repertoire itself does -- so the result is cached
-   for the lifetime of the current page load. A plain module-level variable
-   is enough: it's always empty right after a browser refresh (no separate
-   "clear on startup" step needed), and invalidateBuiltCastlesCache() is
-   called explicitly at every write path that can add, move, remove, or
-   relabel a room:
+   between opens unless the repertoire itself does -- so the result is
+   cached both in memory (for repeat opens within the same page load) and
+   persisted to IndexedDB (meta key BUILT_CASTLES_CACHE_KEY, so it also
+   survives a browser refresh -- previously the cache was memory-only and
+   unconditionally lost on every reload). invalidateBuiltCastlesCache()
+   clears both layers together and is called explicitly at every write path
+   that can add, move, remove, or relabel a room:
      - setStandardResponse (both copies: renderBranch/renderBlackRoot)
      - importLine (paste-import) and importEngineVariation (the three-dot
        "Import this variation" menu on a saved eval's PV) -- both write
@@ -4081,19 +4082,42 @@ function openThreeTestAssets(){
    don't change castle structure or anything VR-visible, so they're left
    uncached-through. Mnemonic words/images on VR billboards are read through
    a separate cache that's unconditionally refreshed on every VR open, so
-   they were never part of this staleness problem. If a future write path
-   turns out to change room/exit shape or VR-visible content too, a full
-   browser refresh remains the always-available fallback to force a
-   rebuild. */
+   they were never part of this staleness problem.
+
+   IMPORTANT: because the cache now survives a refresh, a plain browser
+   reload is NOT an escape hatch for a write path this list doesn't cover
+   (it was, back when the cache was memory-only). The escape hatch is now
+   the "Run VR" menu item itself: Shift+click or right-click it to force a
+   fresh rebuild (see menuThreeTest's own wiring), which also re-persists
+   the fresh result so subsequent opens/reloads pick it up too. */
+const BUILT_CASTLES_CACHE_KEY = 'builtCastlesCache';
 let _builtCastlesCache = null;
+let _builtCastlesIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
+let _builtCastlesBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
 function invalidateBuiltCastlesCache(){
   _builtCastlesCache = null;
+  _builtCastlesIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
+  setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
 }
 async function gatherBuiltCastles(lines){
   if(_builtCastlesCache){
-    console.log('[VR] gatherBuiltCastles: cache hit, 0ms');
+    console.log('[VR] gatherBuiltCastles: cache hit (memory), 0ms');
     return _builtCastlesCache;
+  }
+  // the persisted copy is checked at most once per page load -- once we know
+  // one way or the other, _builtCastlesCache itself (null or populated) is
+  // authoritative and this branch is skipped from then on.
+  if(!_builtCastlesIdbChecked){
+    _builtCastlesIdbChecked = true;
+    try {
+      const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
+      if(raw){
+        _builtCastlesCache = JSON.parse(raw);
+        console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
+        return _builtCastlesCache;
+      }
+    } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
   }
   const t0 = performance.now();
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
@@ -4126,6 +4150,8 @@ async function gatherBuiltCastles(lines){
     }
   });
   _builtCastlesCache = out;
+  _builtCastlesBuildCount++;
+  setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify(out));   // fire-and-forget: persist across reloads
   console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
   return out;
 }
@@ -4136,7 +4162,10 @@ async function gatherBuiltCastles(lines){
 // modal can drive the same flow, landing directly on startRoomKey instead of
 // Main Street, when the room wasn't already reachable via jumpToRoom's fast
 // path (VR not open yet, or open but missing that room's castle).
-async function openMainVRWorld(startRoomKey){
+// forceRebuild bypasses (and re-persists) the gatherBuiltCastles cache --
+// menuThreeTest's own Shift+click/right-click gesture sets it; "Jump to VR"
+// never does, so that path stays on the normal cache-aware behavior.
+async function openMainVRWorld(startRoomKey, forceRebuild){
   const spinner = showSpinner('Building world…');
   let systems = [], castles = [];
   try {
@@ -4146,6 +4175,7 @@ async function openMainVRWorld(startRoomKey){
     // built castle so each one appears as a building on its system's street.
     const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
     systems = await systemsForWalk(lines);
+    if(forceRebuild) invalidateBuiltCastlesCache();
     castles = await gatherBuiltCastles(lines);
   } finally {
     hideSpinner(spinner);
@@ -4161,10 +4191,19 @@ async function openMainVRWorld(startRoomKey){
     onAssets: openThreeTestAssets
   });
 }
-$('menuThreeTest').onclick = async ()=>{
+// Shift+click or right-click forces a fresh rebuild even when a cached world
+// (memory or persisted) already exists -- the escape hatch for any
+// repertoire edit that isn't one of gatherBuiltCastles's known invalidation
+// paths, now that the cache survives a plain browser refresh.
+$('menuThreeTest').onclick = async (e)=>{
   $('menuList').style.display='none';
-  await openMainVRWorld();
+  await openMainVRWorld(undefined, e.shiftKey);
 };
+$('menuThreeTest').addEventListener('contextmenu', async (e)=>{
+  e.preventDefault();
+  $('menuList').style.display='none';
+  await openMainVRWorld(undefined, true);
+});
 
 /* ---------- asset manager ---------- */
 $('menuAssets').onclick = ()=>{
@@ -6593,12 +6632,15 @@ if(localStorage.getItem('threeTestDebug')){
   };
 }
 
-// test-only hook for the gatherBuiltCastles in-memory cache, so a test can
-// confirm a second "Run VR" reuses the cached result (no rebuild) and that
-// importBackup's restore correctly drops it.
+// test-only hook for the gatherBuiltCastles in-memory + persisted cache, so
+// a test can confirm a second "Run VR" reuses the cached result (no
+// rebuild), that the cache survives a reload, and that importBackup's
+// restore (and everything else) correctly drops it.
 if(localStorage.getItem('threeTestDebug')){
   window.__vrCacheTestHooks = {
     isCached: () => _builtCastlesCache !== null,
+    isPersisted: async () => !!(await getMeta(BUILT_CASTLES_CACHE_KEY)),
+    buildCount: () => _builtCastlesBuildCount,
     invalidate: () => invalidateBuiltCastlesCache(),
     // direct calls into the manual-reply write path (same functions the
     // row menu's "Add opponent's move" / "Remove" actions call), so cache
