@@ -5,13 +5,20 @@ network-blocked. There is a committed offline harness that fixes this. Use it to
 *actually run* VR/app changes instead of only syntax-checking them.
 
 ```sh
-cd test && npm install && npm test        # → "4 passed, 0 failed"
+cd test && npm install && npm test        # 150+ tests, phases A.. onward
 ```
 
 This document is the "why and how"; [`test/README.md`](../test/README.md) is the
 quick reference. If you change VR/world behavior, **run this harness before you
 claim it works** — a green `node --check` says nothing about whether the world
 renders.
+
+**Before deciding how much of the suite to run for a given change**, read
+[`../test/TESTING_POLICY.md`](../test/TESTING_POLICY.md) — a tiered policy
+scoped to the size/risk of the change (a constant tweak needs no run at all;
+a shared/core change may justify two full runs). Don't default to a full
+run + revert + rerun + reapply + rerun cycle for every change regardless of
+size; that's the exact pattern the policy exists to retire.
 
 ---
 
@@ -87,6 +94,31 @@ Inspect the running world through the app's built-in debug hook
 | `toggle()` | flip edit mode |
 | `target(ud)` | drive the edit-target path (select a prop by its userData) |
 | `teleport(x,z,yaw)` / `pos()` | move / read the player |
+| `memorized()` / `setMemorized(key,val)` | read/seed the 🧠 memorized-room flag without clicking the toolbar icon |
+| `decorated()` / `setDecorated(key,val)` / `evaluateDecorated()` | same, for the "fully decorated" 🎨 flag |
+| `isRoomEmpty(key)` | the locked-door "nothing built past here" check for a target room |
+| `jumpToRoom(key)` | the fast-path teleport "Jump to VR" uses |
+
+`__threeTestEdit` covers the 3D world specifically. As features accumulated,
+each grew its own narrowly-scoped hook (all gated behind the same
+`threeTestDebug` flag, all defined near the feature they test) rather than
+piling more onto one giant object — check near the feature's own code for
+the exact shape before writing a test against it:
+
+| Hook | Covers |
+|---|---|
+| `window.__statsTestHooks` | `computeNodeStats` (Node Statistics / "complete to move N") |
+| `window.__graphTestHooks` | the transposition-graph cytoscape instance and its own memorized/decorated setters |
+| `window.__vrCacheTestHooks` | the `gatherBuiltCastles` in-memory cache — `isCached()`, `invalidate()`, plus direct calls into a couple of write paths |
+| `window.__aqTestHooks` | the background analysis queue |
+| `window.__oqTestHooks` | the opening quiz session |
+| `window.__evalTestHooks` | saved/live engine evaluations |
+| `window.__cropTestHooks` | the crop/erase image editor |
+| `window.__miniBoardGridHtml` | the mini-board grid markup (VR toolbar icon, room-info modal) |
+
+Grep `window.__` in `js/app.js`/`js/threeVR.js` for the current, authoritative
+list — this table will drift as features are added; treat it as a starting
+point, not ground truth.
 
 Also available: `window.__threeTestState` = `{room, x, z, y, yaw, editMode}`,
 updated every frame.

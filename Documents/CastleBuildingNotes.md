@@ -4,11 +4,29 @@ Design considerations for how "rooms" in the Opening Graph / memory-palace
 castle should be structured, captured from discussion so they can be
 revisited when building room-decoration features.
 
-The **room model** below (hallways vs. doors, feature-vs-door classification,
-blunder marking) is still *intent* — the castle-graph generator that would
-apply it is not built yet. However, a set of room-decoration and navigation
-features **are now built and shipped** in the standalone Three.js walking
-prototype (`js/threeVR.js`); those are documented in
+**Status update:** the **hallways-vs-doors half of the room model is now
+built and shipped.** `buildGeneratedCastle`/`analyzeCastleStructure`
+(`js/app.js`) automatically walk the move tree and collapse forced
+(single-reply) chains into one corridor room, pack up to two such runs onto
+a room's left/right walls (a "two-track" room), and leave real branch
+points as doors — exactly the "one room per real decision point" rule
+below. This is fully **automatic structural detection** (based on each
+node's in-/out-degree), not a per-move manual override: there is no UI to
+force a given opponent reply to stay a "feature" vs. become a "door".
+(`CastleDataModel.md`'s proposed `classification` field never got wired to
+any UI — it's checked in one dead code path and can't actually be set.) See
+`LinearSequencesAndRoomObjects.md` for the full design and its own updated
+status.
+
+**Still not built:** the **blunder-marking half** (flagging a specific
+reply as a known non-obvious trap, with a visual marker like a dunce cap) —
+`PREFS`'s `blunderTrap` field is referenced in one dead check the same way
+`classification` is, but nothing in the UI ever sets it. The room model
+below for that piece is still pure intent.
+
+A separate set of room-decoration and navigation features **are also built
+and shipped**, but in the standalone Three.js walking prototype
+(`js/threeVR.js`) rather than the generator — those are documented in
 "[Implemented in the walking prototype](#implemented-in-the-walking-prototype-jsthreetestjs)"
 near the end of this file.
 
@@ -170,18 +188,20 @@ palace can be walked as a recall **self-test**:
 - **Doors** are skinnable per doorway, and inherit the building's
   `door`/`exitDoor` default when not individually overridden.
 
-(See `CastleDataModel.md` for how these same concepts are expected to be keyed
-in the eventual generated-castle data model.)
+(See `CastleDataModel.md` for how these same concepts are keyed in the
+generated-castle data model, and where the shipped implementation differs
+from that original proposal.)
 
-## Summary of the room model (target, not yet built)
+## Summary of the room model
 
-| Situation | Representation |
-|---|---|
-| Forced sequence, no real choice for several plies | One room = a hallway; each forced ply-pair hangs on a room feature (picture/statue/furniture) in sequence |
-| Real branch point (room has 2+ meaningfully different replies that lead to different sub-trees) | One door per branch, each door leading out to its own room/leaf |
-| Shallow branch: one main reply + one non-obvious blunder/trap reply, nothing else | Both can be room features instead of doors (e.g. right-side coat of arms for the right move, left-side fireplace for the blunder) — avoids spawning a room just for a single throwaway reply |
-| A move that is a known blunder/trap-trigger | Its feature's image gets a visual marker (e.g. dunce cap) to flag it as a blunder rather than a normal line |
+| Situation | Representation | Status |
+|---|---|---|
+| Forced sequence, no real choice for several plies | One room = a corridor (hallway); each forced ply-pair gets a numbered move-object slot (`L1`/`R1`, …) along the wall | **Built** — `analyzeCastleStructure`'s run detection |
+| Real branch point (room has 2+ meaningfully different replies that lead to different sub-trees) | One door per branch, each door leading out to its own room/leaf | **Built** |
+| Shallow branch: exactly two outgoing replies, each itself a run head | Both walls packed into one "two-track" room (left/right) instead of separate rooms with doors | **Built** — a side effect of the same general two-track packing rule, not specifically "blunder" detection |
+| A move that is a known blunder/trap-trigger | A visual marker (e.g. dunce cap) on its slot to flag it as a blunder rather than a normal line | **Not built** — no UI sets `blunderTrap`; the field is checked but unreachable |
 
-No features for any of this are being requested yet — this file exists so
-these considerations can be re-read later when actually designing the
-room-decoration/editing UI.
+The first three rows are automatic and structural — there's no way to force
+a given reply to stay a room feature vs. become a door, or vice versa. Only
+the blunder-marking row remains open design intent; re-read it when
+actually designing that UI.
