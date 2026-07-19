@@ -9,11 +9,39 @@ memorizing a real sequence (Shakespeare's plays, in a single room of a house):
    our response) is pegged to a specific object in the room, not just floated
    near a billboard.
 
-Status: **design intent, not yet built.** This refines, and should be read
-alongside, `CastleBuildingNotes.md` (the "hallways vs. doors" room model) and
-`CastleDataModel.md` (the position-keyed persistence plan). Nothing here is
-shipped yet; the run-boxing in the network graph and the object-association
-edit UX are both designed-and-ready, not coded.
+Status: **mostly built.** This refines, and should be read alongside,
+`CastleBuildingNotes.md` (the "hallways vs. doors" room model) and
+`CastleDataModel.md` (the position-keyed persistence plan). What shipped,
+section by section:
+
+- **§1 Linear sequences (runs)** — **built**, as designed. `analyzeCastleStructure`
+  (`js/app.js`) detects runs by exactly the rule below (out-degree 1, target
+  a room not a leaf, target in-degree 1), and boxes them in the network
+  graph via cytoscape compound (parent) nodes, same as proposed.
+- **§2 Rooms hold linear sequences (packing)** — **built**, as "two-track"
+  rooms: a node with exactly two children that are each themselves a run
+  head gets both runs packed onto left/right walls of one room instead of
+  two separate rooms. Layout scaling (room length ~ run length), mid-wall
+  doors, and uneven left/right side lengths all work as described.
+- **§3 Identity: two layers** — **built** almost exactly as specified: room
+  identity is a stable position key (`posKeyByGid` → `castleRoomKey`),
+  independent of the `R#` numbering, so decorations survive regeneration;
+  detection is derived/advisory the way this section anticipates.
+- **§4 Maintenance when a run breaks** — the **detection half is built**
+  (adding a reply that splits a run re-boxes automatically on next
+  regenerate). The **"pin-and-annex" half is not**: there's no way to lock
+  an already-memorized room against being reshaped by a future
+  regeneration. Today every regeneration is unconditional "re-flow"; the
+  `MEMORIZED` 🧠 flag is a manual progress marker only, with no effect on
+  structure. See `CastleDataModel.md`'s "Explicitly deferred" section.
+- **§5 Move-pair ↔ object association** — **built**: numbered placeholder
+  slots (`obj-L1`, `obj-R1`, …), the Choose Asset picker to fill them,
+  clear-to-restore-placeholder, and the hints-toggle hiding placeholders
+  alongside billboards while keeping filled objects visible. **Not built:**
+  the **leash clamp** — a placed object can currently be nudged freely, not
+  clamped to a radius around its billboard anchor (there's a code comment
+  marking this as still-future: "a future leash will clamp it near its
+  billboard").
 
 ---
 
@@ -237,11 +265,16 @@ billboard), with no data link. Make it real.
 
 ## Open items / to refine after a feel test
 
-- True room count under two-runs-per-room packing (and the constraint that a
-  branch spawning 3+ runs can't fit them all on two walls of its room).
+- ~~True room count under two-runs-per-room packing~~ — **resolved**: the
+  network graph's status line reports it directly (`analyzeCastleStructure`'s
+  `twoTrackCount`/`twoTrackCollapsed`, shown as "N two-track pair(s)").
 - Spacing/scale of billboards + objects in long corridors so objects don't
-  overlap.
-- Leash radius tuning; soft vs. hard clamp.
-- Whether two converging runs should ever share a single exit door.
+  overlap — addressed via the `CAS_LAYOUT` constants (`entrySetback`,
+  `centerAhead`, `sideFirst`, `sideStride`) in `js/threeVR.js`; whether the
+  current values hold up on very long runs hasn't been specifically stress-tested.
+- Leash radius tuning; soft vs. hard clamp — still open, blocked on the
+  leash itself not being built yet (see §5's status above).
+- Whether two converging runs should ever share a single exit door — still open.
 - Re-flow vs. pin-and-annex selection (per-castle "locked" flag, or implicit via
-  stable decoration keys).
+  stable decoration keys) — still open; today there is only re-flow (see §4's
+  status above).

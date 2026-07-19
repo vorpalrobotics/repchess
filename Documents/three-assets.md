@@ -2,9 +2,28 @@
 
 Design for how art assets get into the Three.js walking prototype
 (`js/threeVR.js`) without hand-coding primitive geometry per object, the
-way `FURNITURE_BUILDERS` (table/chair/chest) does today. Nothing in this
-file is implemented yet — it's the agreed plan so a future agent can pick
-it up without re-deriving it.
+way the legacy `FURNITURE_BUILDERS` (table/chair/chest — still present,
+unconverted) does.
+
+**Status: the core idea shipped, but the delivery mechanism differs from
+what's proposed below.** The size/skin/side-color/repeat-density concepts
+all made it in, and the prop-type split (discrete object vs. tileable
+surface vs. one-shot facade) is exactly what's implemented. Two concrete
+differences from the original proposal:
+
+- **No static PNG+JSON file pairs.** Assets aren't authored as files
+  checked into the repo — they're uploaded, AI-generated, or cropped
+  through an in-app **Asset Manager** (`getAllAssets`/`setAsset`,
+  IndexedDB-backed) with the resolution tier picked at import time, per
+  the "Import resolution" section below (that section describes shipped
+  behavior, not a plan). There's no `assets/three/props/` directory.
+- **The `box` prop type is called `extruded` in the shipped code**
+  (`PROP_TYPES = ['extruded', 'billboard-cylindrical', 'billboard-sprite']`
+  in `js/threeVR.js`) — same concept (one skinned face + a flat-colored
+  side), different name. `billboard-cylindrical` and `billboard-sprite`
+  shipped under their proposed names, as did `surface` (`repeatPerMeter`)
+  and `facade` (one-shot, whole-building-front texture, wired into
+  `buildingFacadeFor`).
 
 ## The core idea
 
@@ -237,13 +256,10 @@ not a new one.
 
 ## Open items (decide when actually implementing)
 
-- Where asset files live — likely `assets/three/props/` and
-  `assets/three/surfaces/`, mirroring the existing
-  `assets/three/textures/` used for facade images.
-- Whether `box` needs a per-face color/skin map beyond `"front"` /
-  `"front+top"` before any real multi-sided prop is authored, or whether
-  to wait until one is actually needed.
-- Whether `fit: "stretch" | "contain"` is worth adding to `box`/billboard
-  types, or whether aspect-ratio discipline at image-generation time is
-  sufficient (current bet: discipline is sufficient until proven
-  otherwise).
+- ~~Where asset files live~~ — **moot**: assets live in IndexedDB via the
+  Asset Manager, not as files, so this question no longer applies.
+- Whether `extruded` (proposed as `box`) needs a per-face color/skin map
+  beyond a single skinned face, or whether to wait until a real multi-sided
+  prop is actually authored — still open; hasn't come up in practice yet.
+- Whether `fit: "stretch" | "contain"` is worth adding — still open;
+  aspect-ratio discipline at generation/crop time has been sufficient so far.

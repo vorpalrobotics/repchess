@@ -1,12 +1,15 @@
 # Micro-Environments — Design Notes
 
-Status: **early-stage notes for future reference, not yet implemented and
-not yet scheduled**. This document captures a memory-palace extension
-concept so it doesn't get lost, and offers an initial evaluation. Priority
-right now is finishing regular room-based castles end to end
-(`CastleBuildingNotes.md`, `CastleDataModel.md`) before any of this is
-built. Nothing here changes `buildCastleGraph`, the exit/feature schema,
-or any shipped behavior.
+Status: **early-stage notes for future reference, still not implemented and
+not scheduled**. This document captures a memory-palace extension concept
+so it doesn't get lost, and offers an initial evaluation. This was written
+when regular room-based castles (the generator, hallways-vs-doors, linear
+runs, move-object slots) were still unbuilt prerequisite work; that part
+has since substantially shipped (see the updated status notes in
+`CastleBuildingNotes.md`, `CastleDataModel.md`, and
+`LinearSequencesAndRoomObjects.md`), but this micro-environment extension
+itself remains unbuilt and unscheduled — nothing here changes
+`buildCastleGraph`, the exit/feature schema, or any shipped behavior.
 
 ## The concept
 

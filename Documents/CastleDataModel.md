@@ -1,19 +1,34 @@
 # Castle Data Model — Design Proposal
 
-Status: **proposal for the generated-castle data model — not yet implemented
-here**. This document specifies the data shapes for turning the Opening Graph
-into a navigable, decorated memory-palace castle (see `CastleBuildingNotes.md`
-for the underlying mnemonic-design considerations this builds on). Nothing here
-changes `buildCastleGraph`, the room-info click panel, or any other shipped
-behavior yet — this is the target schema to implement against.
+Status: **the generator this document proposed now exists and is shipped**
+(`buildGeneratedCastle`/`buildCastleGraph`/`analyzeCastleStructure` in
+`js/app.js`, feeding `registerOneCastle` in `js/threeVR.js`). The core shape
+below — Layer 1 structural, Layer 2 position-keyed decoration, Layer 3 a
+shared asset catalog — is right, and Layer 2's room identity
+(`roomKey = positionKey(fen)`, surviving regeneration) is exactly what
+shipped. Two things did **not** ship the way this document originally
+proposed:
 
-> **Note:** the standalone Three.js walking prototype (`js/threeVR.js`)
-> already implements several of these concepts — room names, per-building
-> surface defaults, named presets, elevators, stairs/door skinning, and a
-> hints/self-test toggle — against its own `ROOMS`/`LAYOUT` structures. Their
-> concrete shapes are recorded in
-> "[Already implemented in the walking prototype](#already-implemented-in-the-walking-prototype-jsthreetestjs)"
-> below so the mapping into this model is explicit.
+- **No `classification` field.** The door-vs-hallway-feature decision (Layer
+  2's central design point below) is **fully automatic** — `analyzeCastleStructure`
+  derives it from each node's in-/out-degree (see `LinearSequencesAndRoomObjects.md`,
+  now also mostly built) — not a stored per-edge property with an `"auto" |
+  "feature" | "exit"` override. There is no UI to pin a reply's
+  classification; `saved.classification` is checked in one dead code path
+  (`computeCompactRun`'s "annotated" guard) and can't actually be set.
+- **The asset catalog is a live, uploaded library, not static files.** Rather
+  than authored `assetId`-tagged catalog entries checked into the repo, the
+  shipped asset system is an in-app **Asset Manager** (`getAllAssets`/
+  `setAsset`, IndexedDB-backed) that users upload/generate/crop images into
+  directly, with resolution tiers picked at import time. See `three-assets.md`
+  for how that pipeline's own proposal compares to what actually shipped.
+
+The exit-type vocabulary below (`door` / `stairsUp` / `stairsDown` /
+`elevator` / `portal`) is **not** how the generator's own doors work today —
+generated-castle exits are plain doors (or locked "?" leaves); the richer
+exit types remain specific to the hand-authored walking prototype described
+below. Everything under "Already implemented in the walking prototype"
+remains accurate as a description of that separate, hand-authored system.
 
 ## Three layers
 
@@ -268,11 +283,15 @@ for the user-facing behavior.
 
 ## Explicitly deferred (not part of this proposal)
 
-- Actual Three.js scene construction, asset loading, and rendering.
-- The real contents of the asset catalog (specific textures/models).
-- Reworking `buildCastleGraph` / the room-info click panel to actually
-  walk `feature`-classified edges into multi-ply hallways instead of
-  one-room-per-position. Today every position still gets its own room;
-  this document defines the target shape that change will produce.
-- UI for editing/overriding `classification`, assigning features to
-  slots, or picking assets by hand.
+- ~~Reworking `buildCastleGraph` to walk forced runs into multi-ply
+  hallways instead of one-room-per-position.~~ **Done** — see the status
+  note at the top of this document and `LinearSequencesAndRoomObjects.md`.
+- UI for picking assets by hand (the Choose Asset picker) and assigning
+  them to move-object slots — **done**. UI for overriding `classification`
+  — still not built, and given the automatic detection above, may not be
+  needed.
+- Still open: a room-level "pin" against a future regeneration reshuffling
+  an already-memorized room's structure (`LinearSequencesAndRoomObjects.md`
+  section 4's "pin-and-annex" idea) — regeneration is always full re-flow
+  today. The `MEMORIZED` 🧠 flag is purely a manual progress marker; it has
+  no effect on regeneration.
