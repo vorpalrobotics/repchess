@@ -4643,5 +4643,129 @@ try {
   await appAY.close();
 }
 
+// --- Phase AZ: importing a variation (paste-import, engine-variation import,
+//     and a local game-file import) no longer discards a focused variation --
+//     these paths refresh the ALREADY-open line via renderTreeBody, which
+//     re-applies the saved focus, instead of openLine, which unconditionally
+//     cleared it (the reported bug: "importing a line from analysis" blowing
+//     focus back out to all variations). Each case focuses a sibling row
+//     first (hiding the OTHER top-level reply), imports, then confirms the
+//     other reply is still hidden and the Unfocus button is still shown. ---
+const appAZ = await launchApp();
+try {
+  const isFocused = () => appAZ.page.evaluate(() => ({
+    unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+    d5Hidden: document.querySelector('tr.data-row[data-seq="d4,d5"]')?.classList.contains('focus-hidden'),
+  }));
+  const focusOnNf6 = async () => {
+    await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="focus"]').click());
+    const f = await isFocused();
+    assert(f.unfocusShown && f.d5Hidden, `setup: expected focusing d4,Nf6 to hide d4,d5, got ${JSON.stringify(f)}`);
+  };
+
+  // 166. "Import this variation" from a saved eval's PV (the bug as
+  //      originally reported) preserves focus.
+  try {
+    const midFen = await appAZ.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['d4','Nf6']) c.move(m, { sloppy: true });
+      return c.fen();
+    });
+    await seedBackup(appAZ.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], eval: { type: 'cp', value: 35, depth: 20, pv: '2.c4 e6', pvFen: midFen, pvUci: ['c2c4','e7e6'] } },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
+      ],
+    });
+    await appAZ.page.click('.line-row');
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await focusOnNf6();
+
+    await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .evaltag').click());
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"] + tr.meta-row .meta-pv-menu', { timeout: 5000 });
+    await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] + tr.meta-row .meta-pv-menu').click());
+    await appAZ.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    await appAZ.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    await appAZ.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
+    }, { timeout: 10000 });
+
+    const f = await isFocused();
+    assert(f.unfocusShown && f.d5Hidden,
+      `expected focus to survive "Import this variation" from a saved eval, got ${JSON.stringify(f)}`);
+    ok('focus survives "Import this variation" from a saved eval\'s PV (the reported bug)');
+  } catch(e){ bad('focus preserved: import engine variation from saved eval', e); }
+
+  // 167. Paste-import (the "Import Variation(s)" menu) preserves focus too.
+  try {
+    await seedBackup(appAZ.page, {
+      version: 6, user: 'tester2',
+      lines: [{ id: 'L2', name: 'Test2', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
+      ],
+    });
+    await appAZ.page.click('.line-row');
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await focusOnNf6();
+
+    await appAZ.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appAZ.page.fill('#importLineInput', '1. d4 Nf6 2. c4');
+    await appAZ.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appAZ.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
+    }, { timeout: 10000 });
+
+    const f = await isFocused();
+    assert(f.unfocusShown && f.d5Hidden,
+      `expected focus to survive paste-import, got ${JSON.stringify(f)}`);
+    ok('focus survives paste-import ("Import Variation(s)")');
+  } catch(e){ bad('focus preserved: paste-import', e); }
+
+  // 168. Importing a local game file (re-running the currently open line
+  //      against the freshly-imported games) preserves focus too.
+  try {
+    await seedBackup(appAZ.page, {
+      version: 6, user: 'tester3',
+      lines: [{ id: 'L3', name: 'Test3', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
+      ],
+    });
+    await appAZ.page.click('.line-row');
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await focusOnNf6();
+
+    const ndjson = [
+      { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' },
+    ].map(g => JSON.stringify(g)).join('\n');
+    await appAZ.page.setInputFiles('#fileImport', {
+      name: 'games.ndjson', mimeType: 'application/x-ndjson', buffer: Buffer.from(ndjson),
+    });
+    await appAZ.page.waitForFunction(() => {
+      const cnt = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4"]');
+      return !!cnt || document.querySelectorAll('tr.data-row').length > 0;
+    }, { timeout: 10000 });
+
+    const f = await isFocused();
+    assert(f.unfocusShown && f.d5Hidden,
+      `expected focus to survive a local game-file import, got ${JSON.stringify(f)}`);
+    ok('focus survives importing a local game file');
+  } catch(e){ bad('focus preserved: local game-file import', e); }
+} finally {
+  await appAZ.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

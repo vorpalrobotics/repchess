@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-131';
+const BUILD_TAG = '-132';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3088,7 +3088,10 @@ $('fileImport').addEventListener('change', async e=>{
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
   clr();
-  if(CURRENT_LINE) openLine(CURRENT_LINE);  // re-run automatically
+  // renderTreeBody (not openLine) -- this re-renders the ALREADY-open line
+  // from the freshly-updated GAMES; openLine would also call clearFocus(),
+  // silently discarding whatever variation the user had focused.
+  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
 });
 
 /* ---------- home screen: list of lines ---------- */
@@ -3169,6 +3172,11 @@ function refreshLineStreetName(){
   $('lineStreetName').textContent = CURRENT_LINE ? streetNameForLine(CURRENT_LINE) : '';
 }
 
+/* navigates to (and fully loads) an opening system -- always clears any
+   focused-variation view, appropriately, since this is a fresh navigation.
+   To re-render the line that's ALREADY open after a background write
+   (import, download), call renderTreeBody(CURRENT_LINE) directly instead --
+   see its own doc comment. */
 async function openLine(line){
   CURRENT_LINE = line;
   $('homeScreen').style.display='none';
@@ -3206,7 +3214,13 @@ async function openLine(line){
 /* (re)builds the move tree for `line` from the already-loaded GAMES/PREFS,
    without re-fetching either — used by openLine on first load, and again
    whenever a toggle (visibility, compact mode) changes which rows the tree
-   should show, since GAMES/PREFS are already in memory at that point. */
+   should show, since GAMES/PREFS are already in memory at that point. Also
+   the right call for re-rendering the ALREADY-open line after a background
+   write (paste-import, engine-variation import, a local/downloaded game
+   import) that already updated GAMES/PREFS in memory itself -- call this
+   directly rather than openLine(CURRENT_LINE) for that, since openLine
+   also unconditionally clears the focused-variation view, which would
+   otherwise discard it for no reason on every one of those refreshes. */
 function renderTreeBody(line){
   // wiping the tree orphans the focus DOM, so remember which row was focused and
   // re-apply it to the freshly-built row afterwards (keeps the focused view and
@@ -3334,7 +3348,11 @@ async function importLine(text){
     log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
       + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
     if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
-    await openLine(CURRENT_LINE);
+    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
+    // the freshly-imported PREFS (already updated in memory by
+    // importParsedLine); openLine would also call clearFocus(), silently
+    // discarding whatever variation the user had focused before importing.
+    renderTreeBody(CURRENT_LINE);
   } else {
     $('importLineError').textContent = errors.join('\n');
   }
@@ -3554,7 +3572,10 @@ $('dlBtn').onclick = async ()=>{
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
-    if(CURRENT_LINE) await openLine(CURRENT_LINE);
+    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
+    // the freshly-updated GAMES; openLine would also call clearFocus(),
+    // silently discarding whatever variation the user had focused.
+    if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
     else await renderHome();
   }catch(e){ console.error('[dlBtn] import failed',e); logDl(e.message,true); }
 };
@@ -6363,7 +6384,12 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
     const count = await importParsedLine([...startSeq, ...pv]);
     if(count) invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
-    await openLine(CURRENT_LINE);
+    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
+    // the freshly-imported PREFS (already updated in memory by
+    // importParsedLine); openLine would also call clearFocus(), silently
+    // discarding whatever variation the user had focused before importing --
+    // exactly the reported bug (importing from analysis losing focus).
+    renderTreeBody(CURRENT_LINE);
   } catch(err){
     console.error('[importEngineVariation]', err);
     log('import failed: ' + err.message, true);
