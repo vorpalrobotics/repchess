@@ -210,14 +210,23 @@ The Asset Manager down-converts every uploaded PNG on import (it never
 stores more pixels than a ~10m room can show). The author picks a tier
 (**Low / Normal / High**, default Normal); the tier plus the asset's
 category set the **long-edge** pixel cap. Aspect ratio is always preserved
-(fit-within-box, never cropped or squashed), and `4096` is the hard ceiling
-(the WebGL2 max-texture-size safe on essentially all hardware).
+(fit-within-box, never cropped or squashed). This cap only applies at
+import/re-crop time — nothing re-checks it at render time — so raising it
+never affects an asset already saved at a smaller size.
+
+`tiled`/`object` stay at the WebGL2-guaranteed-safe `1024` ceiling (a tiled
+or object-scale texture doesn't benefit from more pixels anyway). `large`
+(facade) goes to `8192` at the High tier: facades are walked right up to,
+there are only ever a handful in a system (at most ~20), and 8192 is safe
+on essentially all hardware from roughly the last decade — only very
+old/low-end/software-rendering devices are limited to the WebGL2-guaranteed
+floor of `4096`.
 
 | Category | Types | Low | **Normal** | High |
 |---|---|---|---|---|
 | tiled  | `surface` (repeats across a wall — least needed)        | 256  | **512**  | 1024 |
 | object | `box`, `billboard-*` (viewed at object scale, 1–3m)    | 256  | **512**  | 1024 |
-| large  | `facade` (one-shot, spans a whole ~50m building front) | 1024 | **2048** | 4096 |
+| large  | `facade` (one-shot, spans a whole ~50m building front) | 1024 | **2048** | 8192 |
 
 The chosen tier is stored on the asset record (`resolution`) so a soft-looking
 asset can be re-imported at a higher tier later without guessing. Only the
