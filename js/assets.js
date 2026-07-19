@@ -25,8 +25,23 @@ const ASSET_TYPES = {
    than a room-scale (~10m) demo can show. The user picks a tier (Low/Normal/
    High); the tier + the asset's category pick the actual long-edge pixel cap.
    Aspect ratio is always preserved (fit within a maxDim box, never cropped or
-   squashed), so a 2.5:1 facade at the 2048 cap becomes 2048x819. 4096 is the
-   hard ceiling — the WebGL2 max-texture-size guaranteed safe on ~all hardware.
+   squashed), so a 2.5:1 facade at the 2048 cap becomes 2048x819. This is
+   purely an IMPORT-time cap (downscaling a freshly-uploaded original) —
+   nothing re-checks it at render time, and re-editing an existing asset's
+   other fields never re-downscales its already-stored pixels (see
+   rederiveImage's "no original -- nothing to do" guard) — so raising a cap
+   here is fully backward compatible with anything already saved at a
+   smaller size.
+
+   large/high is 8192, not the WebGL2-guaranteed-safe 4096: facades are
+   walked right up to (viewed at close range approaching the front door),
+   there are only ever a handful of them (at most ~20 even in a large
+   system) so the total texture-memory cost stays small, and 8192 is safe
+   on essentially all hardware from roughly the last decade -- only very
+   old/low-end/software-rendering devices are limited to the WebGL2 floor
+   of 4096. tiled/object stay conservative since a texture at that category
+   is either tiled (cheap to keep small) or viewed at 1-3m object scale
+   (more pixels wouldn't be visible anyway).
 
    Categories:
      tiled  — surfaces repeat across a wall, so detail-per-tile is enough → least
@@ -38,7 +53,7 @@ const RESOLUTION_DEFAULT = 'normal';
 const RESOLUTION_CAPS = {
   tiled:  { low: 256,  normal: 512,  high: 1024 },
   object: { low: 256,  normal: 512,  high: 1024 },
-  large:  { low: 1024, normal: 2048, high: 4096 },
+  large:  { low: 1024, normal: 2048, high: 8192 },
 };
 function resolutionCategory(type){
   if(type === 'facade')  return 'large';
