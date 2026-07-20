@@ -2167,6 +2167,36 @@ try {
     assert(outOfRange === '4', `expected an out-of-range saved choice to fall back to the default (4), got ${outOfRange}`);
     ok('engine threads selector: restores a saved choice only when still in range');
   } catch(e){ bad('engine threads selector: saved-choice restore/fallback', e); }
+
+  // 69. Changing the threads selector while a live analysis is in progress
+  //     must NOT restart it (unlike Lines/Depth, which deliberately do) --
+  //     a Threads change means stop + pthread-pool respawn + a fresh `go`,
+  //     wasting whatever depth the current search already reached for no
+  //     real gain. The new choice is only supposed to apply going forward.
+  try {
+    await app24.page.evaluate(() => {
+      window.__aqCallCount = 0;
+      const { engine } = window.__aqTestHooks;
+      engine.ready = true;
+      engine.multithreaded = true;
+      engine.maxThreads = 6;
+      engine.threads = 4;
+      engine.analyze = () => { window.__aqCallCount++; return new Promise(() => {}); };   // never resolves
+      // simulate "a live analysis is in progress on some position" -- the
+      // normal path (showPosition) can't run without the cm-chessboard
+      // widget this harness doesn't load.
+      window.__aqTestHooks.setCurrentEngineFen('rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1');
+    });
+    const sel = app24.page.locator('#engineThreadsSelect');
+    await sel.selectOption('3');
+    // give any (wrongly) triggered runEngine()/analyze() a moment to fire.
+    await app24.page.waitForTimeout(200);
+    const calls = await app24.page.evaluate(() => window.__aqCallCount);
+    const saved = await app24.page.evaluate(() => localStorage.getItem('engine_lastThreads'));
+    assert(calls === 0, `expected changing threads to NOT call engine.analyze() (would restart the current search), got ${calls} call(s)`);
+    assert(saved === '3', `expected the new choice to still be persisted for next time, got ${saved}`);
+    ok("engine threads selector: changing it does not restart the analysis already in progress");
+  } catch(e){ bad('engine threads selector: does not restart in-progress analysis', e); }
 } finally {
   await app24.close();
 }

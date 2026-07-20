@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-140';
+const BUILD_TAG = '-141';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5775,8 +5775,14 @@ $('engineMaxDepthSelect').onchange = () => {
   if(currentEngineFen) runEngine(currentEngineFen);
 };
 $('engineThreadsSelect').onchange = () => {
+  // deliberately does NOT restart the current search like Lines/Depth do --
+  // changing Threads means stop + a pthread-pool respawn + a fresh `go`
+  // (see engine.js's analyze()), discarding the depth already reached on
+  // whatever position is being watched right now for no real gain. The new
+  // choice just gets persisted and takes effect the next time runEngine()
+  // actually runs on its own (a newly-selected position, or an explicit
+  // Stop/Resume) -- never forced.
   localStorage.setItem(LS_ENGINE_THREADS, $('engineThreadsSelect').value);
-  if(currentEngineFen) runEngine(currentEngineFen);
 };
 // 1..maxThreads (cores-1) -- only meaningful once the multi-threaded build is
 // up, so this is called from engine.init().then() below, never at module
@@ -6729,6 +6735,11 @@ if(localStorage.getItem('threeTestDebug')){
     // engine.multithreaded/.maxThreads/.threads first, then calls this directly.
     populateEngineThreadsSelect: () => populateEngineThreadsSelect(),
     engineThreads: () => engineThreads(),
+    // showPosition (the normal way currentEngineFen gets set) bails out
+    // without the cm-chessboard widget this harness can't load -- lets a
+    // test simulate "a live analysis is in progress" for the threads
+    // selector's must-not-restart-it check.
+    setCurrentEngineFen: (fen) => { currentEngineFen = fen; },
     // the real Engine singleton -- since Stockfish isn't available in this
     // harness, a test monkey-patches .ready/.threads/.analyze/.stop directly
     // to fake a search in progress (analyze() returns a controllable pending
