@@ -4482,7 +4482,32 @@ try {
     ok('VR cache: setting a move-quality glyph invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by move-quality glyph', e); }
 
-  // 159. Importing games via the local NDJSON file import invalidates the
+  // 159. Attributes modal: checking "starts new castle" and typing a name
+  //      updates the "Belongs to castle" select's "Auto" label immediately
+  //      (before Save) to inherit from the just-typed name, instead of
+  //      leaving it stuck on whatever applied before the checkbox was
+  //      touched.
+  try {
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="attributes"]').click());
+    await appAW.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    const initialLabel = await appAW.page.$eval('#attrCastleOwner option[value=""]', o => o.textContent);
+    assert(initialLabel.includes('Alpha'), `expected initial Auto label to show this node's own saved castle Alpha, got "${initialLabel}"`);
+
+    await appAW.page.uncheck('#attrIsCastleRoot');
+    const uncheckedLabel = await appAW.page.$eval('#attrCastleOwner option[value=""]', o => o.textContent);
+    assert(uncheckedLabel.includes('no ancestor castle'), `expected unchecking "starts new castle" to fall back to no-ancestor-castle live, got "${uncheckedLabel}"`);
+
+    await appAW.page.check('#attrIsCastleRoot');
+    await appAW.page.fill('#attrCastleName', 'Beta');
+    const liveLabel = await appAW.page.$eval('#attrCastleOwner option[value=""]', o => o.textContent);
+    assert(liveLabel.includes('Beta'), `expected Auto label to live-update to the just-typed name Beta, got "${liveLabel}"`);
+
+    await appAW.page.evaluate(() => document.getElementById('attributesCancelBtn').click());
+    ok('Attributes modal: "Auto" castle-owner label live-updates as you check "starts new castle" and type a name');
+  } catch(e){ bad('Attributes modal: live Auto label update', e); }
+
+  // 160. Importing games via the local NDJSON file import invalidates the
   //      cache -- a changed game set can change which opponent replies are
   //      frequent enough to be visible/built.
   try {
