@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-135';
+const BUILD_TAG = '-136';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5642,10 +5642,13 @@ function showPvFloat(el){
   }
   pvFloatAnalysisFen = fen;
   renderPvFloatAnalysisText(findKnownPvFloatEval(fen));
+  // prefer above-and-to-the-right of the clicked move (its lower-left corner
+  // offset from the move's upper-right corner) so the float doesn't cover the
+  // lines below the one just tapped; fall back to below only if it wouldn't fit above.
   const fr = f.getBoundingClientRect();
-  const left = Math.min(r.left, window.innerWidth - fr.width - 8);
-  const top  = r.bottom + fr.height + 6 <= window.innerHeight ? r.bottom + 6 : r.top - fr.height - 6;
-  f.style.left = `${Math.round(Math.max(8,left))}px`;
+  const left = Math.max(8, Math.min(r.right + 6, window.innerWidth - fr.width - 8));
+  const top  = r.top - fr.height - 6 >= 8 ? r.top - fr.height - 6 : r.bottom + 6;
+  f.style.left = `${Math.round(left)}px`;
   f.style.top  = `${Math.round(Math.max(8,top))}px`;
   pvFloatEl?.classList.remove('pv-move-active');
   el.classList.add('pv-move-active');
