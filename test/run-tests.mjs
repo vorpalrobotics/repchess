@@ -4961,5 +4961,54 @@ try {
   await appBB.close();
 }
 
+// --- Phase BC: the street-level entry pair billboard (outside a castle's
+//     front door) also carries an occurrence stat -- "which castle should I
+//     memorize first?" is a street-level question, not a per-door one, so
+//     this is computed separately (gatherBuiltCastles, js/app.js) from how
+//     often games actually reached the castle's own entry, since
+//     buildGeneratedCastle's own genRooms never captures an edge INTO its
+//     own root (it starts fresh there with no incoming edge). ---
+const appBC = await launchApp();
+try {
+  await seedBackup(appBC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1, name: 'Alpha Foyer' },
+    ]}],
+    // 2 of 3 games that reach 1.d4 Nf6 continue 2.c4 (entering Alpha); the
+    // third continues 2.Nf3 instead -- so Alpha's own entry occurrence is
+    // 2 (67%), not the trivial 100% a single-continuation seed would give.
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nf3 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appBC.page.click('.line-row');
+  await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+
+  // 175. The street entry billboard's canvas grows a footer strip to fit the
+  //      occurrence stat (renderMnemPairCanvas: 768 -> 858px tall) -- a
+  //      reliable, specific signal that `entryOccurrence` made it all the way
+  //      through gatherBuiltCastles -> openThreeTest -> generateMainStreet ->
+  //      buildStreetEntryPair -> buildMnemPairSprite, the same style of check
+  //      the existing cross-castle-plaque test uses for its own geometry.
+  try {
+    const alphaEntryKey = await appBC.page.evaluate(() => {
+      const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
+    });
+    await openVR(appBC.page);
+    await appBC.page.waitForTimeout(300);   // let the async billboard builds settle
+    const size = await appBC.page.evaluate((slotId) => window.__threeTestEdit.spriteCanvasSize(slotId), 'dbb-' + alphaEntryKey);
+    assert(size && size.width === 768 && size.height === 858,
+      `expected the street entry billboard's canvas to grow a 90px occurrence strip (768x858), got ${JSON.stringify(size)}`);
+    ok("street entry billboard's canvas grows an occurrence-stat strip below the move pair");
+  } catch(e){ bad('street entry billboard occurrence stat', e); }
+} finally {
+  await appBC.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
