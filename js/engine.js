@@ -27,6 +27,11 @@ const STOCKFISH_BUILDS = [
   { js: 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js' },
   { js: 'https://cdn.jsdelivr.net/npm/stockfish@10/stockfish.js' },
 ];
+// how long to wait for the worker's first response (uci -> uciok, then
+// isready -> readyok) during init. Generous because a cold wasm fetch/compile
+// can genuinely take a while on a slow connection/device; the point isn't to
+// be tight, it's to eventually fail instead of hanging forever.
+const INIT_TIMEOUT_MS = 20000;
 
 export class Engine {
   constructor() {
@@ -61,7 +66,7 @@ export class Engine {
     this._worker = new Worker(`${scriptUrl}#${encodeURIComponent(wasmUrl)}`);
     this._worker.onmessage = ({ data }) => this._listener?.(data);
 
-    await this._command('uci', line => line === 'uciok');
+    await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
     // leave a core for the UI/main thread; the lite build scales well to a
     // handful of threads but oversubscribing past that gives little back.
     const cores = navigator.hardwareConcurrency || 2;
@@ -69,7 +74,7 @@ export class Engine {
     this._send(`setoption name Threads value ${this.threads}`);
     this._currentThreads = this.threads;
     this._send('setoption name Hash value 128');
-    await this._command('isready', line => line === 'readyok');
+    await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
     this.multithreaded = true;
     this.ready = true;
     console.debug(`[engine] multi-threaded Stockfish ready (${this.threads} threads)`);
@@ -93,8 +98,8 @@ export class Engine {
     this._worker = new Worker(blobUrl);
     this._worker.onmessage = ({ data }) => this._listener?.(data);
 
-    await this._command('uci', line => line === 'uciok');
-    await this._command('isready', line => line === 'readyok');
+    await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
+    await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
     this.multithreaded = false;
     this.threads = 1;
     this._currentThreads = 1;
@@ -114,6 +119,50 @@ export class Engine {
     return new Promise(resolve => {
       this._listener = line => {
         if (isDone(line)) {
+          this._listener = null;
+          resolve(line);
+        }
+      };
+      this._send(cmd);
+    });
+  }
+
+  // Like _command, but used only for the init handshakes (uci/uciok,
+  // isready/readyok on a freshly-constructed worker) where there's no
+  // fallback path yet if the worker never responds. Unlike _command, this
+  // can actually fail: it rejects if the worker fires its 'error' event
+  // (a real runtime failure -- bad script, wasm load failure, etc. -- as
+  // opposed to a fetch()-level failure, which _initSingle's CDN loop
+  // already handles before a worker even exists) or if timeoutMs elapses
+  // with no response, instead of leaving the caller awaiting a promise
+  // that can hang forever with no error and no console diagnostic.
+  _commandWithTimeout(cmd, isDone, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const worker = this._worker;
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        worker.removeEventListener('error', onError);
+      };
+      const onError = (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`engine worker error while waiting for "${cmd}": ${err?.message || err}`));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        this._listener = null;
+        reject(new Error(`engine handshake timed out waiting for a response to "${cmd}"`));
+      }, timeoutMs);
+      worker.addEventListener('error', onError);
+      this._listener = line => {
+        if (isDone(line)) {
+          if (settled) return;
+          settled = true;
+          cleanup();
           this._listener = null;
           resolve(line);
         }
@@ -174,16 +223,17 @@ export class Engine {
   // `threads`, when given (multi-threaded builds only -- ignored otherwise),
   // overrides the Threads option for just this search; defaults to the full
   // count init() picked. Only re-sent when it actually differs from what's
-  // currently configured (so the common case -- every caller except the
-  // background analysis queue always asks for the full count -- never pays
-  // for it), and, when it does change, followed by an isready/readyok
+  // currently configured (so the common case -- today, no caller actually
+  // passes a `threads` override, so this whole branch is dormant -- never
+  // pays for it), and, when it does change, followed by an isready/readyok
   // handshake before the next `go`: changing Threads makes a multi-threaded
   // WASM build respawn its whole pthread pool in the background, and
   // searching before that settles can wedge the worker so it never responds
-  // to anything again (this was a real bug -- the background queue's reduced
-  // thread count was the first thing in the app to ever change Threads after
-  // init, with no such handshake, and could hang the engine on its very
-  // first search).
+  // to anything again (this was a real bug -- the background analysis
+  // queue used to pass a reduced thread count, the first thing in the app
+  // to ever change Threads after init, with no such handshake, and could
+  // hang the engine on its very first search; the queue no longer overrides
+  // threads at all, but the handshake stays in case a future caller does).
   async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
     await this._stopCurrent();
     if (this.multithreaded) {
@@ -192,11 +242,17 @@ export class Engine {
         this._send(`setoption name Threads value ${clampedThreads}`);
         // race a timeout too (like _stopCurrent's) so a missing/late readyok
         // can't wedge the app forever -- worst case we search a beat early.
-        await Promise.race([
-          this._command('isready', line => line === 'readyok'),
-          new Promise(resolve => setTimeout(resolve, 4000)),
+        // Only mark _currentThreads updated when readyok genuinely won the
+        // race: if the timeout fires instead, the engine may not have
+        // actually finished switching, so the NEXT call for this same
+        // thread count should still redo the handshake rather than
+        // wrongly assume it's already there (a slightly wasted repeat
+        // handshake is a much safer failure mode than skipping it).
+        const ack = await Promise.race([
+          this._command('isready', line => line === 'readyok').then(() => true),
+          new Promise(resolve => setTimeout(() => resolve(false), 4000)),
         ]);
-        this._currentThreads = clampedThreads;
+        if (ack) this._currentThreads = clampedThreads;
       }
     }
     this._send(`setoption name MultiPV value ${multipv}`);
