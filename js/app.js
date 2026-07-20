@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-141';
+const BUILD_TAG = '-143';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -97,6 +97,7 @@ const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
+const LS_AQ_THREADS='aq_lastThreads';
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
@@ -5111,6 +5112,19 @@ function oqRoomMemorized(roomSeq){
 }
 function oqMemorizedFilter(seq, candidates){
   if(!OQ.onlyMemorized) return candidates;
+  // castle-scoped session, still short of the castle's own root: every
+  // candidate here is already forced down to one deterministic move by
+  // oqCoverageEligible (there's no other way to reach the castle), so never
+  // gate it by memorized status -- these lead-in rooms genuinely belong to
+  // whatever castle/line came before this one (oqRoomMemorized's
+  // OQ.castleName shortcut would wrongly check THIS castle's key instead),
+  // some aren't independently markable rooms at all (the very first ply has
+  // no room yet), and the user should still be tested on them regardless of
+  // memorized status -- it's the same game, played in full, every time.
+  // Only once seq reaches the root does memorized-gating (the whole point of
+  // this feature) actually apply, and OQ.castleName is correct again there.
+  const root = OQ.coverageRootSeq;
+  if(root && seq.length < root.length) return candidates;
   return candidates.filter(c => { const rs = oqCandidateRoomSeq(seq, c); return rs && oqRoomMemorized(rs); });
 }
 
@@ -5748,13 +5762,15 @@ let liveEvalSpan = null, liveEvalBtn = null;
 
 const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
 const engineMaxDepth  = () => parseInt($('engineMaxDepthSelect').value, 10);
-// undefined (not a number) when the threads select is hidden/empty (single-
+// undefined (not a number) when a threads select is hidden/empty (single-
 // threaded build) -- analyze()'s own `threads = this.threads` default then
-// applies, same as before this control existed.
-const engineThreads = () => {
-  const v = parseInt($('engineThreadsSelect').value, 10);
+// applies, same as before either of these controls existed.
+const threadsFrom = (selectId) => {
+  const v = parseInt($(selectId).value, 10);
   return Number.isFinite(v) ? v : undefined;
 };
+const engineThreads = () => threadsFrom('engineThreadsSelect');
+const aqThreads = () => threadsFrom('aqThreadsSelect');
 
 /* restore last-used line count / max depth, if they're still valid options */
 const savedLines = localStorage.getItem(LS_ENGINE_LINES);
@@ -5784,21 +5800,32 @@ $('engineThreadsSelect').onchange = () => {
   // Stop/Resume) -- never forced.
   localStorage.setItem(LS_ENGINE_THREADS, $('engineThreadsSelect').value);
 };
+// same "persist, never force" rule as the live panel's selector above --
+// the currently-processing queue item keeps whatever thread count it
+// started with; the new choice is only read on the NEXT engine.analyze()
+// call processAnalysisQueueLoop makes (the next item, or this one resumed).
+$('aqThreadsSelect').onchange = () => {
+  localStorage.setItem(LS_AQ_THREADS, $('aqThreadsSelect').value);
+};
 // 1..maxThreads (cores-1) -- only meaningful once the multi-threaded build is
 // up, so this is called from engine.init().then() below, never at module
 // load. Restores a saved choice only if it's still in range on THIS device.
-function populateEngineThreadsSelect(){
+// Shared by the live engine panel's selector and the Analysis Queue modal's
+// -- same range/gate, independently persisted choices.
+function populateThreadsSelect(fieldId, selectId, storageKey){
   if(!engine.multithreaded || engine.maxThreads <= 1){
-    $('engineThreadsField').style.display = 'none';
+    $(fieldId).style.display = 'none';
     return;
   }
-  const sel = $('engineThreadsSelect');
+  const sel = $(selectId);
   sel.innerHTML = Array.from({length: engine.maxThreads}, (_, i) => i + 1)
     .map(n => `<option value="${n}">${n}</option>`).join('');
-  const saved = parseInt(localStorage.getItem(LS_ENGINE_THREADS), 10);
+  const saved = parseInt(localStorage.getItem(storageKey), 10);
   sel.value = (Number.isFinite(saved) && saved >= 1 && saved <= engine.maxThreads) ? saved : engine.threads;
-  $('engineThreadsField').style.display = '';
+  $(fieldId).style.display = '';
 }
+const populateEngineThreadsSelect = () => populateThreadsSelect('engineThreadsField', 'engineThreadsSelect', LS_ENGINE_THREADS);
+const populateAqThreadsSelect = () => populateThreadsSelect('aqThreadsField', 'aqThreadsSelect', LS_AQ_THREADS);
 
 /* short suffix telling the user how many threads are ACTUALLY configured
    right now (not just the default init() picked -- the threads selector
@@ -5867,6 +5894,7 @@ engine.init().then(() => {
     $('engineDepth').textContent = Chessboard ? `Engine ready${engineModeTag()}` : 'Engine not available';
   }
   populateEngineThreadsSelect();
+  populateAqThreadsSelect();
   maybeResumeAnalysisQueue();
 }).catch(err => {
   console.error('[engine] init failed', err);
@@ -6086,12 +6114,13 @@ function queueChildrenForAnalysis(parentSeq, branchDiv){
    search -- see maybeResumeAnalysisQueue(), hooked from setEngineUI('idle'
    and 'stopped') and from engine.init(). A live search takes precedence
    while it runs, but stopping it explicitly hands the engine straight back
-   to the queue. Always runs at the same (conservative) Threads count init()
-   picked, never the live engine panel's own thread-count choice -- a
-   mid-session Threads change is safe now (see engine.js's analyze()), but
-   interrupting an already-running background search for one still isn't
-   worth it for unattended work, at the cost of the queue competing for the
-   same cores as analysis the user is actually watching.
+   to the queue. Runs at its OWN thread count (the Analysis Queue modal's own
+   selector, independent of the live engine panel's), read fresh on every
+   engine.analyze() call this loop makes -- a mid-session Threads change is
+   safe now (see engine.js's analyze()), but a change while an item is
+   mid-search never interrupts it, only applying once that item finishes (or
+   the next one starts), at the cost of the queue competing for whatever
+   cores it's currently using against analysis the user is actively watching.
    Any interactive engine.analyze() call still automatically preempts it for
    free (Engine._stopCurrent()) -- the queue just notices its search resolved
    short of the target depth and leaves the item queued to pick back up at
@@ -6337,6 +6366,7 @@ $('menuAnalysisQueue').onclick = async () => {
   $('menuList').style.display='none';
   await refreshAnalysisQueue();
   renderAnalysisQueueModal();
+  populateAqThreadsSelect();   // in case the modal opens before engine.init() resolves
   $('analysisQueueOverlay').style.display='flex';
 };
 $('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
@@ -6405,19 +6435,22 @@ async function processAnalysisQueueLoop(){
 
       let result = null;
       try {
-        // no `threads` override -- always the same (conservative) count
-        // init() picked, deliberately never the live panel's own choice:
-        // interrupting an already-running background search for a Threads
-        // change isn't worth it for unattended work. This CAN still trigger
-        // analyze()'s mid-session Threads-change path now, though -- if the
-        // live panel just ran with a different thread count, the queue's
-        // request to switch back to the default no longer matches
-        // _currentThreads. That's fine (safe now -- see analyze()'s own
-        // comment); it just means a handshake beat whenever control passes
-        // between "live analysis at a custom thread count" and the queue.
+        // aqThreads() -- the Analysis Queue modal's OWN selector, independent
+        // of the live panel's -- deliberately never forces a restart of the
+        // item currently processing (same "persist, never force" rule the
+        // live panel's own selector follows): it's just read fresh on each
+        // engine.analyze() call this loop makes, so a change while an item
+        // is mid-search only takes effect once that item finishes (or the
+        // next item starts). This CAN trigger analyze()'s mid-session
+        // Threads-change path -- if the live panel (or a prior queue item)
+        // just ran at a different thread count, this request may no longer
+        // match _currentThreads. That's fine (safe now -- see analyze()'s
+        // own comment); it just means a handshake beat whenever control
+        // passes between two different thread-count choices.
         result = await engine.analyze(fen, {
           multipv,
           depth: item.depth,
+          threads: aqThreads(),
           onInfo: (d, lines) => {
             aqCurrentProgress = {depth: d, lines};
             renderAnalysisQueueModalIfOpen();
@@ -6735,6 +6768,8 @@ if(localStorage.getItem('threeTestDebug')){
     // engine.multithreaded/.maxThreads/.threads first, then calls this directly.
     populateEngineThreadsSelect: () => populateEngineThreadsSelect(),
     engineThreads: () => engineThreads(),
+    populateAqThreadsSelect: () => populateAqThreadsSelect(),
+    aqThreads: () => aqThreads(),
     // showPosition (the normal way currentEngineFen gets set) bails out
     // without the cm-chessboard widget this harness can't load -- lets a
     // test simulate "a live analysis is in progress" for the threads

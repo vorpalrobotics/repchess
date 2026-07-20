@@ -947,6 +947,9 @@
   <div class="modal" style="width:min(46em,95vw);max-height:88vh;display:flex;flex-direction:column">
     <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
       <h2 style="margin:0">Analysis Queue</h2>
+      <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-left:.5rem">Threads:
+        <select id="aqThreadsSelect"></select>
+      </label>
       <button id="analysisQueueCloseBtn" style="flex:0 0 auto;margin-left:auto">Close</button>
     </div>
     <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis Queue" to queue deep background analysis.</p>
@@ -1228,6 +1231,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260720-141"></script>
+<script type="module" src="js/app.js?v=20260720-143"></script>
 </body>
 </html>
