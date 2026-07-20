@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-143';
+const BUILD_TAG = '-144';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5125,7 +5125,28 @@ function oqMemorizedFilter(seq, candidates){
   // this feature) actually apply, and OQ.castleName is correct again there.
   const root = OQ.coverageRootSeq;
   if(root && seq.length < root.length) return candidates;
-  return candidates.filter(c => { const rs = oqCandidateRoomSeq(seq, c); return rs && oqRoomMemorized(rs); });
+  if(seq.length === 0){
+    // no room reached yet -- whole-system coverage's very first move (no
+    // castle scope to force a lead-in through), or a black line's forced
+    // opening trigger (oqPlayTrigger). There's nothing "current" to check
+    // yet, so this is necessarily a lookahead: does choosing this candidate
+    // land somewhere memorized?
+    return candidates.filter(c => { const rs = oqCandidateRoomSeq(seq, c); return rs && oqRoomMemorized(rs); });
+  }
+  // `seq` is a room already reached (ends in OUR move) -- test every branch
+  // out of it as long as THIS room itself is memorized (that's the room
+  // whose content -- move pairs, mnemonics -- the memorized flag actually
+  // represents). A branch whose own resulting room ISN'T memorized still
+  // gets asked here (you're being tested FROM a room you know); it simply
+  // won't continue past it -- the next oqAfterCorrect call for that deeper
+  // seq finds it unmemorized and returns no candidates, ending the question
+  // right there. Previously this looked ahead per-candidate instead (like
+  // the seq.length===0 case above), which silently hid every branch except
+  // the one leading to an already-memorized room -- so a room with several
+  // taught replies only ever got quizzed on whichever ONE happened to lead
+  // somewhere memorized, and a memorized room's OWN further branches never
+  // got asked at all once you'd just arrived in it.
+  return oqRoomMemorized(seq) ? candidates : [];
 }
 
 /* the engine's random pick from `candidates`, honoring a same-choices replay

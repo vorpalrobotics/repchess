@@ -2720,7 +2720,7 @@ try {
   const keys = await appAA.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
       return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
-    return { e6Room: pk(['d4','Nf6','c4','e6','Nc3']), g6Room: pk(['d4','Nf6','c4','g6','Nc3']) };
+    return { rootRoom: pk(['d4','Nf6','c4']), e6Room: pk(['d4','Nf6','c4','e6','Nc3']), g6Room: pk(['d4','Nf6','c4','g6','Nc3']) };
   });
   await seedBackup(appAA.page, {
     version: 6, user: 'tester',
@@ -2734,9 +2734,11 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
   });
-  // mark only the e6 branch's room memorized, via the same IDB key the VR
-  // toolbar toggle writes (setMeta is a bare global, same as getMeta elsewhere).
-  await appAA.page.evaluate((k) => setMeta('threeMemorizedRooms', JSON.stringify({ [k]: Date.now() })), keys.e6Room);
+  // mark the castle's own root AND the e6 branch's room memorized (not g6) --
+  // via the same IDB key the VR toolbar toggle writes (setMeta is a bare
+  // global, same as getMeta elsewhere).
+  await appAA.page.evaluate((ks) => setMeta('threeMemorizedRooms',
+    JSON.stringify({ [ks.rootRoom]: Date.now(), [ks.e6Room]: Date.now() })), keys);
 
   await appAA.page.click('.line-row');
   await appAA.page.waitForSelector('.data-row', { timeout: 10000 });
@@ -2760,25 +2762,60 @@ try {
     ok('starting a session with "only memorized" checked loads castleName + the memorized-rooms map onto OQ');
   } catch(e){ bad('oqStartSession: castleName/onlyMemorized/memorizedRooms', e); }
 
-  // 74. roomMemorized reflects exactly the one seeded room.
+  // 74. roomMemorized reflects exactly the three seeded rooms (the castle's
+  //     own root, plus e6 -- not g6).
   try {
     const r = await appAA.page.evaluate(() => ({
+      root: window.__oqTestHooks.roomMemorized(['d4','Nf6','c4']),
       e6: window.__oqTestHooks.roomMemorized(['d4','Nf6','c4','e6','Nc3']),
       g6: window.__oqTestHooks.roomMemorized(['d4','Nf6','c4','g6','Nc3']),
     }));
+    assert(r.root === true, `expected the castle's own root room to read as memorized, got ${r.root}`);
     assert(r.e6 === true, `expected the e6 room to read as memorized, got ${r.e6}`);
     assert(r.g6 === false, `expected the g6 room to read as NOT memorized, got ${r.g6}`);
     ok('oqRoomMemorized reflects exactly the rooms marked in threeMemorizedRooms');
   } catch(e){ bad('oqRoomMemorized', e); }
 
-  // 75. memorizedFilter narrows candidates to only the memorized branch, at
-  //     the castle root (the real call shape oqAfterCorrect uses).
+  // 75. memorizedFilter offers EVERY branch out of a room that is itself
+  //     memorized, not just whichever one happens to also lead somewhere
+  //     memorized -- reproduces "it will never quiz me on the other 5
+  //     responses in the first room": the old per-candidate lookahead
+  //     silently hid every branch except one, even though the room you're
+  //     actually standing in (and being tested from) is fully memorized.
   try {
     const filtered = await appAA.page.evaluate(() =>
       window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
-    assert(JSON.stringify(filtered) === JSON.stringify(['e6']), `expected only ['e6'], got ${JSON.stringify(filtered)}`);
-    ok('memorizedFilter narrows candidates to only the branch leading to a memorized room');
-  } catch(e){ bad('oqMemorizedFilter narrows to memorized branch', e); }
+    assert(JSON.stringify(filtered) === JSON.stringify(['e6','g6']),
+      `expected every branch out of the memorized root room, got ${JSON.stringify(filtered)}`);
+    ok('memorizedFilter offers every branch out of a room that is itself memorized');
+  } catch(e){ bad('oqMemorizedFilter offers every branch from a memorized room', e); }
+
+  // 75b. ...but returns NO candidates once the current room (g6's, not
+  //      memorized) isn't itself memorized -- this is what actually ends a
+  //      question: oqLoadStep has no memorized-gating of its own (it just
+  //      checks PREFS for a recorded reply), so the ply INTO an unmemorized
+  //      room still gets asked; it's the step AFTER landing there that
+  //      stops. Reproduces "when I give my response... that would end that
+  //      test run since those rooms are not memorized."
+  try {
+    const stopped = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4','g6','Nc3'], ['Bg7']));
+    assert(JSON.stringify(stopped) === JSON.stringify([]),
+      `expected no candidates once standing in an unmemorized room, got ${JSON.stringify(stopped)}`);
+    ok('memorizedFilter returns no candidates once the current room is not memorized, ending the question there');
+  } catch(e){ bad('oqMemorizedFilter stops once the current room is not memorized', e); }
+
+  // 75c. ...and DOES continue testing inside a deeper memorized room (e6's,
+  //      also marked memorized) -- reproduces "it should play the moves
+  //      inside that memorized room" (the quiz previously stopped right at
+  //      the doorway instead of testing anything past it).
+  try {
+    const inside = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4','e6','Nc3'], ['Bb4']));
+    assert(JSON.stringify(inside) === JSON.stringify(['Bb4']),
+      `expected testing to continue inside a deeper memorized room, got ${JSON.stringify(inside)}`);
+    ok('memorizedFilter continues testing inside a memorized room reached via a branch, not just at the castle root');
+  } catch(e){ bad('oqMemorizedFilter continues testing inside a deeper memorized room', e); }
 
   // 76. With the checkbox off, the filter is a pure passthrough -- existing
   //     (pre-feature) behavior is unchanged byte-for-byte.
@@ -2792,12 +2829,12 @@ try {
 
   // 77. The forced lead-in toward a castle-scoped session's own root (here:
   //     1.d4 Nf6, the two plies before Alpha's root) is NEVER filtered by
-  //     memorized status, even though Alpha's own root room isn't itself
-  //     separately marked memorized -- reproduces the reported "No moves to
-  //     test" bug: with the old code, oqRoomMemorized used OQ.castleName
-  //     (forced to 'Alpha' for the whole session) instead of resolving each
-  //     lead-in room's real owner, so an unmarked root wrongly failed the
-  //     memorized check and starting a session found zero eligible moves.
+  //     memorized status -- reproduces the reported "No moves to test" bug:
+  //     with the old code, oqRoomMemorized used OQ.castleName (forced to
+  //     'Alpha' for the whole session) instead of resolving each lead-in
+  //     room's real owner, so a lead-in room belonging to a DIFFERENT
+  //     castle/line wrongly failed the memorized check and starting a
+  //     session found zero eligible moves.
   try {
     await appAA.page.evaluate(() => window.__oqTestHooks.setOQ({ onlyMemorized: true }));
     const leadIn = await appAA.page.evaluate(() => ({
@@ -2807,13 +2844,14 @@ try {
     assert(JSON.stringify(leadIn.firstPly) === JSON.stringify(['d4']),
       `expected the forced first ply to pass through untested-by-memorized-status, got ${JSON.stringify(leadIn.firstPly)}`);
     assert(JSON.stringify(leadIn.secondPly) === JSON.stringify(['Nf6']),
-      `expected the forced second ply to pass through even though Alpha's own root room isn't separately marked memorized, got ${JSON.stringify(leadIn.secondPly)}`);
-    // at (or past) the root, memorized-gating still applies exactly as
-    // before -- this fix only bypasses it BEFORE the root is reached.
+      `expected the forced second ply to pass through untested-by-memorized-status, got ${JSON.stringify(leadIn.secondPly)}`);
+    // at (or past) the root, current-room-based gating still applies exactly
+    // as tests 75/75b/75c cover -- this fix only bypasses it BEFORE the root
+    // is reached.
     const atRoot = await appAA.page.evaluate(() =>
       window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
-    assert(JSON.stringify(atRoot) === JSON.stringify(['e6']),
-      `expected memorized-gating to still apply once inside the castle, got ${JSON.stringify(atRoot)}`);
+    assert(JSON.stringify(atRoot) === JSON.stringify(['e6','g6']),
+      `expected current-room-based gating to still apply once inside the castle, got ${JSON.stringify(atRoot)}`);
     ok('memorizedFilter never gates the forced lead-in toward a castle root, but still gates real branches inside it');
   } catch(e){ bad('oqMemorizedFilter: lead-in bypass', e); }
 } finally {
