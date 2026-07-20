@@ -176,7 +176,9 @@ try {
   await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
   // 8. Generate Alpha's castle and walk it; a door into Beta shows the taller
-  //    two-line castle plaque (PlaneGeometry height 0.45 vs 0.33 for room-only).
+  //    castle plaque -- three lines (castle + room + occurrence stat, since
+  //    both games here give this room's exits a real "N (M%)" to show) at
+  //    PlaneGeometry height 0.57, vs 0.33 for a plain room-only plaque.
   try {
     // open the Nf6 row's ⋮ and Generate Castle (icon buttons have zero size
     // without Font Awesome, so click through evaluate)
@@ -192,13 +194,13 @@ try {
     const found = await app3.page.evaluate(() => {
       const meshes = window.__threeTestEdit.meshes();
       const planes = meshes.filter(m => m.type === 'PlaneGeometry');
-      const twoLine = planes.filter(m => m.params && Math.abs(m.params.height - 0.45) < 0.02);
+      const threeLine = planes.filter(m => m.params && Math.abs(m.params.height - 0.57) < 0.02);
       const oneLine = planes.filter(m => m.params && Math.abs(m.params.height - 0.33) < 0.02);
-      return { twoLine: twoLine.length, oneLine: oneLine.length };
+      return { threeLine: threeLine.length, oneLine: oneLine.length };
     });
-    assert(found.twoLine >= 1,
-      `expected a two-line cross-castle plaque (0.45-high plane); planes found: ${JSON.stringify(found)}`);
-    ok(`cross-castle door shows the two-line castle plaque (${found.twoLine} found)`);
+    assert(found.threeLine >= 1,
+      `expected a three-line cross-castle plaque (0.57-high plane); planes found: ${JSON.stringify(found)}`);
+    ok(`cross-castle door shows the taller castle plaque (${found.threeLine} found)`);
   } catch(e){ bad('cross-castle door plaque', e); }
 } finally {
   await app3.close();
@@ -4883,6 +4885,80 @@ try {
   } catch(e){ bad('VR cache: right-click forces rebuild', e); }
 } finally {
   await appBA.close();
+}
+
+// --- Phase BB: VR door plaques and the digraph's edge labels both show how
+//     often an opponent's reply has actually occurred in the user's own
+//     games -- "N (M%)", the same replies()-driven stat the move table's
+//     own .cnt span shows (js/app.js), just rounded to a whole percent since
+//     these two spots have far less room to work with. ---
+const appBB = await launchApp();
+try {
+  await seedBackup(appBB.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1, name: 'Alpha Foyer' },
+      // both replies get a Standard Response of their own (Nc3), so each
+      // becomes a real, built room with a real VR door -- an opponent move
+      // with NO configured reply is a bare leaf and gets no door at all
+      // (registerOneCastle's `fwd` filter), so there'd be nothing to show a
+      // plaque on otherwise. Neither game continues past this, so both end
+      // up "locked" (empty) doors -- exactly the "should I bother
+      // memorizing/building further?" case the stat is meant to help with.
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    // g6 played twice, e6 once -- out of this room's 3 recorded continuations
+    // that's g6: 2 (67%), e6: 1 (33%).
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appBB.page.click('.line-row');
+  await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+
+  // 173. The digraph's edge labels show the same occurrence stat, as a
+  //      small second line under the move.
+  try {
+    await appBB.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appBB.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const labels = await appBB.page.evaluate(({ g6Seq, e6Seq }) => {
+      const cy = window.__graphTestHooks.cy();
+      const find = seq => {
+        const e = cy.edges().filter(x => JSON.stringify(x.data('seq')) === JSON.stringify(seq));
+        return e.nonempty() ? e.data('label') : null;
+      };
+      return { g6: find(g6Seq), e6: find(e6Seq) };
+    }, { g6Seq: ['d4','Nf6','c4','g6'], e6Seq: ['d4','Nf6','c4','e6'] });
+    assert(labels.g6 === 'g6\n2 (67%)', `expected the g6 edge label to carry its occurrence stat, got ${JSON.stringify(labels.g6)}`);
+    assert(labels.e6 === 'e6\n1 (33%)', `expected the e6 edge label to carry its occurrence stat, got ${JSON.stringify(labels.e6)}`);
+    ok('digraph edge labels show how often each reply has actually occurred ("N (M%)")');
+    await appBB.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+  } catch(e){ bad('digraph edge occurrence stat', e); }
+
+  // 174. VR door plaques show the same stat -- including on a "locked" door
+  //      (built, but empty beyond), which is exactly the "should I
+  //      prioritize memorizing/building this further?" case motivating
+  //      the feature.
+  try {
+    const alphaKey = await appBB.page.evaluate(() => {
+      const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
+    });
+    await openVR(appBB.page);
+    await appBB.page.evaluate((key) => window.__threeTestEdit.enter(key), alphaKey);
+    await appBB.page.waitForTimeout(300);   // let the async plaque builds settle
+    const occs = (await appBB.page.evaluate(() => window.__threeTestEdit.exits()))
+      .filter(ex => !ex.back).map(ex => ex.occurrence).sort();
+    assert(JSON.stringify(occs) === JSON.stringify(['1 (33%)', '2 (67%)']),
+      `expected the two locked-door plaques to show 2 (67%) and 1 (33%), got ${JSON.stringify(occs)}`);
+    ok('VR door plaques show how often each opponent reply has actually occurred, including on locked doors');
+  } catch(e){ bad('VR door plaque occurrence stat', e); }
+} finally {
+  await appBB.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

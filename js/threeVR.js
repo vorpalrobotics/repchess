@@ -409,7 +409,8 @@ function registerOneCastle(castle, instanceId, opts = {}){
                                                  // room key (computed the same way its own walk would) --
                                                  // use it directly instead of forging THIS instance's prefix.
                                                  target: dp.ex.foreignKey || keyOf(dp.ex.toKey),
-                                                 label: dp.ex.opp, pair: dp.ex.pair });
+                                                 label: dp.ex.opp, pair: dp.ex.pair,
+                                                 occurrence: dp.ex.occurrence });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -3148,9 +3149,15 @@ function buildExitSign(size, wall, offset){
 }
 
 // name placard for the room beyond a door (text only -- the move sits beside it
-// as its own square decoration).
-function makeNameSignMesh(name){
-  const cw = 300, ch = 110;
+// as its own square decoration). `occurrence`, when given, is a small muted
+// second line -- "N (M%)": how often this exact door has actually been taken
+// in the user's own games, out of the room's total recorded continuations
+// (0 = never played against them). Grows the plaque a bit taller to fit it;
+// with no occurrence (or no name -- an as-yet-unnamed room can still show
+// just the stat) it renders exactly as before.
+function makeNameSignMesh(name, occurrence){
+  const hasName = !!name, hasOcc = !!occurrence;
+  const cw = 300, ch = (hasName && hasOcc) ? 140 : 110;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d');
@@ -3159,23 +3166,33 @@ function makeNameSignMesh(name){
   ctx.strokeStyle = '#caa46a';
   ctx.lineWidth = 4;
   ctx.strokeRect(7, 7, cw - 14, ch - 14);
-  ctx.fillStyle = '#1a1a1a';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  let font = 56;
-  ctx.font = `bold ${font}px serif`;
-  while(font > 16 && ctx.measureText(name).width > cw - 36){ font -= 2; ctx.font = `bold ${font}px serif`; }
-  ctx.fillText(name, cw/2, ch/2 + 2);
+  if(hasName){
+    ctx.fillStyle = '#1a1a1a';
+    let font = 56; ctx.font = `bold ${font}px serif`;
+    while(font > 16 && ctx.measureText(name).width > cw - 36){ font -= 2; ctx.font = `bold ${font}px serif`; }
+    ctx.fillText(name, cw/2, hasOcc ? ch * 0.36 : ch/2 + 2);
+  }
+  if(hasOcc){
+    const weight = hasName ? '' : 'bold ';
+    ctx.fillStyle = hasName ? '#5a5148' : '#1a1a1a';
+    let font2 = hasName ? 30 : 44; ctx.font = `${weight}${font2}px serif`;
+    while(font2 > 12 && ctx.measureText(occurrence).width > cw - 36){ font2 -= 2; ctx.font = `${weight}${font2}px serif`; }
+    ctx.fillText(occurrence, cw/2, hasName ? ch * 0.76 : ch/2 + 2);
+  }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  return new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.33), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9 * ch / cw), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
 }
 // A taller two-line plaque for a door that crosses into another castle: the
 // destination castle name (top, larger) over the room within it (below,
 // smaller/muted). Same off-white + gold-frame styling as makeNameSignMesh; the
-// 0.9-wide plane keeps buildDoorHint's uniform scaling working.
-function makeCastleDoorSignMesh(castleName, roomName){
-  const cw = 300, ch = 150;
+// 0.9-wide plane keeps buildDoorHint's uniform scaling working. `occurrence`
+// (see makeNameSignMesh) is an optional third, even smaller/muted line.
+function makeCastleDoorSignMesh(castleName, roomName, occurrence){
+  const hasRoom = !!roomName, hasOcc = !!occurrence;
+  const cw = 300, ch = (hasRoom && hasOcc) ? 190 : 150;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d');
@@ -3190,13 +3207,21 @@ function makeCastleDoorSignMesh(castleName, roomName){
   ctx.fillStyle = '#1a1a1a';
   let f1 = 52; ctx.font = `bold ${f1}px serif`;
   while(f1 > 16 && ctx.measureText(castleName).width > cw - 30){ f1 -= 2; ctx.font = `bold ${f1}px serif`; }
-  ctx.fillText(castleName, cw/2, roomName ? ch * 0.35 : ch / 2);
+  ctx.fillText(castleName, cw/2, (hasRoom || hasOcc) ? ch * (hasRoom && hasOcc ? 0.27 : 0.35) : ch / 2);
   // room within the castle (below, smaller, muted)
-  if(roomName){
+  if(hasRoom){
     ctx.fillStyle = '#5a5148';
     let f2 = 34; ctx.font = `${f2}px serif`;
     while(f2 > 12 && ctx.measureText(roomName).width > cw - 36){ f2 -= 2; ctx.font = `${f2}px serif`; }
-    ctx.fillText(roomName, cw/2, ch * 0.72);
+    ctx.fillText(roomName, cw/2, hasOcc ? ch * 0.55 : ch * 0.72);
+  }
+  // occurrence stat (bottom, even smaller/muted -- or in the room-name slot
+  // when this door has no room name yet)
+  if(hasOcc){
+    ctx.fillStyle = '#6b6258';
+    let f3 = hasRoom ? 26 : 34; ctx.font = `${f3}px serif`;
+    while(f3 > 12 && ctx.measureText(occurrence).width > cw - 36){ f3 -= 2; ctx.font = `${f3}px serif`; }
+    ctx.fillText(occurrence, cw/2, hasRoom ? ch * 0.83 : ch * 0.72);
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -3319,7 +3344,10 @@ function buildRoomNameFloorLabel(room, roomKey){
 // immediately above the lintel, centered on the doorway. (The opponent-move icon
 // that used to sit above it is gone -- the move now lives in the door-side pair,
 // buildDoorPair, so it'd be redundant.) Hidden by the hints toggle for self-test.
-function buildDoorHint(size, wall, offset, targetKey, roomKey){
+// `occurrence` ("N (M%)", see makeNameSignMesh) is shown as a small second line
+// so an as-yet-unnamed room still gets a plaque when there's a stat to show --
+// this is exactly the case ("should I bother memorizing this?") the stat is for.
+function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   const group = new THREE.Group();
   const name = roomNameFor(targetKey);
   // a door crossing into another castle shows that castle's name (over the room
@@ -3332,11 +3360,11 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey){
   const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
   const ownerCastle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
   const crossCastle = !!destCastle && destCastle !== ownerCastle;
-  if(!name && !crossCastle) return group;
+  if(!name && !crossCastle && !occurrence) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
   const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
-  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name) : makeNameSignMesh(name);
+  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name, occurrence) : makeNameSignMesh(name, occurrence);
   const NAME_H = NAME_W * m.geometry.parameters.height / 0.9;   // keep the plane's aspect
   const GAP = 0.12;                       // gap between the door top and the plaque
   const nameY = DOOR_H + GAP + NAME_H / 2;
@@ -4594,7 +4622,7 @@ function buildRoom(roomKey){
           // forward-door hint: name plaque above the door, and the move-pair +
           // object for the room beyond, to the left of the door. The pair is
           // hint-gated inside buildDoorPair; a filled object stays for self-test.
-          if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target, roomKey));
+          if(hintsOn && !ex.back) scene.add(buildDoorHint(room.size, wall, ex.offset, ex.target, roomKey, ex.occurrence));
           if(!ex.back) scene.add(buildDoorPair(roomKey, room, wall, ex.offset, ex));
           if(editMode) scene.add(buildDoorMarker(room.size, wall, ex.offset, roomKey, dKey));
         }
@@ -6738,6 +6766,12 @@ export async function openThreeTest(containerEl, opts){
       toggle: () => setEditMode(!editMode),
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
+      // occurrence stats ("N (M%)") on the current (or a given) room's
+      // exits -- how often that exact opponent reply has actually occurred
+      // in the user's own games, threaded through buildGeneratedCastle ->
+      // registerOneCastle -> ROOMS[key].exits.
+      exits: (roomKeyArg) => (mergedRoom(roomKeyArg || currentRoomKey)?.exits || [])
+        .map(e => ({ target: e.target, back: !!e.back, occurrence: e.occurrence || null })),
       // "memorized" toggle (Phase 1): drives the real toggleMemorized()/toolbar
       // state so a test doesn't need to click the actual button DOM element.
       memorized: () => MEMORIZED[currentRoomKey] || null,
