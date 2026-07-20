@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-2';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260720-97';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260720-98';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260717-70';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-138';
+const BUILD_TAG = '-139';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4181,13 +4181,22 @@ async function gatherBuiltCastles(lines){
           if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
         }
       }
-      return { name, streetNumber, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
+      // how often this castle's own entry has actually occurred in the
+      // user's games -- same "N (M%)" stat as a room's own doors, just
+      // computed for the move that leads INTO the castle's root itself
+      // (which buildGeneratedCastle's own genRooms never captures, since it
+      // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
+      // move (the room convention everywhere else); the position right
+      // before it is what a game "chose to enter this castle" out of.
+      const { counts: entryCounts, tot: entryTot } = replies(GAMES, rootSeq.slice(0, -1));
+      const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
+      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
     }).filter(Boolean)
   )));
   const out = [];
   lines.forEach((line, i) => {
     for(const c of perLine[i]){
-      out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber,
+      out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
                  instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
     }
   });

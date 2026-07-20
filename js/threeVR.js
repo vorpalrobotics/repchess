@@ -224,7 +224,8 @@ function generateMainStreet(systems, streetCastles){
         color: 0x6f8fb0,
         size: { w: BW, d: BD, h: BH },
         origin: { x: side * xInner, z: z - (SIDE_W / 2 + BD / 2 + 1) },
-        doorWall: 'south', doorOffset: 0
+        doorWall: 'south', doorOffset: 0,
+        entryOccurrence: c.entryOccurrence
       });
     });
   });
@@ -3004,11 +3005,15 @@ function drawMoveNumberBadge(ctx, qx, qy, boxSize, moveNumber){
   ctx.fillText(text, x, y);
   ctx.restore();
 }
-// the response laps over it in the shared corner.
-function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality){
+// the response laps over it in the shared corner. `occurrence` ("N (M%)",
+// only ever passed for a castle's street-level entry pair -- see
+// buildStreetEntryPair) adds a small muted strip below the two quadrants, so
+// castles can be compared at a glance for which to prioritize memorizing.
+function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality, occurrence){
+  const stripH = occurrence ? 90 : 0;
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
-  canvas.height = MNEM_PAIR_SIZE;
+  canvas.height = MNEM_PAIR_SIZE + stripH;
   const ctx = canvas.getContext('2d');
   const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
   drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
@@ -3016,6 +3021,16 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
   if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, MNEM_QUADRANT, oppContent.moveNumber);
   if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, MNEM_QUADRANT, respContent.moveNumber);
+  if(occurrence){
+    ctx.fillStyle = 'rgba(15,15,20,0.75)';
+    ctx.fillRect(0, MNEM_PAIR_SIZE, MNEM_PAIR_SIZE, stripH);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let font = 56; ctx.font = `bold ${font}px sans-serif`;
+    while(font > 20 && ctx.measureText(occurrence).width > MNEM_PAIR_SIZE - 40){ font -= 4; ctx.font = `bold ${font}px sans-serif`; }
+    ctx.fillText(occurrence, MNEM_PAIR_SIZE / 2, MNEM_PAIR_SIZE + stripH / 2 + 2);
+  }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   sprite.material.map = tex;
@@ -3024,8 +3039,10 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   sprite.material.alphaTest = (oppContent.image || respContent.image) ? 0.5 : 0;
   sprite.material.color.set(0xffffff);
   sprite.material.needsUpdate = true;
-  sprite.userData.baseH = MNEM_PAIR_UNITS;
-  sprite.userData.baseAspect = 1;
+  // keep the same world WIDTH (and the same px-per-meter density as the
+  // square case) when a strip is added -- only the height grows to fit it.
+  sprite.userData.baseH = MNEM_PAIR_UNITS * (canvas.height / MNEM_PAIR_SIZE);
+  sprite.userData.baseAspect = MNEM_PAIR_SIZE / canvas.height;
   applySpriteContentScale(sprite);
 }
 
@@ -3056,14 +3073,14 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
 // with the immediate notation fallback plus the async graphic/word resolve.
 // Position and interactive userData are the caller's job -- shared by the
 // in-room mnemonic slots and the new door-side pairs.
-function buildMnemPairSprite(pair, userScale){
+function buildMnemPairSprite(pair, userScale, occurrence){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
   sprite.userData.userScale = userScale || 1;
   const oppQ = pair.opponent.quality;
   renderMnemPairCanvas(sprite,
     { text: pair.opponent.san, moveNumber: pair.opponent.moveNumber },
     { text: pair.response.san, moveNumber: pair.response.moveNumber },
-    null, oppQ);
+    null, oppQ, occurrence);
   const myGen = buildGeneration;
   Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
@@ -3072,7 +3089,7 @@ function buildMnemPairSprite(pair, userScale){
       resolveMoveContent(pair.response, mnemonicsBySquare)
     ]).then(([oppContent, respContent]) => {
       if(buildGeneration !== myGen) return;
-      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ);
+      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ, occurrence);
     });
   });
   return sprite;
@@ -3402,8 +3419,10 @@ function doorPairContent(target, exPair){
 // editable in place: its per-door position/rotation/scale live in THIS room's
 // slotXform under `dobj-<target>`, while its (shared) image edits on the target
 // room. Base pos + resolved asset ride on userData so the editor can re-place it
-// without a roomSlots entry.
-function buildPairAt(roomKey, room, x, z, target, exPair){
+// without a roomSlots entry. `occurrence` (only ever passed by
+// buildStreetEntryPair -- "which castles should I prioritize memorizing?" is a
+// street-level, not per-door, question) is a small line drawn under the pair.
+function buildPairAt(roomKey, room, x, z, target, exPair, occurrence){
   const group = new THREE.Group();
   const { pair, asset, word, slotId } = doorPairContent(target, exPair);
   if(hintsOn && pair){
@@ -3412,7 +3431,7 @@ function buildPairAt(roomKey, room, x, z, target, exPair){
     // `dbb-<target>`, base pos on userData (no roomSlots entry).
     const bbId = 'dbb-' + target;
     const xf = slotXformFor(roomKey, bbId) || {};
-    const bb = buildMnemPairSprite(pair, xf.scale || 1);
+    const bb = buildMnemPairSprite(pair, xf.scale || 1, occurrence);
     bb.userData.kind = 'accessory';
     bb.userData.slotId = bbId;
     bb.userData.doorBill = true;
@@ -3465,7 +3484,7 @@ function buildStreetEntryPair(roomKey, room, b, size){
   let x, z;
   if(axis === 'x'){ x = b.origin.x + along;               z = b.origin.z + fixed + out.z * clear; }
   else            { z = b.origin.z + along;               x = b.origin.x + fixed + out.x * clear; }
-  return buildPairAt(roomKey, room, x, z, b.target, null);
+  return buildPairAt(roomKey, room, x, z, b.target, null, b.entryOccurrence);
 }
 
 // Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
@@ -6908,6 +6927,16 @@ export async function openThreeTest(containerEl, opts){
         const wp = new THREE.Vector3();
         found.getWorldPosition(wp);
         return { x: +wp.x.toFixed(3), y: +wp.y.toFixed(3), z: +wp.z.toFixed(3) };
+      },
+      // the canvas pixel size of a Sprite's texture (mnemonic pair billboards
+      // aren't Meshes, so meshes() can't see them) -- for testing that a
+      // street entry pair's occurrence strip actually grows the canvas
+      // (renderMnemPairCanvas), keyed the same way posOf finds any object.
+      spriteCanvasSize: (slotId) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
+        const img = found && found.material && found.material.map && found.material.map.image;
+        return img ? { width: img.width, height: img.height } : null;
       },
       // apply a room geometry resize exactly as the room-geometry dialog's Apply
       // button does (same setRoomGeom call), for testing the bounds auto-fix.
