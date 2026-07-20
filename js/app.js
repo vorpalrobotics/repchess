@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260630-2';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260717-96';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260720-97';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260717-70';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
 cytoscape.use(cytoscapeDagre);
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-137';
+const BUILD_TAG = '-138';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -246,6 +246,14 @@ function replies(games,seq){
   const counts={}; let tot=0;
   for(const child of node.kids.values()){ counts[child.label]=child.pass; tot+=child.pass; }
   return {counts,tot};
+}
+/* "N (M%)" occurrence stat for one specific opponent reply out of a room,
+   against `tot` (that room's total recorded continuations) -- same data the
+   move table's own .cnt span uses (renderBranch), just rounded to a whole
+   percent since VR door plaques and the digraph have far less room to work
+   with than a table row. */
+function formatOccurrence(count, tot){
+  return `${count||0} (${tot ? Math.round((count/tot)*100) : 0}%)`;
 }
 
 /* ---------- node statistics ----------
@@ -512,14 +520,18 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
   }
   /* exitSeq ends in the opponent's move (one ply past `seq`, which ends in
      OUR move, or is the empty pre-game position at the very top of a black
-     line); resolves to either an existing/new room, or a locked leaf. */
-  function processExit(fromRoomId, seq, opp){
+     line); resolves to either an existing/new room, or a locked leaf. `count`
+     is how many of our actual games saw this exact opponent reply out of
+     `seq`, and `tot` that room's total recorded continuations -- carried onto
+     the edge so a door/digraph label can show "how often has this actually
+     been played against me" (0 = never, in real games). */
+  function processExit(fromRoomId, seq, opp, count=0, tot=0){
     const exitSeq = [...seq,opp];
     const exitPref = PREFS[prefKey(line.id,exitSeq)];
     const reply = exitPref?.reply;
     if(!reply){
       const leaf = getLeaf(exitSeq);
-      addEdge(fromRoomId,leaf.id,exitSeq);
+      addEdge(fromRoomId,leaf.id,exitSeq,null,{count,tot});
       return;
     }
     const destSeq = [...exitSeq,reply];
@@ -534,23 +546,23 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
     const foreignName = ownCastleName && exitPref.isCastleRoot && exitPref.castleName?.trim();
     if(foreignName && foreignName !== ownCastleName){
       const foreignKey = castleRoomKey(castleInstanceId(line.id, foreignName), positionKey(fenForSeq(destSeq)));
-      addEdge(fromRoomId, null, exitSeq, destSeq, { foreignCastle: foreignName, foreignKey });
+      addEdge(fromRoomId, null, exitSeq, destSeq, { foreignCastle: foreignName, foreignKey, count, tot });
       return;
     }
     const destKey = positionKey(fenForSeq(destSeq));
     const alreadyExisted = rooms.has(destKey);
     const destRoom = getRoom(destSeq);
-    addEdge(fromRoomId,destRoom.id,exitSeq,destSeq);
+    addEdge(fromRoomId,destRoom.id,exitSeq,destSeq,{count,tot});
     if(!alreadyExisted) walk(destSeq,destRoom.id);
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
   function walk(seq, roomId){
-    const {counts} = replies(games,seq);
+    const {counts, tot} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
-    for(const opp of visibleOpps) processExit(roomId,seq,opp);
+    for(const opp of visibleOpps) processExit(roomId,seq,opp,counts[opp],tot);
   }
 
   const entryRoomIds = [];
@@ -583,7 +595,8 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
         entryRoomIds.push(room.id);
       } else {
         const opp = roomSeq[fromSeq.length];
-        addEdge(fromRoomId, room.id, [...fromSeq,opp]);
+        const {counts: ancCounts, tot: ancTot} = replies(games, fromSeq);
+        addEdge(fromRoomId, room.id, [...fromSeq,opp], null, {count: ancCounts[opp]||0, tot: ancTot});
         if(i===0) entryRoomIds.push(room.id);
       }
       fromRoomId = room.id;
@@ -598,9 +611,10 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
   if(line.color==='black'){
     /* the opponent moves first, so the very first ply is itself an "exit"
        out of a virtual pre-game 'start' room rather than a room of ours */
+    const {counts: rootCounts, tot: rootTot} = replies(games, []);
     for(const trigger of triggers){
       if(PREFS[prefKey(line.id,[trigger])]?.hidden) continue;
-      processExit('start',[],trigger);
+      processExit('start',[],trigger,rootCounts[trigger],rootTot);
     }
   } else {
     for(const trigger of triggers){
@@ -828,22 +842,26 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     for(const e of graph.edges){
       if(!memberSet.has(e.source)) continue;
       const track = trackOf(e.source);
+      // "N (M%)" -- how often this exact opponent reply has actually occurred
+      // in the user's own games, out of this room's total recorded
+      // continuations, so the VR door plaque / digraph edge can show it.
+      const occurrence = formatOccurrence(e.count, e.tot);
       if(e.foreignKey){
         // this edge crosses into another castle's own room (see processExit's
         // redirect in buildCastleGraph) -- `to`/`toKey` stay null (nothing of
         // ours to point at); `foreignKey` is the real destination.
         exits.push({ opp: e.label, to: null, foreignCastle: e.foreignCastle, foreignKey: e.foreignKey,
-                     pair: pairFromSeq(e.destSeq), track });
+                     pair: pairFromSeq(e.destSeq), track, occurrence });
         continue;
       }
-      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track }); continue; }
+      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track, occurrence }); continue; }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
       // `to` is the R# label (for the readable report); `toKey` is the stable
       // position identity the VR uses to wire doors + persist decorations.
       exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null,
                    // edge-specific move pair, shown beside this door in the VR walk
-                   pair: pairFromSeq(e.destSeq), track });
+                   pair: pairFromSeq(e.destSeq), track, occurrence });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
@@ -1228,6 +1246,10 @@ async function showTranspositionGraph(){
       const nm = trunc12(meta.name), cn = trunc12(meta.castle);
       return cn ? (nm ? `${cn}: ${nm}` : cn) : nm;
     };
+    // move label + how often this exact reply has occurred in the user's own
+    // games (second line, same "N (M%)" stat the VR door plaque and the move
+    // table's .cnt span show) -- helps prioritize which branches to memorize.
+    const edgeLabel = e => `${e.label}\n${formatOccurrence(e.count, e.tot)}`;
 
     // dagre's compound-nesting layout intermittently throws "Cannot set 'order'
     // of undefined" on the run/two-track BOXES -- it's triggered by certain box
@@ -1311,12 +1333,12 @@ async function showTranspositionGraph(){
       // NON-cycle edges only -- the cycle (back) edges are deliberately kept OUT
       // of the graph during layout and added back afterward (see below).
       ...edges.flatMap((e,i)=> backEdges.has(i) ? [] : [{
-        data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq}
+        data:{id:'e'+i, source:e.source, target:e.target, label:edgeLabel(e), fen:e.fen, seq:e.seq}
       }])
     ];
     // The dashed repetition edges, added to the graph only AFTER dagre has run.
     const deferredEdgeEls = edges.flatMap((e,i)=> backEdges.has(i) ? [{
-      data:{id:'e'+i, source:e.source, target:e.target, label:e.label, fen:e.fen, seq:e.seq},
+      data:{id:'e'+i, source:e.source, target:e.target, label:edgeLabel(e), fen:e.fen, seq:e.seq},
       classes:'cycle-edge'
     }] : []);
 
@@ -1360,7 +1382,7 @@ async function showTranspositionGraph(){
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
           'target-arrow-shape':'triangle', 'curve-style':'bezier',
-          'label':'data(label)', 'font-size':9, 'color':'#333',
+          'label':'data(label)', 'font-size':9, 'color':'#333', 'text-wrap':'wrap',
           'text-background-color':'#fff', 'text-background-opacity':0.8
         }},
         { selector:'edge.cycle-edge', style:{
