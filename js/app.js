@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-136';
+const BUILD_TAG = '-137';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1931,7 +1931,9 @@ $('fieldModalSaveBtn').onclick = () => {
    when this node starts a new castle, the Castle name. Stored as plain pref
    fields (name / isCastleRoot / castleName). */
 let attributesModalSave = null;
+let attrModalLineSeq = null;
 function openAttributesModal(saved, onSave, lineSeq){
+  attrModalLineSeq = lineSeq;
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
@@ -1947,6 +1949,7 @@ function refreshAttrFieldVisibility(){
   const isRoot = $('attrIsCastleRoot').checked;
   $('attrCastleNameField').style.display = isRoot ? '' : 'none';
   $('attrStreetNumberField').style.display = isRoot ? '' : 'none';
+  updateCastleOwnerAutoLabel(attrModalLineSeq);
 }
 
 /* every castle defined in this opening system (distinct castle names on
@@ -2040,12 +2043,28 @@ function inheritedCastle(lineSeq, lineId = CURRENT_LINE?.id){
   }
   return '';
 }
+/* Like inheritedCastle, but for THIS node uses the attributes modal's own
+   live (unsaved) isCastleRoot/castleName fields instead of its last-saved
+   PREFS value -- so checking "starts new castle" and typing a name updates
+   the "Auto" option's label immediately, instead of only after Save. */
+function liveInheritedCastle(lineSeq){
+  const isRoot = $('attrIsCastleRoot').checked;
+  const castleName = $('attrCastleName').value.trim();
+  if(isRoot && castleName) return castleName;
+  return inheritedCastle((lineSeq||[]).slice(0,-1));
+}
+function updateCastleOwnerAutoLabel(lineSeq){
+  const opt = $('attrCastleOwner').querySelector('option[value=""]');
+  if(!opt) return;
+  const inherited = liveInheritedCastle(lineSeq);
+  opt.textContent = `Auto${inherited ? ` (inherit: ${inherited})` : ' (no ancestor castle)'}`;
+}
 /* "Belongs to castle" override: Auto (inherit) + every defined castle. Only
    needed to resolve a transposition shared by two castles; hidden when no
    castles exist (and there's no stored override to preserve). */
 function refreshCastleOwnerSelect(saved, lineSeq){
   const sel = $('attrCastleOwner');
-  const inherited = inheritedCastle(lineSeq);
+  const inherited = liveInheritedCastle(lineSeq);
   const castles = definedCastles();
   sel.innerHTML =
     `<option value="">Auto${inherited ? ` (inherit: ${escapeHtml(inherited)})` : ' (no ancestor castle)'}</option>` +
@@ -2054,6 +2073,7 @@ function refreshCastleOwnerSelect(saved, lineSeq){
   $('attrCastleOwnerField').style.display = (castles.length || saved?.castleOwner) ? '' : 'none';
 }
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
+$('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
 $('attributesCancelBtn').onclick = () => {
   $('attributesOverlay').style.display='none';
   attributesModalSave = null;
