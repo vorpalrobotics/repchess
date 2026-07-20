@@ -2201,6 +2201,125 @@ try {
   await app24.close();
 }
 
+// --- Phase VD: the Analysis Queue modal's OWN thread-count selector --
+//     independent of the live engine panel's, hidden/populated the same way
+//     (shared populateThreadsSelect), and actually reaches
+//     processAnalysisQueueLoop's engine.analyze() call without ever
+//     restarting whatever item is currently mid-search. ---
+const app25 = await launchApp();
+try {
+  await seedBackup(app25.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  });
+  await app25.page.click('.line-row');
+  await app25.page.waitForSelector('.data-row', { timeout: 10000 });
+  // the select lives inside the modal overlay -- open it once so Playwright's
+  // real selectOption() (test 71) can interact with it; harmless for test 70,
+  // which only checks computed styles/hook return values.
+  await app25.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+  await app25.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
+
+  // 70. Hidden on a single-threaded engine; populated 1..maxThreads and
+  //     restores a saved choice (independently of the live panel's own
+  //     LS_ENGINE_THREADS key) when multithreaded.
+  try {
+    await app25.page.evaluate(() => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = false;
+      engine.maxThreads = 1;
+      window.__aqTestHooks.populateAqThreadsSelect();
+    });
+    const hiddenState = await app25.page.evaluate(() => ({
+      hidden: document.getElementById('aqThreadsField').style.display === 'none',
+      threads: window.__aqTestHooks.aqThreads(),
+    }));
+    assert(hiddenState.hidden === true, 'expected the queue threads field to stay hidden on a single-threaded engine');
+    assert(hiddenState.threads === undefined, `expected aqThreads() to return undefined when hidden, got ${hiddenState.threads}`);
+
+    await app25.page.evaluate(() => {
+      localStorage.removeItem('aq_lastThreads');
+      localStorage.setItem('engine_lastThreads', '2');   // the LIVE panel's own key -- must not leak in here
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = true;
+      engine.maxThreads = 6;
+      engine.threads = 4;
+      window.__aqTestHooks.populateAqThreadsSelect();
+    });
+    const defaultState = await app25.page.evaluate(() => {
+      const sel = document.getElementById('aqThreadsSelect');
+      return { visible: document.getElementById('aqThreadsField').style.display !== 'none',
+               options: [...sel.options].map(o => o.value), selected: sel.value };
+    });
+    assert(defaultState.visible === true, 'expected the queue threads field to show once multithreaded');
+    assert(JSON.stringify(defaultState.options) === JSON.stringify(['1','2','3','4','5','6']),
+      `expected options 1..maxThreads(6), got ${JSON.stringify(defaultState.options)}`);
+    assert(defaultState.selected === '4', `expected the default (4), not the live panel's own saved choice (2), got ${defaultState.selected}`);
+
+    await app25.page.evaluate(() => {
+      localStorage.setItem('aq_lastThreads', '5');
+      window.__aqTestHooks.populateAqThreadsSelect();
+    });
+    const restored = await app25.page.evaluate(() => document.getElementById('aqThreadsSelect').value);
+    assert(restored === '5', `expected the queue's own saved choice (5) to be restored, got ${restored}`);
+    ok('analysis queue threads selector: hidden/populated/restored independently of the live panel\'s own selector');
+  } catch(e){ bad('analysis queue threads selector: hide/populate/restore', e); }
+
+  // 71. The selected value actually reaches processAnalysisQueueLoop's
+  //     engine.analyze() call -- and changing it while an item is mid-search
+  //     does not restart that item (same fake-engine technique as Phase T's
+  //     cancel/resume tests: engine.analyze() never resolves on its own,
+  //     only engine.stop() resolves it, standing in for a real in-progress
+  //     search).
+  try {
+    await app25.page.evaluate(() => {
+      window.__aqFakeEngine2 = { pending: null, calls: [] };
+      const { engine } = window.__aqTestHooks;
+      engine.ready = true;
+      engine.analyze = (fen, opts) => {
+        window.__aqFakeEngine2.calls.push(opts.threads);
+        return new Promise(resolve => {
+          window.__aqFakeEngine2.pending = () =>
+            resolve({ depth: 10, lines: { 1: { score: { type:'cp', value:5 }, depth:10, pv:['e2e4'] } } });
+        });
+      };
+      engine.stop = () => {
+        if(window.__aqFakeEngine2.pending){
+          const p = window.__aqFakeEngine2.pending;
+          window.__aqFakeEngine2.pending = null;
+          p();
+        }
+      };
+    });
+    await app25.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','Nf6'], 40, 1));
+    await app25.page.evaluate(() => window.__aqTestHooks.maybeResumeAnalysisQueue());
+    await app25.page.waitForFunction(() => window.__aqFakeEngine2.calls.length === 1, { timeout: 5000 });
+    const firstCallThreads = await app25.page.evaluate(() => window.__aqFakeEngine2.calls[0]);
+    assert(firstCallThreads === 5, `expected the queue's own selected thread count (5) to reach engine.analyze(), got ${firstCallThreads}`);
+
+    // change the selector mid-search -- must NOT trigger another analyze()
+    // call (which would mean the in-progress item got restarted).
+    await app25.page.selectOption('#aqThreadsSelect', '3');
+    await app25.page.waitForTimeout(200);
+    const callsAfterChange = await app25.page.evaluate(() => window.__aqFakeEngine2.calls.length);
+    assert(callsAfterChange === 1, `expected changing the queue's threads mid-search NOT to restart the current item, got ${callsAfterChange} call(s)`);
+
+    // let the fake search finish and confirm the NEXT item picks up the new value.
+    await app25.page.evaluate(() => window.__aqTestHooks.engine.stop());
+    await app25.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','d5'], 40, 1));
+    await app25.page.waitForFunction(() => window.__aqFakeEngine2.calls.length === 2, { timeout: 5000 });
+    const secondCallThreads = await app25.page.evaluate(() => window.__aqFakeEngine2.calls[1]);
+    assert(secondCallThreads === 3, `expected the next item to pick up the newly-selected thread count (3), got ${secondCallThreads}`);
+
+    // let the second fake search resolve so nothing dangles past this test.
+    await app25.page.evaluate(() => window.__aqTestHooks.engine.stop());
+    ok('analysis queue threads selector: reaches engine.analyze(), never restarts an item already in progress');
+  } catch(e){ bad('analysis queue threads selector: reaches analyze() without restarting', e); }
+} finally {
+  await app25.close();
+}
+
 // --- Phase W: room-info modal (click a graph node) -- move-number badge on
 //     the exit rows' thumbnails, and the exits list scrolls independently so
 //     a long list of replies can never push the Close button off-screen. ---
@@ -2670,6 +2789,33 @@ try {
     assert(JSON.stringify(passthrough) === JSON.stringify(['e6','g6']), `expected an unfiltered passthrough, got ${JSON.stringify(passthrough)}`);
     ok('memorizedFilter is a no-op passthrough when "only memorized" is unchecked');
   } catch(e){ bad('oqMemorizedFilter passthrough when off', e); }
+
+  // 77. The forced lead-in toward a castle-scoped session's own root (here:
+  //     1.d4 Nf6, the two plies before Alpha's root) is NEVER filtered by
+  //     memorized status, even though Alpha's own root room isn't itself
+  //     separately marked memorized -- reproduces the reported "No moves to
+  //     test" bug: with the old code, oqRoomMemorized used OQ.castleName
+  //     (forced to 'Alpha' for the whole session) instead of resolving each
+  //     lead-in room's real owner, so an unmarked root wrongly failed the
+  //     memorized check and starting a session found zero eligible moves.
+  try {
+    await appAA.page.evaluate(() => window.__oqTestHooks.setOQ({ onlyMemorized: true }));
+    const leadIn = await appAA.page.evaluate(() => ({
+      firstPly: window.__oqTestHooks.memorizedFilter([], ['d4']),
+      secondPly: window.__oqTestHooks.memorizedFilter(['d4'], ['Nf6']),
+    }));
+    assert(JSON.stringify(leadIn.firstPly) === JSON.stringify(['d4']),
+      `expected the forced first ply to pass through untested-by-memorized-status, got ${JSON.stringify(leadIn.firstPly)}`);
+    assert(JSON.stringify(leadIn.secondPly) === JSON.stringify(['Nf6']),
+      `expected the forced second ply to pass through even though Alpha's own root room isn't separately marked memorized, got ${JSON.stringify(leadIn.secondPly)}`);
+    // at (or past) the root, memorized-gating still applies exactly as
+    // before -- this fix only bypasses it BEFORE the root is reached.
+    const atRoot = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
+    assert(JSON.stringify(atRoot) === JSON.stringify(['e6']),
+      `expected memorized-gating to still apply once inside the castle, got ${JSON.stringify(atRoot)}`);
+    ok('memorizedFilter never gates the forced lead-in toward a castle root, but still gates real branches inside it');
+  } catch(e){ bad('oqMemorizedFilter: lead-in bypass', e); }
 } finally {
   await appAA.close();
 }
