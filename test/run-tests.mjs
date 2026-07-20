@@ -2789,6 +2789,33 @@ try {
     assert(JSON.stringify(passthrough) === JSON.stringify(['e6','g6']), `expected an unfiltered passthrough, got ${JSON.stringify(passthrough)}`);
     ok('memorizedFilter is a no-op passthrough when "only memorized" is unchecked');
   } catch(e){ bad('oqMemorizedFilter passthrough when off', e); }
+
+  // 77. The forced lead-in toward a castle-scoped session's own root (here:
+  //     1.d4 Nf6, the two plies before Alpha's root) is NEVER filtered by
+  //     memorized status, even though Alpha's own root room isn't itself
+  //     separately marked memorized -- reproduces the reported "No moves to
+  //     test" bug: with the old code, oqRoomMemorized used OQ.castleName
+  //     (forced to 'Alpha' for the whole session) instead of resolving each
+  //     lead-in room's real owner, so an unmarked root wrongly failed the
+  //     memorized check and starting a session found zero eligible moves.
+  try {
+    await appAA.page.evaluate(() => window.__oqTestHooks.setOQ({ onlyMemorized: true }));
+    const leadIn = await appAA.page.evaluate(() => ({
+      firstPly: window.__oqTestHooks.memorizedFilter([], ['d4']),
+      secondPly: window.__oqTestHooks.memorizedFilter(['d4'], ['Nf6']),
+    }));
+    assert(JSON.stringify(leadIn.firstPly) === JSON.stringify(['d4']),
+      `expected the forced first ply to pass through untested-by-memorized-status, got ${JSON.stringify(leadIn.firstPly)}`);
+    assert(JSON.stringify(leadIn.secondPly) === JSON.stringify(['Nf6']),
+      `expected the forced second ply to pass through even though Alpha's own root room isn't separately marked memorized, got ${JSON.stringify(leadIn.secondPly)}`);
+    // at (or past) the root, memorized-gating still applies exactly as
+    // before -- this fix only bypasses it BEFORE the root is reached.
+    const atRoot = await appAA.page.evaluate(() =>
+      window.__oqTestHooks.memorizedFilter(['d4','Nf6','c4'], ['e6','g6']));
+    assert(JSON.stringify(atRoot) === JSON.stringify(['e6']),
+      `expected memorized-gating to still apply once inside the castle, got ${JSON.stringify(atRoot)}`);
+    ok('memorizedFilter never gates the forced lead-in toward a castle root, but still gates real branches inside it');
+  } catch(e){ bad('oqMemorizedFilter: lead-in bypass', e); }
 } finally {
   await appAA.close();
 }

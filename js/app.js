@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-142';
+const BUILD_TAG = '-143';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5112,6 +5112,19 @@ function oqRoomMemorized(roomSeq){
 }
 function oqMemorizedFilter(seq, candidates){
   if(!OQ.onlyMemorized) return candidates;
+  // castle-scoped session, still short of the castle's own root: every
+  // candidate here is already forced down to one deterministic move by
+  // oqCoverageEligible (there's no other way to reach the castle), so never
+  // gate it by memorized status -- these lead-in rooms genuinely belong to
+  // whatever castle/line came before this one (oqRoomMemorized's
+  // OQ.castleName shortcut would wrongly check THIS castle's key instead),
+  // some aren't independently markable rooms at all (the very first ply has
+  // no room yet), and the user should still be tested on them regardless of
+  // memorized status -- it's the same game, played in full, every time.
+  // Only once seq reaches the root does memorized-gating (the whole point of
+  // this feature) actually apply, and OQ.castleName is correct again there.
+  const root = OQ.coverageRootSeq;
+  if(root && seq.length < root.length) return candidates;
   return candidates.filter(c => { const rs = oqCandidateRoomSeq(seq, c); return rs && oqRoomMemorized(rs); });
 }
 
