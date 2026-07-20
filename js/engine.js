@@ -39,7 +39,11 @@ export class Engine {
     this._listener = null;
     this.ready = false;
     this.multithreaded = false;
-    this.threads = 1;
+    this.threads = 1;       // the DEFAULT thread count init() picked (conservative --
+                             // see _initThreaded -- scales well without much more to gain)
+    this.maxThreads = 1;    // the ceiling analyze()'s `threads` override can ask for:
+                             // cores-1, uncapped, so a caller can deliberately go past
+                             // the conservative default when they want it to go faster
     this._currentThreads = 1;   // whatever Threads value is actually configured right now
   }
 
@@ -68,9 +72,13 @@ export class Engine {
 
     await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
     // leave a core for the UI/main thread; the lite build scales well to a
-    // handful of threads but oversubscribing past that gives little back.
+    // handful of threads but oversubscribing past that gives little back, so
+    // the DEFAULT stays conservative even though maxThreads (the ceiling a
+    // caller can deliberately ask for via analyze()'s `threads` override)
+    // goes all the way to cores-1.
     const cores = navigator.hardwareConcurrency || 2;
-    this.threads = Math.max(1, Math.min(cores - 1, 8));
+    this.maxThreads = Math.max(1, cores - 1);
+    this.threads = Math.min(this.maxThreads, 8);
     this._send(`setoption name Threads value ${this.threads}`);
     this._currentThreads = this.threads;
     this._send('setoption name Hash value 128');
@@ -102,6 +110,7 @@ export class Engine {
     await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
     this.multithreaded = false;
     this.threads = 1;
+    this.maxThreads = 1;
     this._currentThreads = 1;
     this.ready = true;
   }
@@ -221,23 +230,25 @@ export class Engine {
   // depth. searchmoves guarantees every listed move gets ranked among only
   // each other, so all of them keep reporting through to the target depth.
   // `threads`, when given (multi-threaded builds only -- ignored otherwise),
-  // overrides the Threads option for just this search; defaults to the full
-  // count init() picked. Only re-sent when it actually differs from what's
-  // currently configured (so the common case -- today, no caller actually
-  // passes a `threads` override, so this whole branch is dormant -- never
-  // pays for it), and, when it does change, followed by an isready/readyok
-  // handshake before the next `go`: changing Threads makes a multi-threaded
-  // WASM build respawn its whole pthread pool in the background, and
-  // searching before that settles can wedge the worker so it never responds
-  // to anything again (this was a real bug -- the background analysis
-  // queue used to pass a reduced thread count, the first thing in the app
-  // to ever change Threads after init, with no such handshake, and could
-  // hang the engine on its very first search; the queue no longer overrides
-  // threads at all, but the handshake stays in case a future caller does).
+  // overrides the Threads option for just this search, clamped to maxThreads
+  // (cores-1, not the conservative `threads` default -- lets a caller
+  // deliberately ask for more than init()'s own pick). Only re-sent when it
+  // actually differs from what's currently configured, and, when it does
+  // change, followed by an isready/readyok handshake before the next `go`:
+  // changing Threads makes a multi-threaded WASM build respawn its whole
+  // pthread pool in the background, and searching before that settles can
+  // wedge the worker so it never responds to anything again (this was a
+  // real bug -- the background analysis queue used to pass a reduced thread
+  // count, the first thing in the app to ever change Threads after init,
+  // with no such handshake, and could hang the engine on its very first
+  // search; the queue still doesn't override threads -- interrupting an
+  // already-running search for a Threads change isn't worth it for
+  // unattended background work -- but the live engine panel's thread-count
+  // selector does, safely, now that this handshake exists).
   async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
     await this._stopCurrent();
     if (this.multithreaded) {
-      const clampedThreads = Math.max(1, Math.min(threads, this.threads));
+      const clampedThreads = Math.max(1, Math.min(threads, this.maxThreads));
       if (clampedThreads !== this._currentThreads) {
         this._send(`setoption name Threads value ${clampedThreads}`);
         // race a timeout too (like _stopCurrent's) so a missing/late readyok
