@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260630-2';
+import { Engine } from './engine.js?v=20260720-3';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260720-98';
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-139';
+const BUILD_TAG = '-141';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -96,7 +96,7 @@ function hideBootSpinner(){
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
-const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth';
+const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
@@ -5748,6 +5748,13 @@ let liveEvalSpan = null, liveEvalBtn = null;
 
 const engineMultiPV   = () => parseInt($('engineLinesSelect').value, 10);
 const engineMaxDepth  = () => parseInt($('engineMaxDepthSelect').value, 10);
+// undefined (not a number) when the threads select is hidden/empty (single-
+// threaded build) -- analyze()'s own `threads = this.threads` default then
+// applies, same as before this control existed.
+const engineThreads = () => {
+  const v = parseInt($('engineThreadsSelect').value, 10);
+  return Number.isFinite(v) ? v : undefined;
+};
 
 /* restore last-used line count / max depth, if they're still valid options */
 const savedLines = localStorage.getItem(LS_ENGINE_LINES);
@@ -5767,12 +5774,38 @@ $('engineMaxDepthSelect').onchange = () => {
   localStorage.setItem(LS_ENGINE_DEPTH, $('engineMaxDepthSelect').value);
   if(currentEngineFen) runEngine(currentEngineFen);
 };
+$('engineThreadsSelect').onchange = () => {
+  // deliberately does NOT restart the current search like Lines/Depth do --
+  // changing Threads means stop + a pthread-pool respawn + a fresh `go`
+  // (see engine.js's analyze()), discarding the depth already reached on
+  // whatever position is being watched right now for no real gain. The new
+  // choice just gets persisted and takes effect the next time runEngine()
+  // actually runs on its own (a newly-selected position, or an explicit
+  // Stop/Resume) -- never forced.
+  localStorage.setItem(LS_ENGINE_THREADS, $('engineThreadsSelect').value);
+};
+// 1..maxThreads (cores-1) -- only meaningful once the multi-threaded build is
+// up, so this is called from engine.init().then() below, never at module
+// load. Restores a saved choice only if it's still in range on THIS device.
+function populateEngineThreadsSelect(){
+  if(!engine.multithreaded || engine.maxThreads <= 1){
+    $('engineThreadsField').style.display = 'none';
+    return;
+  }
+  const sel = $('engineThreadsSelect');
+  sel.innerHTML = Array.from({length: engine.maxThreads}, (_, i) => i + 1)
+    .map(n => `<option value="${n}">${n}</option>`).join('');
+  const saved = parseInt(localStorage.getItem(LS_ENGINE_THREADS), 10);
+  sel.value = (Number.isFinite(saved) && saved >= 1 && saved <= engine.maxThreads) ? saved : engine.threads;
+  $('engineThreadsField').style.display = '';
+}
 
-/* short suffix telling the user whether multi-threading kicked in (it only does
-   on cross-origin-isolated browsers, see js/engine.js) -- shown on the live
-   engine status line so it's visible at a glance during analysis. */
+/* short suffix telling the user how many threads are ACTUALLY configured
+   right now (not just the default init() picked -- the threads selector
+   above can override it per search), shown on the live engine status line
+   so it's visible at a glance during analysis. */
 const engineModeTag = () => !engine.ready ? ''
-  : engine.multithreaded ? ` · ${engine.threads} threads` : ' · 1 thread';
+  : engine.multithreaded ? ` · ${engine._currentThreads} threads` : ' · 1 thread';
 
 /* The STOP/PLAY button drives (and reflects) the live search state:
      'running' -> STOP (square): a search is in progress (it can peg several
@@ -5833,6 +5866,7 @@ engine.init().then(() => {
   if(!$('engineDepth').textContent){
     $('engineDepth').textContent = Chessboard ? `Engine ready${engineModeTag()}` : 'Engine not available';
   }
+  populateEngineThreadsSelect();
   maybeResumeAnalysisQueue();
 }).catch(err => {
   console.error('[engine] init failed', err);
@@ -6052,11 +6086,12 @@ function queueChildrenForAnalysis(parentSeq, branchDiv){
    search -- see maybeResumeAnalysisQueue(), hooked from setEngineUI('idle'
    and 'stopped') and from engine.init(). A live search takes precedence
    while it runs, but stopping it explicitly hands the engine straight back
-   to the queue. Always runs at the same Threads count init() picked --
-   asking for fewer used to hang the whole engine (see engine.js's analyze()
-   for why a mid-session Threads change is unsafe on a multi-threaded WASM
-   build), so this deliberately never overrides it, at the cost of the queue
-   competing for the same cores as analysis the user is actually watching.
+   to the queue. Always runs at the same (conservative) Threads count init()
+   picked, never the live engine panel's own thread-count choice -- a
+   mid-session Threads change is safe now (see engine.js's analyze()), but
+   interrupting an already-running background search for one still isn't
+   worth it for unattended work, at the cost of the queue competing for the
+   same cores as analysis the user is actually watching.
    Any interactive engine.analyze() call still automatically preempts it for
    free (Engine._stopCurrent()) -- the queue just notices its search resolved
    short of the target depth and leaves the item queued to pick back up at
@@ -6248,6 +6283,26 @@ function aqProgressHtml(item){
 function aqModalOpen(){ return $('analysisQueueOverlay').style.display === 'flex'; }
 function renderAnalysisQueueModalIfOpen(){ if(aqModalOpen()) renderAnalysisQueueModal(); }
 
+/* swaps the ORDER (see getAnalysisQueue's sort in db.js) of ANALYSIS_QUEUE[i]
+   and its neighbor at i+dir, persists both, and re-renders. Index 0 is never
+   touched either way -- it's the item currently being (or about to be)
+   searched, so displacing it would waste in-progress engine work; the
+   highest anything else can be raised to is index 1 (the second row). */
+async function moveAnalysisQueueItem(id, dir){
+  const i = ANALYSIS_QUEUE.findIndex(it => it.id === id);
+  if(i === -1) return;
+  const j = i + dir;
+  if(i === 0 || j <= 0 || j >= ANALYSIS_QUEUE.length) return;
+  const a = ANALYSIS_QUEUE[i], b = ANALYSIS_QUEUE[j];
+  const orderOf = it => it.order ?? it.createdAt;
+  const tmp = orderOf(a);
+  a.order = orderOf(b);
+  b.order = tmp;
+  ANALYSIS_QUEUE[i] = b; ANALYSIS_QUEUE[j] = a;
+  await Promise.all([putAnalysisQueueItem(a), putAnalysisQueueItem(b)]);
+  renderAnalysisQueueModalIfOpen();
+}
+
 function renderAnalysisQueueModal(){
   const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
   if(!ANALYSIS_QUEUE.length){
@@ -6255,15 +6310,26 @@ function renderAnalysisQueueModal(){
     return;
   }
   empty.style.display='none'; table.style.display='';
-  body.innerHTML = ANALYSIS_QUEUE.map(item => `
+  const last = ANALYSIS_QUEUE.length - 1;
+  body.innerHTML = ANALYSIS_QUEUE.map((item,i) => `
     <tr data-id="${escapeHtml(item.id)}">
-      <td><button type="button" class="aq-del" title="Cancel"><i class="fa-solid fa-trash"></i></button></td>
+      <td class="aq-reorder">
+        ${i >= 2 ? `<button type="button" class="aq-up" title="Raise priority"><i class="fa-solid fa-arrow-up"></i></button>` : ''}
+        ${i >= 1 && i < last ? `<button type="button" class="aq-down" title="Lower priority"><i class="fa-solid fa-arrow-down"></i></button>` : ''}
+        <button type="button" class="aq-del" title="Cancel"><i class="fa-solid fa-trash"></i></button>
+      </td>
       <td>${aqPositionLabel(item)}</td>
       <td>depth ${item.depth}, ${item.multipv} line${item.multipv===1?'':'s'}</td>
       <td>${aqProgressHtml(item)}</td>
     </tr>`).join('');
   body.querySelectorAll('.aq-del').forEach(btn => {
     btn.onclick = () => cancelAnalysisQueueItem(btn.closest('tr').dataset.id);
+  });
+  body.querySelectorAll('.aq-up').forEach(btn => {
+    btn.onclick = () => moveAnalysisQueueItem(btn.closest('tr').dataset.id, -1);
+  });
+  body.querySelectorAll('.aq-down').forEach(btn => {
+    btn.onclick = () => moveAnalysisQueueItem(btn.closest('tr').dataset.id, 1);
   });
 }
 
@@ -6339,8 +6405,16 @@ async function processAnalysisQueueLoop(){
 
       let result = null;
       try {
-        // no `threads` override -- always the same count init() picked, so
-        // this never triggers analyze()'s mid-session Threads-change path.
+        // no `threads` override -- always the same (conservative) count
+        // init() picked, deliberately never the live panel's own choice:
+        // interrupting an already-running background search for a Threads
+        // change isn't worth it for unattended work. This CAN still trigger
+        // analyze()'s mid-session Threads-change path now, though -- if the
+        // live panel just ran with a different thread count, the queue's
+        // request to switch back to the default no longer matches
+        // _currentThreads. That's fine (safe now -- see analyze()'s own
+        // comment); it just means a handshake beat whenever control passes
+        // between "live analysis at a custom thread count" and the queue.
         result = await engine.analyze(fen, {
           multipv,
           depth: item.depth,
@@ -6562,11 +6636,13 @@ async function runEngine(fen, onEvalUpdate, onComplete){
   expandedPvLines.clear();
   const multipv = engineMultiPV();
   const depth = engineMaxDepth();
-  console.debug(`[runEngine] runId=${runId} starting analyze multipv=${multipv} depth=${depth}`);
+  const threads = engineThreads();
+  console.debug(`[runEngine] runId=${runId} starting analyze multipv=${multipv} depth=${depth} threads=${threads}`);
   const t0 = performance.now();
   engine.analyze(fen, {
     multipv,
     depth,
+    threads,
     onInfo: (d,lines) => {
       if(runId !== engineRunId){ console.debug(`[runEngine] runId=${runId} stale onInfo (current=${engineRunId}) ignored at depth=${d}`); return; }
       // the user hit STOP; ignore any final lines the engine emits as it halts
@@ -6648,11 +6724,22 @@ if(localStorage.getItem('threeTestDebug')){
     addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
+    moveAnalysisQueueItem: (id, dir) => moveAnalysisQueueItem(id, dir),
     maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
     // drives the real live-analysis state machine (setEngineUI) so a test can
     // simulate "live analysis started" / "explicitly stopped" without needing
     // the cm-chessboard widget this harness can't load.
     setEngineUI: (state) => setEngineUI(state),
+    // real engine.init() always rejects here (no live Stockfish), so it never
+    // reaches populateEngineThreadsSelect() on its own -- a test monkey-patches
+    // engine.multithreaded/.maxThreads/.threads first, then calls this directly.
+    populateEngineThreadsSelect: () => populateEngineThreadsSelect(),
+    engineThreads: () => engineThreads(),
+    // showPosition (the normal way currentEngineFen gets set) bails out
+    // without the cm-chessboard widget this harness can't load -- lets a
+    // test simulate "a live analysis is in progress" for the threads
+    // selector's must-not-restart-it check.
+    setCurrentEngineFen: (fen) => { currentEngineFen = fen; },
     // the real Engine singleton -- since Stockfish isn't available in this
     // harness, a test monkey-patches .ready/.threads/.analyze/.stop directly
     // to fake a search in progress (analyze() returns a controllable pending

@@ -362,7 +362,13 @@ async function getAnalysisQueue(user){
   return new Promise((resolve,reject)=>{
     const store = db.transaction('analysisQueue','readonly').objectStore('analysisQueue');
     const req = store.index('user').getAll(user);
-    req.onsuccess = () => resolve(req.result.sort((a,b)=>a.createdAt-b.createdAt));
+    // `order` (added for manual up/down reordering) wins when present; an item
+    // saved before that feature existed has no `order` yet, so falls back to
+    // its createdAt -- preserving today's FIFO order for old data untouched
+    // until the user actually reorders it (moveAnalysisQueueItem then gives
+    // it a real `order` going forward).
+    const orderOf = it => it.order ?? it.createdAt;
+    req.onsuccess = () => resolve(req.result.sort((a,b)=>orderOf(a)-orderOf(b)));
     req.onerror   = () => reject(req.error);
   });
 }

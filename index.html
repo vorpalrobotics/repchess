@@ -345,6 +345,9 @@
   .aq-table{border-collapse:collapse;width:100%;font-size:.85rem}
   .aq-table th,.aq-table td{border:1px solid #ddd;padding:.35rem .5rem;text-align:left;vertical-align:top}
   .aq-table th{background:#f2f2f2;font-size:.78rem}
+  .aq-reorder{display:flex;align-items:center;gap:.4rem;white-space:nowrap}
+  .aq-up,.aq-down{color:#555;cursor:pointer;background:none;border:none;font-size:.85rem;padding:0}
+  .aq-up:hover,.aq-down:hover{color:#1565c0}
   .aq-del{color:#c62828;cursor:pointer;background:none;border:none;font-size:1rem;padding:0}
   .aq-del:hover{color:#8e0000}
   .aq-pos{font-family:'Courier New',monospace}
@@ -641,6 +644,9 @@
                 <option>15</option><option>20</option><option>25</option>
                 <option selected>30</option><option>35</option><option>40</option>
               </select>
+            </label>
+            <label id="engineThreadsField" style="display:none">Threads:
+              <select id="engineThreadsSelect"></select>
             </label>
           </div>
         </div>
@@ -1205,7 +1211,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260630-40"></script>
+<script src="js/db.js?v=20260720-41"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1222,6 +1228,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260720-139"></script>
+<script type="module" src="js/app.js?v=20260720-141"></script>
 </body>
 </html>
