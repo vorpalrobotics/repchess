@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-151';
+const BUILD_TAG = '-152';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6454,6 +6454,31 @@ async function moveAnalysisQueueItem(id, dir){
   renderAnalysisQueueModalIfOpen();
 }
 
+/* Jumps ANALYSIS_QUEUE[i] all the way to the top movable slot (index 1,
+   dir<0) or all the way to the bottom (the last index, dir>0) -- same
+   index-0 protection as moveAnalysisQueueItem. Only the moved item's own
+   `order` changes (nobody else's is touched): moving to "top" sets it to
+   the MIDPOINT between index 0's and index 1's order, rather than just
+   index 1's order minus a fixed step, so it can never accidentally sort
+   ahead of index 0 on a fresh IDB fetch even if the two were created only
+   moments apart; moving to "bottom" just needs to clear the last item's
+   order, so a fixed +1 step is safe there. */
+async function jumpAnalysisQueueItem(id, dir){
+  const i = ANALYSIS_QUEUE.findIndex(it => it.id === id);
+  if(i === -1 || i === 0) return;
+  const targetIndex = dir < 0 ? 1 : ANALYSIS_QUEUE.length - 1;
+  if(i === targetIndex) return;
+  const orderOf = it => it.order ?? it.createdAt;
+  const item = ANALYSIS_QUEUE[i];
+  item.order = dir < 0
+    ? (orderOf(ANALYSIS_QUEUE[0]) + orderOf(ANALYSIS_QUEUE[1])) / 2
+    : orderOf(ANALYSIS_QUEUE[ANALYSIS_QUEUE.length - 1]) + 1;
+  ANALYSIS_QUEUE.splice(i, 1);
+  ANALYSIS_QUEUE.splice(dir < 0 ? 1 : ANALYSIS_QUEUE.length, 0, item);
+  await putAnalysisQueueItem(item);
+  renderAnalysisQueueModalIfOpen();
+}
+
 function renderAnalysisQueueModal(){
   const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
   if(!ANALYSIS_QUEUE.length){
@@ -6465,8 +6490,10 @@ function renderAnalysisQueueModal(){
   body.innerHTML = ANALYSIS_QUEUE.map((item,i) => `
     <tr data-id="${escapeHtml(item.id)}">
       <td class="aq-reorder">
+        ${i >= 2 ? `<button type="button" class="aq-top" title="Move to top"><i class="fa-solid fa-angles-up"></i></button>` : ''}
         ${i >= 2 ? `<button type="button" class="aq-up" title="Raise priority"><i class="fa-solid fa-arrow-up"></i></button>` : ''}
         ${i >= 1 && i < last ? `<button type="button" class="aq-down" title="Lower priority"><i class="fa-solid fa-arrow-down"></i></button>` : ''}
+        ${i >= 1 && i < last ? `<button type="button" class="aq-bottom" title="Move to bottom"><i class="fa-solid fa-angles-down"></i></button>` : ''}
         <button type="button" class="aq-del" title="Cancel"><i class="fa-solid fa-trash"></i></button>
       </td>
       <td>${aqPositionLabel(item)}</td>
@@ -6481,6 +6508,12 @@ function renderAnalysisQueueModal(){
   });
   body.querySelectorAll('.aq-down').forEach(btn => {
     btn.onclick = () => moveAnalysisQueueItem(btn.closest('tr').dataset.id, 1);
+  });
+  body.querySelectorAll('.aq-top').forEach(btn => {
+    btn.onclick = () => jumpAnalysisQueueItem(btn.closest('tr').dataset.id, -1);
+  });
+  body.querySelectorAll('.aq-bottom').forEach(btn => {
+    btn.onclick = () => jumpAnalysisQueueItem(btn.closest('tr').dataset.id, 1);
   });
 }
 
@@ -6892,6 +6925,7 @@ if(localStorage.getItem('threeTestDebug')){
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
     moveAnalysisQueueItem: (id, dir) => moveAnalysisQueueItem(id, dir),
+    jumpAnalysisQueueItem: (id, dir) => jumpAnalysisQueueItem(id, dir),
     maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
     // drives the real live-analysis state machine (setEngineUI) so a test can
     // simulate "live analysis started" / "explicitly stopped" without needing
