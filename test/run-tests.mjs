@@ -5764,5 +5764,60 @@ try {
   await appBI.close();
 }
 
+// --- Phase BJ: boot-time "install default mnemonics?" offer
+//     (json/repchess-mnemonics-DEFAULT.json.gz), driven via
+//     __mnemDefaultTestHooks. The real auto-run on boot is skipped under
+//     threeTestDebug (see the guarded call near renderHome() in app.js) so
+//     ordinary tests that boot with an empty mnemonics store don't all pay
+//     for a real fetch+decompress+import -- only this dedicated test drives
+//     it, end to end, against the real committed file. ---
+const appBJ = await launchApp();
+try {
+  // 87. A fresh browser has no mnemonics and hasn't been offered yet;
+  //     accepting the offer installs the real default bundle and remembers
+  //     the decision so it won't ask again.
+  try {
+    const before = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(before).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(before).length} square(s)`);
+    const offeredBefore = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!offeredBefore, 'expected the offer to not have been made yet on a fresh boot');
+
+    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+
+    const after = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(after).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
+    const offeredAfter = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!!offeredAfter, 'expected the offer to be marked as made after accepting');
+    ok('accepting the default-mnemonics offer installs the real bundle and remembers the decision');
+  } catch(e){ bad('default mnemonics offer: accept installs the real bundle', e); }
+
+  // 88. Once offered, a later call is a silent no-op -- no confirm(), no re-install.
+  try {
+    await appBJ.page.evaluate(() => { window.confirm = () => { throw new Error('confirm() should not be called again'); }; });
+    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    ok('default mnemonics offer: already-offered is a silent no-op on a later boot');
+  } catch(e){ bad('default mnemonics offer: no re-prompt once already offered', e); }
+} finally {
+  await appBJ.close();
+}
+
+// --- Phase BK: declining the default-mnemonics offer leaves the store empty
+//     but still remembers the decision, so it doesn't nag on every boot. ---
+const appBK = await launchApp();
+try {
+  // 89. Decline -> nothing installed, but the offer is still marked made.
+  try {
+    await appBK.page.evaluate(() => { window.confirm = () => false; });
+    await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    const stored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(stored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(stored).length} square(s)`);
+    const offered = await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!!offered, 'expected declining to still mark the offer as made (so it does not nag again)');
+    ok('declining the default-mnemonics offer installs nothing but remembers the decision');
+  } catch(e){ bad('default mnemonics offer: decline leaves store empty but remembers decision', e); }
+} finally {
+  await appBK.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
