@@ -247,23 +247,41 @@ export class Engine {
   // selector does, safely, now that this handshake exists).
   async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
     await this._stopCurrent();
+    let threadsFallback = null;
     if (this.multithreaded) {
       const clampedThreads = Math.max(1, Math.min(threads, this.maxThreads));
       if (clampedThreads !== this._currentThreads) {
-        this._send(`setoption name Threads value ${clampedThreads}`);
         // race a timeout too (like _stopCurrent's) so a missing/late readyok
         // can't wedge the app forever -- worst case we search a beat early.
-        // Only mark _currentThreads updated when readyok genuinely won the
-        // race: if the timeout fires instead, the engine may not have
-        // actually finished switching, so the NEXT call for this same
-        // thread count should still redo the handshake rather than
-        // wrongly assume it's already there (a slightly wasted repeat
-        // handshake is a much safer failure mode than skipping it).
-        const ack = await Promise.race([
-          this._command('isready', line => line === 'readyok').then(() => true),
-          new Promise(resolve => setTimeout(() => resolve(false), 4000)),
-        ]);
-        if (ack) this._currentThreads = clampedThreads;
+        const trySetThreads = async n => {
+          this._send(`setoption name Threads value ${n}`);
+          return await Promise.race([
+            this._command('isready', line => line === 'readyok').then(() => true),
+            new Promise(resolve => setTimeout(() => resolve(false), 4000)),
+          ]);
+        };
+        const ack = await trySetThreads(clampedThreads);
+        if (ack) {
+          this._currentThreads = clampedThreads;
+        } else {
+          // navigator.hardwareConcurrency (what maxThreads is derived from)
+          // can overstate what this browser/OS will actually let a WASM
+          // build spin up as pthread workers -- if the requested count
+          // never acked, DON'T just barrel on into a search on whatever
+          // half-respawned state the pthread pool is now in (that's what
+          // used to silently wedge the engine for good, with nothing ever
+          // reaching bestmove again). Instead, fall back to _currentThreads
+          // -- the last count that's actually known to have acked -- and
+          // only proceed once THAT'S reconfirmed. If even that doesn't ack,
+          // the worker itself is wedged, not just this particular thread
+          // count, so give up loudly instead of hanging forever.
+          console.warn(`[engine] Threads -> ${clampedThreads} didn't ack in time, falling back to ${this._currentThreads}`);
+          const fallbackAck = await trySetThreads(this._currentThreads);
+          if (!fallbackAck) {
+            throw new Error(`engine unresponsive after a Threads change to ${clampedThreads} -- the worker may need a reload`);
+          }
+          threadsFallback = { requested: clampedThreads, using: this._currentThreads };
+        }
       }
     }
     this._send(`setoption name MultiPV value ${multipv}`);
@@ -297,7 +315,7 @@ export class Engine {
         if (line.startsWith('bestmove')) {
           this._listener = null;
           console.debug(`[engine] bestmove received, final depth=${curDepth}`);
-          resolve({ depth: curDepth, lines });
+          resolve(threadsFallback ? { depth: curDepth, lines, threadsFallback } : { depth: curDepth, lines });
         }
       };
       const searchmovesPart = searchmoves?.length ? ` searchmoves ${searchmoves.join(' ')}` : '';

@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260720-3';
+import { Engine } from './engine.js?v=20260721-4';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260720-98';
@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-148';
+const BUILD_TAG = '-149';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6538,8 +6538,13 @@ async function processAnalysisQueueLoop(){
             renderAnalysisQueueModalIfOpen();
           }
         });
+        if(result.threadsFallback){
+          const {requested, using} = result.threadsFallback;
+          log(`Analysis queue: ${requested} threads didn't respond in time, fell back to ${using}`, true);
+        }
       } catch(err){
         console.error('[analysisQueue] search failed', err);
+        log(`Analysis queue: engine search failed (${err.message}) — it may need a page reload`, true);
       }
 
       if(result) await saveAnalysisQueueResult(item, fen, result);
@@ -6768,6 +6773,10 @@ async function runEngine(fen, onEvalUpdate, onComplete){
     }
   }).then(result => {
     console.debug(`[runEngine] runId=${runId} analyze resolved after ${(performance.now()-t0).toFixed(0)}ms`, result);
+    if(result.threadsFallback){
+      const {requested, using} = result.threadsFallback;
+      log(`Engine: ${requested} threads didn't respond in time, fell back to ${using}`, true);
+    }
     // only the current run owns the status UI -- a stale run resolving (because
     // a newer search superseded it) must not touch the button the new run owns.
     // A user-initiated stop leaves the PLAY button up; a natural finish hides it.
@@ -6775,7 +6784,10 @@ async function runEngine(fen, onEvalUpdate, onComplete){
       if(engineState !== 'stopped') setEngineUI('idle');
       onComplete?.();
     }
-  }).catch(err => console.error(`[runEngine] runId=${runId} analyze failed`, err));
+  }).catch(err => {
+    console.error(`[runEngine] runId=${runId} analyze failed`, err);
+    log(`Engine search failed (${err.message}) — it may need a page reload`, true);
+  });
 }
 
 function showPosition(fen, onEvalUpdate, onComplete, seq){
