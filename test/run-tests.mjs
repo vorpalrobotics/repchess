@@ -2037,20 +2037,23 @@ try {
   await app23.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
   await app23.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
 
-  // 64. Row 0 has neither arrow (never touchable); row 1 has only a down
-  //     arrow (already at the raise ceiling); rows 2..N-2 have both; the
-  //     last row has no down arrow (nothing below it).
+  // 64. Row 0 has none of the four reorder buttons (never touchable); row 1
+  //     has only a down/bottom pair (already at the raise ceiling); rows
+  //     2..N-2 have all four; the last row has no down/bottom pair (nothing
+  //     below it). The double-arrow (top/bottom) buttons follow exactly the
+  //     same visibility rule as their single-step counterparts.
   try {
     const rows = await app23.page.evaluate(() => [...document.querySelectorAll('#analysisQueueBody tr')].map(tr => ({
-      up: !!tr.querySelector('.aq-up'), down: !!tr.querySelector('.aq-down'),
+      top: !!tr.querySelector('.aq-top'), up: !!tr.querySelector('.aq-up'),
+      down: !!tr.querySelector('.aq-down'), bottom: !!tr.querySelector('.aq-bottom'),
     })));
     assert(JSON.stringify(rows) === JSON.stringify([
-      { up:false, down:false },
-      { up:false, down:true },
-      { up:true,  down:true },
-      { up:true,  down:false },
-    ]), `unexpected up/down arrow visibility per row: ${JSON.stringify(rows)}`);
-    ok('analysis queue: up/down arrows are hidden exactly where raising/lowering would be a no-op or displace the processing item');
+      { top:false, up:false, down:false, bottom:false },
+      { top:false, up:false, down:true,  bottom:true  },
+      { top:true,  up:true,  down:true,  bottom:true  },
+      { top:true,  up:true,  down:false, bottom:false },
+    ]), `unexpected reorder button visibility per row: ${JSON.stringify(rows)}`);
+    ok('analysis queue: up/down/top/bottom reorder buttons are hidden exactly where they would be a no-op or displace the processing item');
   } catch(e){ bad('analysis queue: reorder arrow visibility', e); }
 
   // 65. Raising the last item all the way up stops at index 1, never
@@ -2084,6 +2087,64 @@ try {
     assert(JSON.stringify(order2) === JSON.stringify(order1), `expected the reordered queue to survive a reload from IDB, got ${JSON.stringify(order2)}`);
     ok('analysis queue: raising an item persists to IDB and stops at index 1');
   } catch(e){ bad('analysis queue: reorder persists and respects the ceiling', e); }
+
+  // 66. jumpAnalysisQueueItem(id, -1) ("move to top") lands the last item at
+  //     index 1 in ONE call -- not one step at a time like moveAnalysisQueueItem
+  //     -- while still never touching index 0, and persists to IDB.
+  try {
+    const idAt = (i) => app23.page.evaluate((i) => window.__aqTestHooks.getQueue()[i].id, i);
+    // queue is currently ['d4,Nf6','d4,e5','d4,d5','d4,c5'] (from test 65).
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), await idAt(3));
+
+    const order1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(order1) === JSON.stringify(['d4,Nf6','d4,c5','d4,e5','d4,d5']),
+      `expected d4,c5 jumped straight from the bottom to index 1 in one call, got ${JSON.stringify(order1)}`);
+
+    await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
+    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(order2) === JSON.stringify(order1),
+      `expected the "move to top" jump to survive a reload from IDB (proving the midpoint order value sorted correctly), got ${JSON.stringify(order2)}`);
+    ok('analysis queue: "move to top" jumps an item straight to index 1 in one call and persists');
+  } catch(e){ bad('analysis queue: jump to top', e); }
+
+  // 67. jumpAnalysisQueueItem(id, +1) ("move to bottom") lands an item at
+  //     the last index in one call, and persists to IDB.
+  try {
+    const idAt = (i) => app23.page.evaluate((i) => window.__aqTestHooks.getQueue()[i].id, i);
+    // queue is currently ['d4,Nf6','d4,c5','d4,e5','d4,d5'] (from test 66).
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), await idAt(2));
+
+    const order1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(order1) === JSON.stringify(['d4,Nf6','d4,c5','d4,d5','d4,e5']),
+      `expected d4,e5 jumped straight to the last index in one call, got ${JSON.stringify(order1)}`);
+
+    await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
+    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(order2) === JSON.stringify(order1),
+      `expected the "move to bottom" jump to survive a reload from IDB, got ${JSON.stringify(order2)}`);
+    ok('analysis queue: "move to bottom" jumps an item straight to the last index in one call and persists');
+  } catch(e){ bad('analysis queue: jump to bottom', e); }
+
+  // 68. jumpAnalysisQueueItem is a safe no-op both for index 0 (the
+  //     currently-processing item, never displaceable) and for an item
+  //     already sitting at its target end.
+  try {
+    const before = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    const id0 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue()[0].id);
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), id0);
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), id0);
+    // index 1 is already the "top" target -- jumping it further is a no-op.
+    const id1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue()[1].id);
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), id1);
+    // the last index is already the "bottom" target -- likewise a no-op.
+    const idLast = await app23.page.evaluate(() => { const q = window.__aqTestHooks.getQueue(); return q[q.length-1].id; });
+    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), idLast);
+
+    const after = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(after) === JSON.stringify(before),
+      `expected jumping index 0 or an already-at-target item to be a no-op, got ${JSON.stringify(after)} (was ${JSON.stringify(before)})`);
+    ok('analysis queue: jumping index 0 or an item already at its target end is a safe no-op');
+  } catch(e){ bad('analysis queue: jump no-op safety', e); }
 } finally {
   await app23.close();
 }
