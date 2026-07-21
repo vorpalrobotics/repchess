@@ -5512,5 +5512,66 @@ try {
   await appBE.close();
 }
 
+// --- Phase BF: engine.js's Threads-change handshake falls back to the last
+//     known-good thread count (instead of silently searching on a possibly
+//     wedged pthread pool) when a requested count doesn't ack in time, and
+//     gives up loudly if even the fallback doesn't ack. Drives a real Engine
+//     instance directly (no real Stockfish worker needed -- _send is
+//     overridden to simulate the UCI protocol) since the vendored WASM build
+//     isn't exercised by this offline harness. ---
+const appBF = await launchApp();
+try {
+  // 81. A Threads change that never acks falls back to the last count known
+  //     to have worked, and the resolved result reports the fallback.
+  try {
+    const result = await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      engine.multithreaded = true;
+      engine.maxThreads = 16;
+      engine._currentThreads = 8;   // the last count known to have acked
+      let lastThreadsSent = null;
+      engine._send = (cmd) => {
+        const m = cmd.match(/^setoption name Threads value (\d+)$/);
+        if(m){ lastThreadsSent = parseInt(m[1], 10); return; }
+        if(cmd === 'isready'){
+          // only the fallback target (8) ever acks -- the requested 12 never does
+          if(lastThreadsSent === 8) setTimeout(() => engine._listener?.('readyok'), 5);
+          return;
+        }
+        if(cmd.startsWith('go ')){ setTimeout(() => engine._listener?.('bestmove e2e4'), 5); return; }
+      };
+      return await engine.analyze('startpos', { threads: 12, depth: 1 });
+    });
+    assert(result.threadsFallback && result.threadsFallback.requested === 12 && result.threadsFallback.using === 8,
+      `expected a threadsFallback {requested:12, using:8}, got ${JSON.stringify(result.threadsFallback)}`);
+    ok("engine.analyze falls back to the last acking thread count when the requested one doesn't ack");
+  } catch(e){ bad('engine Threads-change fallback', e); }
+
+  // 82. When NEITHER the requested count nor the fallback acks, analyze()
+  //     rejects instead of hanging forever on a `go` the engine can never answer.
+  try {
+    let rejected = null;
+    await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      engine.multithreaded = true;
+      engine.maxThreads = 16;
+      engine._currentThreads = 8;
+      // nothing ever acks -- both the primary and fallback handshakes time out
+      engine._send = () => {};
+      window.__aqWedgeResult = null;
+      try { await engine.analyze('startpos', { threads: 12, depth: 1 }); }
+      catch(e){ window.__aqWedgeResult = e.message; }
+    });
+    rejected = await appBF.page.evaluate(() => window.__aqWedgeResult);
+    assert(typeof rejected === 'string' && /unresponsive/.test(rejected),
+      `expected analyze() to reject with an "unresponsive" error, got ${JSON.stringify(rejected)}`);
+    ok('engine.analyze rejects loudly when even the fallback thread count never acks');
+  } catch(e){ bad('engine Threads-change total wedge', e); }
+} finally {
+  await appBF.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
