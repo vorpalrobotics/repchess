@@ -5469,5 +5469,48 @@ try {
   await appBD.close();
 }
 
+// --- Phase BE: mnemonics export downscales images to fit
+//     MNEM_EXPORT_IMG_MAX_DIM (so a full 384-image pack clears GitHub's
+//     25MB web-upload limit) without touching the locally-stored originals. ---
+const appBE = await launchApp();
+try {
+  const bigImg = await appBE.page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 512;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#3366cc'; ctx.fillRect(0, 0, 512, 512);
+    return c.toDataURL('image/png');
+  });
+  await seedBackup(appBE.page, {
+    version: 6, user: 'tester',
+    lines: [], games: [],
+    mnemonics: [{ square: 'e4', knight: 'echo', knightImg: bigImg }],
+  });
+
+  // 80. The exported bundle's image is downscaled to fit MNEM_EXPORT_IMG_MAX_DIM,
+  //     while the locally-stored original (still 512px) is left untouched.
+  try {
+    const { exportedDims, storedDims, maxDim } = await appBE.page.evaluate(async () => {
+      const dims = (dataUrl) => new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.src = dataUrl;
+      });
+      const data = await window.__mnemExportTestHooks.build();
+      const stored = await window.__mnemExportTestHooks.getStored();
+      const exportedDims = await dims(data.mnemonics.find(m => m.square === 'e4').knightImg);
+      const storedDims = await dims(stored.e4.knightImg);
+      return { exportedDims, storedDims, maxDim: window.__mnemExportTestHooks.maxDim };
+    });
+    assert(exportedDims.w <= maxDim && exportedDims.h <= maxDim,
+      `expected the exported image capped at ${maxDim}px, got ${exportedDims.w}x${exportedDims.h}`);
+    assert(storedDims.w === 512 && storedDims.h === 512,
+      `expected the locally-stored original to stay at 512px, got ${storedDims.w}x${storedDims.h}`);
+    ok('mnemonics export downscales images to the export cap without touching the stored originals');
+  } catch(e){ bad('mnemonics export image downscale', e); }
+} finally {
+  await appBE.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
