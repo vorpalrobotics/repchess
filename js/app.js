@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-154';
+const BUILD_TAG = '-155';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1075,7 +1075,6 @@ function analyzeCastleStructure(graph){
     if(run.length >= 2) runs.push(run);
   }
   const nodesInRuns = runs.reduce((a,r)=>a+r.length, 0);
-  const singleCollapsed = rooms.length - nodesInRuns + runs.length;
 
   // two-track rooms: a node with exactly two children, each a non-merge run head
   const runByHead = new Map();
@@ -1112,7 +1111,7 @@ function analyzeCastleStructure(graph){
   const twoTrackCollapsed = boxes.length + (rooms.length - boxOf.size);
 
   return { indegree, outDeg, outTargets, runs, boxes, boxOf,
-           mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed };
+           mergeCount, nodesInRuns, twoTrackCount, twoTrackCollapsed };
 }
 
 // Find the cycle-closing "back edges" in the position-merged graph. Draw-by-
@@ -1226,14 +1225,36 @@ async function showTranspositionGraph(){
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
-    const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, singleCollapsed, twoTrackCount, twoTrackCollapsed }
+    const { indegree, outDeg, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount, twoTrackCollapsed }
       = analyzeCastleStructure(graph);
+
+    // a room's VR key, for the memorized/decorated lookups below and in the
+    // node-label glyphs further down -- r.seq always ends in OUR move, same
+    // convention threeVR.js's own MEMORIZED/DECORATED maps key against.
+    const roomKeyForRoom = r => {
+      const ownCastle = inheritedCastle(r.seq);
+      return ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
+    };
+    // "moves memorized" = every move (door) out of a memorized room -- once
+    // you've memorized a room you know all of its own replies, not just the
+    // single move that led into it.
+    let memorizedRoomCount = 0, decoratedRoomCount = 0, memorizedMoveCount = 0;
+    for(const r of rooms){
+      const roomKey = roomKeyForRoom(r);
+      if(!roomKey) continue;
+      if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += outDeg.get(r.id) || 0; }
+      if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
+    }
+    const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
 
     $('graphStatus').textContent =
       (GRAPH_FOCUS_SEQ ? '🎯 focused (right-click → Clear focus) · ' : '') +
       `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
-      (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s) → ≈ ${singleCollapsed} rooms single-track` +
-        (twoTrackCount ? `, ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '');
+      (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s)` +
+        (twoTrackCount ? ` → ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '') +
+      ` · ${memorizedRoomCount}/${rooms.length} room(s) memorized (${pct(memorizedRoomCount, rooms.length)}%)` +
+      `, ${memorizedMoveCount}/${edges.length} move(s) memorized (${pct(memorizedMoveCount, edges.length)}%)` +
+      `, ${decoratedRoomCount}/${rooms.length} room(s) decorated (${pct(decoratedRoomCount, rooms.length)}%)`;
 
     populateGraphCastleSelect();
 
@@ -1297,13 +1318,8 @@ async function showTranspositionGraph(){
       ...(flat ? [] : boxes.map(b=>({ data:{id:b.id, label:b.label}, classes: b.kind === 'two-track' ? 'twotrack-box' : 'run-box' }))),
       ...rooms.map(r=>{
         const name = graphNodeName(r.seq);
-        // does this room have a VR room, for memorized/decorated lookups? r.seq
-        // always ends in OUR move, same convention buildCastleGraph uses
-        // everywhere else -- inheritedCastle walks it back to the nearest
-        // castle root, same key scheme threeVR.js's own MEMORIZED/DECORATED
-        // maps use.
-        const ownCastle = inheritedCastle(r.seq);
-        const roomKey = ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
+        const roomKey = roomKeyForRoom(r);
+        const ownCastle = inheritedCastle(r.seq);   // needed below for the locked-dead-end / castle-entry check
         const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
         const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const decorated = roomKey ? !!DECORATED_ROOMS[roomKey] : false;
