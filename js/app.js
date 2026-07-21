@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-155';
+const BUILD_TAG = '-156';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1108,10 +1108,9 @@ function analyzeCastleStructure(graph){
     boxes.push({ id: bid, kind: 'run', nodes: trimmed, label: `linear ×${trimmed.length}` });
     trimmed.forEach(id=>boxOf.set(id, bid));
   });
-  const twoTrackCollapsed = boxes.length + (rooms.length - boxOf.size);
 
   return { indegree, outDeg, outTargets, runs, boxes, boxOf,
-           mergeCount, nodesInRuns, twoTrackCount, twoTrackCollapsed };
+           mergeCount, nodesInRuns, twoTrackCount };
 }
 
 // Find the cycle-closing "back edges" in the position-merged graph. Draw-by-
@@ -1225,36 +1224,59 @@ async function showTranspositionGraph(){
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
-    const { indegree, outDeg, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount, twoTrackCollapsed }
+    const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount }
       = analyzeCastleStructure(graph);
 
-    // a room's VR key, for the memorized/decorated lookups below and in the
-    // node-label glyphs further down -- r.seq always ends in OUR move, same
-    // convention threeVR.js's own MEMORIZED/DECORATED maps key against.
+    // a room's VR key, for the node-label glyphs further down -- r.seq always
+    // ends in OUR move, same convention threeVR.js's own MEMORIZED/DECORATED
+    // maps key against.
     const roomKeyForRoom = r => {
       const ownCastle = inheritedCastle(r.seq);
       return ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
     };
-    // "moves memorized" = every move (door) out of a memorized room -- once
-    // you've memorized a room you know all of its own replies, not just the
-    // single move that led into it.
+
+    // "castle rooms": the real VR room count, distinct from `rooms.length`
+    // below (raw chess positions) -- a corridor or two-track room collapses
+    // several positions into one physical room, so this is computed exactly
+    // the way "Generate Castle" itself would (buildGeneratedCastle, built on
+    // this same analyzer), per castle in the current scope -- one castle if
+    // focused, every castle in the system otherwise -- and summed. A castle
+    // marked but with no root reply chosen yet contributes 0 (nothing to
+    // generate). Memorized/decorated/moves-memorized are counted against
+    // these real rooms too, each keyed by its own anchor position (same as
+    // threeVR.js's MEMORIZED_ROOMS/DECORATED_ROOMS) -- a corridor's non-anchor
+    // positions aren't separately memorizable; they're part of whichever real
+    // room they got collapsed into. "Moves memorized" counts every door out
+    // of a memorized room (all of them, across every position folded into
+    // it), since memorizing a room means knowing all of its own replies, not
+    // just the move that led into it.
+    const focusedName = focusedCastleName();
+    const castleNames = focusedName ? [focusedName] : definedCastles();
+    let totalCastleRooms = 0, totalCastleMoves = 0;
     let memorizedRoomCount = 0, decoratedRoomCount = 0, memorizedMoveCount = 0;
-    for(const r of rooms){
-      const roomKey = roomKeyForRoom(r);
-      if(!roomKey) continue;
-      if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += outDeg.get(r.id) || 0; }
-      if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
+    for(const name of castleNames){
+      const castleRootSeq = castleRootRoomSeq(name);
+      if(!castleRootSeq) continue;
+      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, GAMES, castleRootSeq, name);
+      totalCastleRooms += genRooms.length;
+      const instanceId = castleInstanceId(CURRENT_LINE.id, name);
+      for(const gr of genRooms){
+        totalCastleMoves += gr.exits.length;
+        const roomKey = castleRoomKey(instanceId, gr.posKey);
+        if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.exits.length; }
+        if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
+      }
     }
     const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
 
     $('graphStatus').textContent =
       (GRAPH_FOCUS_SEQ ? '🎯 focused (right-click → Clear focus) · ' : '') +
-      `${rooms.length} room(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
+      `${totalCastleRooms} castle room(s) · ${rooms.length} position(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
       (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s)` +
-        (twoTrackCount ? ` → ≈ ${twoTrackCollapsed} two-track (${twoTrackCount} pair${twoTrackCount===1?'':'s'})` : '') : '') +
-      ` · ${memorizedRoomCount}/${rooms.length} room(s) memorized (${pct(memorizedRoomCount, rooms.length)}%)` +
-      `, ${memorizedMoveCount}/${edges.length} move(s) memorized (${pct(memorizedMoveCount, edges.length)}%)` +
-      `, ${decoratedRoomCount}/${rooms.length} room(s) decorated (${pct(decoratedRoomCount, rooms.length)}%)`;
+        (twoTrackCount ? `, ${twoTrackCount} two-track pair${twoTrackCount===1?'':'s'}` : '') : '') +
+      ` · ${memorizedRoomCount}/${totalCastleRooms} castle room(s) memorized (${pct(memorizedRoomCount, totalCastleRooms)}%)` +
+      `, ${memorizedMoveCount}/${totalCastleMoves} move(s) memorized (${pct(memorizedMoveCount, totalCastleMoves)}%)` +
+      `, ${decoratedRoomCount}/${totalCastleRooms} castle room(s) decorated (${pct(decoratedRoomCount, totalCastleRooms)}%)`;
 
     populateGraphCastleSelect();
 
@@ -1549,12 +1571,7 @@ function populateGraphCastleSelect(){
   wrap.style.display = '';
   sel.innerHTML = '<option value="">All</option>' +
     castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-  let cur = '';
-  if(GRAPH_FOCUS_SEQ){
-    const key = GRAPH_FOCUS_SEQ.join(',');
-    for(const c of castles){ const rs = castleRootRoomSeq(c); if(rs && rs.join(',') === key){ cur = c; break; } }
-  }
-  sel.value = cur;
+  sel.value = focusedCastleName() || '';
 }
 $('graphCastleSelect').onchange = () => {
   const name = $('graphCastleSelect').value;
@@ -2041,6 +2058,14 @@ function castleRootRoomSeq(castleName){
     }
   }
   return best;
+}
+// resolves GRAPH_FOCUS_SEQ back to the castle name it belongs to (if any) --
+// shared by the "Show Castle" dropdown's current selection and the
+// castle-room stats in the digraph status line.
+function focusedCastleName(){
+  if(!GRAPH_FOCUS_SEQ) return null;
+  const key = GRAPH_FOCUS_SEQ.join(',');
+  return definedCastles().find(c => { const rs = castleRootRoomSeq(c); return rs && rs.join(',') === key; }) || null;
 }
 /* BFS out from a previewed castle to every OTHER castle its rooms have a
    redirected door into (see buildCastleGraph's foreign-exit redirect), so the

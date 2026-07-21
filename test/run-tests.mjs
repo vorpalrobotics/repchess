@@ -5849,77 +5849,92 @@ try {
   await appBK.close();
 }
 
-// --- Phase BL: the digraph modal's status line reports memorized/decorated
-//     coverage (count + percentage) instead of the retired "N rooms
-//     single-track" collapsing stat, which stopped being meaningful once
-//     two-track collapsing became the norm (total rooms and the two-track
-//     figure track together now). ---
+// --- Phase BL: the digraph modal's status line leads with the real VR
+//     "castle room(s)" count (a corridor/two-track room collapses several
+//     chess positions into one physical room, computed the same way
+//     "Generate Castle" itself would -- buildGeneratedCastle, built on the
+//     same analyzer) instead of the retired "N rooms single-track" stat,
+//     and reports memorized/decorated coverage against those real rooms
+//     (count + percentage), not raw graph positions. ---
 const appBL = await launchApp();
 try {
+  // root (after d4 Nf6 c4) branches into two short replies (e6 and g6),
+  // neither long enough to form a "run" -- so this collapses into 3 real
+  // rooms (root itself, plus the two branch replies), not 1, giving a
+  // non-trivial denominator to check the percentage math against.
   await seedBackup(appBL.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
     ]}],
-    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+    ],
   });
   await appBL.page.click('.line-row');
   await appBL.page.waitForSelector('.data-row', { timeout: 10000 });
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
   await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
 
-  const roomFen = await appBL.page.evaluate(() => {
+  const rootFen = await appBL.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
     return c.fen();
   });
   const statusText = () => appBL.page.evaluate(() => document.getElementById('graphStatus').textContent);
 
-  // 90. The retired "single-track" collapsing stat is gone; the memorized/
-  //     decorated stats start at 0 with a correct denominator and 0%.
-  let totalRooms, totalMoves;
+  // 90. The retired "single-track" collapsing stat is gone; "castle room(s)"
+  //     leads the line (3, not the 4 raw positions); memorized/decorated
+  //     stats start at 0 against that real-room denominator.
+  let castleRooms, castleMoves;
   try {
     const text = await statusText();
     assert(!/single-track/.test(text), `expected the retired "single-track" stat to be gone, got: ${text}`);
-    const head = text.match(/(\d+) room\(s\), (\d+) move\(s\)/);
-    assert(head, `expected the leading room/move counts, got: ${text}`);
-    totalRooms = +head[1]; totalMoves = +head[2];
-    const memRoom = text.match(/0\/(\d+) room\(s\) memorized \(0%\)/);
+    const head = text.match(/^(?:🎯[^·]*· )?(\d+) castle room\(s\) · (\d+) position\(s\)/);
+    assert(head, `expected "N castle room(s) · M position(s)" to lead the line, got: ${text}`);
+    castleRooms = +head[1];
+    assert(castleRooms === 3, `expected 3 real rooms (root + 2 short branches collapse no further), got ${castleRooms}: ${text}`);
+    assert(+head[2] === 4, `expected 4 raw positions (root + 2 branches + the shared entry position), got ${head[2]}: ${text}`);
+    const memRoom = text.match(/0\/(\d+) castle room\(s\) memorized \(0%\)/);
     const memMove = text.match(/0\/(\d+) move\(s\) memorized \(0%\)/);
-    const decRoom = text.match(/0\/(\d+) room\(s\) decorated \(0%\)/);
-    assert(memRoom && +memRoom[1] === totalRooms, `expected "0/${totalRooms} room(s) memorized (0%)", got: ${text}`);
-    assert(memMove && +memMove[1] === totalMoves, `expected "0/${totalMoves} move(s) memorized (0%)", got: ${text}`);
-    assert(decRoom && +decRoom[1] === totalRooms, `expected "0/${totalRooms} room(s) decorated (0%)", got: ${text}`);
-    ok('digraph status: no leftover "single-track" stat; memorized/decorated start at 0 with the right denominators');
-  } catch(e){ bad('digraph status: baseline (no single-track, zeroed memorized/decorated)', e); }
+    const decRoom = text.match(/0\/(\d+) castle room\(s\) decorated \(0%\)/);
+    assert(memRoom && +memRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) memorized (0%)", got: ${text}`);
+    assert(memMove, `expected a "0/N move(s) memorized (0%)" stat, got: ${text}`);
+    castleMoves = +memMove[1];
+    assert(decRoom && +decRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) decorated (0%)", got: ${text}`);
+    ok('digraph status: no leftover "single-track" stat; "castle room(s)" leads with the real (collapsed) count, memorized/decorated start at 0');
+  } catch(e){ bad('digraph status: baseline (castle rooms leads, no single-track, zeroed memorized/decorated)', e); }
 
-  // 91. Marking the castle-root room memorized and decorated updates both the
-  //     room counts AND the derived "moves memorized" count (every door out
-  //     of a memorized room counts as memorized), with matching percentages.
+  // 91. Marking the ROOT room (2 doors: e6 and g6) memorized+decorated
+  //     updates the room counts AND the derived "moves memorized" count to
+  //     2 (both its doors), against the same real-room denominators -- not
+  //     100%, since 2 of the 3 real rooms (the branches) are untouched.
   try {
-    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
-    assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
+    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), rootFen);
+    assert(roomKey, `expected the root to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
     const text = await statusText();
 
-    const roomPct = Math.round(1 / totalRooms * 100);
-    const memRoom = text.match(/(\d+)\/(\d+) room\(s\) memorized \((\d+)%\)/);
-    assert(memRoom && +memRoom[1] === 1 && +memRoom[2] === totalRooms && +memRoom[3] === roomPct,
-      `expected "1/${totalRooms} room(s) memorized (${roomPct}%)", got: ${text}`);
-    const decRoom = text.match(/(\d+)\/(\d+) room\(s\) decorated \((\d+)%\)/);
-    assert(decRoom && +decRoom[1] === 1 && +decRoom[2] === totalRooms && +decRoom[3] === roomPct,
-      `expected "1/${totalRooms} room(s) decorated (${roomPct}%)", got: ${text}`);
+    const roomPct = Math.round(1 / castleRooms * 100);
+    const memRoom = text.match(/(\d+)\/(\d+) castle room\(s\) memorized \((\d+)%\)/);
+    assert(memRoom && +memRoom[1] === 1 && +memRoom[2] === castleRooms && +memRoom[3] === roomPct,
+      `expected "1/${castleRooms} castle room(s) memorized (${roomPct}%)", got: ${text}`);
+    const decRoom = text.match(/(\d+)\/(\d+) castle room\(s\) decorated \((\d+)%\)/);
+    assert(decRoom && +decRoom[1] === 1 && +decRoom[2] === castleRooms && +decRoom[3] === roomPct,
+      `expected "1/${castleRooms} castle room(s) decorated (${roomPct}%)", got: ${text}`);
     const memMove = text.match(/(\d+)\/(\d+) move\(s\) memorized \((\d+)%\)/);
-    assert(memMove, `expected a "N/${totalMoves} move(s) memorized (P%)" stat, got: ${text}`);
+    assert(memMove, `expected a "N/${castleMoves} move(s) memorized (P%)" stat, got: ${text}`);
     const [, moveCount, moveTotal, movePct] = memMove.map(Number);
-    assert(moveTotal === totalMoves, `expected the moves-memorized denominator to match the total move count, got: ${text}`);
-    assert(moveCount >= 1, `expected at least one move memorized (the marked room has at least one door), got: ${text}`);
-    assert(movePct === Math.round(moveCount / totalMoves * 100), `expected the moves-memorized percentage to match its own count/total, got: ${text}`);
-    ok('digraph status: marking a room memorized+decorated updates room and derived-move counts with correct percentages');
+    assert(moveTotal === castleMoves, `expected the moves-memorized denominator to stay ${castleMoves}, got: ${text}`);
+    assert(moveCount === 2, `expected both of the root's own doors (e6, g6) to count as memorized, got ${moveCount}: ${text}`);
+    assert(movePct === Math.round(moveCount / castleMoves * 100), `expected the moves-memorized percentage to match its own count/total, got: ${text}`);
+    ok('digraph status: marking the root memorized+decorated counts both its doors and stays scoped to the real rooms, not 100%');
   } catch(e){ bad('digraph status: memorized/decorated counts after marking a room', e); }
 } finally {
   await appBL.close();
