@@ -5387,5 +5387,87 @@ try {
   await appBC.close();
 }
 
+// --- Phase BD: "Set Attributes" always edits the room's CANONICAL seq, even
+//     when opened from a transposing path that isn't it -- so both doors
+//     into a shared room end up showing the same name regardless of which
+//     path was used to name it. Transposition: 1.d4 Nf6 2.c4 a6 3.e4 h6 and
+//     1.d4 Nf6 2.c4 h6 3.e4 a6 reach the same position (a6/h6 are
+//     independent pawn moves); games list the a6-first game before the
+//     h6-first one, so buildCastleGraph's walk discovers a6-first first and
+//     that becomes canonical. ---
+const appBD = await launchApp();
+try {
+  await seedBackup(appBD.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','a6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','h6'], reply: 'e4' },
+      // the move that actually completes the transposition (the OTHER of
+      // a6/h6, played after e4) needs its own recorded reply too -- a room
+      // only exists (and can merge with another path) once OUR move creates
+      // it; without this, both paths stay unanswered leaves and never merge.
+      { seq: ['d4','Nf6','c4','a6','e4','h6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','h6','e4','a6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appBD.page.click('.line-row');
+  await appBD.page.waitForSelector('.data-row', { timeout: 10000 });
+  // repeatedly expand every collapsed branch until none remain, to reach
+  // both 6-ply transposing rows regardless of how deep they are.
+  await appBD.page.evaluate(() => {
+    for(let i = 0; i < 10; i++){
+      const btns = [...document.querySelectorAll('.toggle:not(.toggle-empty)')]
+        .filter(b => b.querySelector('i')?.classList.contains('fa-caret-right'));
+      if(!btns.length) break;
+      btns.forEach(b => b.click());
+    }
+  });
+  await appBD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"]', { timeout: 10000 });
+
+  // 78. canonicalRoomSeq resolves the non-canonical transposing path's own
+  //     (opponent-move) seq to the canonical one -- same convention
+  //     genRoomMeta reads attributes from (one ply back from the room,
+  //     which ends in OUR reply Nc3).
+  try {
+    const resolved = await appBD.page.evaluate(() =>
+      window.__oqTestHooks.canonicalRoomSeq(['d4','Nf6','c4','h6','e4','a6']));
+    assert(JSON.stringify(resolved) === JSON.stringify(['d4','Nf6','c4','a6','e4','h6']),
+      `expected the non-canonical path to resolve to the canonical one, got ${JSON.stringify(resolved)}`);
+    ok("canonicalRoomSeq resolves a transposing path to the room's canonical seq");
+  } catch(e){ bad('canonicalRoomSeq resolves a transposition', e); }
+
+  // 79. Setting the room name from the NON-canonical path's row writes it
+  //     onto the CANONICAL seq's own pref -- the same data VR's door
+  //     plaques (genRoomMeta) read regardless of which path led there --
+  //     not onto this row's own (different) pref entry.
+  try {
+    await appBD.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"] .rowMenuBtn').click());
+    await appBD.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"] [data-act="attributes"]').click());
+    await appBD.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appBD.page.fill('#attrRoomName', 'Transpose');
+    await appBD.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appBD.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const names = await appBD.page.evaluate(() => {
+      const prefs = window.__oqTestHooks.getPrefs();
+      const pk = window.__oqTestHooks.prefKey;
+      return {
+        canonical: prefs[pk('L1', ['d4','Nf6','c4','a6','e4','h6'])]?.name,
+        nonCanonical: prefs[pk('L1', ['d4','Nf6','c4','h6','e4','a6'])]?.name,
+      };
+    });
+    assert(names.canonical === 'Transpose', `expected the name on the canonical seq's pref, got ${JSON.stringify(names)}`);
+    assert(!names.nonCanonical, `expected no name written to the non-canonical path's own pref, got ${JSON.stringify(names)}`);
+    ok("Set Attributes from a transposing (non-canonical) row writes the shared room's canonical pref entry");
+  } catch(e){ bad('Set Attributes writes to the canonical transposition key', e); }
+} finally {
+  await appBD.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
