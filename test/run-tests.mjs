@@ -5618,5 +5618,55 @@ try {
   await appBG.close();
 }
 
+// --- Phase BH: importBackup() shows a spinner (with a running "N mnemonic
+//     squares imported" progress label) during a full restore -- with zero
+//     visual feedback, nothing prevented navigating to Manage Mnemonics
+//     mid-restore and seeing incomplete data, which is what looked like a
+//     silent failure to import mnemonics after a full backup restore. ---
+const appBH = await launchApp();
+try {
+  const backup = {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [],
+    // enough entries that the restore takes a real, observable amount of
+    // time (each is its own get-then-put IndexedDB round trip) -- a handful
+    // of squares would likely finish before the test's first poll.
+    mnemonics: Array.from({length: 64}, (_, i) => ({
+      square: 'abcdefgh'[i % 8] + (Math.floor(i / 8) + 1), knight: `word${i}`,
+    })),
+  };
+
+  // 84. The spinner appears immediately, its label counts mnemonic squares
+  //     imported as the restore proceeds, and it's hidden again once done.
+  try {
+    const setFiles = appBH.page.setInputFiles('#backupImport', {
+      name: 'restore.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(backup)),
+    });
+    await appBH.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'flex' &&
+            document.getElementById('spinnerLabel').textContent.startsWith('Restoring backup'),
+      { timeout: 5000 }
+    );
+    await appBH.page.waitForFunction(
+      () => /\d+ mnemonic squares? imported/.test(document.getElementById('spinnerLabel').textContent),
+      { timeout: 10000 }
+    );
+    await setFiles;
+    await appBH.page.waitForFunction(
+      () => document.getElementById('userId') && document.getElementById('userId').value === 'tester',
+      { timeout: 10000 }
+    );
+    await appBH.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'none',
+      { timeout: 10000 }
+    );
+    ok('importBackup shows a spinner with running progress while restoring, then hides it');
+  } catch(e){ bad('backup restore spinner', e); }
+} finally {
+  await appBH.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
