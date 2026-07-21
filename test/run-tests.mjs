@@ -5573,5 +5573,100 @@ try {
   await appBF.close();
 }
 
+// --- Phase BG: exportMnemonics() shows a spinner (with a running "N images
+//     converted" progress label) while it re-encodes every image for export
+//     -- converting a full 384-image set is slow enough that, with no visual
+//     feedback, clicking Export looked like it did nothing (the reported bug). ---
+const appBG = await launchApp();
+try {
+  const bigImg = await appBG.page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 480; c.height = 480;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#22aa66'; ctx.fillRect(0, 0, 480, 480);
+    return c.toDataURL('image/png');
+  });
+  await seedBackup(appBG.page, {
+    version: 6, user: 'tester',
+    lines: [], games: [],
+    mnemonics: [
+      { square: 'e4', knight: 'echo', knightImg: bigImg, bishop: 'bravo', bishopImg: bigImg },
+      { square: 'd4', rook: 'romeo', rookImg: bigImg },
+    ],
+  });
+
+  // 83. The spinner appears immediately, its label counts images converted
+  //     as the export proceeds, and it's hidden again once the download fires.
+  try {
+    await appBG.page.evaluate(() => { document.getElementById('mnemonicsExportBtn').click(); });
+    await appBG.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'flex' &&
+            document.getElementById('spinnerLabel').textContent.startsWith('Exporting mnemonics'),
+      { timeout: 5000 }
+    );
+    await appBG.page.waitForFunction(
+      () => /\d+ images? converted/.test(document.getElementById('spinnerLabel').textContent),
+      { timeout: 10000 }
+    );
+    await appBG.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'none',
+      { timeout: 10000 }
+    );
+    ok('exportMnemonics shows a spinner with running progress while converting images, then hides it');
+  } catch(e){ bad('mnemonics export spinner', e); }
+} finally {
+  await appBG.close();
+}
+
+// --- Phase BH: importBackup() shows a spinner (with a running "N mnemonic
+//     squares imported" progress label) during a full restore -- with zero
+//     visual feedback, nothing prevented navigating to Manage Mnemonics
+//     mid-restore and seeing incomplete data, which is what looked like a
+//     silent failure to import mnemonics after a full backup restore. ---
+const appBH = await launchApp();
+try {
+  const backup = {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [],
+    // enough entries that the restore takes a real, observable amount of
+    // time (each is its own get-then-put IndexedDB round trip) -- a handful
+    // of squares would likely finish before the test's first poll.
+    mnemonics: Array.from({length: 64}, (_, i) => ({
+      square: 'abcdefgh'[i % 8] + (Math.floor(i / 8) + 1), knight: `word${i}`,
+    })),
+  };
+
+  // 84. The spinner appears immediately, its label counts mnemonic squares
+  //     imported as the restore proceeds, and it's hidden again once done.
+  try {
+    const setFiles = appBH.page.setInputFiles('#backupImport', {
+      name: 'restore.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(backup)),
+    });
+    await appBH.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'flex' &&
+            document.getElementById('spinnerLabel').textContent.startsWith('Restoring backup'),
+      { timeout: 5000 }
+    );
+    await appBH.page.waitForFunction(
+      () => /\d+ mnemonic squares? imported/.test(document.getElementById('spinnerLabel').textContent),
+      { timeout: 10000 }
+    );
+    await setFiles;
+    await appBH.page.waitForFunction(
+      () => document.getElementById('userId') && document.getElementById('userId').value === 'tester',
+      { timeout: 10000 }
+    );
+    await appBH.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'none',
+      { timeout: 10000 }
+    );
+    ok('importBackup shows a spinner with running progress while restoring, then hides it');
+  } catch(e){ bad('backup restore spinner', e); }
+} finally {
+  await appBH.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

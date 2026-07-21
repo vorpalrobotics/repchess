@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-149';
+const BUILD_TAG = '-151';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3810,7 +3810,12 @@ async function exportBackup(){
    backup exactly rather than merging with (and possibly duplicating)
    whatever is already there. Caller is responsible for confirming with
    the user before calling this, since it is destructive. */
-async function importBackup(data){
+// `onMnemProgress`, if given, is called with the running count of mnemonic
+// squares written so far -- restoring hundreds of squares (each its own
+// get-then-put IndexedDB round trip) is slow enough that a caller showing a
+// spinner wants to update its label, same as buildMnemonicsExportData's own
+// onProgress on the export side.
+async function importBackup(data, onMnemProgress){
   if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
   if(!data.user) throw new Error('backup file has no user id');
 
@@ -3849,6 +3854,7 @@ async function importBackup(data){
       });
     }
   }
+  let mnemCount = 0;
   for(const entry of (data.mnemonics||[])){
     const patch = {};
     for(const p of MNEM_PIECES){
@@ -3857,7 +3863,16 @@ async function importBackup(data){
       patch[p+'Img'] = entry[p+'Img'] || '';
     }
     await setMnemonicSquare(entry.square, patch);
+    onMnemProgress?.(++mnemCount);
   }
+  // keep the in-memory mirror in sync with what was just written -- mirrors
+  // importMnemonicsBundle/compressAllImages's own refresh, and matters here
+  // too since openMnemonicsEditor reads MNEMONICS directly rather than
+  // re-fetching (renderMnemonicsGrid always re-fetches on its own, so this
+  // is belt-and-suspenders rather than the actual fix for the reported bug
+  // -- see the spinner added around this call, which is what actually
+  // prevents the menu from being reachable mid-restore).
+  MNEMONICS = await getAllMnemonics();
   if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
@@ -3898,16 +3913,26 @@ async function importAssetBundle(data){
 const MNEM_EXPORT_IMG_MAX_DIM = 400;
 // builds the bundle (with export-downscaled images) without touching local
 // storage or triggering a download -- split out so tests can inspect it directly.
-async function buildMnemonicsExportData(){
+// `onProgress`, if given, is called with the running count of images
+// converted so far -- re-encoding hundreds of images (decode + canvas +
+// WebP) is slow enough that a caller showing a spinner wants to update its
+// label rather than sit on a single static message the whole time.
+async function buildMnemonicsExportData(onProgress){
   const mnemonicsBySquare = await getAllMnemonics();
   const mnemonics = [];
+  let converted = 0;
   for(const entry of Object.values(mnemonicsBySquare)){
     const out = {square: entry.square};
     for(const p of MNEM_PIECES){
       out[p] = entry[p] || '';
       out[p+'Desc'] = entry[p+'Desc'] || '';
       const img = entry[p+'Img'];
-      out[p+'Img'] = img ? await downscaleMnemImage(img, MNEM_EXPORT_IMG_MAX_DIM) : '';
+      if(img){
+        out[p+'Img'] = await downscaleMnemImage(img, MNEM_EXPORT_IMG_MAX_DIM);
+        onProgress?.(++converted);
+      } else {
+        out[p+'Img'] = '';
+      }
     }
     mnemonics.push(out);
   }
@@ -3921,7 +3946,16 @@ async function buildMnemonicsExportData(){
   };
 }
 async function exportMnemonics(){
-  const data = await buildMnemonicsExportData();
+  const spinner = showSpinner('Exporting mnemonics…');
+  await nextPaint();
+  let data;
+  try {
+    data = await buildMnemonicsExportData(n => {
+      $('spinnerLabel').textContent = `Exporting mnemonics… ${n} image${n===1?'':'s'} converted`;
+    });
+  } finally {
+    hideSpinner(spinner);
+  }
   const bytes = await downloadJsonBackup(data, `repchess-mnemonics-${new Date().toISOString().slice(0,10)}`);
   const mb = (bytes / 1048576).toFixed(1);
   log(`exported ${data.mnemonics.length} mnemonic square(s) — ${mb}MB (images capped at ${MNEM_EXPORT_IMG_MAX_DIM}px)`);
@@ -4118,11 +4152,17 @@ $('backupImport').addEventListener('change', async e=>{
     'Any changes made since this backup was taken WILL BE LOST. This cannot be undone.\n\n' +
     'Continue?'
   )) return;
+  const spinner = showSpinner('Restoring backup…');
+  await nextPaint();
   try{
-    await importBackup(data);
+    await importBackup(data, n => {
+      $('spinnerLabel').textContent = `Restoring backup… ${n} mnemonic square${n===1?'':'s'} imported`;
+    });
   }catch(err){
     console.error('[import] failed',err);
     log('import failed: '+err.message,true);
+  }finally{
+    hideSpinner(spinner);
   }
 });
 
