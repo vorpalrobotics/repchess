@@ -5760,8 +5760,93 @@ try {
     await appBI.page.waitForFunction(() => document.getElementById('helpOverlay').style.display === 'none', { timeout: 5000 });
     ok('Help modal: Close hides the overlay');
   } catch(e){ bad('help modal: close', e); }
+
+  // 87. Every topic listed in help/topics.json actually loads real, non-empty
+  //     content when clicked -- catches a typo'd `file` entry or a missing
+  //     fragment immediately, rather than leaving a topic silently broken.
+  try {
+    await appBI.page.evaluate(() => document.getElementById('menuHelp').click());
+    await appBI.page.waitForSelector('#helpOverlay', { state: 'visible', timeout: 5000 });
+    const topicCount = await appBI.page.evaluate(() => document.querySelectorAll('#helpTopics .help-topic-btn').length);
+    assert(topicCount >= 11, `expected at least 11 help topics (Intro + 10 new ones), got ${topicCount}`);
+    for(let i = 0; i < topicCount; i++){
+      const { title } = await appBI.page.evaluate((idx) => {
+        const btns = [...document.querySelectorAll('#helpTopics .help-topic-btn')];
+        btns[idx].click();
+        return { title: btns[idx].textContent };
+      }, i);
+      await appBI.page.waitForFunction(
+        () => document.getElementById('helpContent').textContent.trim().length > 0,
+        { timeout: 5000 }
+      );
+      // openHelpTopic() renders a "Couldn't load this help topic (...)" paragraph
+      // on a fetch failure -- also non-empty, so the wait above alone can't tell
+      // a real load from a broken `file` entry in topics.json. Rule that out
+      // explicitly so a typo'd filename actually fails this test.
+      const errored = await appBI.page.evaluate(() => document.getElementById('helpContent').textContent.includes("Couldn't load this help topic"));
+      assert(!errored, `expected "${title}" to load real content, but it showed the fetch-failure fallback`);
+      const activeNow = await appBI.page.evaluate(() => document.querySelector('#helpTopics .help-topic-btn.active')?.textContent);
+      assert(activeNow === title, `expected clicking "${title}" to mark it active, got "${activeNow}"`);
+    }
+    ok('every help topic in topics.json loads non-empty content when clicked');
+  } catch(e){ bad('help modal: every topic loads', e); }
 } finally {
   await appBI.close();
+}
+
+// --- Phase BJ: boot-time "install default mnemonics?" offer
+//     (json/repchess-mnemonics-DEFAULT.json.gz), driven via
+//     __mnemDefaultTestHooks. The real auto-run on boot is skipped under
+//     threeTestDebug (see the guarded call near renderHome() in app.js) so
+//     ordinary tests that boot with an empty mnemonics store don't all pay
+//     for a real fetch+decompress+import -- only this dedicated test drives
+//     it, end to end, against the real committed file. ---
+const appBJ = await launchApp();
+try {
+  // 87. A fresh browser has no mnemonics and hasn't been offered yet;
+  //     accepting the offer installs the real default bundle and remembers
+  //     the decision so it won't ask again.
+  try {
+    const before = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(before).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(before).length} square(s)`);
+    const offeredBefore = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!offeredBefore, 'expected the offer to not have been made yet on a fresh boot');
+
+    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+
+    const after = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(after).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
+    const offeredAfter = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!!offeredAfter, 'expected the offer to be marked as made after accepting');
+    ok('accepting the default-mnemonics offer installs the real bundle and remembers the decision');
+  } catch(e){ bad('default mnemonics offer: accept installs the real bundle', e); }
+
+  // 88. Once offered, a later call is a silent no-op -- no confirm(), no re-install.
+  try {
+    await appBJ.page.evaluate(() => { window.confirm = () => { throw new Error('confirm() should not be called again'); }; });
+    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    ok('default mnemonics offer: already-offered is a silent no-op on a later boot');
+  } catch(e){ bad('default mnemonics offer: no re-prompt once already offered', e); }
+} finally {
+  await appBJ.close();
+}
+
+// --- Phase BK: declining the default-mnemonics offer leaves the store empty
+//     but still remembers the decision, so it doesn't nag on every boot. ---
+const appBK = await launchApp();
+try {
+  // 89. Decline -> nothing installed, but the offer is still marked made.
+  try {
+    await appBK.page.evaluate(() => { window.confirm = () => false; });
+    await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    const stored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    assert(Object.keys(stored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(stored).length} square(s)`);
+    const offered = await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
+    assert(!!offered, 'expected declining to still mark the offer as made (so it does not nag again)');
+    ok('declining the default-mnemonics offer installs nothing but remembers the decision');
+  } catch(e){ bad('default mnemonics offer: decline leaves store empty but remembers decision', e); }
+} finally {
+  await appBK.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
