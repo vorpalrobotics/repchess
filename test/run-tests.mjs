@@ -5729,5 +5729,40 @@ try {
   await appBH.close();
 }
 
+// --- Phase BI: the Help modal (hamburger menu -> Help) loads its topic
+//     list from help/topics.json and injects each topic's HTML fragment
+//     from help/<file>.html into the content pane -- real files served by
+//     the test harness's static server, not mocked. ---
+const appBI = await launchApp();
+try {
+  // 85. Opening Help auto-selects the first (Intro) topic and loads its real
+  //     content, including the branded product name.
+  try {
+    await appBI.page.evaluate(() => document.getElementById('menuHelp').click());
+    await appBI.page.waitForSelector('#helpOverlay', { state: 'visible', timeout: 5000 });
+    await appBI.page.waitForFunction(() => document.getElementById('helpContent').textContent.trim().length > 0, { timeout: 5000 });
+
+    const topicButtons = await appBI.page.evaluate(() => [...document.querySelectorAll('#helpTopics .help-topic-btn')].map(b => b.textContent));
+    assert(topicButtons.includes('Intro'), `expected an "Intro" topic in the sidebar, got ${JSON.stringify(topicButtons)}`);
+
+    const activeCount = await appBI.page.evaluate(() => document.querySelectorAll('#helpTopics .help-topic-btn.active').length);
+    assert(activeCount === 1, `expected exactly one active topic button (the auto-selected first topic), got ${activeCount}`);
+
+    const brandText = await appBI.page.evaluate(() => document.querySelector('#helpContent .repchess-brand')?.textContent);
+    assert(brandText === 'REPchess', `expected the Intro content to include a .repchess-brand span reading exactly "REPchess", got ${JSON.stringify(brandText)}`);
+
+    ok('Help modal loads topics.json and auto-opens the first topic with branded content');
+  } catch(e){ bad('help modal: open and load default topic', e); }
+
+  // 86. Close hides the overlay.
+  try {
+    await appBI.page.evaluate(() => document.getElementById('helpCloseBtn').click());
+    await appBI.page.waitForFunction(() => document.getElementById('helpOverlay').style.display === 'none', { timeout: 5000 });
+    ok('Help modal: Close hides the overlay');
+  } catch(e){ bad('help modal: close', e); }
+} finally {
+  await appBI.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
