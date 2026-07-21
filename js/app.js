@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-146';
+const BUILD_TAG = '-148';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3888,26 +3888,43 @@ async function importAssetBundle(data){
    plus the free-text mnemonics notes. Distinct from a full backup (which also
    carries `lines`/`games`) and from an asset bundle (`repchessAssets`); tagged
    with `repchessMnemonics` so the unified import handler can recognise it. */
-async function exportMnemonics(){
+// Export-only downscale cap, independent of MNEM_IMG_MAX_DIM (the 512px cap
+// applied when an image is saved into local storage). A full 384-image set at
+// 512px lands over GitHub's 25MB web-upload limit; shrinking further at
+// export time -- without touching the locally-stored originals -- keeps the
+// distributed "standard mnemonics" pack under that limit while leaving every
+// user's own working copies untouched. Tune this number and re-export to
+// compare quality/size (e.g. 450 still clears 25MB with less softening).
+const MNEM_EXPORT_IMG_MAX_DIM = 400;
+// builds the bundle (with export-downscaled images) without touching local
+// storage or triggering a download -- split out so tests can inspect it directly.
+async function buildMnemonicsExportData(){
   const mnemonicsBySquare = await getAllMnemonics();
-  const data = {
+  const mnemonics = [];
+  for(const entry of Object.values(mnemonicsBySquare)){
+    const out = {square: entry.square};
+    for(const p of MNEM_PIECES){
+      out[p] = entry[p] || '';
+      out[p+'Desc'] = entry[p+'Desc'] || '';
+      const img = entry[p+'Img'];
+      out[p+'Img'] = img ? await downscaleMnemImage(img, MNEM_EXPORT_IMG_MAX_DIM) : '';
+    }
+    mnemonics.push(out);
+  }
+  return {
     repchessMnemonics: true,
     version: 1,
     exportedAt: new Date().toISOString(),
-    mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
-      const out = {square: entry.square};
-      for(const p of MNEM_PIECES){
-        out[p] = entry[p] || '';
-        out[p+'Desc'] = entry[p+'Desc'] || '';
-        out[p+'Img'] = entry[p+'Img'] || '';
-      }
-      return out;
-    }),
+    mnemonics,
     mnemonicsNotes: await getMeta(MNEM_NOTES_KEY),
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY)
   };
-  await downloadJsonBackup(data, `repchess-mnemonics-${new Date().toISOString().slice(0,10)}`);
-  log(`exported ${data.mnemonics.length} mnemonic square(s)`);
+}
+async function exportMnemonics(){
+  const data = await buildMnemonicsExportData();
+  const bytes = await downloadJsonBackup(data, `repchess-mnemonics-${new Date().toISOString().slice(0,10)}`);
+  const mb = (bytes / 1048576).toFixed(1);
+  log(`exported ${data.mnemonics.length} mnemonic square(s) — ${mb}MB (images capped at ${MNEM_EXPORT_IMG_MAX_DIM}px)`);
 }
 
 /* assets-only export: same bundle shape the asset manager's "Export All as
@@ -5954,7 +5971,9 @@ engine.init().then(() => {
   // Without the board widget there's no live board to analyse on, so report the
   // engine as not available rather than "ready".
   if(!$('engineDepth').textContent){
-    $('engineDepth').textContent = Chessboard ? `Engine ready${engineModeTag()}` : 'Engine not available';
+    // the thread count used to be tacked on here too, but the Threads
+    // selector right below already shows it -- redundant in the idle state.
+    $('engineDepth').textContent = Chessboard ? 'Engine ready' : 'Engine not available';
   }
   populateEngineThreadsSelect();
   populateAqThreadsSelect();
@@ -6887,5 +6906,17 @@ if(localStorage.getItem('threeTestDebug')){
     // branch-expand UI.
     addManualReply: (seq, move) => addManualReply(seq, move),
     removeManualReply: (seq, move) => removeManualReply(seq, move),
+  };
+}
+
+// test-only hook for the mnemonics export bundle-builder, so a test can
+// inspect the export-downscaled images (MNEM_EXPORT_IMG_MAX_DIM) without
+// driving a real file download, and confirm the locally-stored originals
+// (MNEMONICS) are left untouched by the export.
+if(localStorage.getItem('threeTestDebug')){
+  window.__mnemExportTestHooks = {
+    build: () => buildMnemonicsExportData(),
+    getStored: () => getAllMnemonics(),
+    maxDim: MNEM_EXPORT_IMG_MAX_DIM,
   };
 }
