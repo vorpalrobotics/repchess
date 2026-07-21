@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-145';
+const BUILD_TAG = '-146';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2066,6 +2066,31 @@ function inheritedCastle(lineSeq, lineId = CURRENT_LINE?.id){
   }
   return '';
 }
+/* resolves `seq` (the OPPONENT-move seq a row's own attributes pref is keyed
+   on -- same convention genRoomMeta uses, one ply back from the room itself,
+   which ends in OUR reply) to the CANONICAL seq that owns the resulting
+   room's shared attributes (name, isCastleRoot, castleName, castleOwner,
+   castleStreetNumber). buildCastleGraph merges transposing paths reaching
+   the same position into one room object, keeping only whichever seq it
+   first discovered; reading/writing "Set Attributes" via a DIFFERENT
+   transposing path's own seq would silently miss that shared data (VR's
+   door plaques, which read via genRoomMeta's own canonical seq, would never
+   reflect it). Returns `seq` unchanged when there's no reply recorded yet
+   (no room built here at all -- nothing to canonicalize) or it isn't part
+   of any built castle (no room, no transposition to resolve). */
+function canonicalRoomSeq(seq){
+  const reply = PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply;
+  if(!reply) return seq;
+  const roomSeq = [...seq, reply];
+  const castle = inheritedCastle(roomSeq, CURRENT_LINE.id);
+  if(!castle) return seq;
+  const rootSeq = castleRootRoomSeq(castle);
+  if(!rootSeq) return seq;
+  const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq, false, castle);
+  const key = positionKey(fenForSeq(roomSeq));
+  const room = graph.rooms.find(r => positionKey(r.fen) === key);
+  return room ? room.seq.slice(0, -1) : seq;
+}
 /* Like inheritedCastle, but for THIS node uses the attributes modal's own
    live (unsaved) isCastleRoot/castleName fields instead of its last-saved
    PREFS value -- so checking "starts new castle" and typing a name updates
@@ -2776,16 +2801,22 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      openAttributesModal(currentSaved(), v=>{
+      // room-level attributes live on the room's CANONICAL seq (see
+      // canonicalRoomSeq) so a transposing path always reads/writes the same
+      // shared data VR itself reads -- everything else on this row
+      // (mnemonic, note, eval, hidden, ...) still keys off lineSeq as usual.
+      const roomSeq = canonicalRoomSeq(lineSeq);
+      const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+      openAttributesModal(roomSaved(), v=>{
         // the room's display name, and whether/where it's a castle root, all
         // feed VR room labels and street layout
         invalidateBuiltCastlesCache();
-        saveField('isCastleRoot', v.isCastleRoot);
-        saveField('castleName', v.castleName);
-        saveField('castleOwner', v.castleOwner);
-        saveField('castleStreetNumber', v.castleStreetNumber);
-        saveField('name', v.roomName);
-        refreshBranchName(nameSpan, currentSaved());
+        savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+        savePrefField(roomSeq, 'castleName', v.castleName);
+        savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+        savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+        savePrefField(roomSeq, 'name', v.roomName);
+        refreshBranchName(nameSpan, roomSaved());
       }, lineSeq);
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
@@ -3098,16 +3129,22 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    openAttributesModal(currentSaved(), v=>{
+    // room-level attributes live on the room's CANONICAL seq (see
+    // canonicalRoomSeq) so a transposing path always reads/writes the same
+    // shared data VR itself reads -- everything else on this row (mnemonic,
+    // note, eval, hidden, ...) still keys off lineSeq as usual.
+    const roomSeq = canonicalRoomSeq(lineSeq);
+    const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+    openAttributesModal(roomSaved(), v=>{
       // the room's display name, and whether/where it's a castle root, all
       // feed VR room labels and street layout
       invalidateBuiltCastlesCache();
-      saveField('isCastleRoot', v.isCastleRoot);
-      saveField('castleName', v.castleName);
-      saveField('castleOwner', v.castleOwner);
-      saveField('castleStreetNumber', v.castleStreetNumber);
-      saveField('name', v.roomName);
-      refreshBranchName(nameSpan, currentSaved());
+      savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+      savePrefField(roomSeq, 'castleName', v.castleName);
+      savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+      savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+      savePrefField(roomSeq, 'name', v.roomName);
+      refreshBranchName(nameSpan, roomSaved());
     }, lineSeq);
   };
 
@@ -5574,6 +5611,11 @@ if(localStorage.getItem('threeTestDebug')){
     restorePrefs: () => oqRestorePrefsIfSwapped(),
     getPrefs: () => JSON.parse(JSON.stringify(PREFS)),
     setPrefs: (p) => { PREFS = p; },
+    // resolves a transposing row's own (opponent-move) seq to the room's
+    // canonical one -- for testing "Set Attributes" always edits the same
+    // shared pref regardless of which transposing path opened it.
+    canonicalRoomSeq: (seq) => canonicalRoomSeq(seq),
+    prefKey: (lineId, seq) => prefKey(lineId, seq),
     // a minimal stand-in for the real cm-chessboard instance (unavailable in
     // this harness) that mimics its one behavior this suite needs to catch a
     // regression on: throwing if enableMoveInput() is called while already
