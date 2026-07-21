@@ -5573,5 +5573,50 @@ try {
   await appBF.close();
 }
 
+// --- Phase BG: exportMnemonics() shows a spinner (with a running "N images
+//     converted" progress label) while it re-encodes every image for export
+//     -- converting a full 384-image set is slow enough that, with no visual
+//     feedback, clicking Export looked like it did nothing (the reported bug). ---
+const appBG = await launchApp();
+try {
+  const bigImg = await appBG.page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 480; c.height = 480;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#22aa66'; ctx.fillRect(0, 0, 480, 480);
+    return c.toDataURL('image/png');
+  });
+  await seedBackup(appBG.page, {
+    version: 6, user: 'tester',
+    lines: [], games: [],
+    mnemonics: [
+      { square: 'e4', knight: 'echo', knightImg: bigImg, bishop: 'bravo', bishopImg: bigImg },
+      { square: 'd4', rook: 'romeo', rookImg: bigImg },
+    ],
+  });
+
+  // 83. The spinner appears immediately, its label counts images converted
+  //     as the export proceeds, and it's hidden again once the download fires.
+  try {
+    await appBG.page.evaluate(() => { document.getElementById('mnemonicsExportBtn').click(); });
+    await appBG.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'flex' &&
+            document.getElementById('spinnerLabel').textContent.startsWith('Exporting mnemonics'),
+      { timeout: 5000 }
+    );
+    await appBG.page.waitForFunction(
+      () => /\d+ images? converted/.test(document.getElementById('spinnerLabel').textContent),
+      { timeout: 10000 }
+    );
+    await appBG.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'none',
+      { timeout: 10000 }
+    );
+    ok('exportMnemonics shows a spinner with running progress while converting images, then hides it');
+  } catch(e){ bad('mnemonics export spinner', e); }
+} finally {
+  await appBG.close();
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

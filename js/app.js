@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-149';
+const BUILD_TAG = '-150';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3898,16 +3898,26 @@ async function importAssetBundle(data){
 const MNEM_EXPORT_IMG_MAX_DIM = 400;
 // builds the bundle (with export-downscaled images) without touching local
 // storage or triggering a download -- split out so tests can inspect it directly.
-async function buildMnemonicsExportData(){
+// `onProgress`, if given, is called with the running count of images
+// converted so far -- re-encoding hundreds of images (decode + canvas +
+// WebP) is slow enough that a caller showing a spinner wants to update its
+// label rather than sit on a single static message the whole time.
+async function buildMnemonicsExportData(onProgress){
   const mnemonicsBySquare = await getAllMnemonics();
   const mnemonics = [];
+  let converted = 0;
   for(const entry of Object.values(mnemonicsBySquare)){
     const out = {square: entry.square};
     for(const p of MNEM_PIECES){
       out[p] = entry[p] || '';
       out[p+'Desc'] = entry[p+'Desc'] || '';
       const img = entry[p+'Img'];
-      out[p+'Img'] = img ? await downscaleMnemImage(img, MNEM_EXPORT_IMG_MAX_DIM) : '';
+      if(img){
+        out[p+'Img'] = await downscaleMnemImage(img, MNEM_EXPORT_IMG_MAX_DIM);
+        onProgress?.(++converted);
+      } else {
+        out[p+'Img'] = '';
+      }
     }
     mnemonics.push(out);
   }
@@ -3921,7 +3931,16 @@ async function buildMnemonicsExportData(){
   };
 }
 async function exportMnemonics(){
-  const data = await buildMnemonicsExportData();
+  const spinner = showSpinner('Exporting mnemonics…');
+  await nextPaint();
+  let data;
+  try {
+    data = await buildMnemonicsExportData(n => {
+      $('spinnerLabel').textContent = `Exporting mnemonics… ${n} image${n===1?'':'s'} converted`;
+    });
+  } finally {
+    hideSpinner(spinner);
+  }
   const bytes = await downloadJsonBackup(data, `repchess-mnemonics-${new Date().toISOString().slice(0,10)}`);
   const mb = (bytes / 1048576).toFixed(1);
   log(`exported ${data.mnemonics.length} mnemonic square(s) — ${mb}MB (images capped at ${MNEM_EXPORT_IMG_MAX_DIM}px)`);
