@@ -5760,6 +5760,36 @@ try {
     await appBI.page.waitForFunction(() => document.getElementById('helpOverlay').style.display === 'none', { timeout: 5000 });
     ok('Help modal: Close hides the overlay');
   } catch(e){ bad('help modal: close', e); }
+
+  // 87. Every topic listed in help/topics.json actually loads real, non-empty
+  //     content when clicked -- catches a typo'd `file` entry or a missing
+  //     fragment immediately, rather than leaving a topic silently broken.
+  try {
+    await appBI.page.evaluate(() => document.getElementById('menuHelp').click());
+    await appBI.page.waitForSelector('#helpOverlay', { state: 'visible', timeout: 5000 });
+    const topicCount = await appBI.page.evaluate(() => document.querySelectorAll('#helpTopics .help-topic-btn').length);
+    assert(topicCount >= 11, `expected at least 11 help topics (Intro + 10 new ones), got ${topicCount}`);
+    for(let i = 0; i < topicCount; i++){
+      const { title } = await appBI.page.evaluate((idx) => {
+        const btns = [...document.querySelectorAll('#helpTopics .help-topic-btn')];
+        btns[idx].click();
+        return { title: btns[idx].textContent };
+      }, i);
+      await appBI.page.waitForFunction(
+        () => document.getElementById('helpContent').textContent.trim().length > 0,
+        { timeout: 5000 }
+      );
+      // openHelpTopic() renders a "Couldn't load this help topic (...)" paragraph
+      // on a fetch failure -- also non-empty, so the wait above alone can't tell
+      // a real load from a broken `file` entry in topics.json. Rule that out
+      // explicitly so a typo'd filename actually fails this test.
+      const errored = await appBI.page.evaluate(() => document.getElementById('helpContent').textContent.includes("Couldn't load this help topic"));
+      assert(!errored, `expected "${title}" to load real content, but it showed the fetch-failure fallback`);
+      const activeNow = await appBI.page.evaluate(() => document.querySelector('#helpTopics .help-topic-btn.active')?.textContent);
+      assert(activeNow === title, `expected clicking "${title}" to mark it active, got "${activeNow}"`);
+    }
+    ok('every help topic in topics.json loads non-empty content when clicked');
+  } catch(e){ bad('help modal: every topic loads', e); }
 } finally {
   await appBI.close();
 }
