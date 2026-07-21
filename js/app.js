@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-151';
+const BUILD_TAG = '-152';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4378,6 +4378,59 @@ $('objectListsCloseBtn').onclick = ()=>{
   $('objectListsOverlay').style.display='none';
   closeObjectListManager();
 };
+
+/* ---------- help modal ----------
+   Topics come from help/topics.json: [{id, title, file}, ...]. Each topic's
+   `file` is an HTML fragment (not a full document) under help/, fetched and
+   injected straight into #helpContent so it inherits the app's own styles.
+   See help/README.md for how to add a topic. */
+let helpTopicsCache = null;   // fetched once per page load, not per open
+async function loadHelpTopics(){
+  if(helpTopicsCache) return helpTopicsCache;
+  const res = await fetch('help/topics.json');
+  if(!res.ok) throw new Error(`topics.json fetch failed (${res.status})`);
+  helpTopicsCache = await res.json();
+  return helpTopicsCache;
+}
+async function openHelpTopic(file, btn){
+  $('helpTopics').querySelectorAll('.help-topic-btn').forEach(b => b.classList.toggle('active', b === btn));
+  const content = $('helpContent');
+  try {
+    const res = await fetch(`help/${file}`);
+    if(!res.ok) throw new Error(`${file} fetch failed (${res.status})`);
+    content.innerHTML = await res.text();
+  } catch(err){
+    console.error('[help] topic load failed', err);
+    content.innerHTML = `<p style="color:#c62828">Couldn't load this help topic (${escapeHtml(err.message)}).</p>`;
+  }
+}
+async function openHelpModal(){
+  const list = $('helpTopics');
+  const content = $('helpContent');
+  list.innerHTML = '';
+  content.innerHTML = '';
+  let topics;
+  try {
+    topics = await loadHelpTopics();
+  } catch(err){
+    console.error('[help] topics load failed', err);
+    content.innerHTML = `<p style="color:#c62828">Couldn't load the help topic list (${escapeHtml(err.message)}).</p>`;
+    $('helpOverlay').style.display = 'flex';
+    return;
+  }
+  list.innerHTML = topics.map(t => `<button type="button" class="help-topic-btn" data-file="${escapeHtml(t.file)}">${escapeHtml(t.title)}</button>`).join('');
+  list.querySelectorAll('.help-topic-btn').forEach(btn => {
+    btn.onclick = () => openHelpTopic(btn.dataset.file, btn);
+  });
+  $('helpOverlay').style.display = 'flex';
+  const first = list.querySelector('.help-topic-btn');
+  if(first) await openHelpTopic(first.dataset.file, first);
+}
+$('menuHelp').onclick = ()=>{
+  $('menuList').style.display='none';
+  openHelpModal();
+};
+$('helpCloseBtn').onclick = ()=>{ $('helpOverlay').style.display='none'; };
 
 /* ---------- about modal ---------- */
 $('menuAbout').onclick = ()=>{
