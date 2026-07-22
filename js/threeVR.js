@@ -3628,7 +3628,9 @@ function ordinalWord(n){
 // [head object]. ELEV_ROW_PX maps to ELEV_ROW_M metres, fixing the whole
 // panel's real size (see buildElevatorPanel) at ~0.3 m/row.
 const ELEV_ROW_PX = 140, ELEV_PAD_PX = 12;
-const ELEV_COL = { btn: 132, name: 300, pair: 232, obj: 176 };   // per-column widths (px)
+// the pair column is narrow because the two move images OVERLAP (like the
+// in-room pair billboard), which also makes the panel read like a normal room.
+const ELEV_COL = { btn: 132, name: 300, pair: 150, obj: 176 };   // per-column widths (px)
 const ELEV_CANVAS_W = ELEV_PAD_PX * 2 + ELEV_COL.btn + ELEV_COL.name + ELEV_COL.pair + ELEV_COL.obj;
 const ELEV_ROW_M = 0.3;
 // draw an image "contain"-fitted into the box (bx,by,bw,bh), centred.
@@ -3684,18 +3686,20 @@ function makeElevatorPanelTexture(floors, contents){
     x += ELEV_COL.name;
 
     // move pair: opponent raised (upper-left), response lowered (lower-right),
-    // overlapping like the room's own pair billboard.
-    const cell = rowH - 24;
-    const pairImgSz = cell * 0.66;
-    const oppX = x + 6, oppY = rowTop + 12;
-    const respX = x + ELEV_COL.pair - pairImgSz - 6, respY = rowTop + rowH - 12 - pairImgSz;
+    // OVERLAPPING like the room's own pair billboard -- saves horizontal space
+    // and reads the same as a normal room's move images. Response drawn on top.
+    const cell = rowH - 20;
+    const pairImgSz = cell * 0.74;
+    const step = pairImgSz * 0.5;                 // 50% diagonal overlap
+    const oppX = x + 6, oppY = rowTop + (rowH - (pairImgSz + step)) / 2;
+    const respX = oppX + step, respY = oppY + step;
     const drawMove = (img, text, bx, by) => {
       if(img) drawContain(ctx, img, bx, by, pairImgSz, pairImgSz);
-      else { ctx.fillStyle = '#ddd'; ctx.font = '24px sans-serif'; ctx.textAlign = 'left';
-             ctx.fillText(fitText(ctx, text || '', pairImgSz + 20), bx, by + pairImgSz / 2); }
+      else { ctx.fillStyle = '#ddd'; ctx.font = '22px sans-serif'; ctx.textAlign = 'left';
+             ctx.fillText(fitText(ctx, text || '', pairImgSz + 14), bx, by + pairImgSz / 2); }
     };
-    drawMove(c.oppImg, c.oppText, oppX, oppY);
-    drawMove(c.respImg, c.respText, respX, respY);
+    drawMove(c.oppImg, c.oppText, oppX, oppY);      // opponent behind
+    drawMove(c.respImg, c.respText, respX, respY);  // response in front, lower-right
     x += ELEV_COL.pair;
 
     // head object
@@ -6358,7 +6362,16 @@ function renderRoomGeomDialog(ov, roomKey){
   // ROOM_GEOM_MIN, keeping a shrink from clipping something in the first
   // place (the reconciler still catches anything that slips through, e.g.
   // already-saved data from before this floor existed).
-  const contentMin = (ROOMS[roomKey] && ROOMS[roomKey].size) || room.size;
+  let contentMin = (ROOMS[roomKey] && ROOMS[roomKey].size) || room.size;
+  // An elevator car has ONE physical door (its floor panel), not one per
+  // reply, so the door-count-driven width the branch room was sized for is
+  // irrelevant -- let it shrink to a compact 8x8 (keeping its height, which
+  // the tall floor panel still needs). Without this a 7-floor car is forced
+  // gigantic even though only the single elevator door is ever built.
+  if(isElevatorCar(roomKey)){
+    const ELEV_MIN_WD = 8;
+    contentMin = { w: Math.min(contentMin.w, ELEV_MIN_WD), d: Math.min(contentMin.d, ELEV_MIN_WD), h: contentMin.h };
+  }
   // read straight off the static ROOMS config: exits, stairs and (outdoor)
   // building footprints don't move when the room is resized, so the live
   // preview overlays them on whatever width/depth the user is typing.
@@ -6413,8 +6426,12 @@ function renderRoomGeomDialog(ov, roomKey){
   };
   const objBtnLabel = target => {
     const slotId = headObjSlotId(target);
-    const asset = slotAssetFor(target, slotId);
-    if(asset) return asset.id;
+    // read the raw assigned asset id straight from LAYOUT (set synchronously
+    // by setSlotOverride) rather than via slotAssetFor -> ASSET_BY_ID, which
+    // is only repopulated by applyEdit's awaited refreshAssetMap() -- so the
+    // label refreshes immediately after a pick instead of only on reopen.
+    const rawId = LAYOUT[target] && LAYOUT[target].slots && LAYOUT[target].slots[slotId];
+    if(rawId) return rawId;
     const word = slotWordFor(target, slotId);
     return word && word.trim() ? word.trim() : 'none';
   };

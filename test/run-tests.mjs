@@ -6644,6 +6644,15 @@ try {
     });
     await appBQ.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
 
+    // the button's own label must refresh IMMEDIATELY (not only on reopen):
+    // it reads the raw assigned id from LAYOUT, which is set synchronously,
+    // rather than via ASSET_BY_ID which only repopulates on applyEdit's
+    // awaited refreshAssetMap().
+    const btnLabelNow = await appBQ.page.evaluate((t) =>
+      document.querySelector(`#roomGeomOverlay [data-elev-obj-for="${t}"]`)?.textContent, otherTarget);
+    assert(btnLabelNow && btnLabelNow.includes('toaster'),
+      `expected the object button's label to update to "toaster" immediately after picking, got ${JSON.stringify(btnLabelNow)}`);
+
     await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
     await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
     await appBQ.page.waitForTimeout(150);
@@ -6651,8 +6660,39 @@ try {
     const floor = info.forward[0].find(f => f.target === otherTarget);
     assert(floor && floor.objAssetId === 'toaster',
       `expected picking "toaster" to become that floor's object, got ${JSON.stringify(floor)}`);
-    ok('elevator editor: picking an object in the editor assigns it to that floor');
+    ok('elevator editor: picking an object assigns it to that floor and refreshes the button label immediately');
   } catch(e){ bad('elevator editor: object picker assigns the floor object', e); }
+
+  // 104. An elevator car has only ONE physical door, so its Room Geometry
+  //      editor lets it shrink to a compact 8x8 -- not the door-count-driven
+  //      minimum the branch room was sized for (which is >= 11 wide).
+  try {
+    await appBQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const mins = await appBQ.page.evaluate(() => ({
+      w: Number(document.getElementById('roomGeomW').getAttribute('min')),
+      d: Number(document.getElementById('roomGeomD').getAttribute('min')),
+    }));
+    assert(mins.w <= 8, `expected a car's width min to allow shrinking to 8, got ${mins.w}`);
+    assert(mins.d <= 8, `expected a car's depth min to allow shrinking to 8, got ${mins.d}`);
+
+    // typing 8x8 and Applying sticks (isn't clamped back up to the old min):
+    // reopen the dialog and confirm the fields now read 8x8.
+    await appBQ.page.fill('#roomGeomW', '8');
+    await appBQ.page.fill('#roomGeomD', '8');
+    await appBQ.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appBQ.page.waitForTimeout(150);
+    await appBQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const applied = await appBQ.page.evaluate(() => ({
+      w: Number(document.getElementById('roomGeomW').value),
+      d: Number(document.getElementById('roomGeomD').value),
+    }));
+    assert(applied.w === 8 && applied.d === 8, `expected the car to actually resize to 8x8, got ${JSON.stringify(applied)}`);
+    await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    ok('elevator car: Room Geometry editor allows shrinking to a compact 8x8');
+  } catch(e){ bad('elevator car: 8x8 minimum size', e); }
 } finally {
   await appBQ.close();
 }
