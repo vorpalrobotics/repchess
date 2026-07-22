@@ -3623,14 +3623,35 @@ function ordinalWord(n){
   return ORDINAL_WORDS[n - 1] || ordinal(n);
 }
 
-// draws one floor list onto a canvas: "<Nth> Floor:" then the move's content
-// per row -- the mnemonic image thumbnail when one has resolved, else the
-// move's word, else its algebraic notation. contents[i] holds {image} or
-// {text}, the same shape resolveMoveContent returns.
+// panel canvas geometry (px). One row per floor, laid out left-to-right as
+// [numbered button] [room name] [move pair: opponent raised / response lowered]
+// [head object]. ELEV_ROW_PX maps to ELEV_ROW_M metres, fixing the whole
+// panel's real size (see buildElevatorPanel) at ~0.3 m/row.
+const ELEV_ROW_PX = 140, ELEV_PAD_PX = 12;
+const ELEV_COL = { btn: 132, name: 300, pair: 232, obj: 176 };   // per-column widths (px)
+const ELEV_CANVAS_W = ELEV_PAD_PX * 2 + ELEV_COL.btn + ELEV_COL.name + ELEV_COL.pair + ELEV_COL.obj;
+const ELEV_ROW_M = 0.3;
+// draw an image "contain"-fitted into the box (bx,by,bw,bh), centred.
+function drawContain(ctx, im, bx, by, bw, bh){
+  const s = Math.min(bw / im.width, bh / im.height);
+  const w = im.width * s, h = im.height * s;
+  ctx.drawImage(im, bx + (bw - w) / 2, by + (bh - h) / 2, w, h);
+}
+// wrapped/truncated single-line text that fits maxW, appending an ellipsis.
+function fitText(ctx, text, maxW){
+  if(ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while(t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+// Draws the floor directory onto a canvas. contents[i] holds the resolved
+// row content: { oppImg?, oppText?, respImg?, respText?, objImg?, objText? }
+// (images are decoded HTMLImageElements; text is the algebraic/word fallback).
 function makeElevatorPanelTexture(floors, contents){
-  const cw = 380, rowH = 76;
+  const rowH = ELEV_ROW_PX;
   const canvas = document.createElement('canvas');
-  canvas.width = cw; canvas.height = Math.max(rowH, rowH * floors.length + 16);
+  canvas.width = ELEV_CANVAS_W;
+  canvas.height = Math.max(rowH, rowH * floors.length + ELEV_PAD_PX * 2);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -3639,26 +3660,53 @@ function makeElevatorPanelTexture(floors, contents){
   ctx.strokeRect(3, 3, canvas.width - 6, canvas.height - 6);
   ctx.textBaseline = 'middle';
   floors.forEach((f, i) => {
-    const rowTop = 16 + rowH * i;
-    const cy = rowTop + rowH/2;
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(14, rowTop + 8, canvas.width - 28, rowH - 16);
-    const content = contents && contents[i];
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 24px sans-serif';
+    const rowTop = ELEV_PAD_PX + rowH * i;
+    const cy = rowTop + rowH / 2;
+    const c = (contents && contents[i]) || {};
+    let x = ELEV_PAD_PX + 8;
+
+    // numbered button
+    const btnR = rowH * 0.30;
+    const btnCx = x + ELEV_COL.btn / 2, btnCy = cy;
+    ctx.beginPath(); ctx.arc(btnCx, btnCy, btnR, 0, Math.PI * 2);
+    ctx.fillStyle = '#333'; ctx.fill();
+    ctx.strokeStyle = '#ddd'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(btnR * 1.1)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(f.ordinal), btnCx, btnCy + 1);
+    x += ELEV_COL.btn;
+
+    // room name (or a faint "(unnamed)" so the row still reads)
     ctx.textAlign = 'left';
-    const label = `${ordinalWord(f.ordinal)} Floor:`;
-    ctx.fillText(label, 22, cy);
-    const contentX = 22 + ctx.measureText(label).width + 12;
-    if(content && content.image){
-      const thumb = rowH - 24;
-      const im = content.image;
-      const scale = Math.min(thumb / im.width, thumb / im.height);
-      const w = im.width * scale, h = im.height * scale;
-      ctx.drawImage(im, contentX, cy - h / 2, w, h);
-    } else {
-      ctx.fillText(content && content.text ? content.text : f.label, contentX, cy);
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillStyle = f.name ? '#fff' : '#888';
+    ctx.fillText(fitText(ctx, f.name || '(unnamed)', ELEV_COL.name - 12), x + 6, cy);
+    x += ELEV_COL.name;
+
+    // move pair: opponent raised (upper-left), response lowered (lower-right),
+    // overlapping like the room's own pair billboard.
+    const cell = rowH - 24;
+    const pairImgSz = cell * 0.66;
+    const oppX = x + 6, oppY = rowTop + 12;
+    const respX = x + ELEV_COL.pair - pairImgSz - 6, respY = rowTop + rowH - 12 - pairImgSz;
+    const drawMove = (img, text, bx, by) => {
+      if(img) drawContain(ctx, img, bx, by, pairImgSz, pairImgSz);
+      else { ctx.fillStyle = '#ddd'; ctx.font = '24px sans-serif'; ctx.textAlign = 'left';
+             ctx.fillText(fitText(ctx, text || '', pairImgSz + 20), bx, by + pairImgSz / 2); }
+    };
+    drawMove(c.oppImg, c.oppText, oppX, oppY);
+    drawMove(c.respImg, c.respText, respX, respY);
+    x += ELEV_COL.pair;
+
+    // head object
+    if(c.objImg) drawContain(ctx, c.objImg, x + 6, rowTop + 12, ELEV_COL.obj - 12, cell);
+    else if(c.objText){ ctx.fillStyle = '#bbb'; ctx.font = 'italic 24px sans-serif'; ctx.textAlign = 'left';
+                        ctx.fillText(fitText(ctx, c.objText, ELEV_COL.obj - 12), x + 6, cy); }
+
+    // row divider
+    if(i < floors.length - 1){
+      ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(ELEV_PAD_PX, rowTop + rowH); ctx.lineTo(canvas.width - ELEV_PAD_PX, rowTop + rowH); ctx.stroke();
     }
   });
   const tex = new THREE.CanvasTexture(canvas);
@@ -3677,12 +3725,15 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   const { fixed, half } = wallSpan(size, wall);
   const margin = 0.1;
   const avail = half - DOOR_W/2 - margin * 2;
-  const panelW = Math.max(0.3, Math.min(0.7, avail));
-  const panelH = Math.min(1.1, 0.28 * floors.length + 0.16);
-  // physical size is dictated by the wall's clear space beside the door, not
-  // the canvas's own pixel aspect -- the texture stretches slightly, an
-  // acceptable tradeoff for fitting a multi-row panel into a narrow flank.
-  const mat = new THREE.MeshBasicMaterial({ map: makeElevatorPanelTexture(floors, floors.map(f => ({ text: f.label }))) });
+  // Real size follows the canvas aspect at ELEV_ROW_M (~0.3 m) per row, so the
+  // move/object images stay undistorted. If that's wider than the door's flank
+  // (a small hand-authored car), scale the whole panel down uniformly to fit
+  // -- the wide multi-column layout for many floors is deferred (2 columns).
+  const canvasH = ELEV_PAD_PX * 2 + ELEV_ROW_PX * floors.length;
+  const mpp = ELEV_ROW_M / ELEV_ROW_PX;
+  let panelW = ELEV_CANVAS_W * mpp, panelH = canvasH * mpp;
+  if(panelW > avail && avail > 0.2){ const k = avail / panelW; panelW *= k; panelH *= k; }
+  const mat = new THREE.MeshBasicMaterial({ map: makeElevatorPanelTexture(floors, elevatorRowFallback(floors)) });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), mat);
   const clearance = WALL_THICK/2 + 0.02;
   const along = doorOffset - DOOR_W/2 - margin - panelW/2;
@@ -3695,7 +3746,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   const myGen = buildGeneration;
   getMnemonicsCached().then((mnemonicsBySquare) => {
     if(buildGeneration !== myGen) return;
-    Promise.all(floors.map(f => f.move ? resolveMoveContent(f.move, mnemonicsBySquare, true) : Promise.resolve({ text: f.label })))
+    Promise.all(floors.map(f => resolveElevatorRow(f, mnemonicsBySquare)))
       .then((contents) => {
         if(buildGeneration !== myGen) return;
         mat.map.dispose();
@@ -3704,6 +3755,33 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
       });
   });
   return mesh;
+}
+// the instant text-only row content (drawn before images resolve).
+function elevatorRowFallback(floors){
+  return floors.map(f => ({
+    oppText: f.pair ? f.pair.opponent.san : f.label,
+    respText: f.pair ? f.pair.response.san : '',
+    objText: f.objWord || '',
+  }));
+}
+// resolves one floor row to its drawable content: opponent + response move
+// images (falling back to notation), and the head-object image (falling back
+// to its placeholder word). Mirrors doorPairContent -> resolveMoveContent for
+// the moves, plus a decoded object image.
+function resolveElevatorRow(f, mnemonicsBySquare){
+  const moveOf = m => m ? resolveMoveContent(m, mnemonicsBySquare, true) : Promise.resolve({ text: '' });
+  const objOf = f.objAsset && f.objAsset.image
+    ? loadImageCached(f.objAsset.image).then(img => img ? { image: img } : { text: f.objWord || '' })
+    : Promise.resolve({ text: f.objWord || '' });
+  return Promise.all([
+    moveOf(f.pair && f.pair.opponent),
+    moveOf(f.pair && f.pair.response),
+    objOf,
+  ]).then(([opp, resp, obj]) => ({
+    oppImg: opp.image, oppText: opp.text,
+    respImg: resp.image, respText: resp.text,
+    objImg: obj.image, objText: obj.text,
+  }));
 }
 
 // A cosmetic textured panel filling a doorway opening (DOOR_W x DOOR_H, plus
@@ -4629,13 +4707,25 @@ function buildRoom(roomKey){
         const box = doorTriggerBox(room.size, wall, doorOffset);
         const thru = WALL_OUT_NORMAL[wall];
         if(isFwd){
-          const floors = carLayout.floors.map((fe, i) => ({
-            ordinal: i + 1,
-            label: fe.label || fe.target,
-            move: mnemOpponentMove(fe.target),
-            target: fe.target,
-            spawn: computeSpawnForExit(roomKey, room, fe)
-          }));
+          const floors = carLayout.floors.map((fe, i) => {
+            // each floor row carries the same "in front of a door" content a
+            // normal door shows (doorPairContent): the destination room's name,
+            // the move pair (opponent raised / response lowered), and that
+            // room's signature head object -- so the panel reads like a
+            // directory of doors, not a bare move list.
+            const dc = doorPairContent(fe.target, fe.pair);
+            return {
+              ordinal: i + 1,
+              label: fe.label || fe.target,
+              move: mnemOpponentMove(fe.target),   // still used by the walk-in popup
+              name: roomNameFor(fe.target) || '',
+              pair: dc.pair,                        // { opponent, response } move descriptors, or null
+              objAsset: dc.asset || null,           // the room's head-object asset (has .image), or null
+              objWord: dc.word || null,             // its placeholder word, if no image
+              target: fe.target,
+              spawn: computeSpawnForExit(roomKey, room, fe)
+            };
+          });
           elevatorMeta.push({ box, thru, kind: 'forward', floors });
           scene.add(buildElevatorPanel(room.size, wall, doorOffset, floors));
         } else {   // isBack
@@ -4962,7 +5052,10 @@ function renderElevatorPopup(ov, meta, mnemonicsBySquare){
     const content = imgSrc
       ? `<img data-elevator-thumb src="${imgSrc}" style="width:4.4em;height:4.4em;object-fit:contain;border-radius:3px">`
       : `<span>${(word && word.trim()) ? word.trim() : f.label}</span>`;
-    return `<button data-elevator-target="${f.target}" style="display:flex;align-items:center;gap:.5em"><span>${ordinalWord(f.ordinal)} Floor:</span>${content}</button>`;
+    // "N: Name" reads like the wall panel; the room name (when set) is the
+    // most useful thing to pick a floor by, so lead with it.
+    const head = f.name ? `${f.ordinal}: ${f.name}` : `${ordinalWord(f.ordinal)} Floor:`;
+    return `<button data-elevator-target="${f.target}" style="display:flex;align-items:center;gap:.5em"><span>${head}</span>${content}</button>`;
   };
   const buttonsHtml = meta.kind === 'back'
     ? `<button data-elevator-target="${meta.target}">Go back</button>`
@@ -6307,7 +6400,36 @@ function renderRoomGeomDialog(ov, roomKey){
       type: (ov2 && ov2.type) || ex.type || 'door'
     };
   }
-  const exitTypeRows = staticExits.map(ex => `
+  // The current room's own exit controls. A normal room shows a door-type
+  // dropdown per exit. An ELEVATOR CAR's exits aren't doors -- each forward
+  // exit is a floor -- so the (meaningless) dropdown is replaced by a button
+  // that assigns that floor's signature object (its destination room's head
+  // object, obj-C1), the same object the panel shows and a normal door shows
+  // beside it. The back exit gets nothing.
+  const carMode = isElevatorCar(roomKey);
+  const headObjSlotId = target => {
+    const s = moveObjectSlots(target).find(sl => sl.side === 'center');
+    return s ? s.id : 'obj-C1';
+  };
+  const objBtnLabel = target => {
+    const slotId = headObjSlotId(target);
+    const asset = slotAssetFor(target, slotId);
+    if(asset) return asset.id;
+    const word = slotWordFor(target, slotId);
+    return word && word.trim() ? word.trim() : 'none';
+  };
+  const exitTypeRows = staticExits.map(ex => {
+    if(carMode){
+      const right = ex.back
+        ? `<span style="color:#888;font-size:.72rem">exit door</span>`
+        : `<button type="button" data-elev-obj-for="${escHtml(ex.target)}" style="font-size:.72rem;max-width:11em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Object: ${escHtml(objBtnLabel(ex.target))}</button>`;
+      return `
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:.78rem;gap:.5rem;padding:.15rem 0">
+          <span title="${escHtml(ex.target)}">${escHtml(exitShortLabel(ex))}${ex.back ? ' ↩' : ''}</span>
+          ${right}
+        </label>`;
+    }
+    return `
     <label style="display:flex;align-items:center;justify-content:space-between;font-size:.78rem;gap:.5rem;padding:.15rem 0">
       <span title="${escHtml(ex.target)}">${escHtml(exitShortLabel(ex))}${ex.back ? ' ↩' : ''}</span>
       <select data-exit-type-for="${ex.target}" style="font-size:.78rem">
@@ -6317,7 +6439,11 @@ function renderRoomGeomDialog(ov, roomKey){
         <option value="elevator" ${stagedExits[ex.target].type === 'elevator' ? 'selected' : ''}>Elevator</option>
       </select>
     </label>
-  `).join('');
+  `;
+  }).join('');
+  const exitRowsCaption = carMode
+    ? `<div style="font-size:.7rem;color:#888;margin-bottom:.15rem">Elevator floors — set each floor's object (its room's signature item shown on the panel).</div>`
+    : '';
   // "Room names" section: name THIS room and, more usefully, the room behind
   // each forward door (back/exit doors are excluded). Naming a room edits the
   // same "Room Name" pref the tree's Attributes modal does (via setRoomName ->
@@ -6349,7 +6475,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <p style="margin:0 0 .5rem;font-size:.68rem;color:#888">Won't go below ${contentMin.w.toFixed(1)}×${contentMin.d.toFixed(1)}×${contentMin.h.toFixed(1)}m -- the size this room's own moves and doors need to fit without crowding.</p>
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
-      ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}<div id="roomGeomExitError" style="color:#c62828;font-size:.72rem;line-height:1.3;margin-top:.2rem"></div></div>` : ''}
+      ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitRowsCaption}${exitTypeRows}<div id="roomGeomExitError" style="color:#c62828;font-size:.72rem;line-height:1.3;margin-top:.2rem"></div></div>` : ''}
       <div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">
         <div style="font-size:.72rem;color:#888;margin-bottom:.15rem">Room names — label the room behind each door to plan the walk and theme its decor.</div>
         ${roomNameRows}
@@ -6392,6 +6518,28 @@ function renderRoomGeomDialog(ov, roomKey){
       if(exitErrEl) exitErrEl.textContent = '';
       stagedExits[target].type = sel.value;
       drawPlan();
+    });
+  }
+  // elevator-floor object buttons: open the asset picker for that floor's
+  // destination-room head object (the same slot a normal door's object
+  // assigns). The picker (z 60) sits below this dialog (z 70), so hide the
+  // dialog while it's open and restore on close; the object label refreshes
+  // once something is actually picked/removed (onClose fires first, before
+  // onPick, so the refresh rides on the pick/remove/word callbacks).
+  for(const btn of ov.querySelectorAll('[data-elev-obj-for]')){
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.elevObjFor;
+      const slotId = headObjSlotId(target);
+      const refresh = () => { btn.textContent = 'Object: ' + objBtnLabel(target); };
+      ov.style.display = 'none';
+      openAssetPicker({
+        allow: PROP_TYPES, allowRemove: !!slotAssetFor(target, slotId),
+        allowWord: true, currentWord: slotWordFor(target, slotId),
+        onPick: id => { setSlotOverride(target, slotId, id); refresh(); },
+        onRemove: () => { setSlotOverride(target, slotId, null); refresh(); },
+        onWordApply: word => { setSlotWordOverride(target, slotId, word); refresh(); },
+        onClose: () => { ov.style.display = 'flex'; },
+      });
     });
   }
   // room-name inputs: persist on commit (blur/Enter) and redraw the plan so the
@@ -6956,7 +7104,14 @@ export async function openThreeTest(containerEl, opts){
       // car has exactly ONE forward entry (all exits as its floors) + one
       // back, no matter how many walls the exits were spread across.
       elevatorInfo: () => ({
-        forward: elevatorMeta.filter(m => m.kind === 'forward').map(m => (m.floors || []).map(f => f.target)),
+        forward: elevatorMeta.filter(m => m.kind === 'forward').map(m => (m.floors || []).map(f => ({
+          target: f.target,
+          ordinal: f.ordinal,
+          name: f.name || '',
+          hasPair: !!f.pair,
+          objAssetId: f.objAsset ? f.objAsset.id : null,
+          objWord: f.objWord || null,
+        }))),
         back: elevatorMeta.filter(m => m.kind === 'back').map(m => m.target),
       }),
       // the "can this door be an elevator?" rule the Room Geometry editor
