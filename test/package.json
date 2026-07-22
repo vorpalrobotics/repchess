@@ -5,6 +5,7 @@
   "description": "Offline test harness: serves the app and intercepts CDN module URLs with locally-vendored library builds so the VR/app can run headlessly (the CDNs are unreachable in the sandbox).",
   "scripts": {
     "test": "node run-tests.mjs",
+    "test:list": "node run-tests.mjs --list",
     "vendor": "node build-vendor.mjs"
   },
   "devDependencies": {
