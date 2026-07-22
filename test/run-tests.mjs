@@ -4675,6 +4675,28 @@ try {
     await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('Choose Asset: search filter', e); }
 
+  // 137b. Typing in the search box (including "r", which threeVR.js's
+  //       window-level keydown handler treats as a "return to start room"
+  //       hotkey) must not leak past the picker and eject the player from
+  //       the room they're decorating -- the reported bug.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.click('#pickerSearchInput');
+    await appAR.page.keyboard.type('armchair');
+    const roomAfter = await appAR.page.evaluate(() => window.__threeTestEdit.room());
+    const stillOpen = await appAR.page.evaluate(() => document.getElementById('assetPickerOverlay').style.display === 'flex');
+    assert(roomAfter === roomKey,
+      `expected typing a search term containing "r" to NOT eject the player back to the start room, got room=${roomAfter} (wanted ${roomKey})`);
+    assert(stillOpen, 'expected the picker to remain open after typing');
+    const filtered = await appAR.page.evaluate(() => [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
+    assert(filtered.some(t => t.includes('red-armchair')) && !filtered.some(t => t.includes('grandfather-clock')),
+      `expected the search to still filter normally, got ${JSON.stringify(filtered)}`);
+    ok('Choose Asset: typing a search term containing "r" does not leak to VR\'s window-level hotkeys');
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('Choose Asset: search box keystrokes do not leak to VR hotkeys', e); }
+
   // 138. The placeholder-label field only shows for a move-object slot
   //      picker (allowWord) -- not for e.g. a wall texture picker.
   try {

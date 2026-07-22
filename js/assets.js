@@ -10,6 +10,21 @@
    never needs to reach into app.js's module scope.
 */
 
+// Every modal in this module can be opened while the VR walk is live
+// underneath it (js/threeVR.js registers a WINDOW-level keydown/keyup
+// listener for movement + single-key hotkeys, e.g. 'r' to return to the
+// start room). Call this once, right after creating an overlay's element,
+// so typing in any field inside it -- the asset picker's search box, a
+// filename, a color hex -- never bubbles out to those page-level listeners.
+// (Reported bug: typing a search term containing "r" in the Choose Asset
+// picker teleported the player back to the start room.) Doesn't interfere
+// with this module's own listeners, which are attached to elements the
+// event already passed through before reaching (or failing to reach) here.
+function stopKeyBubble(ov){
+  ov.addEventListener('keydown', e => e.stopPropagation());
+  ov.addEventListener('keyup', e => e.stopPropagation());
+}
+
 const ASSET_TYPES = {
   'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
   'billboard-cylindrical': { label: 'Prop: Billboard (cylindrical)',  kind: 'prop' },
@@ -405,6 +420,7 @@ function openColorPicker(imageDataUrl, initialColor, onSave){
     ov.id = 'colorPickerOverlay';
     ov.className = 'overlay';
     document.body.appendChild(ov);
+    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   let picked = initialColor || null;
@@ -752,6 +768,7 @@ function openGenerateModal(){
     ov.style.cssText = 'position:fixed;inset:0;z-index:130;display:flex;align-items:center;'
       + 'justify-content:center;background:rgba(0,0,0,.6)';
     document.body.appendChild(ov);
+    stopKeyBubble(ov);
   }
   let savedKey = '', savedStanding = '';
   try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
@@ -864,7 +881,7 @@ const CROP_BRUSH_SIZE_KEY = 'cropBrushSize';
 
 export function cropImage(sourceDataUrl){
   let ov = document.getElementById('cropOverlay');
-  if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); }
+  if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); stopKeyBubble(ov); }
   ov.style.display = 'flex';
 
   let work = sourceDataUrl;             // current working data-URL (full-res when caller passed one)
@@ -1340,6 +1357,7 @@ function openNewAssetModal(initialType, allowTypes){
       // Generate… (130), both of which can be opened from within this editor.
       ov.style.zIndex = '62';
       document.body.appendChild(ov);
+      stopKeyBubble(ov);
     }
     ov.innerHTML = `
       <div class="modal" style="width:min(38em,92vw);max-height:90vh;overflow:auto">
@@ -1471,6 +1489,7 @@ export function openAssetPicker(opts){
     ov.className = 'overlay';
     ov.style.zIndex = '60';
     document.body.appendChild(ov);
+    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   renderPicker(ov);
@@ -1662,6 +1681,7 @@ async function openColorSwatchPicker(opts){
     ov.className = 'overlay';
     ov.style.zIndex = '65';
     document.body.appendChild(ov);
+    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   const recent = await getRecentColors();
