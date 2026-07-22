@@ -749,6 +749,8 @@ function elevatorRejectReason(targetKey){
   const fwd = t.exits ? t.exits.filter(e => !e.back).length : 0;
   if(fwd < 2)
     return `An elevator needs at least two floors to choose between; that room has ${fwd === 0 ? 'no' : 'only one'} forward door.`;
+  if(fwd > ELEV_MAX_FLOORS)
+    return `An elevator can have at most ${ELEV_MAX_FLOORS} floors (two panels of ${ELEV_PANEL_MAX_ROWS}); that room has ${fwd} forward doors.`;
   return null;
 }
 function setRoomGeom(roomKey, geom){
@@ -2730,8 +2732,11 @@ const DEMO_MNEMONICS = {
 // per room now (the composite pair billboard), not one per move -- the pair
 // moves/scales as a single unit.
 // a spot just in front of the floor-button wall, to the RIGHT of the door (the
-// floor panel sits on the left), at eye height -- mirrors buildElevatorPanel.
-function elevatorBillboardPos(room, wall, offset){
+// floor panel sits on the left), at eye height -- mirrors buildElevatorPanels.
+// twoPanel (floors.length > ELEV_PANEL_MAX_ROWS): a SECOND panel now sits on
+// the right too (see buildElevatorPanels), so there's no side left clear --
+// mount on the lintel above the doorway instead, centered and clear of both.
+function elevatorBillboardPos(room, wall, offset, twoPanel){
   const { axis, fixed } = wallSpan(room.size, wall);
   const dcx = axis === 'x' ? offset : fixed;          // door centre on the wall plane
   const dcz = axis === 'x' ? fixed : offset;
@@ -2740,6 +2745,10 @@ function elevatorBillboardPos(room, wall, offset){
     north: { rx: 1, rz: 0, ix: 0, iz: 1 }, south: { rx:-1, rz: 0, ix: 0, iz:-1 },
     west:  { rx: 0, rz:-1, ix: 1, iz: 0 }, east:  { rx: 0, rz: 1, ix:-1, iz: 0 }
   }[wall];
+  if(twoPanel){
+    const inset = 0.5;
+    return { x: dcx + V.ix*inset, y: DOOR_H + 0.5, z: dcz + V.iz*inset };
+  }
   const side = DOOR_W/2 + 0.2, inset = 0.6;
   return { x: dcx + V.rx*side + V.ix*inset, y: 1.5, z: dcz + V.rz*side + V.iz*inset };
 }
@@ -2885,12 +2894,14 @@ function mnemonicSlots(roomKey){
   // single-pair room (existing behavior)
   let pos = entry.pos;
   // an elevator car is a room with its own pair, but it's small and its floor
-  // panel sits to the left of the door -- mount its pair to the right of that
-  // door instead of the usual centre-of-room spot.
+  // panel(s) sit beside the door -- mount its pair beside/above that door
+  // instead of the usual centre-of-room spot (see elevatorBillboardPos).
   if(isElevatorCar(roomKey)){
     const room = mergedRoom(roomKey);
     const car = elevatorCarLayout(room);   // the single forward door all floors share
-    if(car.floors.length) pos = elevatorBillboardPos(room, car.fwdWall, car.fwdOffset);
+    if(car.floors.length){
+      pos = elevatorBillboardPos(room, car.fwdWall, car.fwdOffset, car.floors.length > ELEV_PANEL_MAX_ROWS);
+    }
   }
   return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair: entry }];
 }
@@ -3640,7 +3651,7 @@ function ordinal(n){
 // panel canvas geometry (px). One row per floor, laid out left-to-right as
 // [numbered button] [room name] [move pair: opponent raised / response lowered]
 // [head object]. ELEV_ROW_PX maps to ELEV_ROW_M metres, fixing the whole
-// panel's real size (see buildElevatorPanel) at ~0.375 m/row -- every pixel
+// panel's real size (see buildElevatorPanels) at ~0.375 m/row -- every pixel
 // size below (button/images/text) is a fraction of this same row, so bumping
 // just ELEV_ROW_M scales the whole row, images included, uniformly bigger
 // without touching layout proportions.
@@ -3650,6 +3661,13 @@ const ELEV_ROW_PX = 140, ELEV_PAD_PX = 12;
 const ELEV_COL = { btn: 132, name: 300, pair: 150, obj: 176 };   // per-column widths (px)
 const ELEV_CANVAS_W = ELEV_PAD_PX * 2 + ELEV_COL.btn + ELEV_COL.name + ELEV_COL.pair + ELEV_COL.obj;
 const ELEV_ROW_M = 0.375;
+// past ELEV_PANEL_MAX_ROWS floors, a second panel mounts to the right of the
+// door carrying the rest (see buildElevatorPanels) -- real elevators don't
+// split buttons like this, but it's the simplest practical fix for the rare
+// wide branch. Hard-capped at ELEV_MAX_FLOORS (two full panels) for now; see
+// elevatorRejectReason.
+const ELEV_PANEL_MAX_ROWS = 7;
+const ELEV_MAX_FLOORS = ELEV_PANEL_MAX_ROWS * 2;
 // draw an image "contain"-fitted into the box (bx,by,bw,bh), centred.
 function drawContain(ctx, im, bx, by, bw, bh){
   const s = Math.min(bw / im.width, bh / im.height);
@@ -3752,22 +3770,39 @@ function selectedElevatorOrdinal(roomKey, floors){
   return (ord != null && floors.some(f => f.ordinal === ord)) ? ord : null;
 }
 
-// elevator car only: a canvas-textured panel listing the floor buttons,
-// mounted to the left of the forward door (mirrors buildExitSign's
-// lintel-mount convention, but at chest height and offset along the wall
-// rather than centred over the doorway). Built first with the plain
+// elevator car only: the floor-button panel(s) beside the forward door. Up
+// to ELEV_PANEL_MAX_ROWS floors fit one panel, mounted to the left of the
+// door as before; beyond that a SECOND panel mounts to the right, carrying
+// the rest (hard-capped at ELEV_MAX_FLOORS total -- see
+// elevatorRejectReason). Each panel is independently laid out/shrunk to fit
+// its own side's available wall flank, so splitting doesn't change a
+// single-panel car's appearance at all.
+function buildElevatorPanels(size, wall, doorOffset, floors, roomKey){
+  if(floors.length <= ELEV_PANEL_MAX_ROWS){
+    return [buildOneElevatorPanel(size, wall, doorOffset, floors, roomKey, -1)];
+  }
+  return [
+    buildOneElevatorPanel(size, wall, doorOffset, floors.slice(0, ELEV_PANEL_MAX_ROWS), roomKey, -1),
+    buildOneElevatorPanel(size, wall, doorOffset, floors.slice(ELEV_PANEL_MAX_ROWS), roomKey, 1),
+  ];
+}
+// a canvas-textured panel listing one side's floor buttons (mirrors
+// buildExitSign's lintel-mount convention, but at chest height and offset
+// along the wall rather than centred over the doorway). side -1 mounts left
+// of the door (the original single-panel position), +1 mounts right
+// (mirrored) -- fwdOffset is always 0 (elevatorCarLayout), so both sides
+// have identical available space. Built first with the plain
 // algebraic-notation fallback (instant), then re-textured in place once
 // each floor's mnemonic image resolves -- same async-then-upgrade pattern
 // placeMnemonicSlot uses for the room billboards. Tagged 'elevator-panel' so
 // a walk-mode click (see handleWalkClick) can hit-test it and pick a row.
-function buildElevatorPanel(size, wall, doorOffset, floors, roomKey){
+function buildOneElevatorPanel(size, wall, doorOffset, floors, roomKey, side){
   const { fixed, half } = wallSpan(size, wall);
   const margin = 0.1;
   const avail = half - DOOR_W/2 - margin * 2;
   // Real size follows the canvas aspect at ELEV_ROW_M (~0.375 m) per row, so the
   // move/object images stay undistorted. If that's wider than the door's flank
-  // (a small hand-authored car), scale the whole panel down uniformly to fit
-  // -- the wide multi-column layout for many floors is deferred (2 columns).
+  // (a small hand-authored car), scale the whole panel down uniformly to fit.
   const canvasH = ELEV_PAD_PX * 2 + ELEV_ROW_PX * floors.length;
   const mpp = ELEV_ROW_M / ELEV_ROW_PX;
   let panelW = ELEV_CANVAS_W * mpp, panelH = canvasH * mpp;
@@ -3777,7 +3812,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors, roomKey){
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), mat);
   mesh.userData = { kind: 'elevator-panel', roomKey, floors };
   const clearance = WALL_THICK/2 + 0.02;
-  const along = doorOffset - DOOR_W/2 - margin - panelW/2;
+  const along = doorOffset + side * (DOOR_W/2 + margin + panelW/2);
   const y = 1.5;
   if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
   if(wall === 'south'){ mesh.position.set(along, y, fixed - clearance); mesh.rotation.y = Math.PI; }
@@ -4766,7 +4801,7 @@ function buildRoom(roomKey){
             };
           });
           elevatorMeta.push({ box, thru, kind: 'forward', floors });
-          scene.add(buildElevatorPanel(room.size, wall, doorOffset, floors, roomKey));
+          for(const panel of buildElevatorPanels(room.size, wall, doorOffset, floors, roomKey)) scene.add(panel);
         } else {   // isBack
           elevatorMeta.push({ box, thru, kind: 'back', target: back.target, spawn: computeSpawnForExit(roomKey, room, back) });
           scene.add(buildExitSign(room.size, wall, doorOffset));
@@ -7149,20 +7184,28 @@ export async function openThreeTest(containerEl, opts){
       // the canvas-textured panel mesh. Mirrors this file's established
       // pattern of dispatching edit-mode clicks straight to
       // handleEditTarget() via target() above, bypassing raycasting there too.
+      // panelIndex (0 or 1) picks which panel the click lands on -- only
+      // matters once there are more than ELEV_PANEL_MAX_ROWS floors and a
+      // second panel exists (buildElevatorPanels); ignored otherwise.
       // Returns the resulting selection (elevatorSelected()'s value).
-      clickElevatorFloor: (v) => {
+      clickElevatorFloor: (v, panelIndex) => {
         const fwd = elevatorMeta.find(m => m.kind === 'forward');
         if(!fwd) return null;
-        selectElevatorFloor({ roomKey: currentRoomKey, floors: fwd.floors }, { y: v });
+        const floors = fwd.floors.length > ELEV_PANEL_MAX_ROWS
+          ? (panelIndex === 1 ? fwd.floors.slice(ELEV_PANEL_MAX_ROWS) : fwd.floors.slice(0, ELEV_PANEL_MAX_ROWS))
+          : fwd.floors;
+        selectElevatorFloor({ roomKey: currentRoomKey, floors }, { y: v });
         return selectedElevatorOrdinal(currentRoomKey, fwd.floors);
       },
-      // the exact uv.y a raycaster hit on floor `ordinal`'s row CENTER would
-      // report, given `floorCount` total floors -- so a test can drive
+      // the exact uv.y a raycaster hit on a panel row's CENTER would report,
+      // at 1-based position `row` (its position WITHIN that panel -- e.g.
+      // floor 10 is row 3 on the second panel, not row 10) out of that
+      // panel's own `floorCount` rows -- so a test can drive
       // clickElevatorFloor() with a value that matches the real click math
       // exactly, instead of re-deriving/duplicating ELEV_PAD_PX/ELEV_ROW_PX.
-      elevatorRowCenterUV: (ordinal, floorCount) => {
+      elevatorRowCenterUV: (row, floorCount) => {
         const canvasH = Math.max(ELEV_ROW_PX, ELEV_ROW_PX * floorCount + ELEV_PAD_PX * 2);
-        const rowCenterFromTop = ELEV_PAD_PX + ELEV_ROW_PX * (ordinal - 0.5);
+        const rowCenterFromTop = ELEV_PAD_PX + ELEV_ROW_PX * (row - 0.5);
         return 1 - rowCenterFromTop / canvasH;
       },
       // each elevator door's trigger box + through-direction (mirrors what

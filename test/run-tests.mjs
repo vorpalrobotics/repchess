@@ -6928,6 +6928,139 @@ try {
   await appBR.close();
 }
 }
+// --- Phase BS: past ELEV_PANEL_MAX_ROWS (7) floors, an elevator car's
+//     button panel splits into a SECOND panel to the right of the door
+//     (buildElevatorPanels), hard-capped at ELEV_MAX_FLOORS (14) -- past
+//     that, the Room Geometry editor's "Elevator" choice is rejected. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appBS = await launchApp();
+try {
+  // root needs a SECOND initial branch (g6) so it doesn't collapse the
+  // single-path e6->Nc3 chain into itself (a room with only ONE way in and
+  // ONE way further folds into a "corridor" with its parent) -- otherwise
+  // root itself (not a distinct e6/Nc3 room) ends up holding the 10-way
+  // branch, same structural requirement Phase BQ's car setup already relies on.
+  const REPLIES_10 = ['Bb4','Bd6','Be7','d5','c5','a5','h5','g5','b5','Nc6'];
+  await seedBackup(appBS.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      ...REPLIES_10.map(m => ({ seq: ['d4','Nf6','c4','e6','Nc3',m], reply: 'e4' })),
+    ]}],
+    games: [
+      { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      ...REPLIES_10.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
+    ],
+  });
+  await openVR(appBS.page);
+  const keyFor = (moves) => appBS.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+  await appBS.page.evaluate((args) => window.__threeTestEdit.setExitType(args.root, args.carKey, 'elevator'), { root, carKey });
+  await appBS.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+  await appBS.page.waitForTimeout(200);
+
+  // 110. 10 floors (> ELEV_PANEL_MAX_ROWS) split across TWO 'elevator-panel'
+  //      meshes; clicking a row on EITHER panel resolves to the correct
+  //      ABSOLUTE floor ordinal (panel 2's row N is floor N+7, not row N).
+  try {
+    const info = await appBS.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    assert(info.forward[0].length === 10, `expected 10 floors, got ${info.forward[0].length}`);
+    const scan = await appBS.page.evaluate(() => window.__threeTestEdit.scan());
+    const panelCount = scan.filter(o => o.kind === 'elevator-panel').length;
+    assert(panelCount === 2, `expected the panel to split into 2 meshes past 7 floors, got ${panelCount}`);
+
+    const v1 = await appBS.page.evaluate((args) => window.__threeTestEdit.elevatorRowCenterUV(args.row, args.n), { row: 3, n: 7 });
+    const sel1 = await appBS.page.evaluate((args) => window.__threeTestEdit.clickElevatorFloor(args.v, args.p), { v: v1, p: 0 });
+    assert(sel1 === 3, `expected clicking panel 0's row 3 to select floor 3, got ${sel1}`);
+
+    const v2 = await appBS.page.evaluate((args) => window.__threeTestEdit.elevatorRowCenterUV(args.row, args.n), { row: 2, n: 3 });
+    const sel2 = await appBS.page.evaluate((args) => window.__threeTestEdit.clickElevatorFloor(args.v, args.p), { v: v2, p: 1 });
+    assert(sel2 === 9, `expected clicking panel 1's row 2 to select floor 9 (7 + 2), not row 2 itself, got ${sel2}`);
+    ok('elevator: past 7 floors, the panel splits in two, and each panel\'s rows resolve to the correct absolute floor');
+  } catch(e){ bad('elevator: two-panel split + per-panel row resolution', e); }
+
+  // 111. Walking through the forward door with a floor picked from the
+  //      SECOND panel teleports to the correct room (not confused with the
+  //      first panel's floor at the same relative row).
+  try {
+    const info = await appBS.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const expectedTarget = info.forward[0][8].target;   // ordinal 9 (0-indexed 8), selected above
+    const doors = await appBS.page.evaluate(() => window.__threeTestEdit.elevatorDoorGeom());
+    const fwd = doors.find(d => d.kind === 'forward');
+    const cx = (fwd.box.minX + fwd.box.maxX) / 2, cz = (fwd.box.minZ + fwd.box.maxZ) / 2;
+    const yaw = Math.atan2(-fwd.thru.x, -fwd.thru.z);
+    const r = await appBS.page.evaluate(async (args) => {
+      const dbg = window.__threeTestEdit;
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(args.cx, args.cz, args.yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && window.__threeTestState.room === roomBefore){
+        await new Promise(res => setTimeout(res, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestState.room;
+    }, { cx, cz, yaw });
+    assert(r === expectedTarget, `expected walking through with the second panel's pick to land on floor 9, got ${JSON.stringify({ r, expectedTarget })}`);
+    ok('elevator: a floor picked from the second panel teleports to the right room');
+  } catch(e){ bad('elevator: second-panel floor teleport', e); }
+} finally {
+  await appBS.close();
+}
+}
+// --- Phase BT: an elevator car is capped at ELEV_MAX_FLOORS (14) -- past
+//     that, the Room Geometry editor's "Elevator" choice is rejected with
+//     an explanatory message (mirrors the existing "too few floors" reject). ---
+if(shouldRunPhase(['vr-decorating'])){
+const appBT = await launchApp();
+try {
+  const REPLIES_15 = ['Nc6','Na6','Qe7','Ke7','Be7','Bd6','Bc5','Bb4','Ba3','a6','a5','b6','b5','c6','c5'];
+  await seedBackup(appBT.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      ...REPLIES_15.map(m => ({ seq: ['d4','Nf6','c4','e6','Nc3',m], reply: 'e4' })),
+    ]}],
+    games: [
+      { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      ...REPLIES_15.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
+    ],
+  });
+  await openVR(appBT.page);
+  const keyFor = (moves) => appBT.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+  await appBT.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+  await appBT.page.waitForTimeout(200);
+
+  // 112. A 15-floor room (one past the 14-floor cap) is rejected as an
+  //      elevator target, with a message naming the cap.
+  try {
+    const exits = await appBT.page.evaluate((k) => window.__threeTestEdit.exitsOf(k), carKey);
+    assert(exits.filter(e => !e.back).length === 15, `test setup issue: expected 15 forward exits, got ${exits.filter(e => !e.back).length}`);
+    const reason = await appBT.page.evaluate((k) => window.__threeTestEdit.elevatorRejectReason(k), carKey);
+    assert(reason && reason.includes('14'), `expected a reject reason naming the 14-floor cap, got ${JSON.stringify(reason)}`);
+    ok('elevator: a room with more than 14 forward doors is rejected as an elevator target');
+  } catch(e){ bad('elevator: 14-floor hard cap rejection', e); }
+} finally {
+  await appBT.close();
+}
+}
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
