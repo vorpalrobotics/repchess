@@ -462,10 +462,19 @@ let currentRoomKey = 'start';
 // you as you enter -- the only viewpoint that matters for a memory walk.
 let entryPoint = null;
 let exitMeta = [];       // [{box:{minX,maxX,minZ,maxZ}, target, spawn:{x,z,yaw}}]
-// elevator-car doors, popup-triggered instead of instant on contact:
+// elevator-car doors: teleport on forward contact like any other door (see
+// tick()) -- the back door unconditionally, the forward door once a floor
+// has been picked (elevatorSelectedFloor below):
 // [{box, kind:'forward', floors:[{label,target,spawn}]} | {box, kind:'back', target, spawn}]
 let elevatorMeta = [];
-let activeElevatorDoor = null;  // the elevatorMeta entry whose popup is currently open
+// per-car floor selection, keyed by the car's roomKey: which floor's row was
+// last clicked on the panel (its ordinal), highlighted there and consulted
+// by tick() when the player then walks through the forward door. Survives a
+// same-visit rebuild (e.g. right after the click that set it) but is reset
+// on every fresh entry into the car (enterRoom) -- like a real elevator, you
+// pick again each time you get in. Also validated against the car's current
+// floors wherever it's read, since editing can change what's on the panel.
+let elevatorSelectedFloor = {};
 // wall -> [{rise, depth, outSign, dir, offset}], one entry per stair exit on that
 // wall. An array (not one-per-wall) so a staircase sharing a wall with another
 // door still has its own walkable gap keyed to its own offset.
@@ -2724,17 +2733,6 @@ function doorSideXZ(room, wall, offset, sideSign){
   const side = (DOOR_W/2 + 0.6) * sideSign, inset = 0.7;
   return { x: dcx + V.rx*side + V.ix*inset, z: dcz + V.rz*side + V.iz*inset };
 }
-// the opponent (upper) move of a room's pair, used by door hints / elevator
-// floor labels. Handles both the single-pair shape and a multi-pair room (falls
-// back to the first pair).
-function mnemOpponentMove(roomKey){
-  const e = DEMO_MNEMONICS[roomKey];
-  if(!e) return null;
-  if(e.opponent) return e.opponent;
-  if(e.pairs && e.pairs[0]) return e.pairs[0].opponent;
-  return null;
-}
-
 // layout tuning for multi-pair rooms (Phase 1): billboards stride down the
 // left/right walls at eye height, order 1 nearest the (south) entrance. The
 // paired object sits on the floor (MNEM_OBJ_Y) directly below its billboard.
@@ -3615,14 +3613,6 @@ function ordinal(n){
   }
 }
 
-// spelled-out ordinal for the elevator floor labels ("First Floor:", ...),
-// falling back to the numeric ordinal past the named range.
-const ORDINAL_WORDS = ['First','Second','Third','Fourth','Fifth','Sixth','Seventh',
-  'Eighth','Ninth','Tenth','Eleventh','Twelfth'];
-function ordinalWord(n){
-  return ORDINAL_WORDS[n - 1] || ordinal(n);
-}
-
 // panel canvas geometry (px). One row per floor, laid out left-to-right as
 // [numbered button] [room name] [move pair: opponent raised / response lowered]
 // [head object]. ELEV_ROW_PX maps to ELEV_ROW_M metres, fixing the whole
@@ -3649,7 +3639,10 @@ function fitText(ctx, text, maxW){
 // Draws the floor directory onto a canvas. contents[i] holds the resolved
 // row content: { oppImg?, oppText?, respImg?, respText?, objImg?, objText? }
 // (images are decoded HTMLImageElements; text is the algebraic/word fallback).
-function makeElevatorPanelTexture(floors, contents){
+// selectedOrdinal (if set) highlights that floor's row -- the click-to-select
+// UX: clicking a row picks it (see selectElevatorFloor), and walking through
+// the forward door then teleports there (see tick()).
+function makeElevatorPanelTexture(floors, contents, selectedOrdinal){
   const rowH = ELEV_ROW_PX;
   const canvas = document.createElement('canvas');
   canvas.width = ELEV_CANVAS_W;
@@ -3665,13 +3658,19 @@ function makeElevatorPanelTexture(floors, contents){
     const rowTop = ELEV_PAD_PX + rowH * i;
     const cy = rowTop + rowH / 2;
     const c = (contents && contents[i]) || {};
+    const selected = f.ordinal === selectedOrdinal;
     let x = ELEV_PAD_PX + 8;
 
-    // numbered button
+    if(selected){
+      ctx.fillStyle = 'rgba(70,200,110,0.28)';
+      ctx.fillRect(ELEV_PAD_PX, rowTop, canvas.width - ELEV_PAD_PX * 2, rowH);
+    }
+
+    // numbered button (lit green once selected, like a real elevator button)
     const btnR = rowH * 0.30;
     const btnCx = x + ELEV_COL.btn / 2, btnCy = cy;
     ctx.beginPath(); ctx.arc(btnCx, btnCy, btnR, 0, Math.PI * 2);
-    ctx.fillStyle = '#333'; ctx.fill();
+    ctx.fillStyle = selected ? '#2a9d4f' : '#333'; ctx.fill();
     ctx.strokeStyle = '#ddd'; ctx.lineWidth = 3; ctx.stroke();
     ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(btnR * 1.1)}px sans-serif`;
     ctx.textAlign = 'center';
@@ -3718,14 +3717,23 @@ function makeElevatorPanelTexture(floors, contents){
   return tex;
 }
 
+// the currently-selected floor's ordinal for this car, or null -- validated
+// against its CURRENT floors each time (editing can change what's on the
+// panel, stranding a stale ordinal from before).
+function selectedElevatorOrdinal(roomKey, floors){
+  const ord = elevatorSelectedFloor[roomKey];
+  return (ord != null && floors.some(f => f.ordinal === ord)) ? ord : null;
+}
+
 // elevator car only: a canvas-textured panel listing the floor buttons,
 // mounted to the left of the forward door (mirrors buildExitSign's
 // lintel-mount convention, but at chest height and offset along the wall
 // rather than centred over the doorway). Built first with the plain
 // algebraic-notation fallback (instant), then re-textured in place once
 // each floor's mnemonic image resolves -- same async-then-upgrade pattern
-// placeMnemonicSlot uses for the room billboards.
-function buildElevatorPanel(size, wall, doorOffset, floors){
+// placeMnemonicSlot uses for the room billboards. Tagged 'elevator-panel' so
+// a walk-mode click (see handleWalkClick) can hit-test it and pick a row.
+function buildElevatorPanel(size, wall, doorOffset, floors, roomKey){
   const { fixed, half } = wallSpan(size, wall);
   const margin = 0.1;
   const avail = half - DOOR_W/2 - margin * 2;
@@ -3737,8 +3745,10 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
   const mpp = ELEV_ROW_M / ELEV_ROW_PX;
   let panelW = ELEV_CANVAS_W * mpp, panelH = canvasH * mpp;
   if(panelW > avail && avail > 0.2){ const k = avail / panelW; panelW *= k; panelH *= k; }
-  const mat = new THREE.MeshBasicMaterial({ map: makeElevatorPanelTexture(floors, elevatorRowFallback(floors)) });
+  const selectedOrdinal = selectedElevatorOrdinal(roomKey, floors);
+  const mat = new THREE.MeshBasicMaterial({ map: makeElevatorPanelTexture(floors, elevatorRowFallback(floors), selectedOrdinal) });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), mat);
+  mesh.userData = { kind: 'elevator-panel', roomKey, floors };
   const clearance = WALL_THICK/2 + 0.02;
   const along = doorOffset - DOOR_W/2 - margin - panelW/2;
   const y = 1.5;
@@ -3754,7 +3764,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors){
       .then((contents) => {
         if(buildGeneration !== myGen) return;
         mat.map.dispose();
-        mat.map = makeElevatorPanelTexture(floors, contents);
+        mat.map = makeElevatorPanelTexture(floors, contents, selectedElevatorOrdinal(roomKey, floors));
         mat.needsUpdate = true;
       });
   });
@@ -4685,7 +4695,6 @@ function buildRoom(roomKey){
 
   exitMeta = [];
   elevatorMeta = [];
-  closeElevatorPopup();
   currentBuildingColliders = [];
 
   if(!room.outdoor){
@@ -4721,7 +4730,6 @@ function buildRoom(roomKey){
             return {
               ordinal: i + 1,
               label: fe.label || fe.target,
-              move: mnemOpponentMove(fe.target),   // still used by the walk-in popup
               name: roomNameFor(fe.target) || '',
               pair: dc.pair,                        // { opponent, response } move descriptors, or null
               objAsset: dc.asset || null,           // the room's head-object asset (has .image), or null
@@ -4731,7 +4739,7 @@ function buildRoom(roomKey){
             };
           });
           elevatorMeta.push({ box, thru, kind: 'forward', floors });
-          scene.add(buildElevatorPanel(room.size, wall, doorOffset, floors));
+          scene.add(buildElevatorPanel(room.size, wall, doorOffset, floors, roomKey));
         } else {   // isBack
           elevatorMeta.push({ box, thru, kind: 'back', target: back.target, spawn: computeSpawnForExit(roomKey, room, back) });
           scene.add(buildExitSign(room.size, wall, doorOffset));
@@ -5016,80 +5024,15 @@ function enterRoom(roomKey, spawn, preserveYaw){
   // remember where we came in *before* building, so floor props can face it
   entryPoint = { x: spawn.x, z: spawn.z };
   const keepYaw = preserveYaw ? yaw : spawn.yaw;
+  // each visit to an elevator car starts with no floor picked (like a real
+  // elevator) -- clear any leftover selection from a previous visit before
+  // rebuilding, so the panel doesn't show a stale button lit. A rebuild
+  // that's NOT an entry (selectElevatorFloor's own buildRoom call, or any
+  // other live-edit refresh) goes straight to buildRoom and skips this.
+  delete elevatorSelectedFloor[roomKey];
   buildRoom(roomKey);
   pos.x = spawn.x; pos.z = spawn.z; yaw = keepYaw;
   teleportLockUntil = clock.getElapsedTime() + 0.6;
-}
-
-// elevator-car doors don't teleport on contact like a normal exit -- they
-// pop up a choice instead (a floor list for the forward door, a single
-// confirm for the back one), reusing inputLocked the same way the asset
-// picker does to freeze movement while it's open. Lightweight prototype
-// interaction per spec: no animated door-slide, just the popup.
-function openElevatorPopup(meta){
-  activeElevatorDoor = meta;
-  inputLocked = true;
-  let ov = document.getElementById('elevatorOverlay');
-  if(!ov){
-    ov = document.createElement('div');
-    ov.id = 'elevatorOverlay';
-    ov.className = 'overlay';
-    ov.style.zIndex = '70';
-    document.body.appendChild(ov);
-  }
-  // text-only fallback shows instantly; thumbnails patch in once the
-  // mnemonic image data resolves (same image-or-text priority as the
-  // wall panel/billboards), as long as the popup hasn't moved on by then.
-  renderElevatorPopup(ov, meta, null);
-  if(meta.kind === 'forward'){
-    getMnemonicsCached().then((mnemonicsBySquare) => {
-      if(activeElevatorDoor === meta) renderElevatorPopup(ov, meta, mnemonicsBySquare);
-    });
-  }
-}
-function renderElevatorPopup(ov, meta, mnemonicsBySquare){
-  const floorRow = (f) => {
-    const entry = f.move && mnemonicsBySquare && mnemonicsBySquare[f.move.to];
-    const imgSrc = entry && entry[f.move.piece + 'Img'];
-    const word = entry && entry[f.move.piece];
-    // content priority: image -> word -> move notation (thumbnails doubled to 4.4em)
-    const content = imgSrc
-      ? `<img data-elevator-thumb src="${imgSrc}" style="width:4.4em;height:4.4em;object-fit:contain;border-radius:3px">`
-      : `<span>${(word && word.trim()) ? word.trim() : f.label}</span>`;
-    // "N: Name" reads like the wall panel; the room name (when set) is the
-    // most useful thing to pick a floor by, so lead with it.
-    const head = f.name ? `${f.ordinal}: ${f.name}` : `${ordinalWord(f.ordinal)} Floor:`;
-    return `<button data-elevator-target="${f.target}" style="display:flex;align-items:center;gap:.5em"><span>${head}</span>${content}</button>`;
-  };
-  const buttonsHtml = meta.kind === 'back'
-    ? `<button data-elevator-target="${meta.target}">Go back</button>`
-    : meta.floors.map(floorRow).join('');
-  ov.innerHTML = `
-    <div class="modal" style="width:min(18em,86vw)">
-      <h2>${meta.kind === 'back' ? 'Elevator' : 'Choose a floor'}</h2>
-      <div style="display:flex;flex-direction:column;gap:.4rem">${buttonsHtml}</div>
-      <div class="modal-actions"><button data-elevator-cancel="1">Cancel</button></div>
-    </div>
-  `;
-  ov.style.display = 'flex';
-  ov.querySelectorAll('img[data-elevator-thumb]').forEach(img => {
-    img.addEventListener('error', () => img.remove());
-  });
-  ov.querySelectorAll('[data-elevator-target]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const target = btn.getAttribute('data-elevator-target');
-      const dest = meta.kind === 'back' ? meta : meta.floors.find(f => f.target === target);
-      closeElevatorPopup();
-      enterRoom(dest.target, dest.spawn, false);
-    });
-  });
-  ov.querySelector('[data-elevator-cancel]').addEventListener('click', () => closeElevatorPopup());
-}
-function closeElevatorPopup(){
-  const ov = document.getElementById('elevatorOverlay');
-  if(ov) ov.style.display = 'none';
-  inputLocked = false;
-  activeElevatorDoor = null;
 }
 
 function tick(){
@@ -5193,22 +5136,25 @@ function tick(){
     }
   }
 
-  // elevator doors pop up a choice instead of teleporting on contact --
-  // open it on forward approach, and auto-close if the player steps back
-  // out of the doorway without picking anything.
-  if(!editMode){
-    if(activeElevatorDoor){
-      const b = activeElevatorDoor.box;
-      const stillIn = pos.x >= b.minX && pos.x <= b.maxX && pos.z >= b.minZ && pos.z <= b.maxZ;
-      if(!stillIn) closeElevatorPopup();
-    } else if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
-      const fwd = cameraForwardVec();
-      for(const m of elevatorMeta){
-        if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
-           && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
-          openElevatorPopup(m);
-          break;
+  // elevator doors teleport on forward contact just like a normal exit above
+  // -- no popup. The back door always; the forward door only once a floor
+  // has been picked by clicking its row on the panel (selectElevatorFloor).
+  // With nothing picked yet, the forward door simply stays impassable (no
+  // trigger fires here, and clampToRoom's solid wall plane catches you at
+  // the threshold) -- the same feel as an unbuilt "locked door" target.
+  if(!editMode && move > 0 && clock.getElapsedTime() > teleportLockUntil){
+    const fwd = cameraForwardVec();
+    for(const m of elevatorMeta){
+      if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
+         && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
+        if(m.kind === 'back'){
+          enterRoom(m.target, m.spawn, false);
+        } else {
+          const ordinal = selectedElevatorOrdinal(currentRoomKey, m.floors);
+          const dest = ordinal != null ? m.floors.find(f => f.ordinal === ordinal) : null;
+          if(dest) enterRoom(dest.target, dest.spawn, false);
         }
+        break;
       }
     }
   }
@@ -5519,8 +5465,40 @@ function findInteractive(obj){
   return null;
 }
 
+// walk-mode click: the only interactive thing while walking (not editing) is
+// an elevator car's floor panel -- clicking a row selects it (highlighted on
+// the panel), so walking through the forward door then teleports straight
+// there (see tick()'s elevator block). Anything else is a plain look/no-op.
+function handleWalkClick(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(scene.children, true);
+  const hit = hits[0];
+  if(!hit || !hit.uv || !hit.object.userData || hit.object.userData.kind !== 'elevator-panel') return;
+  selectElevatorFloor(hit.object.userData, hit.uv);
+}
+
+// maps the click's UV (three.js PlaneGeometry: v=1 at top) to the row it
+// landed in, using the same canvas geometry makeElevatorPanelTexture draws
+// with (ELEV_PAD_PX/ELEV_ROW_PX) -- then records the pick and rebuilds the
+// room so the panel redraws highlighted. A full buildRoom is heavier than a
+// bare texture patch, but this fires on a single discrete click (not a drag),
+// and matches every other live-edit path in this file.
+function selectElevatorFloor(panelUd, uv){
+  const { roomKey, floors } = panelUd;
+  const canvasH = Math.max(ELEV_ROW_PX, ELEV_ROW_PX * floors.length + ELEV_PAD_PX * 2);
+  const yFromTop = (1 - uv.y) * canvasH;
+  const idx = Math.floor((yFromTop - ELEV_PAD_PX) / ELEV_ROW_PX);
+  if(idx < 0 || idx >= floors.length) return;   // clicked the panel's border/margin
+  elevatorSelectedFloor[roomKey] = floors[idx].ordinal;
+  buildRoom(roomKey);
+}
+
 function onCanvasClick(e){
-  if(!editMode || inputLocked || !raycaster) return;
+  if(inputLocked || !raycaster) return;
+  if(!editMode){ handleWalkClick(e); return; }
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -6365,11 +6343,11 @@ function renderRoomGeomDialog(ov, roomKey){
   let contentMin = (ROOMS[roomKey] && ROOMS[roomKey].size) || room.size;
   // An elevator car has ONE physical door (its floor panel), not one per
   // reply, so the door-count-driven width the branch room was sized for is
-  // irrelevant -- let it shrink to a compact 8x8 (keeping its height, which
+  // irrelevant -- let it shrink to a compact 6x6 (keeping its height, which
   // the tall floor panel still needs). Without this a 7-floor car is forced
   // gigantic even though only the single elevator door is ever built.
   if(isElevatorCar(roomKey)){
-    const ELEV_MIN_WD = 8;
+    const ELEV_MIN_WD = 6;
     contentMin = { w: Math.min(contentMin.w, ELEV_MIN_WD), d: Math.min(contentMin.d, ELEV_MIN_WD), h: contentMin.h };
   }
   // read straight off the static ROOMS config: exits, stairs and (outdoor)
@@ -6855,10 +6833,6 @@ export function setForeignModalOpen(open){
 
 function onKeyDown(e){
   if(foreignModalOpen) return;
-  if(activeElevatorDoor){
-    if(e.key === 'Escape') closeElevatorPopup();
-    return; // swallow everything else while the elevator popup is open
-  }
   if(selectedProp && !inputLocked){
     if(e.key === 'Escape'){ deselectProp(); return; }
     // mnemonic billboards aren't asset-based -- there's nothing for the
@@ -7005,6 +6979,7 @@ export async function openThreeTest(containerEl, opts){
     window.__threeTestEdit = {
       enter: (k) => enterRoom(k, { x:0, z:0, yaw:0 }),
       toggle: () => setEditMode(!editMode),
+      editMode: () => editMode,
       target: (ud) => handleEditTarget(ud),
       room: () => currentRoomKey,
       // occurrence stats ("N (M%)") on the current (or a given) room's
@@ -7131,6 +7106,47 @@ export async function openThreeTest(containerEl, opts){
         }))),
         back: elevatorMeta.filter(m => m.kind === 'back').map(m => m.target),
       }),
+      // click-to-select-floor UX: the currently-selected floor's ordinal for
+      // the CURRENT room's car (null if nothing picked, or the pick is stale
+      // against its current floors) -- read back after clickElevatorFloor
+      // below, or after a real teleport to confirm the right one was used.
+      elevatorSelected: () => {
+        const fwd = elevatorMeta.find(m => m.kind === 'forward');
+        return fwd ? selectedElevatorOrdinal(currentRoomKey, fwd.floors) : null;
+      },
+      // drives the SAME row-selection logic a real panel click does
+      // (selectElevatorFloor), given v = the uv.y a raycaster hit would
+      // report (0 = bottom of the panel texture, 1 = top, matching
+      // three.js's PlaneGeometry UVs) -- exercises the actual pixel/row
+      // mapping math without needing to land a real screen-space raycast on
+      // the canvas-textured panel mesh. Mirrors this file's established
+      // pattern of dispatching edit-mode clicks straight to
+      // handleEditTarget() via target() above, bypassing raycasting there too.
+      // Returns the resulting selection (elevatorSelected()'s value).
+      clickElevatorFloor: (v) => {
+        const fwd = elevatorMeta.find(m => m.kind === 'forward');
+        if(!fwd) return null;
+        selectElevatorFloor({ roomKey: currentRoomKey, floors: fwd.floors }, { y: v });
+        return selectedElevatorOrdinal(currentRoomKey, fwd.floors);
+      },
+      // the exact uv.y a raycaster hit on floor `ordinal`'s row CENTER would
+      // report, given `floorCount` total floors -- so a test can drive
+      // clickElevatorFloor() with a value that matches the real click math
+      // exactly, instead of re-deriving/duplicating ELEV_PAD_PX/ELEV_ROW_PX.
+      elevatorRowCenterUV: (ordinal, floorCount) => {
+        const canvasH = Math.max(ELEV_ROW_PX, ELEV_ROW_PX * floorCount + ELEV_PAD_PX * 2);
+        const rowCenterFromTop = ELEV_PAD_PX + ELEV_ROW_PX * (ordinal - 0.5);
+        return 1 - rowCenterFromTop / canvasH;
+      },
+      // each elevator door's trigger box + through-direction (mirrors what
+      // tick() itself checks) plus, for the back door, its target -- for
+      // positioning/facing the player exactly at a car's forward or back
+      // door in a test (same box/thru shape the normal-door walk-teleport
+      // tests already position against for staircases).
+      elevatorDoorGeom: () => elevatorMeta.map(m => ({
+        kind: m.kind, box: Object.assign({}, m.box), thru: Object.assign({}, m.thru),
+        target: m.kind === 'back' ? m.target : null,
+      })),
       // the "can this door be an elevator?" rule the Room Geometry editor
       // enforces (null = allowed, else the rejection message shown inline).
       elevatorRejectReason: (targetKey) => elevatorRejectReason(targetKey),
