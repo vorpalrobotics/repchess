@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-156';
+const BUILD_TAG = '-158';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -887,8 +887,13 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     // seq (see genRoomMeta) -- carried through so a VR rename can write the same
     // idb item the Attributes → Room Name field edits.
     const nameSeq = anchor.seq && anchor.seq.length ? anchor.seq.slice(0, -1) : null;
+    // total individual "opponent played X, I respond Y" facts this room
+    // represents -- every member's own out-degree, summed, not just the
+    // doors that happen to cross into a different room. A corridor step is
+    // still a move you have to know even though it doesn't leave the room.
+    const moveCount = g.members.reduce((sum, id) => sum + (a.outDeg.get(id) || 0), 0);
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             nameSeq, memberCount: g.members.length, walls, exits, pairs };
+             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs };
   });
 
   return { genRooms, stats: a, graph };
@@ -1246,10 +1251,12 @@ async function showTranspositionGraph(){
     // these real rooms too, each keyed by its own anchor position (same as
     // threeVR.js's MEMORIZED_ROOMS/DECORATED_ROOMS) -- a corridor's non-anchor
     // positions aren't separately memorizable; they're part of whichever real
-    // room they got collapsed into. "Moves memorized" counts every door out
-    // of a memorized room (all of them, across every position folded into
-    // it), since memorizing a room means knowing all of its own replies, not
-    // just the move that led into it.
+    // room they got collapsed into. "Moves memorized" counts every individual
+    // "opponent played X, I respond Y" fact folded into a memorized room
+    // (genRoom.moveCount -- every member's own out-degree, summed), not just
+    // the doors that happen to cross into a different room: a step along a
+    // linear-run hallway is still a move you have to know, even though
+    // walking it doesn't cross a room boundary.
     const focusedName = focusedCastleName();
     const castleNames = focusedName ? [focusedName] : definedCastles();
     let totalCastleRooms = 0, totalCastleMoves = 0;
@@ -1261,9 +1268,9 @@ async function showTranspositionGraph(){
       totalCastleRooms += genRooms.length;
       const instanceId = castleInstanceId(CURRENT_LINE.id, name);
       for(const gr of genRooms){
-        totalCastleMoves += gr.exits.length;
+        totalCastleMoves += gr.moveCount;
         const roomKey = castleRoomKey(instanceId, gr.posKey);
-        if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.exits.length; }
+        if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.moveCount; }
         if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
       }
     }
@@ -1273,10 +1280,22 @@ async function showTranspositionGraph(){
       (GRAPH_FOCUS_SEQ ? '🎯 focused (right-click → Clear focus) · ' : '') +
       `${totalCastleRooms} castle room(s) · ${rooms.length} position(s), ${edges.length} move(s), ${leaves.length} not yet built, ${mergeCount} transposition merge point(s)` +
       (runs.length ? ` · ${runs.length} linear run(s) covering ${nodesInRuns} node(s)` +
-        (twoTrackCount ? `, ${twoTrackCount} two-track pair${twoTrackCount===1?'':'s'}` : '') : '') +
-      ` · ${memorizedRoomCount}/${totalCastleRooms} castle room(s) memorized (${pct(memorizedRoomCount, totalCastleRooms)}%)` +
-      `, ${memorizedMoveCount}/${totalCastleMoves} move(s) memorized (${pct(memorizedMoveCount, totalCastleMoves)}%)` +
-      `, ${decoratedRoomCount}/${totalCastleRooms} castle room(s) decorated (${pct(decoratedRoomCount, totalCastleRooms)}%)`;
+        (twoTrackCount ? `, ${twoTrackCount} two-track pair${twoTrackCount===1?'':'s'}` : '') : '');
+
+    // coverage: one labeled, proportionally-filled bar per stat, on its own
+    // line below the structural summary above -- clearer at a glance than
+    // burying "N/M (P%)" fragments in a run-on sentence. Hidden entirely
+    // when there's nothing to show (no castles built yet in this scope).
+    const coverageBar = (label, color, n, d) => `
+      <div class="graph-coverage-row">
+        <span class="graph-coverage-label">${label}:</span>
+        <span class="graph-coverage-bar"><span class="graph-coverage-fill" style="width:${pct(n,d)}%;background:${color}"></span></span>
+        <span class="graph-coverage-value">${n}/${d} (${pct(n,d)}%)</span>
+      </div>`;
+    $('graphCoverage').innerHTML = !totalCastleRooms ? '' :
+      coverageBar('Rooms memorized', '#1565c0', memorizedRoomCount, totalCastleRooms) +
+      coverageBar('Moves memorized', '#2e7d32', memorizedMoveCount, totalCastleMoves) +
+      coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
 
     populateGraphCastleSelect();
 

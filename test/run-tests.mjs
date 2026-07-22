@@ -5853,25 +5853,33 @@ try {
 //     "castle room(s)" count (a corridor/two-track room collapses several
 //     chess positions into one physical room, computed the same way
 //     "Generate Castle" itself would -- buildGeneratedCastle, built on the
-//     same analyzer) instead of the retired "N rooms single-track" stat,
-//     and reports memorized/decorated coverage against those real rooms
-//     (count + percentage), not raw graph positions. ---
+//     same analyzer) instead of the retired "N rooms single-track" stat.
+//     Memorized/decorated coverage against those real rooms (not raw graph
+//     positions) now renders as its own labeled, proportionally-filled bar
+//     per stat in #graphCoverage, below the plain-text structural line.
+//     "Moves memorized" counts every individual step folded into a room
+//     (genRoom.moveCount), including steps along a linear-run corridor that
+//     never cross a room boundary -- not just the doors that do. ---
 const appBL = await launchApp();
 try {
-  // root (after d4 Nf6 c4) branches into two short replies (e6 and g6),
-  // neither long enough to form a "run" -- so this collapses into 3 real
-  // rooms (root itself, plus the two branch replies), not 1, giving a
-  // non-trivial denominator to check the percentage math against.
+  // root (after d4 Nf6 c4) branches into a short reply (e6, a single dead-end
+  // step -- no run) and a long one (g6, continuing 3 more single-reply steps
+  // -- a real linear-run corridor: g6-Nc3 -> Bg7-e4 -> d6-Nf3, each with
+  // exactly one recorded opponent reply). Real rooms: root (branch, 2 doors),
+  // the e6 dead-end (1 door), and the g6 corridor (3 members, 1 door at the
+  // far end) -- 3 rooms total, not the 5 raw positions.
   await seedBackup(appBL.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6'], reply: 'Nf3' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O', white: 'a', black: 'b', result: '*' },
     ],
   });
   await appBL.page.click('.line-row');
@@ -5879,63 +5887,84 @@ try {
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
   await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
 
-  const rootFen = await appBL.page.evaluate(() => {
+  const corridorHeadFen = await appBL.page.evaluate(() => {
     const c = new Chess();
-    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    for(const m of ['d4','Nf6','c4','g6','Nc3']) c.move(m, { sloppy: true });
     return c.fen();
   });
   const statusText = () => appBL.page.evaluate(() => document.getElementById('graphStatus').textContent);
+  // {label, n, d, pct, width} for one #graphCoverage row, matched by its
+  // leading label text ("Rooms memorized:" etc.) -- reads both the printed
+  // fraction/percentage AND the fill bar's actual rendered width, so a test
+  // can catch the bar going out of sync with the number beside it.
+  const coverageRow = (label) => appBL.page.evaluate((label) => {
+    const rows = [...document.querySelectorAll('#graphCoverage .graph-coverage-row')];
+    const row = rows.find(r => r.querySelector('.graph-coverage-label')?.textContent === label);
+    if(!row) return null;
+    const m = row.querySelector('.graph-coverage-value').textContent.match(/(\d+)\/(\d+) \((\d+)%\)/);
+    if(!m) return null;
+    return { n: +m[1], d: +m[2], pct: +m[3], width: row.querySelector('.graph-coverage-fill').style.width };
+  }, label);
 
   // 90. The retired "single-track" collapsing stat is gone; "castle room(s)"
-  //     leads the line (3, not the 4 raw positions); memorized/decorated
-  //     stats start at 0 against that real-room denominator.
+  //     leads the structural line (3, not the 5 raw positions). The coverage
+  //     bars start at 0/N (0%) with a 0% fill, against the real-room
+  //     denominator -- and the moves total (6: root's 2 doors + the e6
+  //     dead-end's 1 + the corridor's 3 internal steps) already reflects
+  //     every step, not just cross-room doors.
   let castleRooms, castleMoves;
   try {
     const text = await statusText();
     assert(!/single-track/.test(text), `expected the retired "single-track" stat to be gone, got: ${text}`);
+    assert(!/memorized|decorated/.test(text), `expected coverage stats to have moved out of the plain-text status line, got: ${text}`);
     const head = text.match(/^(?:🎯[^·]*· )?(\d+) castle room\(s\) · (\d+) position\(s\)/);
     assert(head, `expected "N castle room(s) · M position(s)" to lead the line, got: ${text}`);
     castleRooms = +head[1];
-    assert(castleRooms === 3, `expected 3 real rooms (root + 2 short branches collapse no further), got ${castleRooms}: ${text}`);
-    assert(+head[2] === 4, `expected 4 raw positions (root + 2 branches + the shared entry position), got ${head[2]}: ${text}`);
-    const memRoom = text.match(/0\/(\d+) castle room\(s\) memorized \(0%\)/);
-    const memMove = text.match(/0\/(\d+) move\(s\) memorized \(0%\)/);
-    const decRoom = text.match(/0\/(\d+) castle room\(s\) decorated \(0%\)/);
-    assert(memRoom && +memRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) memorized (0%)", got: ${text}`);
-    assert(memMove, `expected a "0/N move(s) memorized (0%)" stat, got: ${text}`);
-    castleMoves = +memMove[1];
-    assert(decRoom && +decRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) decorated (0%)", got: ${text}`);
-    ok('digraph status: no leftover "single-track" stat; "castle room(s)" leads with the real (collapsed) count, memorized/decorated start at 0');
-  } catch(e){ bad('digraph status: baseline (castle rooms leads, no single-track, zeroed memorized/decorated)', e); }
+    assert(castleRooms === 3, `expected 3 real rooms (root, the e6 dead-end, and the g6 corridor collapsed into one), got ${castleRooms}: ${text}`);
+    assert(+head[2] === 6, `expected 6 raw positions (the pre-root lead-in position + root + e6 + the 3-step g6 corridor -- the ungrouped graph, unlike castle generation, isn't scoped to just this castle), got ${head[2]}: ${text}`);
 
-  // 91. Marking the ROOT room (2 doors: e6 and g6) memorized+decorated
-  //     updates the room counts AND the derived "moves memorized" count to
-  //     2 (both its doors), against the same real-room denominators -- not
-  //     100%, since 2 of the 3 real rooms (the branches) are untouched.
+    const memRoom = await coverageRow('Rooms memorized:');
+    const memMove = await coverageRow('Moves memorized:');
+    const decRoom = await coverageRow('Rooms decorated:');
+    assert(memRoom && memRoom.n === 0 && memRoom.d === castleRooms && memRoom.pct === 0 && memRoom.width === '0%',
+      `expected the "Rooms memorized" bar at 0/${castleRooms} (0%), 0% fill, got: ${JSON.stringify(memRoom)}`);
+    assert(memMove && memMove.n === 0 && memMove.pct === 0 && memMove.width === '0%',
+      `expected the "Moves memorized" bar to start at 0 (0%), 0% fill, got: ${JSON.stringify(memMove)}`);
+    castleMoves = memMove.d;
+    assert(castleMoves === 6, `expected 6 total moves (2 + 1 + 3 corridor steps, not 4 if only cross-room doors counted), got ${castleMoves}`);
+    assert(decRoom && decRoom.n === 0 && decRoom.d === castleRooms && decRoom.pct === 0 && decRoom.width === '0%',
+      `expected the "Rooms decorated" bar at 0/${castleRooms} (0%), 0% fill, got: ${JSON.stringify(decRoom)}`);
+    ok('digraph status: no leftover "single-track"/coverage text; "castle room(s)" leads the structural line; coverage bars start at 0 with the real (collapsed) denominators and full move count');
+  } catch(e){ bad('digraph status: baseline (castle rooms leads, coverage bars zeroed, full move count)', e); }
+
+  // 91. Marking the CORRIDOR room memorized+decorated counts all 3 of its
+  //     internal steps as memorized moves (3/6, 50%) -- not just the 1 door
+  //     that actually crosses out of it, which is what the old
+  //     exits-only counting would have given -- and the bar fills to match.
   try {
-    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), rootFen);
-    assert(roomKey, `expected the root to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
+    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), corridorHeadFen);
+    assert(roomKey, `expected the corridor to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
-    const text = await statusText();
 
     const roomPct = Math.round(1 / castleRooms * 100);
-    const memRoom = text.match(/(\d+)\/(\d+) castle room\(s\) memorized \((\d+)%\)/);
-    assert(memRoom && +memRoom[1] === 1 && +memRoom[2] === castleRooms && +memRoom[3] === roomPct,
-      `expected "1/${castleRooms} castle room(s) memorized (${roomPct}%)", got: ${text}`);
-    const decRoom = text.match(/(\d+)\/(\d+) castle room\(s\) decorated \((\d+)%\)/);
-    assert(decRoom && +decRoom[1] === 1 && +decRoom[2] === castleRooms && +decRoom[3] === roomPct,
-      `expected "1/${castleRooms} castle room(s) decorated (${roomPct}%)", got: ${text}`);
-    const memMove = text.match(/(\d+)\/(\d+) move\(s\) memorized \((\d+)%\)/);
-    assert(memMove, `expected a "N/${castleMoves} move(s) memorized (P%)" stat, got: ${text}`);
-    const [, moveCount, moveTotal, movePct] = memMove.map(Number);
-    assert(moveTotal === castleMoves, `expected the moves-memorized denominator to stay ${castleMoves}, got: ${text}`);
-    assert(moveCount === 2, `expected both of the root's own doors (e6, g6) to count as memorized, got ${moveCount}: ${text}`);
-    assert(movePct === Math.round(moveCount / castleMoves * 100), `expected the moves-memorized percentage to match its own count/total, got: ${text}`);
-    ok('digraph status: marking the root memorized+decorated counts both its doors and stays scoped to the real rooms, not 100%');
-  } catch(e){ bad('digraph status: memorized/decorated counts after marking a room', e); }
+    const memRoom = await coverageRow('Rooms memorized:');
+    assert(memRoom && memRoom.n === 1 && memRoom.d === castleRooms && memRoom.pct === roomPct && memRoom.width === `${roomPct}%`,
+      `expected "Rooms memorized" at 1/${castleRooms} (${roomPct}%) with a matching fill, got: ${JSON.stringify(memRoom)}`);
+    const decRoom = await coverageRow('Rooms decorated:');
+    assert(decRoom && decRoom.n === 1 && decRoom.d === castleRooms && decRoom.pct === roomPct && decRoom.width === `${roomPct}%`,
+      `expected "Rooms decorated" at 1/${castleRooms} (${roomPct}%) with a matching fill, got: ${JSON.stringify(decRoom)}`);
+    const memMove = await coverageRow('Moves memorized:');
+    assert(memMove, 'expected a "Moves memorized" coverage row');
+    assert(memMove.d === castleMoves, `expected the moves-memorized denominator to stay ${castleMoves}, got: ${JSON.stringify(memMove)}`);
+    assert(memMove.n === 3, `expected all 3 of the corridor's own steps to count as memorized (not just its 1 external door), got: ${JSON.stringify(memMove)}`);
+    const movePct = Math.round(3 / castleMoves * 100);
+    assert(memMove.pct === movePct && memMove.width === `${movePct}%`,
+      `expected the moves-memorized bar's percentage and fill to match its own count/total, got: ${JSON.stringify(memMove)}`);
+    ok('digraph status: marking a corridor memorized counts every internal step, not just its one external door, and the bars fill to match');
+  } catch(e){ bad('digraph status: coverage bars after marking a corridor room', e); }
 } finally {
   await appBL.close();
 }
