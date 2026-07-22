@@ -4382,6 +4382,39 @@ try {
     assert(applied.d !== 2.5, `expected the dialog to reject 2.5m outright, but it was applied as-is`);
     ok('Room Geometry dialog clamps a resize up to this room\'s own content-driven minimum size');
   } catch(e){ bad('Room Geometry dialog: minimum size reflects the room\'s own content', e); }
+
+  // 130. After a resize, the player respawns at the room's own entrance
+  //      (same spot/facing a normal walk-in would use) instead of wherever
+  //      they happened to be standing -- a resize can leave that spot
+  //      outside the new bounds or facing straight into a wall.
+  try {
+    const before = await appAN.page.evaluate((k) => window.__threeTestEdit.entrySpawnFor(k), roomKey);
+    assert(before, 'test setup issue: entrySpawnFor returned null for the current room');
+
+    // stand somewhere that has nothing to do with the entrance -- off to one
+    // side, facing an arbitrary direction -- before triggering the resize.
+    await appAN.page.evaluate((p) => window.__threeTestEdit.teleport(p.x, p.z, p.yaw),
+      { x: before.x + 3, z: before.z - 4, yaw: Math.PI / 3 });
+
+    await appAN.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const cur = await appAN.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+    await appAN.page.fill('#roomGeomD', String(cur.d + 1));   // any valid resize -- the exact new size isn't what's under test
+    await appAN.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAN.page.waitForTimeout(250);
+
+    // recompute the expected entry spawn against the room's NEW (post-resize)
+    // geometry -- doorSpawn's inset depends on room depth, so the resize
+    // itself can shift where "just inside the entrance" actually is.
+    const expected = await appAN.page.evaluate((k) => window.__threeTestEdit.entrySpawnFor(k), roomKey);
+    const after = await appAN.page.evaluate(() => window.__threeTestEdit.pos());
+    const dist = Math.hypot(after.x - expected.x, after.z - expected.z);
+    assert(dist < 0.05, `expected the player back at the (post-resize) entrance spawn ${JSON.stringify(expected)}, got ${JSON.stringify(after)}`);
+    assert(Math.abs(((after.yaw - expected.yaw + Math.PI) % (2*Math.PI)) - Math.PI) < 0.01,
+      `expected the player's facing to match the entrance spawn's yaw, got ${JSON.stringify({ after, expected })}`);
+    ok('resizing a room respawns the player at its own entrance, not wherever they were standing');
+  } catch(e){ bad('resize respawns the player at the room entrance', e); }
 } finally {
   await appAN.close();
 }
@@ -6772,10 +6805,21 @@ try {
       await new Promise(res => setTimeout(res, 700));
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
       await new Promise(res => setTimeout(res, 1500));
+      const toastWhileBlocked = dbg.toastText();
+      // still holding forward, well past the toast's own ~3.9s auto-dismiss
+      // (3.5s hold + .4s fade) -- if it were latching correctly it fires
+      // ONCE per approach rather than refreshing every frame, so it should
+      // have faded on its own by now even though 'w' never let up.
+      await new Promise(res => setTimeout(res, 4200));
+      const toastAfterAutoDismiss = dbg.toastText();
       window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
-      return window.__threeTestState.room === roomBefore;
+      return { stayed: window.__threeTestState.room === roomBefore, toastWhileBlocked, toastAfterAutoDismiss };
     });
-    assert(blocked, 'expected the forward door to stay impassable with no floor selected');
+    assert(blocked.stayed, 'expected the forward door to stay impassable with no floor selected');
+    assert(blocked.toastWhileBlocked && /select a floor/i.test(blocked.toastWhileBlocked),
+      `expected a "select a floor first" toast while blocked at the door, got ${JSON.stringify(blocked.toastWhileBlocked)}`);
+    assert(blocked.toastAfterAutoDismiss === null,
+      `expected the toast to auto-dismiss on its own (not keep re-firing every frame while forward is held), got ${JSON.stringify(blocked.toastAfterAutoDismiss)}`);
 
     // now the back door: walking out should be instant, no confirmation.
     const back = await appBQ.page.evaluate(async () => {
@@ -6802,6 +6846,53 @@ try {
     assert(!back.overlayShown, 'expected no confirmation popup for the back/exit door');
     ok('elevator: forward door stays blocked with no floor picked; back door walks out instantly with no prompt');
   } catch(e){ bad('elevator: unselected forward door blocked, back door instant', e); }
+
+  // 113. Backing off from the door and re-approaching shows the "select a
+  //      floor first" toast again -- the latch is scoped to the CURRENT
+  //      approach (reset once the player leaves the door's trigger box), not
+  //      a one-time-ever flag for the whole visit.
+  try {
+    await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ.page.waitForTimeout(150);
+    const r = await appBQ.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const fwd = dbg.elevatorDoorGeom().find(d => d.kind === 'forward');
+      const cx = (fwd.box.minX + fwd.box.maxX) / 2, cz = (fwd.box.minZ + fwd.box.maxZ) / 2;
+      const yaw = Math.atan2(-fwd.thru.x, -fwd.thru.z);
+      const backYaw = yaw + Math.PI;   // face away from the door to back off
+
+      dbg.teleport(cx, cz, yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 300));
+      const firstToast = dbg.toastText();
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+
+      // back off out of the trigger box, then re-approach.
+      dbg.teleport(cx, cz, backYaw);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 600));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      const stillInBoxAfterBackoff = (() => {
+        const p = dbg.pos();
+        return p.x >= fwd.box.minX && p.x <= fwd.box.maxX && p.z >= fwd.box.minZ && p.z <= fwd.box.maxZ;
+      })();
+
+      dbg.teleport(cx, cz, yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 300));
+      const secondToast = dbg.toastText();
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+
+      return { firstToast, secondToast, stillInBoxAfterBackoff };
+    });
+    assert(r.firstToast && /select a floor/i.test(r.firstToast), `expected a toast on the first approach, got ${JSON.stringify(r)}`);
+    assert(!r.stillInBoxAfterBackoff, `test setup issue: expected backing off to actually leave the door's trigger box, got ${JSON.stringify(r)}`);
+    assert(r.secondToast && /select a floor/i.test(r.secondToast),
+      `expected the toast to fire again on a fresh approach after backing off, got ${JSON.stringify(r)}`);
+    ok('elevator: the "select a floor first" toast fires again on a fresh approach after backing off');
+  } catch(e){ bad('elevator: toast re-fires on a fresh approach', e); }
 } finally {
   await appBQ.close();
 }
