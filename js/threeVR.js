@@ -1308,6 +1308,30 @@ function setDoorOverride(roomKey, dKey, assetId){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.doors[dKey] = assetId; else delete r.doors[dKey];
+    // An entrance door's skin also becomes its destination room's own exit
+    // (back) door skin, so walking out through it looks like walking back
+    // through the same door you came in. Only an ordinary forward door
+    // resolves to a single destination here -- an elevator's shared floor
+    // door has no exit matching its collapsed doorKey, so it's naturally
+    // excluded (nothing else needs special-casing: propagating to a locked
+    // door's dead-end target is harmless, just an unused stored value).
+    // Last write wins if more than one room leads to the same target (a
+    // transposition): whichever entrance door was styled most recently sets
+    // that room's exit door. Folded into this same mutator (rather than a
+    // second setDoorOverride/applyEdit call) so it's one
+    // persistLayout+refreshAssetMap+buildRoom cycle, not two racing ones
+    // (see setAllDoorAssets's test-hook comment for why that matters).
+    const room = mergedRoom(roomKey);
+    const ex = room && (room.exits || []).find(e => doorKey(e.wall, e.offset) === dKey);
+    if(ex && !ex.back){
+      const target = mergedRoom(ex.target);
+      const backExit = target && (target.exits || []).find(e => e.back);
+      if(backExit){
+        const r2 = ensureRoomLayout(ex.target);
+        const backKey = doorKey(backExit.wall, backExit.offset);
+        if(assetId) r2.doors[backKey] = assetId; else delete r2.doors[backKey];
+      }
+    }
   });
 }
 
@@ -3616,13 +3640,16 @@ function ordinal(n){
 // panel canvas geometry (px). One row per floor, laid out left-to-right as
 // [numbered button] [room name] [move pair: opponent raised / response lowered]
 // [head object]. ELEV_ROW_PX maps to ELEV_ROW_M metres, fixing the whole
-// panel's real size (see buildElevatorPanel) at ~0.3 m/row.
+// panel's real size (see buildElevatorPanel) at ~0.375 m/row -- every pixel
+// size below (button/images/text) is a fraction of this same row, so bumping
+// just ELEV_ROW_M scales the whole row, images included, uniformly bigger
+// without touching layout proportions.
 const ELEV_ROW_PX = 140, ELEV_PAD_PX = 12;
 // the pair column is narrow because the two move images OVERLAP (like the
 // in-room pair billboard), which also makes the panel read like a normal room.
 const ELEV_COL = { btn: 132, name: 300, pair: 150, obj: 176 };   // per-column widths (px)
 const ELEV_CANVAS_W = ELEV_PAD_PX * 2 + ELEV_COL.btn + ELEV_COL.name + ELEV_COL.pair + ELEV_COL.obj;
-const ELEV_ROW_M = 0.3;
+const ELEV_ROW_M = 0.375;
 // draw an image "contain"-fitted into the box (bx,by,bw,bh), centred.
 function drawContain(ctx, im, bx, by, bw, bh){
   const s = Math.min(bw / im.width, bh / im.height);
@@ -3737,7 +3764,7 @@ function buildElevatorPanel(size, wall, doorOffset, floors, roomKey){
   const { fixed, half } = wallSpan(size, wall);
   const margin = 0.1;
   const avail = half - DOOR_W/2 - margin * 2;
-  // Real size follows the canvas aspect at ELEV_ROW_M (~0.3 m) per row, so the
+  // Real size follows the canvas aspect at ELEV_ROW_M (~0.375 m) per row, so the
   // move/object images stay undistorted. If that's wider than the door's flank
   // (a small hand-authored car), scale the whole panel down uniformly to fit
   // -- the wide multi-column layout for many floors is deferred (2 columns).
@@ -7173,6 +7200,11 @@ export async function openThreeTest(containerEl, opts){
         setDoorOverride(roomKey, doorKey(ex.wall, ex.offset), assetId);
         return true;
       },
+      // the raw per-room door-skin OVERRIDE id (or null if unset -- doesn't
+      // fall back to a building default/procedural pick), keyed by doorKey
+      // -- for testing entrance->exit door-skin sync (setDoorOverride)
+      // without scraping the door panel mesh's texture out of the scene.
+      doorOverrideId: (roomKey, dKey) => (LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey]) || null,
       // drives the real "make default" capture the Room Geometry dialog's
       // Apply button does (captureBuildingDefaults), persisted + rebuilt the
       // same way that flow's commitRoomGeomDialog does right after -- for

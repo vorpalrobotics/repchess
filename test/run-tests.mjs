@@ -6806,6 +6806,128 @@ try {
   await appBQ.close();
 }
 }
+// --- Phase BR: an entrance door's skin also becomes its destination room's
+//     own exit/back door skin (setDoorOverride), so walking out looks like
+//     walking back through the same door you came in. A transposition (two
+//     different rooms leading to the same target) last-write-wins: whichever
+//     entrance door was styled most recently sets the target's exit door. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appBR = await launchApp();
+try {
+  // a6-then-e4-then-h6 and h6-then-e4-then-a6 transpose to the same room
+  // (a6/h6 are independent pawn moves) -- same setup as Phase BD's
+  // canonical-seq test. root has two forward doors (via a6, via h6) to two
+  // DIFFERENT rooms X and Y; X and Y each have their OWN forward door
+  // (completing the other of a6/h6) that both lead to the SAME shared room.
+  await seedBackup(appBR.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','a6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','h6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','h6','e4','a6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+      { id: 'doorSkin2', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+    ],
+  });
+  await openVR(appBR.page);
+  const keyFor = (moves) => appBR.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const X = await keyFor(['d4','Nf6','c4','a6','e4']);
+  const Y = await keyFor(['d4','Nf6','c4','h6','e4']);
+  const shared = await keyFor(['d4','Nf6','c4','a6','e4','h6','Nc3']);
+
+  // 107. Skinning root's door to X, through the REAL in-world picker, sets
+  //      X's own back-door skin too (the door leading back to root).
+  let xBackKey, xFwdKey, yFwdKey, sharedBackKey;
+  try {
+    await appBR.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+    await appBR.page.waitForTimeout(200);
+    await appBR.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appBR.page.waitForTimeout(60);
+    const rootToXKey = (await appBR.page.evaluate((rk) => window.__threeTestEdit.exitsOf(rk), root))
+      .find(e => e.target === X).doorKey;
+    xBackKey = (await appBR.page.evaluate((rk) => window.__threeTestEdit.exitsOf(rk), X))
+      .find(e => e.back).doorKey;
+
+    await appBR.page.evaluate(({ rk, dk }) => window.__threeTestEdit.target({ kind: 'door', roomKey: rk, doorKey: dk }),
+      { rk: root, dk: rootToXKey });
+    await appBR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appBR.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+        .find(c => !c.classList.contains('asset-card-color') && c.textContent.includes('doorSkin1'));
+      card.click();
+    });
+    await appBR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appBR.page.waitForTimeout(150);
+
+    const ids = await appBR.page.evaluate((args) => ({
+      entrance: window.__threeTestEdit.doorOverrideId(args.root, args.rootToXKey),
+      exit: window.__threeTestEdit.doorOverrideId(args.X, args.xBackKey),
+    }), { root, rootToXKey, X, xBackKey });
+    assert(ids.entrance === 'doorSkin1', `expected the entrance door's own override to be doorSkin1, got ${JSON.stringify(ids)}`);
+    assert(ids.exit === 'doorSkin1', `expected X's own exit door to pick up the same skin, got ${JSON.stringify(ids)}`);
+    ok('entrance door skin (set through the real picker) syncs to the destination room\'s exit door');
+  } catch(e){ bad('door skin sync: entrance -> exit door', e); }
+
+  // 108. Transposition: X and Y each have their OWN forward door leading to
+  //      the SAME shared room (completing the other of a6/h6). Skinning X's
+  //      door sets the shared room's exit door; skinning Y's door OVERWRITES
+  //      it (last write wins) -- X's own stored override is untouched.
+  //      Removing Y's override then clears the shared exit door.
+  try {
+    xFwdKey = (await appBR.page.evaluate((rk) => window.__threeTestEdit.exitsOf(rk), X))
+      .find(e => !e.back).doorKey;
+    yFwdKey = (await appBR.page.evaluate((rk) => window.__threeTestEdit.exitsOf(rk), Y))
+      .find(e => !e.back).doorKey;
+    sharedBackKey = (await appBR.page.evaluate((rk) => window.__threeTestEdit.exitsOf(rk), shared))
+      .find(e => e.back).doorKey;
+
+    const setX = await appBR.page.evaluate((args) =>
+      window.__threeTestEdit.setDoorAssetForTarget(args.X, args.shared, 'doorSkin1'), { X, shared });
+    assert(setX, 'test setup issue: setDoorAssetForTarget(X, shared) failed to find the exit');
+    await appBR.page.waitForTimeout(150);
+    const afterX = await appBR.page.evaluate((args) =>
+      window.__threeTestEdit.doorOverrideId(args.shared, args.sharedBackKey), { shared, sharedBackKey });
+    assert(afterX === 'doorSkin1', `expected X's door to set the shared room's exit door, got ${afterX}`);
+
+    const setY = await appBR.page.evaluate((args) =>
+      window.__threeTestEdit.setDoorAssetForTarget(args.Y, args.shared, 'doorSkin2'), { Y, shared });
+    assert(setY, 'test setup issue: setDoorAssetForTarget(Y, shared) failed to find the exit');
+    await appBR.page.waitForTimeout(150);
+
+    const afterY = await appBR.page.evaluate((args) => ({
+      entranceX: window.__threeTestEdit.doorOverrideId(args.X, args.xFwdKey),
+      entranceY: window.__threeTestEdit.doorOverrideId(args.Y, args.yFwdKey),
+      exit: window.__threeTestEdit.doorOverrideId(args.shared, args.sharedBackKey),
+    }), { X, xFwdKey, Y, yFwdKey, shared, sharedBackKey });
+    assert(afterY.entranceY === 'doorSkin2', `expected Y's own forward-door override to be doorSkin2, got ${JSON.stringify(afterY)}`);
+    assert(afterY.exit === 'doorSkin2', `expected the LATER write (via Y) to win the shared exit door, got ${JSON.stringify(afterY)}`);
+    assert(afterY.entranceX === 'doorSkin1', `expected X's own stored override to be untouched, got ${JSON.stringify(afterY)}`);
+
+    await appBR.page.evaluate((args) =>
+      window.__threeTestEdit.setDoorAssetForTarget(args.Y, args.shared, null), { Y, shared });
+    await appBR.page.waitForTimeout(150);
+    const afterRemove = await appBR.page.evaluate((args) =>
+      window.__threeTestEdit.doorOverrideId(args.shared, args.sharedBackKey), { shared, sharedBackKey });
+    assert(afterRemove === null, `expected removing Y's override to also clear the shared exit door, got ${afterRemove}`);
+    ok('door skin sync: transposition last-write-wins, and removal propagates too');
+  } catch(e){ bad('door skin sync: transposition + removal', e); }
+} finally {
+  await appBR.close();
+}
+}
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
