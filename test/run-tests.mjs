@@ -6162,6 +6162,30 @@ try {
     assert(!opened.panelHidden, `expected the toggle to reveal the coverage panel, got: ${JSON.stringify(opened)}`);
     assert(opened.caret.includes('fa-caret-down'), `expected an expanded (caret-down) icon, got: ${opened.caret}`);
 
+    // the fill bar's `style.width` percentage has no visual effect unless the
+    // element actually renders as a box (it's a <span>, inline by default) --
+    // check the RENDERED pixel width against its bar container, not just the
+    // style attribute value, so a regression to display:inline (the reported
+    // bug: bars all looked empty/gray despite the right width being set)
+    // fails loudly instead of passing on the unobserved style value alone.
+    // Needs the panel actually visible (not display:none) to get a non-zero
+    // layout, hence checking here rather than in test 90/91. roomPct is
+    // recomputed (test 91's own copy is out of scope, a separate try block).
+    const roomPct = Math.round(1 / castleRooms * 100);
+    const memRoomRendered = await appBL.page.evaluate(() => {
+      const row = [...document.querySelectorAll('#graphCoverage .graph-coverage-row')]
+        .find(r => r.querySelector('.graph-coverage-label')?.textContent === 'Rooms memorized:');
+      const fillRect = row.querySelector('.graph-coverage-fill').getBoundingClientRect();
+      const barRect = row.querySelector('.graph-coverage-bar').getBoundingClientRect();
+      return { fillWidth: fillRect.width, barWidth: barRect.width };
+    });
+    assert(memRoomRendered.barWidth > 0, 'setup: expected the bar container itself to have a rendered width');
+    assert(memRoomRendered.fillWidth > 0,
+      `expected the fill bar to actually render at a non-zero pixel width (roomPct=${roomPct}%), got: ${JSON.stringify(memRoomRendered)}`);
+    const renderedPct = memRoomRendered.fillWidth / memRoomRendered.barWidth * 100;
+    assert(Math.abs(renderedPct - roomPct) <= 2,
+      `expected the fill's rendered width to be ~${roomPct}% of the bar, got ${renderedPct.toFixed(1)}%: ${JSON.stringify(memRoomRendered)}`);
+
     await appBL.page.evaluate(() => document.getElementById('graphCoverageToggle').click());
     const closed = await state();
     assert(closed.panelHidden, `expected a second click to re-collapse the coverage panel, got: ${JSON.stringify(closed)}`);
