@@ -475,6 +475,12 @@ let elevatorMeta = [];
 // pick again each time you get in. Also validated against the car's current
 // floors wherever it's read, since editing can change what's on the panel.
 let elevatorSelectedFloor = {};
+// latches true once the "select a floor first" toast has fired for the
+// CURRENT approach to a forward door with nothing picked yet -- stops it
+// re-firing every frame while the player holds forward at the door, reset
+// to false the moment they leave the door's trigger box (see tick()) so a
+// fresh approach prompts again.
+let elevatorBlockedToastShown = false;
 // wall -> [{rise, depth, outSign, dir, offset}], one entry per stair exit on that
 // wall. An array (not one-per-wall) so a staircase sharing a wall with another
 // door still has its own walkable gap keyed to its own offset.
@@ -785,7 +791,11 @@ function setRoomName(roomKey, name){
 // override behind. Any door skin saved under the old wall@offset key
 // migrates to the new one.
 function commitRoomGeomDialog(roomKey, geom, exitMoves){
-  applyEdit(() => {
+  // a resize can leave the player outside the new bounds or facing a wall
+  // (whatever spot they were standing at may no longer make sense against
+  // the new geometry) -- once the rebuild lands, drop them back at the
+  // room's own entrance, same as if they'd just walked in.
+  return applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
     r.geom = geom;
     const staticExits = ROOMS[roomKey].exits || [];
@@ -817,7 +827,7 @@ function commitRoomGeomDialog(roomKey, geom, exitMoves){
       if(isStairType(moveType)) setReciprocalStairType(ex.target, roomKey, moveType === 'stair' ? 'stair-down' : 'stair');
       else if(isStairType(oldType)) setReciprocalStairType(ex.target, roomKey, 'door');
     }
-  });
+  }).then(() => respawnAtEntry(roomKey));
 }
 // Set room B's exit-back-to-A to `type` (used to mirror a stair on the far side).
 // Preserves B's current wall/offset for that door; a plain 'door' at the static
@@ -4505,6 +4515,28 @@ function computeSpawnForExit(fromKey, room, ex){
   return doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true);
 }
 
+// the spawn just inside roomKey's own entrance (its back door, same spawn a
+// normal walk-in through that door would use), or the same "just inside"
+// fallback computeSpawnForExit uses for a room with no back door (mainStreet,
+// a linked foreign castle's entry). null if roomKey isn't registered.
+function entrySpawnFor(roomKey){
+  const room = mergedRoom(roomKey);
+  if(!room) return null;
+  const backEx = (room.exits || []).find(e => e.back);
+  return backEx
+    ? doorSpawn(room.size, backEx.wall, backEx.offset, null, true)
+    : { x: 0, z: room.size.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 };
+}
+// stands the player at roomKey's entrySpawnFor(). Used after a resize --
+// resizing can otherwise leave the player outside the new bounds (clamped to
+// some arbitrary edge) or facing straight into a wall.
+function respawnAtEntry(roomKey){
+  const spawn = entrySpawnFor(roomKey);
+  if(!spawn) return;
+  pos.x = spawn.x; pos.z = spawn.z; yaw = spawn.yaw;
+  teleportLockUntil = clock.getElapsedTime() + 0.6;
+}
+
 /* G2a: a freestanding placard in a generated-castle room, listing the room's
    moves (and any unbuilt exits). Faces south, toward the entering player. The
    rich move-pair billboards replace this in a later phase. */
@@ -5201,9 +5233,17 @@ function tick(){
   // elevator doors teleport on forward contact just like a normal exit above
   // -- no popup. The back door always; the forward door only once a floor
   // has been picked by clicking its row on the panel (selectElevatorFloor).
-  // With nothing picked yet, the forward door simply stays impassable (no
-  // trigger fires here, and clampToRoom's solid wall plane catches you at
-  // the threshold) -- the same feel as an unbuilt "locked door" target.
+  // With nothing picked yet, the forward door stays impassable (no trigger
+  // fires here, and clampToRoom's solid wall plane catches you at the
+  // threshold) -- the same feel as an unbuilt "locked door" target -- but a
+  // one-shot toast explains why, so it doesn't just look broken. Reset the
+  // latch the moment the player isn't in a forward door's box at all, so
+  // backing off and re-approaching prompts again.
+  if(!editMode){
+    const inFwdBox = elevatorMeta.some(m => m.kind === 'forward'
+      && pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ);
+    if(!inFwdBox) elevatorBlockedToastShown = false;
+  }
   if(!editMode && move > 0 && clock.getElapsedTime() > teleportLockUntil){
     const fwd = cameraForwardVec();
     for(const m of elevatorMeta){
@@ -5215,6 +5255,10 @@ function tick(){
           const ordinal = selectedElevatorOrdinal(currentRoomKey, m.floors);
           const dest = ordinal != null ? m.floors.find(f => f.ordinal === ordinal) : null;
           if(dest) enterRoom(dest.target, dest.spawn, false);
+          else if(!elevatorBlockedToastShown){
+            showToast('Select a floor first');
+            elevatorBlockedToastShown = true;
+          }
         }
         break;
       }
@@ -7061,6 +7105,10 @@ export async function openThreeTest(containerEl, opts){
       },
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
+      // the fading toast's current text (null if not currently shown) --
+      // showToast() has no DOM id, so this is the only way to check it fired
+      // without scraping the whole container for an untagged div.
+      toastText: () => (toastEl && toastEl.style.display !== 'none') ? toastEl.textContent : null,
       // the bordered "chip" wrapping Edit + its edit-only buttons -- whether
       // it actually has a visible border, and which icons it contains (in
       // order), for testing the grouping without depending on exact colors.
@@ -7262,6 +7310,11 @@ export async function openThreeTest(containerEl, opts){
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
       pos: () => ({ x: pos.x, z: pos.z, yaw }),
+      // the spawn a resize (commitRoomGeomDialog) drops the player at
+      // (respawnAtEntry) -- for testing that a resize actually lands you
+      // back at the entrance rather than wherever you happened to be
+      // standing, without duplicating the doorSpawn math in the test itself.
+      entrySpawnFor: (roomKey) => entrySpawnFor(roomKey),
       // world position of whichever scene object carries this slotId, regardless
       // of whether it's a Mesh or a Sprite (meshes() only sees the former) --
       // needed to check e.g. a placeholder billboard's position after a resize.
