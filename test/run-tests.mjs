@@ -515,15 +515,16 @@ try {
     mnemonics: [{ square: 'd4', pawn: 'Deer' }],
   });
 
-  // wrapped (unlike the rest of this file's per-test try/catches, this one
-  // guards *setup* used by tests 12-14): quizOpenSetup awaits an IDB read
-  // before showing, and under the accumulated load of a full suite run with
-  // many sequential browser launches this has been observed to occasionally
-  // exceed even a generous timeout (confirmed: resolves in ~100ms standalone).
-  // Uncaught, that would crash the whole run instead of just this phase.
+  // wrapped separately (it guards *setup* used by tests 12-14): a failure
+  // here is recorded as its own test instead of throwing past this phase's
+  // try/finally and aborting the rest of the suite. Used to need a 50s
+  // timeout to paper over seedBackup() resolving before the restore had
+  // actually finished writing mnemonics (see harness.mjs) -- now that
+  // seedBackup() waits for the real completion signal, a normal timeout is
+  // enough here too.
   try {
     await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
-    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 50000 });
+    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 5000 });
   } catch(e){ bad('quiz setup opened', e); }
 
   // 12. The coverage select is broken out into per-system optgroups with a

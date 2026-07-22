@@ -108,14 +108,20 @@ export async function launchApp({ headless = true } = {}){
 // Restore a minimal backup through the real import path, seeding a user + lines
 // so the generated world has systems to render. Returns when restore settles.
 export async function seedBackup(page, backup){
+  // importBackup sets CURRENT_USER/userId.value near the very START, well
+  // before games/lines/mnemonics are actually written -- polling that (as
+  // this used to) can resolve while the restore is still mid-flight, racing
+  // whatever the caller does next. __importBackupGen only bumps at the very
+  // end (after renderHome()), so wait for THAT instead: capture the count
+  // before triggering the import, then wait for it to move past that value.
+  const before = await page.evaluate(() => window.__importBackupGen ? window.__importBackupGen() : 0);
   await page.setInputFiles('#backupImport', {
     name: 'seed.json', mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify(backup)),
   });
-  // importBackup logs "restored …"; wait for CURRENT_USER to reflect the seed
   await page.waitForFunction(
-    u => document.getElementById('userId') && document.getElementById('userId').value === u,
-    backup.user, { timeout: 10000 },
+    n => window.__importBackupGen && window.__importBackupGen() > n,
+    before, { timeout: 15000 },
   );
 }
 
