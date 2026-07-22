@@ -5855,23 +5855,30 @@ try {
 //     "Generate Castle" itself would -- buildGeneratedCastle, built on the
 //     same analyzer) instead of the retired "N rooms single-track" stat,
 //     and reports memorized/decorated coverage against those real rooms
-//     (count + percentage), not raw graph positions. ---
+//     (count + percentage), not raw graph positions. "Moves memorized"
+//     counts every individual step folded into a room (genRoom.moveCount),
+//     including steps along a linear-run corridor that never cross a room
+//     boundary -- not just the doors that do. ---
 const appBL = await launchApp();
 try {
-  // root (after d4 Nf6 c4) branches into two short replies (e6 and g6),
-  // neither long enough to form a "run" -- so this collapses into 3 real
-  // rooms (root itself, plus the two branch replies), not 1, giving a
-  // non-trivial denominator to check the percentage math against.
+  // root (after d4 Nf6 c4) branches into a short reply (e6, a single dead-end
+  // step -- no run) and a long one (g6, continuing 3 more single-reply steps
+  // -- a real linear-run corridor: g6-Nc3 -> Bg7-e4 -> d6-Nf3, each with
+  // exactly one recorded opponent reply). Real rooms: root (branch, 2 doors),
+  // the e6 dead-end (1 door), and the g6 corridor (3 members, 1 door at the
+  // far end) -- 3 rooms total, not the 5 raw positions.
   await seedBackup(appBL.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6'], reply: 'Nf3' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O', white: 'a', black: 'b', result: '*' },
     ],
   });
   await appBL.page.click('.line-row');
@@ -5879,16 +5886,18 @@ try {
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
   await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
 
-  const rootFen = await appBL.page.evaluate(() => {
+  const corridorHeadFen = await appBL.page.evaluate(() => {
     const c = new Chess();
-    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    for(const m of ['d4','Nf6','c4','g6','Nc3']) c.move(m, { sloppy: true });
     return c.fen();
   });
   const statusText = () => appBL.page.evaluate(() => document.getElementById('graphStatus').textContent);
 
   // 90. The retired "single-track" collapsing stat is gone; "castle room(s)"
-  //     leads the line (3, not the 4 raw positions); memorized/decorated
-  //     stats start at 0 against that real-room denominator.
+  //     leads the line (3, not the 5 raw positions); memorized/decorated
+  //     stats start at 0 against that real-room denominator, and the moves
+  //     total (6: root's 2 doors + the e6 dead-end's 1 + the corridor's 3
+  //     internal steps) already reflects every step, not just cross-room doors.
   let castleRooms, castleMoves;
   try {
     const text = await statusText();
@@ -5896,25 +5905,26 @@ try {
     const head = text.match(/^(?:🎯[^·]*· )?(\d+) castle room\(s\) · (\d+) position\(s\)/);
     assert(head, `expected "N castle room(s) · M position(s)" to lead the line, got: ${text}`);
     castleRooms = +head[1];
-    assert(castleRooms === 3, `expected 3 real rooms (root + 2 short branches collapse no further), got ${castleRooms}: ${text}`);
-    assert(+head[2] === 4, `expected 4 raw positions (root + 2 branches + the shared entry position), got ${head[2]}: ${text}`);
+    assert(castleRooms === 3, `expected 3 real rooms (root, the e6 dead-end, and the g6 corridor collapsed into one), got ${castleRooms}: ${text}`);
+    assert(+head[2] === 6, `expected 6 raw positions (the pre-root lead-in position + root + e6 + the 3-step g6 corridor -- the ungrouped graph, unlike castle generation, isn't scoped to just this castle), got ${head[2]}: ${text}`);
     const memRoom = text.match(/0\/(\d+) castle room\(s\) memorized \(0%\)/);
     const memMove = text.match(/0\/(\d+) move\(s\) memorized \(0%\)/);
     const decRoom = text.match(/0\/(\d+) castle room\(s\) decorated \(0%\)/);
     assert(memRoom && +memRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) memorized (0%)", got: ${text}`);
     assert(memMove, `expected a "0/N move(s) memorized (0%)" stat, got: ${text}`);
     castleMoves = +memMove[1];
+    assert(castleMoves === 6, `expected 6 total moves (2 + 1 + 3 corridor steps, not 4 if only cross-room doors counted), got ${castleMoves}: ${text}`);
     assert(decRoom && +decRoom[1] === castleRooms, `expected "0/${castleRooms} castle room(s) decorated (0%)", got: ${text}`);
-    ok('digraph status: no leftover "single-track" stat; "castle room(s)" leads with the real (collapsed) count, memorized/decorated start at 0');
-  } catch(e){ bad('digraph status: baseline (castle rooms leads, no single-track, zeroed memorized/decorated)', e); }
+    ok('digraph status: no leftover "single-track" stat; "castle room(s)" leads with the real (collapsed) count; moves total counts every corridor step');
+  } catch(e){ bad('digraph status: baseline (castle rooms leads, no single-track, zeroed memorized/decorated, full move count)', e); }
 
-  // 91. Marking the ROOT room (2 doors: e6 and g6) memorized+decorated
-  //     updates the room counts AND the derived "moves memorized" count to
-  //     2 (both its doors), against the same real-room denominators -- not
-  //     100%, since 2 of the 3 real rooms (the branches) are untouched.
+  // 91. Marking the CORRIDOR room memorized+decorated counts all 3 of its
+  //     internal steps as memorized moves (3/6, 50%) -- not just the 1 door
+  //     that actually crosses out of it, which is what the old
+  //     exits-only counting would have given.
   try {
-    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), rootFen);
-    assert(roomKey, `expected the root to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
+    const roomKey = await appBL.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), corridorHeadFen);
+    assert(roomKey, `expected the corridor to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -5932,10 +5942,10 @@ try {
     assert(memMove, `expected a "N/${castleMoves} move(s) memorized (P%)" stat, got: ${text}`);
     const [, moveCount, moveTotal, movePct] = memMove.map(Number);
     assert(moveTotal === castleMoves, `expected the moves-memorized denominator to stay ${castleMoves}, got: ${text}`);
-    assert(moveCount === 2, `expected both of the root's own doors (e6, g6) to count as memorized, got ${moveCount}: ${text}`);
+    assert(moveCount === 3, `expected all 3 of the corridor's own steps to count as memorized (not just its 1 external door), got ${moveCount}: ${text}`);
     assert(movePct === Math.round(moveCount / castleMoves * 100), `expected the moves-memorized percentage to match its own count/total, got: ${text}`);
-    ok('digraph status: marking the root memorized+decorated counts both its doors and stays scoped to the real rooms, not 100%');
-  } catch(e){ bad('digraph status: memorized/decorated counts after marking a room', e); }
+    ok('digraph status: marking a corridor memorized counts every internal step, not just its one external door');
+  } catch(e){ bad('digraph status: memorized/decorated counts after marking a corridor room', e); }
 } finally {
   await appBL.close();
 }
