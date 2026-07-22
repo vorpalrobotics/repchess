@@ -6400,5 +6400,141 @@ try {
 }
 }
 
+if(shouldRunPhase(['vr-decorating'])){
+// --- Phase BO: an elevator car collapses ALL of its forward exits behind ONE
+//     door (each a floor button) + one back door, regardless of how many
+//     walls the exits were spread across for the room's non-elevator form.
+//     The reported bug: a 5-exit room became 3 doors (one per wall) with
+//     floors repeated across them. ---
+const appBO = await launchApp();
+try {
+  // X (the room after ...e6 Nc3) branches five ways -- a genuine multi-way
+  // branch, the only shape an elevator suits. Its five forward doors get
+  // spread across north/east/west by the normal layout; marking the door
+  // INTO X as an elevator must collapse them to one door + five floors.
+  // Root also branches to a second child (g6) so root->X stays its own edge
+  // rather than collapsing root and X into one corridor room.
+  await seedBackup(appBO.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bd6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'Be2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','d5'],  reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','c5'],  reply: 'a3' },
+    ]}],
+    games: [
+      { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bd6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Be7 Be2', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await openVR(appBO.page);
+  const keyFor = (moves) => appBO.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+
+  // 97. Marking the door root->X an elevator collapses X's five forward exits
+  //     into ONE forward door (all five as its floors) + one back door -- even
+  //     though those exits are spread across more than one wall.
+  try {
+    const carExits = await appBO.page.evaluate((k) => window.__threeTestEdit.exitsOf(k), carKey);
+    const fwdExits = carExits.filter(e => !e.back);
+    assert(fwdExits.length === 5, `test setup: expected X to have 5 forward exits, got ${fwdExits.length}`);
+    const wallsUsed = new Set(fwdExits.map(e => e.wall));
+    assert(wallsUsed.size > 1, `test setup: expected X's forward doors to span more than one wall (the case the fix collapses), got ${JSON.stringify([...wallsUsed])}`);
+
+    await appBO.page.evaluate((args) => window.__threeTestEdit.setExitType(args.root, args.car, 'elevator'), { root, car: carKey });
+    await appBO.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBO.page.waitForTimeout(200);
+
+    const info = await appBO.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    assert(info.forward.length === 1, `expected exactly ONE forward door, got ${info.forward.length}: ${JSON.stringify(info.forward)}`);
+    assert(info.back.length === 1, `expected exactly ONE back door, got ${info.back.length}`);
+    assert(info.forward[0].length === 5, `expected the single forward door to carry all 5 floors, got ${info.forward[0].length}: ${JSON.stringify(info.forward[0])}`);
+    const uniqueFloors = new Set(info.forward[0]);
+    assert(uniqueFloors.size === 5, `expected 5 distinct floor targets (no repeats), got ${JSON.stringify(info.forward[0])}`);
+    ok('elevator car: many-exit room collapses to one forward door with every exit as a floor, plus one back door');
+  } catch(e){ bad('elevator car: forward exits collapse to a single door', e); }
+
+  // 98. A room that genuinely branches (X, 5 forward exits) is a valid
+  //     elevator target -- elevatorRejectReason returns null.
+  try {
+    const reason = await appBO.page.evaluate((k) => window.__threeTestEdit.elevatorRejectReason(k), carKey);
+    assert(reason === null, `expected a 5-way branch room to be a valid elevator, got: ${JSON.stringify(reason)}`);
+    ok('elevator: a genuine multi-way branch room is accepted as an elevator target');
+  } catch(e){ bad('elevator: branch room accepted', e); }
+} finally {
+  await appBO.close();
+}
+}
+
+if(shouldRunPhase(['vr-decorating'])){
+// --- Phase BP: making a corridor or two-track room an elevator is rejected
+//     with a message -- elevators are only for a room that branches into
+//     several separate rooms, not a linear sequence of moves. ---
+const appBP = await launchApp();
+try {
+  // one opening system with two castles: Alpha is a two-track (root branches
+  // into two 2-deep parallel lanes -- same shape verified in Phase BN), Beta
+  // is a corridor (a single forced 3-room chain).
+  await seedBackup(appBP.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6'], reply: 'Bg5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 d5 c4 e6 Nc3 Nf6 Bg5 Be7', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await openVR(appBP.page);
+  const alphaRoot = await appBP.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  const betaRoot = await appBP.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','d5','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Beta:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  // 99. A two-track room is rejected (message mentions two-track).
+  try {
+    const reason = await appBP.page.evaluate((k) => window.__threeTestEdit.elevatorRejectReason(k), alphaRoot);
+    assert(reason && /two-track/i.test(reason),
+      `expected a two-track room to be rejected as an elevator with a two-track message, got: ${JSON.stringify(reason)}`);
+    ok('elevator: a two-track room is rejected with an explanatory message');
+  } catch(e){ bad('elevator: two-track rejected', e); }
+
+  // 100. A corridor room is rejected (message mentions corridor/sequence).
+  try {
+    const reason = await appBP.page.evaluate((k) => window.__threeTestEdit.elevatorRejectReason(k), betaRoot);
+    assert(reason && /corridor|sequence/i.test(reason),
+      `expected a corridor room to be rejected as an elevator with a corridor/sequence message, got: ${JSON.stringify(reason)}`);
+    ok('elevator: a corridor (linear-sequence) room is rejected with an explanatory message');
+  } catch(e){ bad('elevator: corridor rejected', e); }
+} finally {
+  await appBP.close();
+}
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

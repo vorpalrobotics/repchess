@@ -708,6 +708,40 @@ function isElevatorCar(roomKey){
   }
   return false;
 }
+// An elevator car collapses ALL of its forward exits behind ONE door -- each
+// becomes a floor button in the panel beside that door -- with the back exit
+// (if any) its own separate door. This synthesizes the two door placements,
+// deliberately IGNORING the per-exit wall/offset layout the room carries for
+// its non-elevator form: those exits are spread across north/east/west so the
+// room doesn't fit an elevator's "one door, many buttons" shape. The forward
+// door goes on the wall opposite the back door (north when there's no back),
+// so the two never share a wall regardless of the original layout.
+//   Returns { back, floors, fwdWall, fwdOffset } -- floors is every non-back
+//   exit (in the room's own exit order), back is the single back exit or null.
+function elevatorCarLayout(room){
+  const exits = (room && room.exits) || [];
+  const back = exits.find(e => e.back) || null;
+  const floors = exits.filter(e => !e.back);
+  return { back, floors, fwdWall: back ? WALL_OPPOSITE[back.wall] : 'north', fwdOffset: 0 };
+}
+// Why a room can't be made an elevator, or null if it can. An elevator only
+// makes sense for a room that BRANCHES into several separate rooms (each a
+// "floor"); a linear sequence of moves (a corridor, or a two-track's parallel
+// lanes) has no floors to pick between. Checked when the user picks "Elevator"
+// for a door in the Room Geometry editor (renderRoomGeomDialog).
+function elevatorRejectReason(targetKey){
+  const t = mergedRoom(targetKey);
+  if(!t) return null;   // unknown target -- don't block (shouldn't happen)
+  const type = t.castleSign && t.castleSign.type;
+  if(t.twoTrack || type === 'two-track')
+    return 'That room is a two-track room (two parallel sequences of moves). An elevator is only for a room that branches into several separate rooms — not tracks of moves.';
+  if(type === 'corridor')
+    return 'That room is a corridor (a single linear sequence of moves). An elevator is only for a room that branches into several separate rooms — not a sequence.';
+  const fwd = t.exits ? t.exits.filter(e => !e.back).length : 0;
+  if(fwd < 2)
+    return `An elevator needs at least two floors to choose between; that room has ${fwd === 0 ? 'no' : 'only one'} forward door.`;
+  return null;
+}
 function setRoomGeom(roomKey, geom){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
@@ -2833,8 +2867,8 @@ function mnemonicSlots(roomKey){
   // door instead of the usual centre-of-room spot.
   if(isElevatorCar(roomKey)){
     const room = mergedRoom(roomKey);
-    const fwd = (room.exits || []).find(e => !e.back);   // floors share one wall
-    if(fwd) pos = elevatorBillboardPos(room, fwd.wall, fwd.offset);
+    const car = elevatorCarLayout(room);   // the single forward door all floors share
+    if(car.floors.length) pos = elevatorBillboardPos(room, car.fwdWall, car.fwdOffset);
   }
   return [{ id: 'mnem-0', kind: 'mnemonic', x: pos.x, y: pos.y, z: pos.z, pair: entry }];
 }
@@ -4574,45 +4608,54 @@ function buildRoom(roomKey){
 
   if(!room.outdoor){
     const wallTex = carMode ? makePlainWallTexture(room.color) : makeBrickTexture(room.color);
+    // A car's two doors (one forward, panel of floor buttons; one back) are
+    // placed by elevatorCarLayout, NOT by the exits' own per-wall layout --
+    // otherwise exits spread across several walls each grow their own door +
+    // panel (the reported bug: a 5-exit room became 3 doors). Computed once
+    // here and consulted per wall below.
+    const carLayout = carMode ? elevatorCarLayout(room) : null;
     for(const wall of ['north','south','east','west']){
-      // gather EVERY exit on this wall. Car rooms put a floor's worth of buttons
-      // behind a single door; ordinary rooms can also now carry several doors on
-      // one wall (e.g. the user moved two exits to the same side, or an import
-      // added one), so each one needs its own gap + panel + trigger, and each
-      // stair its own walkable corridor (see stairGapAt).
-      const wallExits = room.exits.filter(e => e.wall === wall);
-      const ex0 = wallExits[0];
-      // a car's floor buttons all share ONE physical door; ordinary rooms cut a
-      // gap per exit.
-      const doorOffsets = carMode ? (ex0 ? [ex0.offset] : []) : wallExits.map(e => e.offset);
-      const group = buildWallGroup(room.size, wall, !!ex0, ex0 ? ex0.offset : 0, wallTex, null,
-        { editable: true, surfaceAsset: wallAssetFor(roomKey, wall), doorOffsets });
-      scene.add(group);
-
       if(carMode){
-        if(ex0){
-          const dKey = doorKey(wall, ex0.offset);
-          const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, !!ex0.back);
-          const box = doorTriggerBox(room.size, wall, ex0.offset);
-          const thru = WALL_OUT_NORMAL[wall];
-          if(ex0.back){
-            elevatorMeta.push({ box, thru, kind: 'back', target: ex0.target, spawn: computeSpawnForExit(roomKey, room, ex0) });
-            scene.add(buildExitSign(room.size, wall, ex0.offset));
-          } else {
-            const floors = wallExits.map((fe, i) => ({
-              ordinal: i + 1,
-              label: fe.label || fe.target,
-              move: mnemOpponentMove(fe.target),
-              target: fe.target,
-              spawn: computeSpawnForExit(roomKey, room, fe)
-            }));
-            elevatorMeta.push({ box, thru, kind: 'forward', floors });
-            scene.add(buildElevatorPanel(room.size, wall, ex0.offset, floors));
-          }
-          if(doorAsset) scene.add(buildDoorPanel(room.size, wall, ex0.offset, doorAsset));
-          if(editMode) scene.add(buildDoorMarker(room.size, wall, ex0.offset, roomKey, dKey));
+        const back = carLayout.back;
+        const isFwd = wall === carLayout.fwdWall && carLayout.floors.length > 0;
+        const isBack = !!back && wall === back.wall;
+        const doorOffset = isFwd ? carLayout.fwdOffset : isBack ? back.offset : null;
+        const group = buildWallGroup(room.size, wall, doorOffset != null, doorOffset || 0, wallTex, null,
+          { editable: true, surfaceAsset: wallAssetFor(roomKey, wall), doorOffsets: doorOffset != null ? [doorOffset] : [] });
+        scene.add(group);
+        if(doorOffset == null) continue;   // a plain wall (no door on it)
+        const dKey = doorKey(wall, doorOffset);
+        const doorAsset = doorAssetFor(roomKey, dKey) || defaultDoorAsset(roomKey, isBack);
+        const box = doorTriggerBox(room.size, wall, doorOffset);
+        const thru = WALL_OUT_NORMAL[wall];
+        if(isFwd){
+          const floors = carLayout.floors.map((fe, i) => ({
+            ordinal: i + 1,
+            label: fe.label || fe.target,
+            move: mnemOpponentMove(fe.target),
+            target: fe.target,
+            spawn: computeSpawnForExit(roomKey, room, fe)
+          }));
+          elevatorMeta.push({ box, thru, kind: 'forward', floors });
+          scene.add(buildElevatorPanel(room.size, wall, doorOffset, floors));
+        } else {   // isBack
+          elevatorMeta.push({ box, thru, kind: 'back', target: back.target, spawn: computeSpawnForExit(roomKey, room, back) });
+          scene.add(buildExitSign(room.size, wall, doorOffset));
         }
+        if(doorAsset) scene.add(buildDoorPanel(room.size, wall, doorOffset, doorAsset));
+        if(editMode) scene.add(buildDoorMarker(room.size, wall, doorOffset, roomKey, dKey));
       } else {
+        // gather EVERY exit on this wall. Ordinary rooms can carry several
+        // doors on one wall (e.g. the user moved two exits to the same side,
+        // or an import added one), so each one needs its own gap + panel +
+        // trigger, and each stair its own walkable corridor (see stairGapAt).
+        const wallExits = room.exits.filter(e => e.wall === wall);
+        const ex0 = wallExits[0];
+        const doorOffsets = wallExits.map(e => e.offset);
+        const group = buildWallGroup(room.size, wall, !!ex0, ex0 ? ex0.offset : 0, wallTex, null,
+          { editable: true, surfaceAsset: wallAssetFor(roomKey, wall), doorOffsets });
+        scene.add(group);
+
         for(const ex of wallExits){
           const isStair = isStairType(ex.type);
           const dKey = doorKey(wall, ex.offset);
@@ -6306,7 +6349,7 @@ function renderRoomGeomDialog(ov, roomKey){
       <p style="margin:0 0 .5rem;font-size:.68rem;color:#888">Won't go below ${contentMin.w.toFixed(1)}×${contentMin.d.toFixed(1)}×${contentMin.h.toFixed(1)}m -- the size this room's own moves and doors need to fit without crowding.</p>
       <canvas id="roomGeomPlan" width="300" height="300" style="background:#eee;border-radius:4px;display:block;margin:0 auto .4rem;cursor:grab;touch-action:none"></canvas>
       <p style="margin:0 0 .5rem;font-size:.72rem;color:#888;text-align:center">Top-down plan. Drag a doorway to nudge it or move it to another wall. Hatched = stairs platform.</p>
-      ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}</div>` : ''}
+      ${exitTypeRows ? `<div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">${exitTypeRows}<div id="roomGeomExitError" style="color:#c62828;font-size:.72rem;line-height:1.3;margin-top:.2rem"></div></div>` : ''}
       <div style="border-top:1px solid #e0e0e0;padding-top:.4rem;margin-bottom:.7rem">
         <div style="font-size:.72rem;color:#888;margin-bottom:.15rem">Room names — label the room behind each door to plan the walk and theme its decor.</div>
         ${roomNameRows}
@@ -6331,9 +6374,23 @@ function renderRoomGeomDialog(ov, roomKey){
   `;
   const wEl = ov.querySelector('#roomGeomW'), dEl = ov.querySelector('#roomGeomD'), hEl = ov.querySelector('#roomGeomH');
   const canvas = ov.querySelector('#roomGeomPlan');
+  const exitErrEl = ov.querySelector('#roomGeomExitError');
   for(const sel of ov.querySelectorAll('[data-exit-type-for]')){
     sel.addEventListener('change', () => {
-      stagedExits[sel.dataset.exitTypeFor].type = sel.value;
+      const target = sel.dataset.exitTypeFor;
+      // "Elevator" only makes sense for a door into a room that branches into
+      // several separate rooms; reject a corridor/two-track/too-few-doors
+      // target and revert the dropdown rather than build a nonsensical car.
+      if(sel.value === 'elevator'){
+        const reason = elevatorRejectReason(target);
+        if(reason){
+          if(exitErrEl) exitErrEl.textContent = reason;
+          sel.value = stagedExits[target].type;   // revert to the last valid choice
+          return;
+        }
+      }
+      if(exitErrEl) exitErrEl.textContent = '';
+      stagedExits[target].type = sel.value;
       drawPlan();
     });
   }
@@ -6892,6 +6949,31 @@ export async function openThreeTest(containerEl, opts){
       exitsOf: (roomKey) => {
         const r = mergedRoom(roomKey);
         return r ? (r.exits || []).map(e => ({ wall: e.wall, offset: e.offset, target: e.target, back: !!e.back, doorKey: doorKey(e.wall, e.offset) })) : null;
+      },
+      // elevator car: the built door/floor structure (elevatorMeta) for the
+      // CURRENT room -- forward is a list of floor-target lists (one per
+      // forward door), back a list of back-door targets. A correctly-built
+      // car has exactly ONE forward entry (all exits as its floors) + one
+      // back, no matter how many walls the exits were spread across.
+      elevatorInfo: () => ({
+        forward: elevatorMeta.filter(m => m.kind === 'forward').map(m => (m.floors || []).map(f => f.target)),
+        back: elevatorMeta.filter(m => m.kind === 'back').map(m => m.target),
+      }),
+      // the "can this door be an elevator?" rule the Room Geometry editor
+      // enforces (null = allowed, else the rejection message shown inline).
+      elevatorRejectReason: (targetKey) => elevatorRejectReason(targetKey),
+      // writes the same LAYOUT exit-type override the Room Geometry editor's
+      // Apply commits (commitRoomGeomDialog), so a test can mark a door
+      // 'elevator' (making its target a car) without driving the dialog DOM.
+      setExitType: (roomKey, targetKey, type) => {
+        const ex = (ROOMS[roomKey] && ROOMS[roomKey].exits || []).find(e => e.target === targetKey);
+        if(!ex) return false;
+        applyEdit(() => {
+          const r = ensureRoomLayout(roomKey);
+          const prev = r.exits[targetKey] || { wall: ex.wall, offset: ex.offset };
+          r.exits[targetKey] = Object.assign({}, prev, { type });
+        });
+        return true;
       },
       // assigns a per-door override keyed by which TARGET the door leads to,
       // rather than requiring the caller to hand-compute its wall/offset via
