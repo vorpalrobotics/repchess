@@ -6422,7 +6422,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
       { seq: ['d4','Nf6','c4','e6','Nc3','Bd6'], reply: 'e4' },
-      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'Be2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'Bg5' },
       { seq: ['d4','Nf6','c4','e6','Nc3','d5'],  reply: 'cxd5' },
       { seq: ['d4','Nf6','c4','e6','Nc3','c5'],  reply: 'a3' },
     ]}],
@@ -6430,7 +6430,7 @@ try {
       { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bd6 e4', white: 'a', black: 'b', result: '*' },
-      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Be7 Be2', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Be7 Bg5', white: 'a', black: 'b', result: '*' },
       { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
       { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
     ],
@@ -6462,8 +6462,9 @@ try {
     assert(info.forward.length === 1, `expected exactly ONE forward door, got ${info.forward.length}: ${JSON.stringify(info.forward)}`);
     assert(info.back.length === 1, `expected exactly ONE back door, got ${info.back.length}`);
     assert(info.forward[0].length === 5, `expected the single forward door to carry all 5 floors, got ${info.forward[0].length}: ${JSON.stringify(info.forward[0])}`);
-    const uniqueFloors = new Set(info.forward[0]);
-    assert(uniqueFloors.size === 5, `expected 5 distinct floor targets (no repeats), got ${JSON.stringify(info.forward[0])}`);
+    const floorTargets = info.forward[0].map(f => f.target);
+    const uniqueFloors = new Set(floorTargets);
+    assert(uniqueFloors.size === 5, `expected 5 distinct floor targets (no repeats), got ${JSON.stringify(floorTargets)}`);
     ok('elevator car: many-exit room collapses to one forward door with every exit as a floor, plus one back door');
   } catch(e){ bad('elevator car: forward exits collapse to a single door', e); }
 
@@ -6533,6 +6534,127 @@ try {
   } catch(e){ bad('elevator: corridor rejected', e); }
 } finally {
   await appBP.close();
+}
+}
+
+if(shouldRunPhase(['vr-decorating'])){
+// --- Phase BQ: the elevator floor panel carries the same "in front of a
+//     door" info a normal door does -- destination room name, move pair, and
+//     the room's head object -- and the Room Geometry editor lets you set
+//     each floor's object (replacing the meaningless door-type dropdown). ---
+const appBQ = await launchApp();
+try {
+  // X (after ...e6 Nc3) is a 5-way branch car (root also branches via g6 so
+  // root->X stays its own edge). Two prop assets to assign as floor objects.
+  await seedBackup(appBQ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bd6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'Bg5' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','d5'],  reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','c5'],  reply: 'a3' },
+    ]}],
+    games: [
+      { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bd6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Be7 Bg5', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'frying-pan', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.4, h: 0.2, d: 0.4 }, keywords: 'kitchen housewares' },
+      { id: 'toaster', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
+    ],
+  });
+  await openVR(appBQ.page);
+  const keyFor = (moves) => appBQ.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+  await appBQ.page.evaluate((args) => window.__threeTestEdit.setExitType(args.root, args.car, 'elevator'), { root, car: carKey });
+  await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+  await appBQ.page.waitForTimeout(200);
+
+  // 101. Each floor row carries the destination room name, its move pair, and
+  //      (once assigned) that room's head object.
+  let firstFloorTarget;
+  try {
+    const info0 = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    firstFloorTarget = info0.forward[0][0].target;
+    // name the first floor's room and give it a head object.
+    await appBQ.page.evaluate((t) => window.__threeTestEdit.setRoomName(t, 'Housewares'), firstFloorTarget);
+    await appBQ.page.evaluate((t) => window.__threeTestEdit.setSlotAsset(t, 'obj-C1', 'frying-pan'), firstFloorTarget);
+    await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ.page.waitForTimeout(150);
+
+    const info = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const floor = info.forward[0].find(f => f.target === firstFloorTarget);
+    assert(floor, `expected to find the named floor's row, got ${JSON.stringify(info.forward[0])}`);
+    assert(floor.name === 'Housewares', `expected the floor row to carry the destination room name, got ${JSON.stringify(floor)}`);
+    assert(floor.objAssetId === 'frying-pan', `expected the floor row to carry the assigned head object, got ${JSON.stringify(floor)}`);
+    assert(floor.hasPair === true, `expected the floor row to carry a move pair, got ${JSON.stringify(floor)}`);
+    assert(info.forward[0].every(f => f.hasPair), `expected every floor to carry a move pair, got ${JSON.stringify(info.forward[0])}`);
+    ok('elevator panel: each floor row carries the room name, move pair, and head object');
+  } catch(e){ bad('elevator panel: floor rows carry name/pair/object', e); }
+
+  // 102. The Room Geometry editor for a car shows an object-picker button per
+  //      forward floor (not the door-type dropdown), and none for the back exit.
+  try {
+    await appBQ.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode ON (ruler button only shows then)
+    await appBQ.page.waitForTimeout(60);
+    await appBQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const counts = await appBQ.page.evaluate(() => ({
+      objBtns: document.querySelectorAll('#roomGeomOverlay [data-elev-obj-for]').length,
+      typeSelects: document.querySelectorAll('#roomGeomOverlay [data-exit-type-for]').length,
+    }));
+    assert(counts.objBtns === 5, `expected 5 floor object buttons (one per forward exit), got ${counts.objBtns}`);
+    assert(counts.typeSelects === 0, `expected NO door-type dropdowns in a car's editor, got ${counts.typeSelects}`);
+    ok('elevator editor: forward floors get an object-picker button instead of a door-type dropdown');
+  } catch(e){ bad('elevator editor: object buttons replace door-type dropdowns', e); }
+
+  // 103. Clicking a floor's object button opens the asset picker; picking an
+  //      asset assigns it to that floor's room head object (updates the panel).
+  try {
+    // pick the button for a floor whose object isn't set yet (not the one
+    // named "Housewares" above).
+    const otherTarget = await appBQ.page.evaluate((named) => {
+      const btns = [...document.querySelectorAll('#roomGeomOverlay [data-elev-obj-for]')];
+      const b = btns.find(x => x.dataset.elevObjFor !== named && x.textContent.includes('none'));
+      if(b) b.click();
+      return b ? b.dataset.elevObjFor : null;
+    }, firstFloorTarget);
+    assert(otherTarget, 'expected an unset floor object button to click');
+    await appBQ.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    // the room-geometry dialog hides while the picker is up (z-order)
+    assert(await appBQ.page.evaluate(() => document.getElementById('roomGeomOverlay').style.display === 'none'),
+      'expected the Room Geometry dialog to hide while the asset picker is open');
+    await appBQ.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+        .find(c => c.querySelector('.asset-id') && c.querySelector('.asset-id').textContent.includes('toaster'));
+      card.click();
+    });
+    await appBQ.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ.page.waitForTimeout(150);
+    const info = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const floor = info.forward[0].find(f => f.target === otherTarget);
+    assert(floor && floor.objAssetId === 'toaster',
+      `expected picking "toaster" to become that floor's object, got ${JSON.stringify(floor)}`);
+    ok('elevator editor: picking an object in the editor assigns it to that floor');
+  } catch(e){ bad('elevator editor: object picker assigns the floor object', e); }
+} finally {
+  await appBQ.close();
 }
 }
 
