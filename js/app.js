@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-162';
+const BUILD_TAG = '-163';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1425,12 +1425,12 @@ async function showTranspositionGraph(){
         { selector:'node.root', style:{ 'background-color':'#2e7d32' } },
         { selector:'node.transposition', style:{ 'background-color':'#e65100' } },
         // "all done" (memorized AND fully decorated -- see the 🧠/🎨 label
-        // glyphs for either alone) -- a border, not a background-color, so
-        // it composes with .root/.transposition instead of fighting them for
-        // the same channel (an all-done transposition room stays
-        // orange-filled with a green ring), and reads at a glance even
-        // zoomed out too far to make out the glyphs.
-        { selector:'node.all-done', style:{ 'border-width':3, 'border-color':'#66bb6a', 'border-style':'solid' } },
+        // glyphs for either alone). A full dark-green fill rather than just a
+        // border -- a border ring wasn't obvious enough zoomed out; a solid
+        // fill reads at a glance at any zoom level. Listed after
+        // .root/.transposition so it wins over their own background-color
+        // for a node that's also a root or transposition room.
+        { selector:'node.all-done', style:{ 'background-color':'#1b5e20' } },
         { selector:'node.run-box', style:{
           'shape':'round-rectangle', 'background-color':'#ffcc80', 'background-opacity':0.18,
           'border-width':1.5, 'border-style':'dashed', 'border-color':'#e69a3c',
