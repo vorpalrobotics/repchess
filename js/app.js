@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-158';
+const BUILD_TAG = '-159';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3875,6 +3875,16 @@ async function exportBackup(){
   log(`exported ${lines.length} opening system(s), ${games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
 }
 
+// test-only generation counter, bumped at the very end of importBackup (see
+// below) -- CURRENT_USER/$('userId').value are set very early in the
+// function, well before games/lines/mnemonics are actually written, so the
+// test harness's seedBackup() polls this instead of userId to avoid racing
+// a still-in-flight restore under load.
+let _importBackupGen = 0;
+if(localStorage.getItem('threeTestDebug')){
+  window.__importBackupGen = () => _importBackupGen;
+}
+
 /* full restore: wipes every local store first, so the result matches the
    backup exactly rather than merging with (and possibly duplicating)
    whatever is already there. Caller is responsible for confirming with
@@ -3950,6 +3960,7 @@ async function importBackup(data, onMnemProgress){
   for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
+  _importBackupGen++;
 }
 
 /* A standalone asset bundle (from the asset manager's "Export All as JSON"),
