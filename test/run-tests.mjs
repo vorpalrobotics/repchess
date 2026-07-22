@@ -6664,7 +6664,7 @@ try {
   } catch(e){ bad('elevator editor: object picker assigns the floor object', e); }
 
   // 104. An elevator car has only ONE physical door, so its Room Geometry
-  //      editor lets it shrink to a compact 8x8 -- not the door-count-driven
+  //      editor lets it shrink to a compact 6x6 -- not the door-count-driven
   //      minimum the branch room was sized for (which is >= 11 wide).
   try {
     await appBQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
@@ -6673,13 +6673,13 @@ try {
       w: Number(document.getElementById('roomGeomW').getAttribute('min')),
       d: Number(document.getElementById('roomGeomD').getAttribute('min')),
     }));
-    assert(mins.w <= 8, `expected a car's width min to allow shrinking to 8, got ${mins.w}`);
-    assert(mins.d <= 8, `expected a car's depth min to allow shrinking to 8, got ${mins.d}`);
+    assert(mins.w <= 6, `expected a car's width min to allow shrinking to 6, got ${mins.w}`);
+    assert(mins.d <= 6, `expected a car's depth min to allow shrinking to 6, got ${mins.d}`);
 
-    // typing 8x8 and Applying sticks (isn't clamped back up to the old min):
-    // reopen the dialog and confirm the fields now read 8x8.
-    await appBQ.page.fill('#roomGeomW', '8');
-    await appBQ.page.fill('#roomGeomD', '8');
+    // typing 6x6 and Applying sticks (isn't clamped back up to the old min):
+    // reopen the dialog and confirm the fields now read 6x6.
+    await appBQ.page.fill('#roomGeomW', '6');
+    await appBQ.page.fill('#roomGeomD', '6');
     await appBQ.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
     await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appBQ.page.waitForTimeout(150);
@@ -6689,10 +6689,119 @@ try {
       w: Number(document.getElementById('roomGeomW').value),
       d: Number(document.getElementById('roomGeomD').value),
     }));
-    assert(applied.w === 8 && applied.d === 8, `expected the car to actually resize to 8x8, got ${JSON.stringify(applied)}`);
+    assert(applied.w === 6 && applied.d === 6, `expected the car to actually resize to 6x6, got ${JSON.stringify(applied)}`);
     await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
-    ok('elevator car: Room Geometry editor allows shrinking to a compact 8x8');
-  } catch(e){ bad('elevator car: 8x8 minimum size', e); }
+    ok('elevator car: Room Geometry editor allows shrinking to a compact 6x6');
+  } catch(e){ bad('elevator car: 6x6 minimum size', e); }
+
+  // 105. Click-to-select-floor UX: clicking a floor's row on the panel
+  //      selects it (elevatorSelected() reflects the pick); walking forward
+  //      through the door then teleports straight to THAT floor, no popup.
+  try {
+    // test 102 turned edit mode ON (needed for the ruler icon) and nothing
+    // since has turned it back off -- door/elevator teleports are suppressed
+    // in edit mode (so you can stand in a doorway and edit), so walk-mode
+    // behavior needs it off first.
+    if(await appBQ.page.evaluate(() => window.__threeTestEdit.editMode())){
+      await appBQ.page.evaluate(() => window.__threeTestEdit.toggle());
+    }
+    await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ.page.waitForTimeout(150);
+    const before = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorSelected());
+    assert(before === null, `expected no floor selected yet on a fresh car, got ${before}`);
+
+    const info = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const floors = info.forward[0];
+    assert(floors.length >= 2, `expected the car to have at least 2 floors for this test, got ${floors.length}`);
+    const pick = floors[1];   // pick the SECOND floor, not the first, so a "defaults to floor 1" bug would be caught
+
+    // clickElevatorFloor(v) drives the real row-selection math with v = the
+    // uv.y a raycaster hit on that row would report (0 bottom of the panel
+    // texture, 1 top -- three.js PlaneGeometry UVs); elevatorRowCenterUV
+    // computes the exact v for that row's center using the same constants
+    // the real panel drawing/hit-testing use.
+    const v = await appBQ.page.evaluate(
+      (args) => window.__threeTestEdit.elevatorRowCenterUV(args.ord, args.n), { ord: pick.ordinal, n: floors.length });
+    const selected = await appBQ.page.evaluate((vv) => window.__threeTestEdit.clickElevatorFloor(vv), v);
+    assert(selected === pick.ordinal, `expected clicking floor ${pick.ordinal}'s row to select it, got ${selected}`);
+
+    // walk forward through the door and confirm we land on the picked floor,
+    // not the first one -- positioned/facing via the door's own trigger geom
+    // (elevatorDoorGeom), mirroring the existing stair walk-teleport tests.
+    const r = await appBQ.page.evaluate(async (targetKey) => {
+      const dbg = window.__threeTestEdit;
+      const doors = dbg.elevatorDoorGeom();
+      const fwd = doors.find(d => d.kind === 'forward');
+      const cx = (fwd.box.minX + fwd.box.maxX) / 2, cz = (fwd.box.minZ + fwd.box.maxZ) / 2;
+      const yaw = Math.atan2(-fwd.thru.x, -fwd.thru.z);
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(cx, cz, yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && window.__threeTestState.room === roomBefore){
+        await new Promise(res => setTimeout(res, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return { roomBefore, roomAfter: window.__threeTestState.room, targetKey };
+    }, pick.target);
+    assert(r.roomAfter === pick.target,
+      `expected walking through the forward door to land on the SELECTED floor (${pick.target}), got ${JSON.stringify(r)}`);
+    // and no popup/prompt of any kind was ever shown for this
+    const overlayExisted = await appBQ.page.evaluate(() => !!document.getElementById('elevatorOverlay'));
+    assert(!overlayExisted, 'expected no elevator popup overlay to exist at all (removed in favor of click-then-walk)');
+    ok('elevator: clicking a floor row selects it, and walking through the door teleports there directly (no popup)');
+  } catch(e){ bad('elevator: click-to-select-floor + walk-to-teleport', e); }
+
+  // 106. Walking through the forward door WITHOUT selecting a floor first
+  //      leaves you blocked (no default/accidental teleport) -- and walking
+  //      OUT the back door is instant, with no "Go back" confirmation.
+  try {
+    await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ.page.waitForTimeout(150);
+    const stillNone = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorSelected());
+    assert(stillNone === null, `expected a freshly-entered car to have no selection (previous room's pick shouldn't leak), got ${stillNone}`);
+
+    const blocked = await appBQ.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const fwd = dbg.elevatorDoorGeom().find(d => d.kind === 'forward');
+      const cx = (fwd.box.minX + fwd.box.maxX) / 2, cz = (fwd.box.minZ + fwd.box.maxZ) / 2;
+      const yaw = Math.atan2(-fwd.thru.x, -fwd.thru.z);
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(cx, cz, yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 1500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestState.room === roomBefore;
+    });
+    assert(blocked, 'expected the forward door to stay impassable with no floor selected');
+
+    // now the back door: walking out should be instant, no confirmation.
+    const back = await appBQ.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const b = dbg.elevatorDoorGeom().find(d => d.kind === 'back');
+      if(!b) return { err: 'no back door found' };
+      const cx = (b.box.minX + b.box.maxX) / 2, cz = (b.box.minZ + b.box.maxZ) / 2;
+      const yaw = Math.atan2(-b.thru.x, -b.thru.z);
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(cx, cz, yaw);
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && window.__threeTestState.room === roomBefore){
+        await new Promise(res => setTimeout(res, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return { target: b.target, roomBefore, roomAfter: window.__threeTestState.room,
+        overlayShown: !!document.getElementById('elevatorOverlay') };
+    });
+    assert(!back.err, back.err);
+    assert(back.roomAfter === back.target,
+      `expected walking through the back door to teleport straight out, got ${JSON.stringify(back)}`);
+    assert(!back.overlayShown, 'expected no confirmation popup for the back/exit door');
+    ok('elevator: forward door stays blocked with no floor picked; back door walks out instantly with no prompt');
+  } catch(e){ bad('elevator: unselected forward door blocked, back door instant', e); }
 } finally {
   await appBQ.close();
 }
