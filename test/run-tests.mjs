@@ -5966,8 +5966,107 @@ try {
       `expected the moves-memorized bar's percentage and fill to match its own count/total, got: ${JSON.stringify(memMove)}`);
     ok('digraph status: marking a corridor memorized counts every internal step, not just its one external door, and the bars fill to match');
   } catch(e){ bad('digraph status: coverage bars after marking a corridor room', e); }
+
+  // 92. The coverage panel takes up real space, so it's collapsed by default
+  //     and only shown via the toggle button -- clicking it reveals the
+  //     panel and flips the caret; clicking again re-collapses it.
+  try {
+    const state = () => appBL.page.evaluate(() => ({
+      panelHidden: document.getElementById('graphCoverage').style.display === 'none',
+      toggleVisible: document.getElementById('graphCoverageToggle').style.display !== 'none',
+      caret: document.getElementById('graphCoverageToggle').querySelector('i').className,
+    }));
+    const before = await state();
+    assert(before.panelHidden, `expected the coverage panel to start collapsed, got: ${JSON.stringify(before)}`);
+    assert(before.toggleVisible, `expected the toggle button to be visible (this scope has castle rooms), got: ${JSON.stringify(before)}`);
+    assert(before.caret.includes('fa-caret-right'), `expected a collapsed (caret-right) icon, got: ${before.caret}`);
+
+    await appBL.page.evaluate(() => document.getElementById('graphCoverageToggle').click());
+    const opened = await state();
+    assert(!opened.panelHidden, `expected the toggle to reveal the coverage panel, got: ${JSON.stringify(opened)}`);
+    assert(opened.caret.includes('fa-caret-down'), `expected an expanded (caret-down) icon, got: ${opened.caret}`);
+
+    await appBL.page.evaluate(() => document.getElementById('graphCoverageToggle').click());
+    const closed = await state();
+    assert(closed.panelHidden, `expected a second click to re-collapse the coverage panel, got: ${JSON.stringify(closed)}`);
+    assert(closed.caret.includes('fa-caret-right'), `expected the icon to flip back to caret-right, got: ${closed.caret}`);
+    ok('digraph status: coverage panel is collapsed by default, toggled open/closed via the caret button');
+  } catch(e){ bad('digraph status: coverage panel toggle', e); }
+
+  // 93. Expanding the panel, then closing and reopening the whole modal,
+  //     resets it back to collapsed -- "fresh open" always starts hidden,
+  //     even though an in-place refresh (Show Castle, Reset Layout, focus)
+  //     would have left it open.
+  try {
+    await appBL.page.evaluate(() => document.getElementById('graphCoverageToggle').click());
+    assert(
+      await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display !== 'none'),
+      'setup: expected the panel to be open before testing close/reopen'
+    );
+    await appBL.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const reopened = await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display === 'none');
+    assert(reopened, 'expected a fresh open (after close) to start with the coverage panel collapsed again');
+    ok('digraph status: reopening the modal after closing resets the coverage panel to collapsed');
+  } catch(e){ bad('digraph status: coverage panel resets on fresh open', e); }
 } finally {
   await appBL.close();
+}
+
+// --- Phase BM: opening the digraph while the MOVE TABLE (not the digraph's
+//     own right-click focus) is focused on a castle root already scoped the
+//     displayed nodes correctly (rootSeq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ),
+//     but the stats/coverage totals and the "Show Castle" dropdown's
+//     selection ignored that fallback and always used the whole system.
+//     focusedCastleName() now shares the same GRAPH_FOCUS_SEQ || FOCUSED_SEQ
+//     precedence, fixing both at once. ---
+const appBM = await launchApp();
+try {
+  // Alpha: just its root room (one opponent reply, e6, with no pref -- a
+  // leaf, so it can't chain/collapse into anything). Beta: root (branch,
+  // two distinct opponent replies so it can't corridor-collapse with its
+  // child) + one built child room -- 2 rooms. Whole system: 3 castle rooms;
+  // Alpha alone: 1.
+  await seedBackup(appBM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 d5 c4 c6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appBM.page.click('.line-row');
+  await appBM.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 94. Focus on Alpha's root via the move table's own row menu (NOT the
+  //     digraph's right-click focus), then open the digraph fresh.
+  try {
+    await appBM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appBM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="focus"]').click());
+    assert(await appBM.page.evaluate(() => document.getElementById('unfocusBtn').style.display !== 'none'),
+      'setup: expected the move table to show as focused');
+
+    await appBM.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appBM.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+    const castleSelectValue = await appBM.page.evaluate(() => document.getElementById('graphCastleSelect').value);
+    assert(castleSelectValue === 'Alpha',
+      `expected "Show Castle" to auto-select Alpha (the move-table's own focus), got ${JSON.stringify(castleSelectValue)}`);
+
+    const text = await appBM.page.evaluate(() => document.getElementById('graphStatus').textContent);
+    const head = text.match(/(\d+) castle room\(s\)/);
+    assert(head && +head[1] === 1,
+      `expected the stats to scope to Alpha alone (1 castle room), not the whole system (3), got: ${text}`);
+    ok('digraph: move-table focus on a castle root scopes both the "Show Castle" selection and the stats, not just the displayed nodes');
+  } catch(e){ bad('digraph: stats/dropdown follow move-table focus onto a castle root', e); }
+} finally {
+  await appBM.close();
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

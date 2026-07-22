@@ -24,13 +24,31 @@ reuse `launchApp` / `seedBackup` / `openVR` from `test/harness.mjs` and inspect
 the scene via the app's `window.__threeTestEdit` hook. When a library **version**
 changes in the source, rerun `node test/build-vendor.mjs`.
 
-Run the suite **once** per feature/fix — a single clean run is enough
-confirmation. Don't repeat the full run 2+ times "for stability" as a matter
-of routine; that's real clock time with little payoff once a run is clean.
-Only repeat a run when there's an actual reason to suspect flakiness (e.g. a
-failure that looks timing-related, or you're specifically investigating a
-flaky test). An occasional full multi-run pass as a sanity check is fine, but
-it's not a required step for ordinary feature work.
+**Don't run the full suite (`npm test`) on your own initiative — it costs the
+user real development-cycle time (roughly an hour's worth across a session),
+and only the user can weigh that cost against a given change.** Write/update
+the test cases for whatever you changed as normal, but stop short of
+executing `npm test`. If you judge a change large or risky enough to warrant
+a run, say so and ask; proceed only once the user actually says to run it.
+The user may also just tell you to run it outright — do so then, no need to
+re-ask. Static/syntax-level self-checks (reading the diff, reasoning through
+the logic) are still expected; they're not a substitute for the harness, but
+they're free and don't require asking.
+
+When the user does have you run it: once is enough confirmation, including
+for the new/changed test. Do **not** additionally disable the fix, rerun to
+watch the test fail, then restore and rerun again — that "verify by
+reversion" cycle multiplies the cost for routine changes and is reserved for
+cases with a specific reason to distrust the test itself (it's asserting
+something subtle, or you're not fully sure the assertion would actually
+catch the bug) -- and even then, only with the user's go-ahead given the time
+cost. Don't repeat the run 2+ times "for stability" as a matter of routine
+either. If a run turns up a failure that investigation shows is flaky/
+load-sensitive rather than a real regression, don't sink further runs into
+chasing it — either fix the root cause if it's quick and obvious, or just
+disable that one test (comment it out with a one-line reason, matching the
+precedent at the "150 ... removed -- it flaked" comment in run-tests.mjs) and
+move on.
 
 ## Version / cache-buster discipline
 

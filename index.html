@@ -832,8 +832,12 @@
         <select id="graphCastleSelect" style="font-size:.9rem;padding:.15rem .3rem"></select>
       </span>
     </div>
-    <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em"></div>
-    <div id="graphCoverage" class="graph-coverage"></div>
+    <div style="display:flex;align-items:baseline;gap:.5rem">
+      <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em;flex:1"></div>
+      <button id="graphCoverageToggle" style="display:none;flex:0 0 auto;font-size:.8rem;color:#555;background:none;border:none;cursor:pointer;padding:.1rem .3rem"
+        title="Show coverage stats"><i class="fa-solid fa-caret-right"></i> Coverage</button>
+    </div>
+    <div id="graphCoverage" class="graph-coverage" style="display:none"></div>
     <!-- overflow:hidden (not auto): cytoscape does its own pan/zoom, and an auto
          scrollbar here oscillates on/off as the canvas rounds a hair past the box -->
     <div id="graphContainer" style="flex:1;min-height:0;border:1px solid #ccc;border-radius:4px;overflow:hidden"></div>
@@ -1267,6 +1271,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260721-159"></script>
+<script type="module" src="js/app.js?v=20260721-161"></script>
 </body>
 </html>
