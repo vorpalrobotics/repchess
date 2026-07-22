@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-159';
+const BUILD_TAG = '-161';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1159,6 +1159,11 @@ function findBackEdges(rooms, edges){
 // graph-local focus seq (set by right-click "Focus on this variation" inside the
 // graph overlay); overrides the move-table FOCUSED_SEQ while the overlay is open.
 let GRAPH_FOCUS_SEQ = null;
+// whether the coverage-bars panel (#graphCoverage) is expanded -- reset to
+// collapsed on each fresh open (graphCloseBtn), same as GRAPH_FOCUS_SEQ, but
+// persists across in-place refreshes (Show Castle, Reset Layout, focus/clear
+// focus) so toggling it open doesn't get clobbered by those.
+let GRAPH_COVERAGE_OPEN = false;
 
 /* ---------- graph node layout persistence ----------
    dagre reflows the whole graph fresh on every open, which is great for a new
@@ -1284,8 +1289,10 @@ async function showTranspositionGraph(){
 
     // coverage: one labeled, proportionally-filled bar per stat, on its own
     // line below the structural summary above -- clearer at a glance than
-    // burying "N/M (P%)" fragments in a run-on sentence. Hidden entirely
-    // when there's nothing to show (no castles built yet in this scope).
+    // burying "N/M (P%)" fragments in a run-on sentence. The toggle button
+    // AND the panel are hidden entirely when there's nothing to show (no
+    // castles built yet in this scope); otherwise shown/hidden per
+    // GRAPH_COVERAGE_OPEN (see updateGraphCoverageVisibility).
     const coverageBar = (label, color, n, d) => `
       <div class="graph-coverage-row">
         <span class="graph-coverage-label">${label}:</span>
@@ -1296,6 +1303,8 @@ async function showTranspositionGraph(){
       coverageBar('Rooms memorized', '#1565c0', memorizedRoomCount, totalCastleRooms) +
       coverageBar('Moves memorized', '#2e7d32', memorizedMoveCount, totalCastleMoves) +
       coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
+    $('graphCoverageToggle').style.display = totalCastleRooms ? '' : 'none';
+    updateGraphCoverageVisibility();
 
     populateGraphCastleSelect();
 
@@ -1577,7 +1586,20 @@ $('graphCloseBtn').onclick = () => {
   $('graphOverlay').style.display='none';
   hideGraphHoverPreview();
   hideGraphCtxMenu();
-  GRAPH_FOCUS_SEQ = null;   // each fresh open starts at the move-table scope
+  GRAPH_FOCUS_SEQ = null;      // each fresh open starts at the move-table scope
+  GRAPH_COVERAGE_OPEN = false;   // ...and with the coverage panel collapsed
+};
+
+// reflects GRAPH_COVERAGE_OPEN onto the toggle button's icon/title and the
+// panel's own visibility -- called after every (re)render and on toggle.
+function updateGraphCoverageVisibility(){
+  $('graphCoverage').style.display = GRAPH_COVERAGE_OPEN ? 'flex' : 'none';
+  $('graphCoverageToggle').innerHTML = `<i class="fa-solid fa-caret-${GRAPH_COVERAGE_OPEN ? 'down' : 'right'}"></i> Coverage`;
+  $('graphCoverageToggle').title = GRAPH_COVERAGE_OPEN ? 'Hide coverage stats' : 'Show coverage stats';
+}
+$('graphCoverageToggle').onclick = () => {
+  GRAPH_COVERAGE_OPEN = !GRAPH_COVERAGE_OPEN;
+  updateGraphCoverageVisibility();
 };
 
 /* "Show Castle:" dropdown — fast-focus the graph on a defined castle's subtree
@@ -2082,8 +2104,16 @@ function castleRootRoomSeq(castleName){
 // shared by the "Show Castle" dropdown's current selection and the
 // castle-room stats in the digraph status line.
 function focusedCastleName(){
-  if(!GRAPH_FOCUS_SEQ) return null;
-  const key = GRAPH_FOCUS_SEQ.join(',');
+  // same precedence showTranspositionGraph's own rootSeq uses: the digraph's
+  // local right-click focus wins if set, otherwise fall back to whatever the
+  // move table itself is focused on -- without this fallback, opening the
+  // digraph while focused (in the move table) on a castle root correctly
+  // scoped the DISPLAYED nodes to that castle (rootSeq already had this same
+  // fallback) but left the stats/coverage totals computed against every
+  // castle in the system instead of just the one being shown.
+  const seq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;
+  if(!seq) return null;
+  const key = seq.join(',');
   return definedCastles().find(c => { const rs = castleRootRoomSeq(c); return rs && rs.join(',') === key; }) || null;
 }
 /* BFS out from a previewed castle to every OTHER castle its rooms have a

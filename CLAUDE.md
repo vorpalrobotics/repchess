@@ -25,12 +25,23 @@ the scene via the app's `window.__threeTestEdit` hook. When a library **version*
 changes in the source, rerun `node test/build-vendor.mjs`.
 
 Run the suite **once** per feature/fix — a single clean run is enough
-confirmation. Don't repeat the full run 2+ times "for stability" as a matter
-of routine; that's real clock time with little payoff once a run is clean.
-Only repeat a run when there's an actual reason to suspect flakiness (e.g. a
-failure that looks timing-related, or you're specifically investigating a
-flaky test). An occasional full multi-run pass as a sanity check is fine, but
-it's not a required step for ordinary feature work.
+confirmation, for the new/changed test too. Do **not** additionally disable
+the fix, rerun to watch the test fail, then restore and rerun again — that
+"verify by reversion" cycle triples the wall-clock cost for routine changes
+and is reserved for cases with a specific reason to distrust the test itself
+(it's asserting something subtle, or you're not fully sure the assertion
+would actually catch the bug). Don't repeat the full run 2+ times "for
+stability" as a matter of routine either — real clock time, little payoff on
+a clean run. Reserve extra runs for an actual reason to suspect flakiness in
+*this* change (e.g. a new failure that looks timing-related).
+
+If a test fails and investigation shows it's flaky/load-sensitive rather than
+a real regression, don't sink time re-running to confirm — either fix the
+root cause if it's quick and obvious, or just disable that one test (comment
+it out with a one-line reason, matching the precedent at the "150 ... removed
+-- it flaked" comment in run-tests.mjs) and move on. A full-suite multi-run
+stress pass is only for major/structural changes (e.g. touching the harness
+itself), not ordinary feature work.
 
 ## Version / cache-buster discipline
 
