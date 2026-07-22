@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-163';
+const BUILD_TAG = '-164';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1360,6 +1360,22 @@ async function showTranspositionGraph(){
       _castleEntryKey.set(name, key);
       return key;
     };
+    // a box member's position within its own box -- 'track' (two-track only:
+    // head/left/right) + 'chainIdx' (order along its own run/track, 0-based)
+    // -- carried on the room's own node data so a later right-click ("Arrange")
+    // can recompute a clean layout for just that box purely from its current
+    // children, with no need to keep `boxes`/`boxOf` alive past this render.
+    const boxById = new Map(boxes.map(b => [b.id, b]));
+    const boxMemberInfo = r => {
+      const boxId = boxOf.get(r.id);
+      if(!boxId) return null;
+      const box = boxById.get(boxId);
+      if(box.kind === 'run') return { chainIdx: box.nodes.indexOf(r.id) };
+      if(r.id === box.head) return { track: 'head', chainIdx: 0 };
+      const li = box.runs[0].indexOf(r.id);
+      if(li >= 0) return { track: 'left', chainIdx: li };
+      return { track: 'right', chainIdx: box.runs[1].indexOf(r.id) };
+    };
 
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
@@ -1379,6 +1395,7 @@ async function showTranspositionGraph(){
         const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '');
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
+        Object.assign(data, boxMemberInfo(r));   // track/chainIdx for "Arrange" (no-op if not boxed)
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
         // a VR dead-end reached through a locked door -- empty (no forward
         // continuation) and not its castle's own entry room (that one is
@@ -1503,7 +1520,7 @@ async function showTranspositionGraph(){
     }
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphClickHandler(cy);
-    attachGraphContextMenu(cy);
+    attachGraphContextMenu(cy, scopeKey);
 
     // Save a manual de-overlap drag: delta from dagre's own placement, keyed
     // by the node's position (stable across a rebuild, unlike its cytoscape id).
@@ -1567,7 +1584,21 @@ async function showTranspositionGraph(){
           if(!n.nonempty()) return false;
           n.emit('tap');
           return true;
-        }
+        },
+        // drives the real right-click "Arrange" menu action directly (the box
+        // itself is canvas-rendered, not a real DOM element a test can
+        // right-click) -- boxIdOf resolves a member's box id first, same as a
+        // test locates the box a member room belongs to.
+        boxIdOf: (fen) => {
+          const n = cy.nodes().filter(x => x.data('fen') === fen);
+          return n.nonempty() ? (n.parent().nonempty() ? n.parent().id() : null) : null;
+        },
+        arrangeBox: (boxId) => {
+          const box = cy.getElementById(boxId);
+          if(!box.nonempty()) return false;
+          arrangeBox(box, scopeKey);
+          return true;
+        },
       };
     }
   } finally {
@@ -1656,14 +1687,53 @@ function showGraphCtxMenu(x, y, items){
   if(r.right > innerWidth)  m.style.left = Math.max(0, x - r.width)+'px';
   if(r.bottom > innerHeight) m.style.top  = Math.max(0, y - r.height)+'px';
 }
+// Recomputes a clean internal layout for a run/two-track box's members --
+// a single straight column (run) or two parallel columns descending from a
+// shared head (two-track), evenly spaced -- using the track/chainIdx tagged
+// onto each member's node data at build time (see boxMemberInfo above).
+// Saved through the same per-node delta mechanism a manual drag already
+// uses (saveGraphNodeDelta persists immediately), so it survives a reopen
+// and "Reset Layout" already knows how to undo it. The box itself needs no
+// explicit resize -- a cytoscape compound parent auto-bounds its children.
+// Only repositions THIS box's own members -- doesn't re-run the whole
+// graph's layout, so it can occasionally leave the tidied box overlapping
+// an untouched neighbor; Reset Layout is the fallback for that.
+const ARRANGE_ROW_STEP = 60;   // vertical spacing between chain members, matches dagre's own rankSep
+const ARRANGE_COL_STEP = 70;   // horizontal offset of two-track's left/right columns from center
+function arrangeBox(boxEl, scopeKey){
+  const bb = boxEl.boundingBox();
+  const topY = bb.y1 + 24;
+  const centerX = (bb.x1 + bb.x2) / 2;
+  const place = (n, x, y) => {
+    const fen = n.data('fen');
+    if(!fen) return;
+    const base = n.scratch('_dagreBase') || n.position();
+    n.position({x, y});
+    saveGraphNodeDelta(scopeKey, positionKey(fen), x - base.x, y - base.y);
+  };
+  if(boxEl.hasClass('twotrack-box')){
+    const head = boxEl.children('[track = "head"]');
+    if(head.nonempty()) place(head[0], centerX, topY);
+    const left = boxEl.children('[track = "left"]').sort((a,b)=>a.data('chainIdx')-b.data('chainIdx'));
+    const right = boxEl.children('[track = "right"]').sort((a,b)=>a.data('chainIdx')-b.data('chainIdx'));
+    left.forEach((n,i) => place(n, centerX - ARRANGE_COL_STEP, topY + (i+1)*ARRANGE_ROW_STEP));
+    right.forEach((n,i) => place(n, centerX + ARRANGE_COL_STEP, topY + (i+1)*ARRANGE_ROW_STEP));
+  } else {
+    const chain = boxEl.children().sort((a,b)=>a.data('chainIdx')-b.data('chainIdx'));
+    chain.forEach((n,i) => place(n, centerX, topY + i*ARRANGE_ROW_STEP));
+  }
+}
 // the menu items for a right-clicked / tapped node (shared by mouse cxttap and
 // touch tap). Rooms get Focus + Show position + Room details; leaves get just
-// Show position; Clear focus appears whenever the graph is focused.
-function graphNodeMenuItems(cy, el){
+// Show position; a run/two-track box gets Arrange; Clear focus appears
+// whenever the graph is focused.
+function graphNodeMenuItems(cy, el, scopeKey){
   const seq = el.data('seq');
-  const focusable = seq && !el.hasClass('start') && !el.hasClass('locked')
-    && !el.hasClass('run-box') && !el.hasClass('twotrack-box');
+  const isBox = el.hasClass('run-box') || el.hasClass('twotrack-box');
+  const focusable = seq && !el.hasClass('start') && !el.hasClass('locked') && !isBox;
   const items = [];
+  if(isBox) items.push({ label:'🧹 Arrange',
+    onClick:()=>arrangeBox(el, scopeKey) });
   if(focusable) items.push({ label:'🎯 Focus on this variation',
     onClick:()=>{ GRAPH_FOCUS_SEQ = seq.slice(); showTranspositionGraph(); } });
   if(el.data('fen')) items.push({ label:'♟ Show position',
@@ -1674,10 +1744,10 @@ function graphNodeMenuItems(cy, el){
     onClick:()=>{ GRAPH_FOCUS_SEQ = null; showTranspositionGraph(); } });
   return items;
 }
-function attachGraphContextMenu(cy){
+function attachGraphContextMenu(cy, scopeKey){
   cy.container().addEventListener('contextmenu', e=>e.preventDefault());
   cy.on('cxttap', 'node', evt=>{
-    const items = graphNodeMenuItems(cy, evt.target);
+    const items = graphNodeMenuItems(cy, evt.target, scopeKey);
     const oe = evt.originalEvent || {};
     if(items.length) showGraphCtxMenu(oe.clientX||0, oe.clientY||0, items);
   });

@@ -6270,7 +6270,113 @@ try {
 } finally {
   await appBM.close();
 }
-
 }
+
+if(shouldRunPhase(['digraph'])){
+// --- Phase BN: right-clicking a run/two-track box in the digraph offers
+//     "Arrange" -- recomputes a clean internal layout for just that box's
+//     members (straight column, or two parallel columns from a shared head,
+//     evenly spaced) instead of whatever generic sibling-spacing dagre's
+//     flat layout happened to leave it with. ---
+const appBN = await launchApp();
+try {
+  // root (after d4 Nf6 c4) forks into two branches, each 2 rooms deep (so
+  // each qualifies as its own "run" and the pair forms a two-track box):
+  // left  = e6 Nc3 -> Bb4 Qc2
+  // right = g6 Nc3 -> Bg7 e4
+  await seedBackup(appBN.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await appBN.page.click('.line-row');
+  await appBN.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+  const fen = async (moves) => appBN.page.evaluate((moves) => {
+    const c = new Chess();
+    for(const m of moves) c.move(m, { sloppy: true });
+    return c.fen();
+  }, moves);
+  const headFen = await fen(['d4','Nf6','c4']);
+  const leftFens = [await fen(['d4','Nf6','c4','e6','Nc3']), await fen(['d4','Nf6','c4','e6','Nc3','Bb4','Qc2'])];
+  const rightFens = [await fen(['d4','Nf6','c4','g6','Nc3']), await fen(['d4','Nf6','c4','g6','Nc3','Bg7','e4'])];
+
+  // 95. "Arrange" straightens both tracks into two parallel, evenly-spaced
+  //     columns symmetric around the head, which sits above both.
+  try {
+    const boxId = await appBN.page.evaluate((fen) => window.__graphTestHooks.boxIdOf(fen), headFen);
+    assert(boxId, `expected the root to belong to a two-track box, got ${JSON.stringify(boxId)}`);
+
+    const applied = await appBN.page.evaluate((boxId) => window.__graphTestHooks.arrangeBox(boxId), boxId);
+    assert(applied, 'expected arrangeBox to find and arrange the box');
+
+    const posOf = async (fen) => appBN.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? n.position() : null;
+    }, fen);
+    const head = await posOf(headFen);
+    const left = [await posOf(leftFens[0]), await posOf(leftFens[1])];
+    const right = [await posOf(rightFens[0]), await posOf(rightFens[1])];
+    assert(head && left[0] && left[1] && right[0] && right[1],
+      `expected all 5 box members to resolve a position, got: ${JSON.stringify({head, left, right})}`);
+
+    // each track is a straight vertical column: constant x, equal y spacing.
+    assert(left[0].x === left[1].x, `expected the left track's own x to stay constant, got ${JSON.stringify(left)}`);
+    assert(right[0].x === right[1].x, `expected the right track's own x to stay constant, got ${JSON.stringify(right)}`);
+    const leftStep1 = left[0].y - head.y, leftStep2 = left[1].y - left[0].y;
+    const rightStep1 = right[0].y - head.y, rightStep2 = right[1].y - right[0].y;
+    assert(leftStep1 === leftStep2 && leftStep1 > 0,
+      `expected equal, positive (downward) vertical spacing down the left track, got steps ${leftStep1}, ${leftStep2}`);
+    assert(rightStep1 === rightStep2 && rightStep1 > 0,
+      `expected equal, positive (downward) vertical spacing down the right track, got steps ${rightStep1}, ${rightStep2}`);
+    assert(leftStep1 === rightStep1, `expected both tracks to use the same row spacing, got left ${leftStep1} vs right ${rightStep1}`);
+
+    // symmetric around the head, which sits above both tracks.
+    assert(left[0].x < head.x && head.x < right[0].x,
+      `expected the head to sit between the two columns, got head.x=${head.x}, left.x=${left[0].x}, right.x=${right[0].x}`);
+    assert(Math.abs((head.x - left[0].x) - (right[0].x - head.x)) < 0.01,
+      `expected the two columns to be symmetric around the head, got: ${JSON.stringify({head, left: left[0], right: right[0]})}`);
+    ok('digraph: "Arrange" straightens a two-track box into two even, symmetric columns under its head');
+  } catch(e){ bad('digraph: Arrange a two-track box', e); }
+
+  // 96. The "Arrange" position survives closing and reopening the graph --
+  //     it's saved the same way a manual drag is (per-node delta in
+  //     GRAPH_LAYOUT), not just an in-memory change to the live cy instance.
+  try {
+    const posBefore = await appBN.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.position();
+    }, leftFens[1]);
+
+    await appBN.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+
+    const posAfter = await appBN.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.position();
+    }, leftFens[1]);
+    // saveGraphNodeDelta rounds dx/dy to the nearest pixel, so a sub-pixel
+    // difference between the two positions is expected, not a real drift.
+    assert(Math.abs(posAfter.x - posBefore.x) <= 1 && Math.abs(posAfter.y - posBefore.y) <= 1,
+      `expected the arranged position to persist across a close/reopen, got ${JSON.stringify(posBefore)} -> ${JSON.stringify(posAfter)}`);
+    ok('digraph: an arranged box\'s layout persists across closing and reopening the graph');
+  } catch(e){ bad('digraph: Arrange persists across reopen', e); }
+} finally {
+  await appBN.close();
+}
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
