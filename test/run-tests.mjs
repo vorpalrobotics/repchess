@@ -7426,6 +7426,37 @@ try {
     ok('games-list: result is computed from the user\'s own color, incl. draws and unknown games');
   } catch(e){ bad('games-list: perspective outcome', e); }
 
+  // 152b. A chess.com game whose player name matches localStorage's
+  //       per-platform chesscom_lastUser (NOT CURRENT_USER, "tester" here)
+  //       still resolves your color -- the reported bug: CURRENT_USER is
+  //       only ever bootstrapped from whichever platform was imported
+  //       FIRST and never updated after, so a later chess.com import under
+  //       a different handle used to read as "someone else's game" despite
+  //       the player data being right there.
+  try {
+    await appAV.page.evaluate(() => localStorage.setItem('chesscom_lastUser', 'MyChessComHandle'));
+    const asWhite = await H('outcome', {
+      source: 'chesscom',
+      players: { white: { user: { name: 'MyChessComHandle' } }, black: { user: { name: 'opp' } } },
+      winner: 'white',
+    });
+    const asBlack = await H('color', {
+      source: 'chesscom',
+      players: { white: { user: { name: 'opp' } }, black: { user: { name: 'MyChessComHandle' } } },
+    });
+    // a Lichess-shaped game (no source:'chesscom') must NOT match against the
+    // chess.com identity -- only CURRENT_USER, keeping the two platforms'
+    // identities from bleeding into each other.
+    const lichessCrossMatch = await H('color', {
+      players: { white: { user: { name: 'MyChessComHandle' } }, black: { user: { name: 'opp' } } },
+    });
+    assert(asWhite === 'win', `expected the chess.com-identity match to resolve White's win from the user's perspective, got ${asWhite}`);
+    assert(asBlack === 'black', `expected the chess.com-identity match to resolve Black, got ${asBlack}`);
+    assert(lichessCrossMatch === null, `expected a Lichess-shaped game to NOT match against the chess.com identity, got ${lichessCrossMatch}`);
+    ok('games-list: a chess.com game matches your per-platform chess.com handle even when it differs from CURRENT_USER');
+    await appAV.page.evaluate(() => localStorage.removeItem('chesscom_lastUser'));
+  } catch(e){ bad('games-list: cross-platform identity fallback', e); }
+
   // 153. Click-out link: Lichess id → lichess.org, chess.com → its own url,
   //      bare game → none.
   try {

@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-189';
+const BUILD_TAG = '-190';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -556,15 +556,25 @@ function gamesAlongLine(games, seq){
   return out;
 }
 
-// which side the signed-in user played (CURRENT_USER vs the player names), or
-// null when unknown (a legacy bare {moves} game, or someone else's game).
+// which side the signed-in user played, or null when unknown (a legacy bare
+// {moves} game, or someone else's game). CURRENT_USER (the app's one overall
+// identity) is only ever bootstrapped from whichever platform got imported
+// FIRST (`if(!CURRENT_USER) CURRENT_USER = fetchUser;` in dlBtn) and never
+// updated after that -- a LATER-imported platform's own handle can
+// legitimately differ (e.g. a chess.com username that doesn't match an
+// earlier Lichess import's), so also try the per-platform username
+// remembered at import time (LS_ID_CHESSCOM / LS_ID, set alongside
+// CURRENT_USER in dlBtn) before giving up. Without this fallback every game
+// from that later platform would read as "someone else's game" despite the
+// player data being right there.
 function userColorInGame(game){
-  const u = (CURRENT_USER || '').toLowerCase();
-  if(!u) return null;
+  const perPlatform = localStorage.getItem(game.source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+  const candidates = [CURRENT_USER, perPlatform].filter(Boolean).map(s => s.toLowerCase());
+  if(!candidates.length) return null;
   const w = game.players?.white?.user?.name?.toLowerCase();
   const b = game.players?.black?.user?.name?.toLowerCase();
-  if(w && w === u) return 'white';
-  if(b && b === u) return 'black';
+  if(w && candidates.includes(w)) return 'white';
+  if(b && candidates.includes(b)) return 'black';
   return null;
 }
 // win / loss / draw from the user's perspective, or null when the user's color
