@@ -5,7 +5,7 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260722-71';
+import { openAssetPicker } from './assets.js?v=20260723-72';
 
 let THREE = null;
 

@@ -4730,6 +4730,30 @@ try {
     await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('Choose Asset: search box keystrokes do not leak to VR hotkeys', e); }
 
+  // 137c. The per-overlay keystroke guard must not depend on keyboard focus
+  //       actually landing inside the overlay -- clicking a <button> doesn't
+  //       move focus on every browser (Firefox/Safari don't, unlike
+  //       Chromium's default), so simulate that by explicitly blurring
+  //       after opening the New Asset modal and confirm "r" still doesn't
+  //       leak through to window and teleport the player home.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.click('#pickerNewAssetBtn');
+    await appAR.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await appAR.page.keyboard.type('rrrr');
+    await appAR.page.waitForTimeout(100);
+    const roomAfterBlurType = await appAR.page.evaluate(() => window.__threeTestEdit.room());
+    assert(roomAfterBlurType === roomKey,
+      `expected "r" typed with focus outside every overlay to NOT eject the player back to the start room, got room=${roomAfterBlurType} (wanted ${roomKey})`);
+    ok('New Asset modal: keystrokes with no field focused still don\'t leak to VR\'s window-level hotkeys');
+    await appAR.page.click('#assetNewCloseBtn');
+    await appAR.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('New Asset modal: keystrokes with no field focused do not leak to VR hotkeys', e); }
+
   // 138. The placeholder-label field only shows for a move-object slot
   //      picker (allowWord) -- not for e.g. a wall texture picker.
   try {
