@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-181';
+const BUILD_TAG = '-182';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -416,9 +416,27 @@ function refreshSystemStats(){
 
 // positionKey -> [{ g:gameIndex, move:SAN|null }] for EVERY position in every
 // game (`move` is the one played FROM that position; null at game's end).
-// Cached against the GAMES array identity, same pattern as the reply trie --
-// so the first query pays the replay cost once and the rest are instant.
+// Cached in memory against the GAMES array identity (so repeat queries within
+// the same page load are instant, same pattern as the reply trie) AND
+// persisted to IndexedDB (meta key POSITION_INDEX_CACHE_KEY, same pattern as
+// BUILT_CASTLES_CACHE_KEY/gatherBuiltCastles) -- for a large game database
+// (thousands of games) the chess.js replay is expensive enough to be worth
+// surviving a browser refresh instead of paying that cost every session.
+// invalidatePositionIndexCache() clears both layers and is called at the
+// three places GAMES' actual CONTENT changes: the chess.com/Lichess download
+// handler, local file import, and importBackup's full restore. It's
+// deliberately NOT invalidated by every GAMES reassignment -- GAMES is also
+// reassigned on every ordinary page load via the lazy
+// `if(!GAMES) GAMES = await getGames()` reads, which don't change content.
+const POSITION_INDEX_CACHE_KEY = 'gamesPositionIndexCache';
 let _posIndex = { games: null, map: null };
+let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
+let _posIndexBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
+function invalidatePositionIndexCache(){
+  _posIndex = { games: null, map: null };
+  _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
+  setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache
+}
 function indexOneGame(add, game, gi){
   const chess = new Chess();
   const sans = (game.moves || '').split(' ').filter(Boolean);
@@ -444,8 +462,26 @@ async function buildPositionIndex(games){
   return map;
 }
 async function positionIndex(games){
-  if(_posIndex.games !== games) _posIndex = { games, map: await buildPositionIndex(games) };
-  return _posIndex.map;
+  if(_posIndex.games === games) return _posIndex.map;
+  // the persisted copy is checked at most once per page load -- once we know
+  // one way or the other, _posIndex itself (games:null or populated) is
+  // authoritative and this branch is skipped from then on.
+  if(!_posIndexIdbChecked){
+    _posIndexIdbChecked = true;
+    try {
+      const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
+      if(raw){
+        const map = new Map(JSON.parse(raw));
+        _posIndex = { games, map };
+        return map;
+      }
+    } catch(e){ console.warn('[games index] failed to read the persisted index, rebuilding', e); }
+  }
+  const map = await buildPositionIndex(games);
+  _posIndex = { games, map };
+  _posIndexBuildCount++;
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
+  return map;
 }
 // games (+ the move played from here) that reached `fen`'s position by ANY move order.
 async function gamesAtPosition(games, fen){
@@ -3588,6 +3624,7 @@ $('fileImport').addEventListener('change', async e=>{
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+  invalidatePositionIndexCache();
   clr();
   // renderTreeBody (not openLine) -- this re-renders the ALREADY-open line
   // from the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -4077,6 +4114,7 @@ $('dlBtn').onclick = async ()=>{
     await putGames(CURRENT_USER,fetched);
     GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+    invalidatePositionIndexCache();
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -4275,6 +4313,7 @@ async function importBackup(data, onMnemProgress){
   // so the next "Run VR" rebuilds against the restored data instead of
   // showing whatever was cached from before the restore.
   invalidateBuiltCastlesCache();
+  invalidatePositionIndexCache();
 
   CURRENT_USER = data.user;
   localStorage.setItem(LS_ID, CURRENT_USER);
@@ -7583,6 +7622,13 @@ if(localStorage.getItem('threeTestDebug')){
     link: (game) => gameLink(game),
     fenForSeq: (seq) => fenForSeq(seq),
     provider: (game) => gameSource(game),
+    // position-index persistence (Phase: persisted games index) -- so a test
+    // can confirm the index survives a reload instead of rebuilding, and that
+    // the three real games-content-changing write paths drop it.
+    isIndexPersisted: async () => !!(await getMeta(POSITION_INDEX_CACHE_KEY)),
+    isIndexCachedInMemory: () => _posIndex.games === GAMES,
+    invalidateIndex: () => invalidatePositionIndexCache(),
+    indexBuildCount: () => _posIndexBuildCount,
   };
 }
 

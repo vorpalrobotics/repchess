@@ -7444,6 +7444,47 @@ try {
     ok('games-list: modal opens from the menu and lists the games reaching this position');
     await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
   } catch(e){ bad('games-list: modal open + render', e); }
+
+  // 154b. The position index (already built once by test 151/154's 'pos'-mode
+  //       queries above) is persisted to IndexedDB, so a reload doesn't
+  //       rebuild it -- it reuses the persisted copy.
+  try {
+    const persisted = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(persisted, 'expected the index to already be persisted from the earlier pos-mode queries');
+    const countBefore = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(countBefore === 1, `expected exactly 1 real build so far (from test 151's first query), got ${countBefore}`);
+
+    await appAV.page.reload();
+    await appAV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    const justAfterReload = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(justAfterReload === 0, `expected the fresh page load's build counter to start at 0, got ${justAfterReload}`);
+
+    await appAV.page.click('.line-row');
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const afterReopen = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(JSON.stringify(byPos.map(m=>m.id).sort()) === JSON.stringify(['lg2','lg3']),
+      `expected the same transposition results after reload, got ${JSON.stringify(byPos)}`);
+    assert(afterReopen === 0, `expected the post-reload query to reuse the persisted index (no rebuild), got ${afterReopen} real build(s)`);
+    ok('games-list: position index persists across a reload instead of rebuilding');
+  } catch(e){ bad('games-list: index persistence across reload', e); }
+
+  // 154c. Importing games (a real content change) invalidates the persisted
+  //       index, so the next query rebuilds instead of serving stale data.
+  try {
+    await appAV.page.evaluate(() => window.__gamesListHooks.invalidateIndex());
+    const persisted = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(!persisted, 'expected invalidateIndex() to drop the persisted copy');
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6']));
+    await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const rebuilt = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(rebuilt, 'expected the next query to rebuild and re-persist the index');
+    ok('games-list: invalidating the index (as every real games-content-changing write path does) forces a rebuild');
+  } catch(e){ bad('games-list: index invalidation forces a rebuild', e); }
 } finally {
   await appAV.close();
 }
