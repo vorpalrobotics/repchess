@@ -4730,6 +4730,30 @@ try {
     await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('Choose Asset: search box keystrokes do not leak to VR hotkeys', e); }
 
+  // 137c. The per-overlay keystroke guard must not depend on keyboard focus
+  //       actually landing inside the overlay -- clicking a <button> doesn't
+  //       move focus on every browser (Firefox/Safari don't, unlike
+  //       Chromium's default), so simulate that by explicitly blurring
+  //       after opening the New Asset modal and confirm "r" still doesn't
+  //       leak through to window and teleport the player home.
+  try {
+    await openSlotPicker();
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.click('#pickerNewAssetBtn');
+    await appAR.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAR.page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await appAR.page.keyboard.type('rrrr');
+    await appAR.page.waitForTimeout(100);
+    const roomAfterBlurType = await appAR.page.evaluate(() => window.__threeTestEdit.room());
+    assert(roomAfterBlurType === roomKey,
+      `expected "r" typed with focus outside every overlay to NOT eject the player back to the start room, got room=${roomAfterBlurType} (wanted ${roomKey})`);
+    ok('New Asset modal: keystrokes with no field focused still don\'t leak to VR\'s window-level hotkeys');
+    await appAR.page.click('#assetNewCloseBtn');
+    await appAR.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAR.page.click('#pickerCloseBtn');
+    await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+  } catch(e){ bad('New Asset modal: keystrokes with no field focused do not leak to VR hotkeys', e); }
+
   // 138. The placeholder-label field only shows for a move-object slot
   //      picker (allowWord) -- not for e.g. a wall texture picker.
   try {
@@ -7165,6 +7189,85 @@ try {
   } catch(e){ bad('elevator: 14-floor hard cap rejection', e); }
 } finally {
   await appBT.close();
+}
+}
+// --- Phase BU: buildRoom disposes the PREVIOUS scene's GPU resources
+//     (geometries/textures) before replacing them -- scene.clear() alone
+//     only detaches objects from the graph, it never frees anything, so
+//     without disposeSceneContents every single edit (buildRoom runs on
+//     nearly all of them) leaked. Session-lifetime singleton materials
+//     (gearMat, the edit-mode marker materials -- tagged via tagShared())
+//     must survive repeated rebuilds untouched, since they're reused by
+//     every room, not rebuilt per room. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appBU = await launchApp();
+try {
+  await seedBackup(appBU.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+  });
+  await openVR(appBU.page);
+  const roomKey = await appBU.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  // 113. Repeatedly rebuilding the same room (walk-mode -- no edit-only
+  //      markers involved) leaves the GPU resource count exactly where it
+  //      started, not growing with every rebuild.
+  try {
+    await appBU.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appBU.page.waitForTimeout(400);
+    const before = await appBU.page.evaluate(() => window.__threeTestEdit.rendererMemory());
+    assert(before && before.geometries > 0 && before.textures > 0,
+      `test setup issue: expected a real, non-empty resource count to start, got ${JSON.stringify(before)}`);
+    for(let i = 0; i < 5; i++){
+      await appBU.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+      await appBU.page.waitForTimeout(120);
+    }
+    const after = await appBU.page.evaluate(() => window.__threeTestEdit.rendererMemory());
+    assert(after.geometries === before.geometries && after.textures === before.textures,
+      `expected GPU resource counts unchanged after 5 rebuilds of the same room, got ${JSON.stringify({ before, after })}`);
+    ok('buildRoom disposes the previous scene\'s GPU resources -- repeated rebuilds do not leak geometries/textures');
+  } catch(e){ bad('no GPU resource leak across repeated rebuilds (walk mode)', e); }
+
+  // 114. Same, in EDIT MODE -- where slot/door/facade/yard marker meshes and
+  //      the selection-gear icon all draw from session-lifetime SHARED
+  //      singleton materials (tagShared()). Confirms disposeSceneContents'
+  //      skip-list keeps those materials alive and usable across repeated
+  //      rebuilds (no leak from the per-room content, no breakage of the
+  //      shared ones), rather than either leaking OR disposing something
+  //      every other room still needs.
+  try {
+    await appBU.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on -- builds marker meshes
+    await appBU.page.waitForTimeout(400);
+    const before = await appBU.page.evaluate(() => window.__threeTestEdit.rendererMemory());
+    const scanBefore = await appBU.page.evaluate(() => window.__threeTestEdit.scan().length);
+    assert(scanBefore > 0, 'test setup issue: expected edit-mode markers in the scene');
+
+    for(let i = 0; i < 4; i++){
+      await appBU.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);   // still edit mode -- rebuilds WITH markers each time
+      await appBU.page.waitForTimeout(120);
+    }
+    const after = await appBU.page.evaluate(() => window.__threeTestEdit.rendererMemory());
+    const scanAfter = await appBU.page.evaluate(() => window.__threeTestEdit.scan().length);
+    assert(after.geometries === before.geometries && after.textures === before.textures,
+      `expected GPU resource counts unchanged after 4 more edit-mode rebuilds, got ${JSON.stringify({ before, after })}`);
+    assert(scanAfter === scanBefore,
+      `expected the same set of interactive markers to still be present (shared materials intact, not disposed out from under other rooms), got ${scanBefore} -> ${scanAfter}`);
+    ok('shared singleton materials (gear icon, edit-mode markers) survive repeated rebuilds without leaking or breaking');
+  } catch(e){ bad('no GPU resource leak across repeated rebuilds (edit mode, shared materials)', e); }
+} finally {
+  await appBU.close();
 }
 }
 

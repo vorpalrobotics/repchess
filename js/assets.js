@@ -13,17 +13,32 @@
 // Every modal in this module can be opened while the VR walk is live
 // underneath it (js/threeVR.js registers a WINDOW-level keydown/keyup
 // listener for movement + single-key hotkeys, e.g. 'r' to return to the
-// start room). Call this once, right after creating an overlay's element,
-// so typing in any field inside it -- the asset picker's search box, a
-// filename, a color hex -- never bubbles out to those page-level listeners.
-// (Reported bug: typing a search term containing "r" in the Choose Asset
-// picker teleported the player back to the start room.) Doesn't interfere
-// with this module's own listeners, which are attached to elements the
-// event already passed through before reaching (or failing to reach) here.
-function stopKeyBubble(ov){
-  ov.addEventListener('keydown', e => e.stopPropagation());
-  ov.addEventListener('keyup', e => e.stopPropagation());
+// start room). Originally guarded per-overlay with a bubble-phase
+// stopPropagation() on the overlay element -- but that only blocks the
+// event while keyboard focus is actually inside the overlay's own DOM
+// subtree, and clicking a <button> does NOT move focus there on every
+// browser (Firefox/Safari don't, unlike Chromium's default). Click "New
+// Asset…", focus stays wherever it was (often <body>, outside every
+// overlay), and the per-overlay listener never even sees the keydown.
+// (Reported bug: typing in the New Asset modal after clicking to open it
+// still leaked "r" and teleported the player home.)
+// Guard at the window level instead, in the CAPTURE phase -- which for two
+// listeners both registered on `window` always runs before the BUBBLE-phase
+// listener threeVR.js installs there, regardless of the event's actual
+// target/focus -- and just check whether any of this module's overlays is
+// currently visible.
+const KEY_BUBBLE_OVERLAY_IDS = [
+  'colorPickerOverlay', 'assetGenOverlay', 'cropOverlay',
+  'assetNewOverlay', 'assetPickerOverlay', 'colorSwatchPickerOverlay',
+];
+function anyAssetsOverlayOpen(){
+  return KEY_BUBBLE_OVERLAY_IDS.some(id => {
+    const el = document.getElementById(id);
+    return el && el.style.display !== 'none';
+  });
 }
+window.addEventListener('keydown', e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
+window.addEventListener('keyup',   e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
 
 const ASSET_TYPES = {
   'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
@@ -420,7 +435,6 @@ function openColorPicker(imageDataUrl, initialColor, onSave){
     ov.id = 'colorPickerOverlay';
     ov.className = 'overlay';
     document.body.appendChild(ov);
-    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   let picked = initialColor || null;
@@ -768,7 +782,6 @@ function openGenerateModal(){
     ov.style.cssText = 'position:fixed;inset:0;z-index:130;display:flex;align-items:center;'
       + 'justify-content:center;background:rgba(0,0,0,.6)';
     document.body.appendChild(ov);
-    stopKeyBubble(ov);
   }
   let savedKey = '', savedStanding = '';
   try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
@@ -881,7 +894,7 @@ const CROP_BRUSH_SIZE_KEY = 'cropBrushSize';
 
 export function cropImage(sourceDataUrl){
   let ov = document.getElementById('cropOverlay');
-  if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); stopKeyBubble(ov); }
+  if(!ov){ ov = document.createElement('div'); ov.id = 'cropOverlay'; ov.className = 'overlay'; document.body.appendChild(ov); }
   ov.style.display = 'flex';
 
   let work = sourceDataUrl;             // current working data-URL (full-res when caller passed one)
@@ -1357,7 +1370,6 @@ function openNewAssetModal(initialType, allowTypes){
       // Generate… (130), both of which can be opened from within this editor.
       ov.style.zIndex = '62';
       document.body.appendChild(ov);
-      stopKeyBubble(ov);
     }
     ov.innerHTML = `
       <div class="modal" style="width:min(38em,92vw);max-height:90vh;overflow:auto">
@@ -1489,7 +1501,6 @@ export function openAssetPicker(opts){
     ov.className = 'overlay';
     ov.style.zIndex = '60';
     document.body.appendChild(ov);
-    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   renderPicker(ov);
@@ -1681,7 +1692,6 @@ async function openColorSwatchPicker(opts){
     ov.className = 'overlay';
     ov.style.zIndex = '65';
     document.body.appendChild(ov);
-    stopKeyBubble(ov);
   }
   ov.style.display = 'flex';
   const recent = await getRecentColors();
