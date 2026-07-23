@@ -3678,6 +3678,11 @@ const ELEV_ROW_M = 0.375;
 // elevatorRejectReason.
 const ELEV_PANEL_MAX_ROWS = 7;
 const ELEV_MAX_FLOORS = ELEV_PANEL_MAX_ROWS * 2;
+// An elevator car has ONE physical door (its floor panel), not one per reply,
+// so the door-count-driven width/depth a branch room was sized for is
+// irrelevant -- renderRoomGeomDialog floors a car's resize minimum at this
+// instead (keeping height, which the tall floor panel still needs).
+const ELEV_MIN_WD = 6;
 // draw an image "contain"-fitted into the box (bx,by,bw,bh), centred.
 function drawContain(ctx, im, bx, by, bw, bh){
   const s = Math.min(bw / im.width, bh / im.height);
@@ -4497,6 +4502,16 @@ function doorSpawn(size, wall, offset, origin, inside){
   return { x: x + origin.x, z: z + origin.z, yaw };
 }
 
+// "just inside the entrance" spot a room with no matching exit to spawn
+// against falls back to -- mainStreet, or a linked foreign castle's entry
+// (see gatherLinkedCastles) with no exits built yet. Matches
+// registerOneCastle's own entry `spawn`. Shared by computeSpawnForExit and
+// entrySpawnFor below, which otherwise pick their "returning" exit
+// differently (see each's own comment for why).
+function defaultEntrySpawn(room){
+  return { x: 0, z: room.size.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 };
+}
+
 function computeSpawnForExit(fromKey, room, ex){
   const targetRoom = mergedRoom(ex.target);
   if(targetRoom.outdoor){
@@ -4504,28 +4519,30 @@ function computeSpawnForExit(fromKey, room, ex){
     const building = targetRoom.buildings.find(b => b.target === fromKey);
     return doorSpawn(room.size, ex.wall, ex.offset, building.origin, false);
   }
-  // ordinary interior-to-interior transition: spawn just inside whichever
-  // of the target room's own exits leads back to the room we're leaving. A
-  // linked foreign castle's entry (see gatherLinkedCastles) can have no
-  // exits of its own at all -- no forward doors built yet and not on a
-  // street -- so fall back to the same "just inside the entrance" spot a
-  // castle's own entry spawns at (registerOneCastle's `spawn`).
+  // ordinary interior-to-interior transition: spawn just inside whichever of
+  // the target room's own exits leads back to fromKey SPECIFICALLY -- a
+  // transposed room can have more than one parent, and the one just walked
+  // in from isn't necessarily its single canonical back:true exit (that's
+  // entrySpawnFor's job, not this one). Falls back to its first exit if none
+  // matches at all -- a linked foreign castle's entry can have no exits of
+  // its own at all -- no forward doors built yet and not on a street.
   const returning = targetRoom.exits.find(e => e.target === fromKey) || targetRoom.exits[0];
-  if(!returning) return { x: 0, z: targetRoom.size.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 };
-  return doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true);
+  return returning
+    ? doorSpawn(targetRoom.size, returning.wall, returning.offset, null, true)
+    : defaultEntrySpawn(targetRoom);
 }
 
-// the spawn just inside roomKey's own entrance (its back door, same spawn a
-// normal walk-in through that door would use), or the same "just inside"
-// fallback computeSpawnForExit uses for a room with no back door (mainStreet,
+// the spawn just inside roomKey's OWN canonical entrance (its back:true
+// exit, same spawn a normal walk-in through that door would use) -- unlike
+// computeSpawnForExit, not relative to any particular room arrived FROM,
+// since there isn't one here (used after a resize, not a real walk-through).
+// Falls back to defaultEntrySpawn for a room with no back exit (mainStreet,
 // a linked foreign castle's entry). null if roomKey isn't registered.
 function entrySpawnFor(roomKey){
   const room = mergedRoom(roomKey);
   if(!room) return null;
   const backEx = (room.exits || []).find(e => e.back);
-  return backEx
-    ? doorSpawn(room.size, backEx.wall, backEx.offset, null, true)
-    : { x: 0, z: room.size.d / 2 - CAS_LAYOUT.entrySetback, yaw: 0 };
+  return backEx ? doorSpawn(room.size, backEx.wall, backEx.offset, null, true) : defaultEntrySpawn(room);
 }
 // stands the player at roomKey's entrySpawnFor(). Used after a resize --
 // resizing can otherwise leave the player outside the new bounds (clamped to
@@ -6447,13 +6464,9 @@ function renderRoomGeomDialog(ov, roomKey){
   // place (the reconciler still catches anything that slips through, e.g.
   // already-saved data from before this floor existed).
   let contentMin = (ROOMS[roomKey] && ROOMS[roomKey].size) || room.size;
-  // An elevator car has ONE physical door (its floor panel), not one per
-  // reply, so the door-count-driven width the branch room was sized for is
-  // irrelevant -- let it shrink to a compact 6x6 (keeping its height, which
-  // the tall floor panel still needs). Without this a 7-floor car is forced
-  // gigantic even though only the single elevator door is ever built.
+  // Without this a 7-floor car is forced gigantic even though only the
+  // single elevator door is ever built -- see ELEV_MIN_WD.
   if(isElevatorCar(roomKey)){
-    const ELEV_MIN_WD = 6;
     contentMin = { w: Math.min(contentMin.w, ELEV_MIN_WD), d: Math.min(contentMin.d, ELEV_MIN_WD), h: contentMin.h };
   }
   // read straight off the static ROOMS config: exits, stairs and (outdoor)
