@@ -5950,17 +5950,20 @@ try {
     ok('importBackup shows a spinner with running progress while restoring, then hides it');
   } catch(e){ bad('backup restore spinner', e); }
 
-  // 85. #backupImport carries no `accept` filter -- cloud file pickers
-  //     (Google Drive, Dropbox) apply their OWN provider-reported MIME type,
-  //     which is often wrong/generic for .json.gz backups (e.g.
-  //     application/octet-stream), so an accept list greys the file out with
-  //     no way to select it. readMaybeGzipped already sniffs gzip vs. plain
-  //     JSON by content, not filename/MIME, so no filter is needed.
+  // 85. #backupImport's `accept` is an explicit "*/*" wildcard -- not a
+  //     specific type list (cloud pickers like Google Drive/Dropbox apply
+  //     their OWN provider-reported MIME type, often wrong/generic for
+  //     .json.gz backups, e.g. application/octet-stream, so a narrower list
+  //     greys the file out with no way to select it -- readMaybeGzipped
+  //     already sniffs gzip vs. plain JSON by content, not filename/MIME)
+  //     and NOT simply absent either -- some mobile browsers drop cloud
+  //     providers from the picker's source list entirely with no accept
+  //     attribute at all.
   try {
     const accept = await appBH.page.evaluate(() => document.getElementById('backupImport').getAttribute('accept'));
-    assert(!accept, `expected #backupImport to have no accept filter (cloud pickers exclude files on MIME mismatch), got ${JSON.stringify(accept)}`);
-    ok('#backupImport has no accept filter, so cloud-picked files (Drive, Dropbox) are always selectable');
-  } catch(e){ bad('#backupImport accept filter removed', e); }
+    assert(accept === '*/*', `expected #backupImport's accept to be the explicit wildcard "*/*", got ${JSON.stringify(accept)}`);
+    ok('#backupImport uses an explicit "*/*" accept, so cloud-picked files (Drive, Dropbox) are always offered and selectable');
+  } catch(e){ bad('#backupImport accept is an explicit wildcard', e); }
 } finally {
   await appBH.close();
 }
