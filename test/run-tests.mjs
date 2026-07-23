@@ -136,6 +136,36 @@ try {
   await app.close();
 }
 
+// 5. A REAL user's browser boots without localStorage.threeTestDebug set --
+//    every other test in this suite launches WITH that flag (it's what
+//    exposes the __xTestHooks tests drive things through), so top-level boot
+//    code gated by `if(!localStorage.getItem('threeTestDebug'))` (there's
+//    exactly one such call: maybeOfferDefaultMnemonics) is structurally
+//    unreachable by the rest of the suite. This is the only test that boots
+//    the way an actual user does, specifically to catch bugs only reachable
+//    on that path -- e.g. the "Cannot access 'GZIP_OK' before initialization"
+//    ReferenceError this reproduced: GZIP_OK's `const` was declared further
+//    down the file than the boot-time call that read it, so it threw on
+//    every real page load while every threeTestDebug=true test sailed past.
+try {
+  const appReal = await launchApp({ threeTestDebug: false });
+  try {
+    await appReal.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    // let the rest of the synchronous top-level boot pass (incl. the
+    // maybeOfferDefaultMnemonics() call and its own synchronous checks,
+    // before any fetch/dialog) finish and surface any error.
+    await appReal.page.waitForTimeout(500);
+    assert(realErrors(appReal.consoleErrors).length === 0,
+      'unexpected console errors on a real (non-threeTestDebug) boot:\n' + realErrors(appReal.consoleErrors).join('\n'));
+    ok('app boots cleanly for a real user (no threeTestDebug) -- catches boot-code bugs the rest of the suite structurally can\'t reach');
+  } finally {
+    await appReal.close();
+  }
+} catch(e){ bad('real-user boot (no threeTestDebug) has no console errors', e); }
+
 }
 // --- Phase B: opponent move-quality annotation (move table) ---
 if(shouldRunPhase(['move-table'])){

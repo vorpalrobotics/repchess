@@ -10,6 +10,39 @@ cytoscape.use(cytoscapeDagre);
 // boot watchdog in index.html so it doesn't show the "failed to load" message.
 window.__APP_BOOTED = true;
 
+// gzip capability flag (native CompressionStream/DecompressionStream) -- read
+// by both the backup export/import gzip helpers below AND
+// maybeOfferDefaultMnemonics (which fetches a gzipped bundle), the latter
+// called from this module's own top-level boot code. Declared this early so
+// every reader sees it initialized regardless of which runs first -- it
+// previously lived down by the export helpers it was originally added for,
+// which put it AFTER that boot-time call in file order and threw
+// "Cannot access 'GZIP_OK' before initialization" on every real page load
+// (masked in the test harness, which skips that call entirely under
+// threeTestDebug).
+const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+
+// Everything below is reachable from that same maybeOfferDefaultMnemonics()
+// boot call (via importMnemonicsBundle) and was found the same way GZIP_OK
+// was: each lived naturally alongside the code that normally uses it, further
+// down the file than line ~4150's boot-time call -- fine for every OTHER
+// caller (which only runs after the whole module has finished loading), but
+// a "Cannot access '<name>' before initialization" TDZ error for this one
+// synchronous top-level call, on every real (non-threeTestDebug) page load.
+const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
+const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+const MNEM_NOTES_KEY = 'mnemonicsNotes';
+const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
+const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
+let MNEMONICS = {};
+// recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
+// file that carries a `mnemonics` array but none of the other top-level
+// stores a full backup / asset bundle would have.
+const isMnemonicsBundle = d =>
+  !!d && (d.repchessMnemonics != null ||
+    (Array.isArray(d.mnemonics) && !Array.isArray(d.lines) &&
+     !Array.isArray(d.assets) && d.repchessAssets == null));
+
 /* cm-chessboard (the 2D board widget) is loaded DYNAMICALLY and tolerantly: it's
    only needed for the four board widgets (analysis board, hover preview, PV
    float, opening quiz). It's tried from unpkg first, then jsdelivr as a fallback
@@ -44,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-185';
+const BUILD_TAG = '-186';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4204,8 +4237,10 @@ $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'
    and base64 inflates binary by ~33%. gzip recovers almost all of that (plus
    near-total compression of the JSON keys/whitespace), shrinking a backup by
    ~30% with zero dependencies via the native CompressionStream API.
-   Older browsers without CompressionStream fall back to plain JSON. */
-const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+   Older browsers without CompressionStream fall back to plain JSON.
+   (GZIP_OK itself is declared near the top of the file -- maybeOfferDefaultMnemonics
+   also reads it, and is called from this module's own top-level boot code
+   before this section would otherwise run.) */
 async function gzipString(str){
   const stream = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'));
   return await new Response(stream).blob();
@@ -4468,15 +4503,10 @@ async function exportAssets(){
   log(`exported ${assets.length} asset(s)`);
 }
 
-/* recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
-   file that carries a `mnemonics` array but none of the other top-level stores
-   a full backup / asset bundle would have. */
-const isMnemonicsBundle = d =>
-  !!d && (d.repchessMnemonics != null ||
-    (Array.isArray(d.mnemonics) && !Array.isArray(d.lines) &&
-     !Array.isArray(d.assets) && d.repchessAssets == null));
+/* isMnemonicsBundle is declared near the top of the file now -- see the
+   comment there (a boot-time TDZ fix).
 
-/* mnemonics-only REPLACE: wipes the mnemonics store (and notes) and writes the
+   mnemonics-only REPLACE: wipes the mnemonics store (and notes) and writes the
    bundle's entries, leaving games/lines/assets untouched. No merge. Destructive;
    caller confirms first. `onProgress`, if given, is called with the running
    count of squares written so far -- same slow-write-loop rationale as
@@ -4506,9 +4536,9 @@ async function importMnemonicsBundle(data, onProgress){
    (same repchessMnemonics shape as an exported bundle) committed to the repo,
    so a brand-new user can start with a ready-made set of memory-palace
    words/images instead of a blank grid. Offered once: the decision (install
-   or skip) is remembered in meta so it doesn't nag on every boot after that. */
-const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
-const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+   or skip) is remembered in meta so it doesn't nag on every boot after that.
+   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY are declared near the top of the
+   file now (a boot-time TDZ fix). */
 async function maybeOfferDefaultMnemonics(){
   if(!GZIP_OK) return;   // the bundle is gzipped; can't read it without DecompressionStream
   if(await getMeta(MNEM_DEFAULT_OFFERED_KEY)) return;
@@ -4987,9 +5017,9 @@ $('menuAbout').onclick = ()=>{
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
 
 /* ---------- manage mnemonics ---------- */
-const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
+// MNEM_PIECES/MNEMONICS are declared near the top of the file now (a
+// boot-time TDZ fix).
 const MNEM_PIECE_ICON = {pawn:'fa-chess-pawn',knight:'fa-chess-knight',bishop:'fa-chess-bishop',rook:'fa-chess-rook',queen:'fa-chess-queen',king:'fa-chess-king'};
-let MNEMONICS = {};
 let MNEM_EDIT_SQUARE = null;
 let MNEM_VIEW_MODE = 'words';   // 'words' = show move words; else a piece name = show that piece's images
 
@@ -5447,7 +5477,7 @@ $('mnemonicsCoverageSelect').onchange = async (e)=>{
 };
 
 /* ---------- mnemonics notes (autosave) ---------- */
-const MNEM_NOTES_KEY = 'mnemonicsNotes';
+// MNEM_NOTES_KEY is declared near the top of the file now (a boot-time TDZ fix).
 let mnemNotesSaveTimer = null;
 function saveMnemonicsNotes(){
   clearTimeout(mnemNotesSaveTimer);
@@ -5469,7 +5499,7 @@ $('mnemonicsNotes').addEventListener('blur', ()=>{
 });
 
 /* ---------- move disambiguator image (one global "older-piece beard") ---------- */
-const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
+// MNEM_DISAMBIG_KEY is declared near the top of the file now (a boot-time TDZ fix).
 function renderDisambigPreview(dataUrl){
   const img = $('mnemDisambigPreview'), drop = $('mnemDisambigDrop');
   if(dataUrl){ img.src = dataUrl; img.style.display=''; drop.classList.add('has-img'); }
