@@ -55,7 +55,15 @@ function startServer(){
 
 // Launch the app in a headless page with CDN interception in place.
 // Returns { browser, page, close, consoleErrors, blockedCdn }.
-export async function launchApp({ headless = true } = {}){
+// threeTestDebug=false boots the app the way a REAL user's browser does --
+// no localStorage.threeTestDebug flag, so no __xTestHooks are exposed and
+// every `if(!localStorage.getItem('threeTestDebug'))`-guarded boot path
+// (there's exactly one today: maybeOfferDefaultMnemonics) actually runs.
+// Every other test in this suite wants the flag ON (default), since that's
+// what exposes the hooks tests drive things through -- this mode exists
+// specifically to catch bugs that only manifest in real boot code the
+// flag-gated majority of tests structurally can never reach.
+export async function launchApp({ headless = true, threeTestDebug = true } = {}){
   const server = await startServer();
   const port = server.address().port;
   const origin = `http://127.0.0.1:${port}`;
@@ -77,8 +85,11 @@ export async function launchApp({ headless = true } = {}){
   page.on('pageerror', e => consoleErrors.push('PAGEERROR: ' + e.message));
   page.on('dialog', d => d.accept());   // auto-accept confirm() during restore etc.
 
-  // turn on the in-app test hook before any app code runs
-  await page.addInitScript(() => { try { localStorage.setItem('threeTestDebug', '1'); } catch {} });
+  // turn on the in-app test hook before any app code runs (unless this
+  // launch specifically wants a real-user boot, see threeTestDebug above)
+  if(threeTestDebug){
+    await page.addInitScript(() => { try { localStorage.setItem('threeTestDebug', '1'); } catch {} });
+  }
 
   await page.route(/^https?:\/\//, async route => {
     const url = route.request().url();

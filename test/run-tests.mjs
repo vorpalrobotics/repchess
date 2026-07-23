@@ -48,6 +48,7 @@ const SUBSYSTEMS = {
   'engine':            'live engine panel, threads, analyze()',
   'castle-generation': "gatherBuiltCastles' cache and its invalidation",
   'import-export':     'full backup import/export',
+  'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
@@ -134,6 +135,36 @@ try {
 } finally {
   await app.close();
 }
+
+// 5. A REAL user's browser boots without localStorage.threeTestDebug set --
+//    every other test in this suite launches WITH that flag (it's what
+//    exposes the __xTestHooks tests drive things through), so top-level boot
+//    code gated by `if(!localStorage.getItem('threeTestDebug'))` (there's
+//    exactly one such call: maybeOfferDefaultMnemonics) is structurally
+//    unreachable by the rest of the suite. This is the only test that boots
+//    the way an actual user does, specifically to catch bugs only reachable
+//    on that path -- e.g. the "Cannot access 'GZIP_OK' before initialization"
+//    ReferenceError this reproduced: GZIP_OK's `const` was declared further
+//    down the file than the boot-time call that read it, so it threw on
+//    every real page load while every threeTestDebug=true test sailed past.
+try {
+  const appReal = await launchApp({ threeTestDebug: false });
+  try {
+    await appReal.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    // let the rest of the synchronous top-level boot pass (incl. the
+    // maybeOfferDefaultMnemonics() call and its own synchronous checks,
+    // before any fetch/dialog) finish and surface any error.
+    await appReal.page.waitForTimeout(500);
+    assert(realErrors(appReal.consoleErrors).length === 0,
+      'unexpected console errors on a real (non-threeTestDebug) boot:\n' + realErrors(appReal.consoleErrors).join('\n'));
+    ok('app boots cleanly for a real user (no threeTestDebug) -- catches boot-code bugs the rest of the suite structurally can\'t reach');
+  } finally {
+    await appReal.close();
+  }
+} catch(e){ bad('real-user boot (no threeTestDebug) has no console errors', e); }
 
 }
 // --- Phase B: opponent move-quality annotation (move table) ---
@@ -4971,7 +5002,75 @@ try {
 } finally {
   await appAU.close();
 }
+}
+// --- Phase BA: chess.com importer keeps full metadata (normalized to the same
+//     shape Lichess games use), and a re-import clears ONLY chess.com games,
+//     leaving Lichess untouched. ---
+if(shouldRunPhase(['import-export'])){
+const appBA = await launchApp();
+try {
+  // 148b. normalizeChessComGame maps an archive object to the Lichess-shaped
+  //      record: winner/status from the per-side result codes, players with
+  //      names+ratings, createdAt from end_time, tagged source:'chesscom',
+  //      moves passed through unchanged.
+  try {
+    const norm = await appBA.page.evaluate(() => {
+      const g = {
+        uuid: 'CC-UUID-1', url: 'https://www.chess.com/game/live/999',
+        rated: true, time_class: 'blitz', end_time: 1700000000,
+        white: { username: 'Me', rating: 1620, result: 'win' },
+        black: { username: 'Them', rating: 1585, result: 'resigned' },
+        eco: 'https://www.chess.com/openings/Caro-Kann-Defense-Advance-Variation-3.e5',
+      };
+      return window.__importTestHooks.normalizeChessComGame(g, 'e4 c6 d4 d5 e5');
+    });
+    assert(norm.source === 'chesscom', `expected source chesscom, got ${norm.source}`);
+    assert(norm.id === 'CC-UUID-1', `expected id from uuid, got ${norm.id}`);
+    assert(norm.winner === 'white' && norm.status === 'resign',
+      `expected winner white by resign, got ${norm.winner}/${norm.status}`);
+    assert(norm.players.white.user.name === 'Me' && norm.players.white.rating === 1620, `white player mismap: ${JSON.stringify(norm.players.white)}`);
+    assert(norm.players.black.user.name === 'Them' && norm.players.black.rating === 1585, `black player mismap: ${JSON.stringify(norm.players.black)}`);
+    assert(norm.createdAt === 1700000000 * 1000, `expected createdAt from end_time, got ${norm.createdAt}`);
+    assert(norm.rated === true && norm.speed === 'blitz', `expected rated blitz, got ${norm.rated}/${norm.speed}`);
+    assert(norm.opening && norm.opening.name === 'Caro Kann Defense Advance Variation', `expected opening name from ecoUrl, got ${JSON.stringify(norm.opening)}`);
+    assert(norm.moves === 'e4 c6 d4 d5 e5', `expected moves passed through unchanged, got ${JSON.stringify(norm.moves)}`);
+    ok('chess.com importer: normalizeChessComGame maps to the Lichess-shaped record');
+  } catch(e){ bad('chess.com importer: normalization mapping', e); }
 
+  // 149b. A draw maps to winner undefined / status draw.
+  try {
+    const norm = await appBA.page.evaluate(() => window.__importTestHooks.normalizeChessComGame({
+      uuid: 'CC-2', time_class: 'rapid', end_time: 1700000001,
+      white: { username: 'A', rating: 1500, result: 'agreed' },
+      black: { username: 'B', rating: 1500, result: 'agreed' },
+    }, 'd4 d5'));
+    assert(norm.winner === undefined && norm.status === 'draw', `expected a draw, got ${norm.winner}/${norm.status}`);
+    ok('chess.com importer: a drawn game maps to no winner / status draw');
+  } catch(e){ bad('chess.com importer: draw mapping', e); }
+
+  // 150b. clearChessComGames removes ONLY chess.com games -- both the new
+  //      source-tagged ones AND legacy bare {moves} objects -- while leaving
+  //      Lichess-shaped games (which always carry `players`) untouched.
+  try {
+    await appBA.page.evaluate(async () => {
+      const H = window.__importTestHooks;
+      await H.putGames('u1', [
+        { id: 'li-1', players: { white: { user: { name: 'x' } } }, createdAt: 123, moves: 'e4 e5' },   // Lichess
+        { moves: 'd4 d5' },                                                                             // legacy bare chess.com
+        { id: 'cc-1', source: 'chesscom', players: { white: { user: { name: 'y' } } }, moves: 'c4 c5' },// new enriched chess.com
+      ]);
+    });
+    const before = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
+    assert(before.length === 3, `test setup issue: expected 3 games stored, got ${before.length}`);
+    const removed = await appBA.page.evaluate(() => window.__importTestHooks.clearChessComGames('u1'));
+    assert(removed === 2, `expected 2 chess.com games removed (legacy + enriched), got ${removed}`);
+    const after = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
+    assert(after.length === 1 && after[0].id === 'li-1', `expected only the Lichess game to survive, got ${JSON.stringify(after.map(g=>g.id||g.moves))}`);
+    ok('chess.com importer: clear removes only chess.com games (tagged + legacy), leaving Lichess untouched');
+  } catch(e){ bad('chess.com importer: source-selective clear', e); }
+} finally {
+  await appBA.close();
+}
 }
 // --- Phase AV: the specific in-session repertoire edits called out as
 //     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
@@ -7268,6 +7367,295 @@ try {
   } catch(e){ bad('no GPU resource leak across repeated rebuilds (edit mode, shared materials)', e); }
 } finally {
   await appBU.close();
+}
+}
+
+// --- Phase AV: "Games with this Position" -- matching (transposition vs exact
+//     line), result-from-your-perspective, and the modal itself. ---
+if(shouldRunPhase(['move-table'])){
+const appAV = await launchApp();
+try {
+  await seedBackup(appAV.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [
+      // Lichess-shaped (has players+id): user 'tester' is White in each.
+      { id: 'lg1', moves: 'd4 Nf6 c4 e6 Nc3', createdAt: 3000, winner: 'white', status: 'resign',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp1' }, rating: 1580 } } },
+      { id: 'lg2', moves: 'd4 Nf6 c4 g6 Nc3', createdAt: 2000, winner: 'black', status: 'mate',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp2' }, rating: 1620 } } },
+      // a TRANSPOSITION into the same "d4 Nf6 c4 g6" position by a different order.
+      { id: 'lg3', moves: 'c4 Nf6 d4 g6 Nc3', createdAt: 1000, status: 'draw',
+        players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp3' }, rating: 1590 } } },
+      // a legacy bare game (no players / no id): reaches "d4 Nf6" but has no details.
+      { moves: 'd4 Nf6 Bf4' },
+    ],
+  });
+  await appAV.page.click('.line-row');
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const H = (fn, arg) => appAV.page.evaluate(({fn,arg}) => window.__gamesListHooks[fn](arg), {fn,arg});
+
+  // 151. Position (transposition) matching finds a game that reached the
+  //      position by a DIFFERENT move order; exact-line matching does not.
+  try {
+    const fen = await H('fenForSeq', ['d4','Nf6','c4','g6']);
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const byLine = await appAV.page.evaluate(() => window.__gamesListHooks.gamesAlongLine(['d4','Nf6','c4','g6']));
+    const posIds = byPos.map(m => m.id).sort();
+    const lineIds = byLine.map(m => m.id).sort();
+    assert(JSON.stringify(posIds) === JSON.stringify(['lg2','lg3']), `expected both orders (lg2,lg3) by position, got ${JSON.stringify(posIds)}`);
+    assert(JSON.stringify(lineIds) === JSON.stringify(['lg2']), `expected only the same-order game (lg2) by line, got ${JSON.stringify(lineIds)}`);
+    assert(byPos.every(m => m.move === 'Nc3'), `expected the move-from-here to be Nc3 for both, got ${JSON.stringify(byPos.map(m=>m.move))}`);
+    ok('games-list: transposition matching finds other move orders; exact-line does not');
+  } catch(e){ bad('games-list: transposition vs exact-line matching', e); }
+
+  // 152. Result is reported from the signed-in user's perspective, both colors,
+  //      draws, and unknown (bare) games.
+  try {
+    const win  = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}}, winner:'white' });
+    const loss = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}}, winner:'black' });
+    const bwin = await H('outcome', { players:{white:{user:{name:'x'}},black:{user:{name:'tester'}}}, winner:'black' });
+    const draw = await H('outcome', { players:{white:{user:{name:'tester'}},black:{user:{name:'x'}}} });
+    const unk  = await H('outcome', { moves:'e4' });
+    assert(win==='win' && loss==='loss', `expected win/loss as White, got ${win}/${loss}`);
+    assert(bwin==='win', `expected a Black win from the user's perspective, got ${bwin}`);
+    assert(draw==='draw', `expected a drawn (no winner) game to read as draw, got ${draw}`);
+    assert(unk===null, `expected an unknown-color (bare) game to read as null, got ${unk}`);
+    ok('games-list: result is computed from the user\'s own color, incl. draws and unknown games');
+  } catch(e){ bad('games-list: perspective outcome', e); }
+
+  // 152b. A chess.com game whose player name matches localStorage's
+  //       per-platform chesscom_lastUser (NOT CURRENT_USER, "tester" here)
+  //       still resolves your color -- the reported bug: CURRENT_USER is
+  //       only ever bootstrapped from whichever platform was imported
+  //       FIRST and never updated after, so a later chess.com import under
+  //       a different handle used to read as "someone else's game" despite
+  //       the player data being right there.
+  try {
+    await appAV.page.evaluate(() => localStorage.setItem('chesscom_lastUser', 'MyChessComHandle'));
+    const asWhite = await H('outcome', {
+      source: 'chesscom',
+      players: { white: { user: { name: 'MyChessComHandle' } }, black: { user: { name: 'opp' } } },
+      winner: 'white',
+    });
+    const asBlack = await H('color', {
+      source: 'chesscom',
+      players: { white: { user: { name: 'opp' } }, black: { user: { name: 'MyChessComHandle' } } },
+    });
+    // a Lichess-shaped game (no source:'chesscom') must NOT match against the
+    // chess.com identity -- only CURRENT_USER, keeping the two platforms'
+    // identities from bleeding into each other.
+    const lichessCrossMatch = await H('color', {
+      players: { white: { user: { name: 'MyChessComHandle' } }, black: { user: { name: 'opp' } } },
+    });
+    assert(asWhite === 'win', `expected the chess.com-identity match to resolve White's win from the user's perspective, got ${asWhite}`);
+    assert(asBlack === 'black', `expected the chess.com-identity match to resolve Black, got ${asBlack}`);
+    assert(lichessCrossMatch === null, `expected a Lichess-shaped game to NOT match against the chess.com identity, got ${lichessCrossMatch}`);
+    ok('games-list: a chess.com game matches your per-platform chess.com handle even when it differs from CURRENT_USER');
+    await appAV.page.evaluate(() => localStorage.removeItem('chesscom_lastUser'));
+  } catch(e){ bad('games-list: cross-platform identity fallback', e); }
+
+  // 153. Click-out link: Lichess id → lichess.org, chess.com → its own url,
+  //      bare game → none.
+  try {
+    const li = await H('link', { id: 'abc12345' });
+    const cc = await H('link', { source: 'chesscom', url: 'https://www.chess.com/game/live/9', id: 'x' });
+    const none = await H('link', { moves: 'e4' });
+    assert(li === 'https://lichess.org/abc12345', `expected a lichess link, got ${li}`);
+    assert(cc === 'https://www.chess.com/game/live/9', `expected the chess.com url, got ${cc}`);
+    assert(none === null, `expected no link for a bare game, got ${none}`);
+    ok('games-list: click-out link resolves per source (lichess id / chess.com url / none)');
+  } catch(e){ bad('games-list: game link resolution', e); }
+
+  // 153b. Provider badge classification: explicit chess.com tag, Lichess
+  //       (has `players`), and a legacy bare game (no source/players at all --
+  //       the only shape a pre-enrichment chess.com import produces) all
+  //       resolve to the right provider for the pawn/knight badge.
+  try {
+    const cc = await H('provider', { source: 'chesscom', players: { white:{}, black:{} } });
+    const li = await H('provider', { players: { white:{user:{name:'x'}}, black:{user:{name:'y'}} } });
+    const bare = await H('provider', { moves: 'e4 e5' });
+    assert(cc === 'chesscom', `expected an explicit source:'chesscom' game to badge as chesscom, got ${cc}`);
+    assert(li === 'lichess', `expected a players-shaped game to badge as lichess, got ${li}`);
+    assert(bare === 'chesscom', `expected a legacy bare game to badge as chesscom (the only shape it can come from), got ${bare}`);
+    ok('games-list: provider badge classifies chess.com (tagged + legacy bare) vs Lichess correctly');
+  } catch(e){ bad('games-list: provider badge classification', e); }
+
+  // 154. The modal opens from the three-dot menu and lists the games reaching
+  //      the shallow "d4 Nf6" position (lg1, lg2, and the bare game), with a
+  //      clickable lichess link on a Lichess row.
+  try {
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
+    await appAV.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const info = await appAV.page.evaluate(() => ({
+      rows: document.querySelectorAll('#gamesListBody .games-row').length,
+      summary: document.getElementById('gamesListSummary').textContent,
+      hasLichessLink: !!document.querySelector('#gamesListBody a.games-row[href^="https://lichess.org/"]'),
+      lichessBadges: document.querySelectorAll('#gamesListBody .games-col-src.lichess').length,
+      chesscomBadges: document.querySelectorAll('#gamesListBody .games-col-src.cc').length,
+    }));
+    assert(info.rows === 3, `expected 3 games reaching d4 Nf6 (lg1, lg2, bare), got ${info.rows}`);
+    assert(/\b3\b/.test(info.summary), `expected the summary to report 3 games, got "${info.summary}"`);
+    assert(info.hasLichessLink, 'expected at least one clickable lichess-linked row');
+    assert(info.lichessBadges === 2, `expected 2 lichess (knight) badges (lg1, lg2), got ${info.lichessBadges}`);
+    assert(info.chesscomBadges === 1, `expected 1 chess.com (pawn) badge (the legacy bare game), got ${info.chesscomBadges}`);
+    ok('games-list: modal opens from the menu and lists the games reaching this position');
+    await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+  } catch(e){ bad('games-list: modal open + render', e); }
+
+  // 154b. The position index (already built once by test 151/154's 'pos'-mode
+  //       queries above) is persisted to IndexedDB, so a reload doesn't
+  //       rebuild it -- it reuses the persisted copy.
+  try {
+    const persisted = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(persisted, 'expected the index to already be persisted from the earlier pos-mode queries');
+    const countBefore = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(countBefore === 1, `expected exactly 1 real build so far (from test 151's first query), got ${countBefore}`);
+
+    await appAV.page.reload();
+    await appAV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    const justAfterReload = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(justAfterReload === 0, `expected the fresh page load's build counter to start at 0, got ${justAfterReload}`);
+
+    await appAV.page.click('.line-row');
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const afterReopen = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(JSON.stringify(byPos.map(m=>m.id).sort()) === JSON.stringify(['lg2','lg3']),
+      `expected the same transposition results after reload, got ${JSON.stringify(byPos)}`);
+    assert(afterReopen === 0, `expected the post-reload query to reuse the persisted index (no rebuild), got ${afterReopen} real build(s)`);
+    ok('games-list: position index persists across a reload instead of rebuilding');
+  } catch(e){ bad('games-list: index persistence across reload', e); }
+
+  // 154c. Importing games (a real content change) invalidates the persisted
+  //       index, so the next query rebuilds instead of serving stale data.
+  try {
+    await appAV.page.evaluate(() => window.__gamesListHooks.invalidateIndex());
+    const persisted = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(!persisted, 'expected invalidateIndex() to drop the persisted copy');
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6']));
+    await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const rebuilt = await appAV.page.evaluate(() => window.__gamesListHooks.isIndexPersisted());
+    assert(rebuilt, 'expected the next query to rebuild and re-persist the index');
+    ok('games-list: invalidating the index (as every real games-content-changing write path does) forces a rebuild');
+  } catch(e){ bad('games-list: index invalidation forces a rebuild', e); }
+} finally {
+  await appAV.close();
+}
+}
+
+// --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
+//     (yielding to the event loop every POSITION_INDEX_CHUNK games) instead of
+//     running as one long unbroken synchronous loop -- for a large game
+//     database (e.g. months of chess.com history) that loop was slow enough to
+//     trip the browser's "page unresponsive" warning on open (the reported
+//     bug). A separate app instance with a big synthetic game set, well past
+//     one chunk boundary, checks the chunking didn't drop or miscount any
+//     game in the process. ---
+if(shouldRunPhase(['move-table'])){
+const appAW2 = await launchApp();
+try {
+  const BIG_N = 230;   // > POSITION_INDEX_CHUNK (100), spans two chunk boundaries
+  await seedBackup(appAW2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['e4'], prefs: [] }],
+    games: Array.from({ length: BIG_N }, (_, i) => ({
+      id: `sg${i}`, moves: 'e4 e5 Nf3 Nc6', createdAt: i,
+      players: { white: { user: { name: 'tester' }, rating: 1500 }, black: { user: { name: 'opp' }, rating: 1500 } },
+    })),
+  });
+  await appAW2.page.click('.line-row');
+  await appAW2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+
+  // 155. Every one of the BIG_N games -- including ones on both sides of the
+  //      100-game chunk boundary -- is still found by position after the
+  //      chunked (yielding) index build.
+  try {
+    const fen = await appAW2.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['e4','e5','Nf3','Nc6']) c.move(m, { sloppy: true });
+      return c.fen();
+    });
+    const hits = await appAW2.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const ids = new Set(hits.map(h => h.id));
+    assert(hits.length === BIG_N, `expected all ${BIG_N} games indexed, got ${hits.length}`);
+    for(const i of [0, 99, 100, 101, BIG_N - 1]){
+      assert(ids.has(`sg${i}`), `expected sg${i} (around a chunk boundary) present in the index, got ${JSON.stringify([...ids]).slice(0,200)}`);
+    }
+    ok('games-list: buildPositionIndex\'s chunked (yielding) replay indexes every game, incl. across chunk boundaries');
+  } catch(e){ bad('games-list: chunked index build correctness', e); }
+
+  // 155b. The "Indexing your games… N of M" progress callback fires once per
+  //       chunk boundary with a running count, not just at the very end.
+  try {
+    const calls = await appAW2.page.evaluate(() => window.__gamesListHooks.buildIndexWithProgress());
+    assert(JSON.stringify(calls) === JSON.stringify([[100, BIG_N], [200, BIG_N]]),
+      `expected progress calls at the two 100-game chunk boundaries (100/${BIG_N} then 200/${BIG_N}), got ${JSON.stringify(calls)}`);
+    ok('games-list: indexing progress callback reports a running "N of M" count per chunk');
+  } catch(e){ bad('games-list: indexing progress callback', e); }
+} finally {
+  await appAW2.close();
+}
+}
+
+// --- Phase AY2: Object List Manager's room-database JSON import -- two code
+//     review fixes: (1) an auto-generated list id (no explicit list.id) is
+//     disambiguated against every id already produced in the SAME import, so
+//     two different rooms that slugify to the same room/list name pair don't
+//     silently clobber each other; (2) a duplicate item name within one
+//     list's items array is deduped (first occurrence wins), matching what
+//     the editor's own "Add item" already enforces by hand. ---
+if(shouldRunPhase(['object-lists'])){
+const appAY2 = await launchApp();
+try {
+  await appAY2.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appAY2.page.waitForSelector('#objectListsOverlay', { state: 'visible', timeout: 5000 });
+
+  // 161. Import a room-database file with two rooms that both omit room.id
+  //      and share the same name ("Kitchen"), each with a same-named list
+  //      ("Fixtures") -- without the fix both would generate the same auto
+  //      id (kitchen__fixtures) and the second import would silently
+  //      overwrite the first via the upsert. Also duplicates an item name
+  //      ("Oven") within the first list to check the item-level dedupe.
+  try {
+    await appAY2.page.setInputFiles('#objlistImportFile', {
+      name: 'rooms.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        rooms: [
+          { name: 'Kitchen', category: 'Home', lists: [
+            { name: 'Fixtures', items: ['Oven', 'Sink', 'Oven'] },
+          ]},
+          { name: 'Kitchen', category: 'Home', lists: [
+            { name: 'Fixtures', items: ['Fridge', 'Stove'] },
+          ]},
+        ],
+      })),
+    });
+    await appAY2.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    const cards = await appAY2.page.evaluate(() => [...document.querySelectorAll('#objlistGrid .objlist-card')].map(c => ({
+      items: c.querySelector('.objlist-card-items').textContent,
+      count: c.querySelector('.objlist-card-count').textContent,
+    })));
+    assert(cards.length === 2,
+      `expected 2 separate list cards (not clobbered into 1 via an id collision), got ${cards.length}: ${JSON.stringify(cards)}`);
+    const fixturesCard = cards.find(c => c.items.includes('Oven'));
+    const secondCard = cards.find(c => c.items.includes('Fridge'));
+    assert(fixturesCard && /^2 item/.test(fixturesCard.count),
+      `expected the first Fixtures list to have 2 items (Oven deduped), got ${JSON.stringify(fixturesCard)}`);
+    assert(secondCard && /^2 item/.test(secondCard.count),
+      `expected the second (id-disambiguated) Fixtures list to import intact with 2 items, got ${JSON.stringify(secondCard)}`);
+    ok('object lists: auto-generated ids disambiguate across a collision, and duplicate item names dedupe on import');
+  } catch(e){ bad('object lists: room-database import id/item dedup', e); }
+} finally {
+  await appAY2.close();
 }
 }
 

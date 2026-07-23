@@ -3,12 +3,45 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260722-109';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260630-41';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260723-42';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
 // boot watchdog in index.html so it doesn't show the "failed to load" message.
 window.__APP_BOOTED = true;
+
+// gzip capability flag (native CompressionStream/DecompressionStream) -- read
+// by both the backup export/import gzip helpers below AND
+// maybeOfferDefaultMnemonics (which fetches a gzipped bundle), the latter
+// called from this module's own top-level boot code. Declared this early so
+// every reader sees it initialized regardless of which runs first -- it
+// previously lived down by the export helpers it was originally added for,
+// which put it AFTER that boot-time call in file order and threw
+// "Cannot access 'GZIP_OK' before initialization" on every real page load
+// (masked in the test harness, which skips that call entirely under
+// threeTestDebug).
+const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+
+// Everything below is reachable from that same maybeOfferDefaultMnemonics()
+// boot call (via importMnemonicsBundle) and was found the same way GZIP_OK
+// was: each lived naturally alongside the code that normally uses it, further
+// down the file than line ~4150's boot-time call -- fine for every OTHER
+// caller (which only runs after the whole module has finished loading), but
+// a "Cannot access '<name>' before initialization" TDZ error for this one
+// synchronous top-level call, on every real (non-threeTestDebug) page load.
+const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
+const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+const MNEM_NOTES_KEY = 'mnemonicsNotes';
+const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
+const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
+let MNEMONICS = {};
+// recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
+// file that carries a `mnemonics` array but none of the other top-level
+// stores a full backup / asset bundle would have.
+const isMnemonicsBundle = d =>
+  !!d && (d.repchessMnemonics != null ||
+    (Array.isArray(d.mnemonics) && !Array.isArray(d.lines) &&
+     !Array.isArray(d.assets) && d.repchessAssets == null));
 
 /* cm-chessboard (the 2D board widget) is loaded DYNAMICALLY and tolerantly: it's
    only needed for the four board widgets (analysis board, hover preview, PV
@@ -44,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-178';
+const BUILD_TAG = '-191';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -180,6 +213,57 @@ async function ccFetch(url){
   if(!resp.ok) throw new Error(`chess.com returned ${resp.status} for ${url}`);
   return resp.json();
 }
+/* the human opening name out of a chess.com ECO URL, e.g.
+   ".../openings/Caro-Kann-Defense-Advance-Variation-3.e5" -> "Caro-Kann
+   Defense Advance Variation". Best-effort/optional -- returns null if the URL
+   isn't in that shape. */
+function openingNameFromEcoUrl(url){
+  if(typeof url !== 'string') return null;
+  const tail = url.split('/openings/')[1];
+  if(!tail) return null;
+  return decodeURIComponent(tail).replace(/-/g,' ').replace(/\s*\d.*$/,'').trim() || null;
+}
+
+/* Normalize one chess.com monthly-archive game object (+ its already-parsed
+   SAN move string) into the SAME shape the app reads for Lichess games, so
+   everything downstream (and any future "games with this position" view) can
+   treat both sources uniformly. Tagged source:'chesscom' so re-imports can
+   replace just these. The one field chess.com's public API never exposes is
+   the per-game rating change (Lichess's ratingDiff) -- everything else maps.
+   Pure (no network / no DOM) so it's unit-testable with a synthetic object. */
+function normalizeChessComGame(g, moves){
+  const idFromUrl = typeof g.url === 'string' ? g.url.split('/').filter(Boolean).pop() : null;
+  const wRes = g.white && g.white.result, bRes = g.black && g.black.result;
+  const winner = wRes === 'win' ? 'white' : bRes === 'win' ? 'black' : undefined;
+  // the decisive reason lives on the losing side ('win' is the winner's code);
+  // for a draw both sides carry the same draw reason, so either works.
+  const reason = winner === 'white' ? bRes : winner === 'black' ? wRes : (wRes || bRes);
+  const STATUS = {
+    checkmated:'mate', resigned:'resign', timeout:'outoftime', abandoned:'aborted',
+    stalemate:'stalemate', agreed:'draw', repetition:'draw', insufficient:'draw',
+    '50move':'draw', timevsinsufficient:'draw',
+  };
+  const status = STATUS[reason] || (winner ? 'resign' : 'draw');
+  const num = v => (typeof v === 'number' ? v : (v == null || v === '' ? undefined : Number(v) || undefined));
+  const name = openingNameFromEcoUrl(g.eco);
+  return {
+    id: g.uuid || idFromUrl || null,
+    source: 'chesscom',
+    url: g.url || null,
+    rated: !!g.rated,
+    speed: g.time_class || null,                     // bullet / blitz / rapid / daily
+    createdAt: g.end_time ? g.end_time * 1000 : undefined,
+    winner,
+    status,
+    players: {
+      white: { user: { name: (g.white && g.white.username) || null }, rating: num(g.white && g.white.rating) },
+      black: { user: { name: (g.black && g.black.username) || null }, rating: num(g.black && g.black.rating) },
+    },
+    ...(name ? { opening: { name } } : {}),
+    moves,
+  };
+}
+
 async function fetchChessCom(user,months,onProgress){
   const archivesUrl = `https://api.chess.com/pub/player/${encodeURIComponent(user)}/games/archives`;
   console.log(`[fetchChessCom] requesting ${archivesUrl}`);
@@ -195,7 +279,8 @@ async function fetchChessCom(user,months,onProgress){
       const chess = new Chess();
       if(!chess.load_pgn(g.pgn)) continue;
       const moves = chess.history().join(' ');
-      if(moves) games.push({moves});
+      if(!moves) continue;
+      games.push(normalizeChessComGame(g, moves));
     }
     onProgress?.(games.length, i+1, chosen.length);
   }
@@ -353,6 +438,251 @@ function refreshSystemStats(){
   if(!ENABLE_NODE_STATS){ span.textContent = ''; return; }
   if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
   span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
+}
+
+/* ---------- games with this position (three-dot menu → Games with this Position) ----------
+   Lists the user's own games that reached a given position, with date / players
+   / ratings / result and the move they played from it. Two match modes: any
+   transposition (the exact position by any move order, anywhere in the DB --
+   the default) or this line only (games that followed exactly this move
+   sequence). Rich columns show for Lichess and (post-enrichment) chess.com
+   games; legacy bare {moves} games still count but show moves only. */
+
+// positionKey -> [{ g:gameIndex, move:SAN|null }] for EVERY position in every
+// game (`move` is the one played FROM that position; null at game's end).
+// Cached in memory against the GAMES array identity (so repeat queries within
+// the same page load are instant, same pattern as the reply trie) AND
+// persisted to IndexedDB (meta key POSITION_INDEX_CACHE_KEY, same pattern as
+// BUILT_CASTLES_CACHE_KEY/gatherBuiltCastles) -- for a large game database
+// (thousands of games) the chess.js replay is expensive enough to be worth
+// surviving a browser refresh instead of paying that cost every session.
+// invalidatePositionIndexCache() clears both layers and is called at the
+// three places GAMES' actual CONTENT changes: the chess.com/Lichess download
+// handler, local file import, and importBackup's full restore. It's
+// deliberately NOT invalidated by every GAMES reassignment -- GAMES is also
+// reassigned on every ordinary page load via the lazy
+// `if(!GAMES) GAMES = await getGames()` reads, which don't change content.
+const POSITION_INDEX_CACHE_KEY = 'gamesPositionIndexCache';
+let _posIndex = { games: null, map: null };
+let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
+let _posIndexBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
+function invalidatePositionIndexCache(){
+  _posIndex = { games: null, map: null };
+  _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
+  setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache
+}
+function indexOneGame(add, game, gi){
+  const chess = new Chess();
+  const sans = (game.moves || '').split(' ').filter(Boolean);
+  for(let i=0;i<sans.length;i++){
+    add(positionKey(chess.fen()), { g: gi, move: sans[i] });
+    if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
+  }
+  add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
+}
+// Replays every game move-by-move through chess.js -- for a large game
+// database (e.g. months of chess.com history) that's slow enough as one
+// unbroken synchronous loop to trip the browser's "page unresponsive"
+// warning. Yield to the event loop every CHUNK games so the "Indexing your
+// games…" message the caller already shows stays live/responsive throughout.
+const POSITION_INDEX_CHUNK = 100;
+async function buildPositionIndex(games, onProgress){
+  const map = new Map();
+  const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
+  for(let gi=0; gi<games.length; gi++){
+    indexOneGame(add, games[gi], gi);
+    if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
+      onProgress?.(gi + 1, games.length);
+      await nextPaint();
+    }
+  }
+  return map;
+}
+async function positionIndex(games, onProgress){
+  if(_posIndex.games === games) return _posIndex.map;
+  // the persisted copy is checked at most once per page load -- once we know
+  // one way or the other, _posIndex itself (games:null or populated) is
+  // authoritative and this branch is skipped from then on.
+  if(!_posIndexIdbChecked){
+    _posIndexIdbChecked = true;
+    try {
+      const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
+      if(raw){
+        const map = new Map(JSON.parse(raw));
+        _posIndex = { games, map };
+        return map;
+      }
+    } catch(e){ console.warn('[games index] failed to read the persisted index, rebuilding', e); }
+  }
+  const map = await buildPositionIndex(games, onProgress);
+  _posIndex = { games, map };
+  _posIndexBuildCount++;
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
+  return map;
+}
+// games (+ the move played from here) that reached `fen`'s position by ANY move order.
+async function gamesAtPosition(games, fen, onProgress){
+  const map = await positionIndex(games, onProgress);
+  const hits = map.get(positionKey(fen)) || [];
+  return hits.map(h => ({ game: games[h.g], move: h.move }));
+}
+// games that followed EXACTLY `seq` (a prefix match on the SAN move list), with
+// the move each played immediately after — the strict "this line only" view.
+function gamesAlongLine(games, seq){
+  const lower = seq.map(m => m.toLowerCase());
+  const out = [];
+  for(const game of games){
+    const sans = (game.moves || '').split(' ').filter(Boolean);
+    if(sans.length < lower.length) continue;
+    let ok = true;
+    for(let i=0;i<lower.length;i++){ if(sans[i].toLowerCase() !== lower[i]){ ok=false; break; } }
+    if(ok) out.push({ game, move: sans[lower.length] || null });
+  }
+  return out;
+}
+
+// which side the signed-in user played, or null when unknown (a legacy bare
+// {moves} game, or someone else's game). CURRENT_USER (the app's one overall
+// identity) is only ever bootstrapped from whichever platform got imported
+// FIRST (`if(!CURRENT_USER) CURRENT_USER = fetchUser;` in dlBtn) and never
+// updated after that -- a LATER-imported platform's own handle can
+// legitimately differ (e.g. a chess.com username that doesn't match an
+// earlier Lichess import's), so also try the per-platform username
+// remembered at import time (LS_ID_CHESSCOM / LS_ID, set alongside
+// CURRENT_USER in dlBtn) before giving up. Without this fallback every game
+// from that later platform would read as "someone else's game" despite the
+// player data being right there.
+function userColorInGame(game){
+  const perPlatform = localStorage.getItem(game.source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+  const candidates = [CURRENT_USER, perPlatform].filter(Boolean).map(s => s.toLowerCase());
+  if(!candidates.length) return null;
+  const w = game.players?.white?.user?.name?.toLowerCase();
+  const b = game.players?.black?.user?.name?.toLowerCase();
+  if(w && candidates.includes(w)) return 'white';
+  if(b && candidates.includes(b)) return 'black';
+  return null;
+}
+// win / loss / draw from the user's perspective, or null when the user's color
+// in this game is unknown (bare games) — a known color plus no winner is a
+// genuine draw.
+function gameOutcomeForUser(game, color){
+  if(!color) return null;
+  if(game.winner === 'white' || game.winner === 'black') return game.winner === color ? 'win' : 'loss';
+  return 'draw';
+}
+// the click-out URL for a game, if we have one (Lichess id → lichess.org/<id>;
+// chess.com carries its own url). Null for bare games with nothing to link to.
+function gameLink(game){
+  if(game.url) return game.url;                               // chess.com (normalized) carries the full url
+  if(game.source === 'chesscom') return null;
+  if(typeof game.id === 'string' && game.id) return `https://lichess.org/${game.id}`;
+  return null;
+}
+// a short, human "how it ended" from the (Lichess-style) status field.
+const GAME_STATUS_LABEL = { mate:'checkmate', resign:'resignation', outoftime:'time', stalemate:'stalemate', draw:'draw', aborted:'aborted', timeout:'time' };
+// which provider a game came from, for the games-list badge. Lichess games
+// always carry `players`; chess.com games are either tagged source:'chesscom'
+// (post-enrichment) or -- for legacy pre-enrichment imports -- bare {moves}
+// objects with no players/id/createdAt at all (same shape clearChessComGames
+// uses to recognize them). Nothing else produces that bare shape (manual file
+// imports are always Lichess-shaped ndjson), so it's an unambiguous chess.com signal.
+function gameSource(game){
+  if(game.source === 'chesscom') return 'chesscom';
+  if(game.players) return 'lichess';
+  return 'chesscom';
+}
+const GAME_SOURCE_BADGE = {
+  chesscom: '<i class="fa-solid fa-chess-pawn games-col-src cc" title="chess.com"></i>',
+  lichess:  '<i class="fa-solid fa-chess-knight games-col-src lichess" title="Lichess"></i>',
+};
+
+let _gamesModalState = null;   // { seq, fen } for the currently open modal, so the toggle can re-render
+function showGamesAtNode(seq){
+  if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
+  _gamesModalState = { seq: seq.slice(), fen: fenForSeq(seq) };
+  $('gamesListOverlay').style.display = 'flex';
+  renderGamesList('pos');
+}
+async function renderGamesList(mode){
+  const { seq, fen } = _gamesModalState;
+  $('gamesModePos').classList.toggle('active', mode === 'pos');
+  $('gamesModeLine').classList.toggle('active', mode === 'line');
+
+  const body = $('gamesListBody');
+  // the position index build can take a moment on a big DB — show a spinner the
+  // first time (subsequent opens reuse the cache), with a running "N of M"
+  // count so a large database (thousands of games) doesn't look stalled.
+  const needsIndex = mode === 'pos' && _posIndex.games !== GAMES;
+  const showIndexingProgress = (done, total) => {
+    body.innerHTML = `<div class="games-list-empty">Indexing your games… ${done} of ${total}</div>`;
+  };
+  if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
+
+  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
+
+  // summary: count + result tally (from the user's perspective, where known) +
+  // "played your repertoire move in X of Y" when a reply is configured here.
+  let win=0, loss=0, draw=0, known=0;
+  const reply = PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply;
+  let yourTurnGames=0, followedReply=0;
+  for(const { game, move } of matches){
+    const color = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, color);
+    if(oc){ known++; if(oc==='win') win++; else if(oc==='loss') loss++; else draw++; }
+    if(color && color[0] === sideToMove){   // it was the user's move from here
+      yourTurnGames++;
+      if(reply && move && move.toLowerCase() === reply.toLowerCase()) followedReply++;
+    }
+  }
+  const pct = known ? Math.round((win + draw*0.5) / known * 100) : null;
+  const bar = known ? `<span class="games-score-bar" title="${win}W ${draw}D ${loss}L">`+
+      `<i class="gw" style="width:${win/known*100}%"></i><i class="gd" style="width:${draw/known*100}%"></i><i class="gl" style="width:${loss/known*100}%"></i></span>` : '';
+  $('gamesListSummary').innerHTML =
+    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'}</span>` +
+    (known ? `<span>+${win} =${draw} −${loss}${pct!=null?` (${pct}%)`:''}</span>${bar}` : '') +
+    (reply && yourTurnGames ? `<span>played your move <strong>${escapeHtml(reply)}</strong> in ${followedReply}/${yourTurnGames}</span>` : '');
+
+  if(!matches.length){
+    body.innerHTML = `<div class="games-list-empty">${mode==='line'
+      ? 'None of your games followed exactly this line.'
+      : 'None of your games reached this position.'}</div>`;
+    return;
+  }
+
+  // newest first when we have dates; undated (bare) games sort to the end.
+  matches.sort((a,b) => (b.game.createdAt||0) - (a.game.createdAt||0));
+  const CAP = 200;
+  const shown = matches.slice(0, CAP);
+
+  body.innerHTML = shown.map(({ game, move }) => {
+    const color = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, color);
+    const date = game.createdAt ? new Date(game.createdAt).toLocaleDateString() : '—';
+    const sideChip = color === 'white' ? '<span class="games-col-side w" title="you played White">W</span>'
+      : color === 'black' ? '<span class="games-col-side b" title="you played Black">B</span>' : '<span class="games-col-side">·</span>';
+    const oppColor = color === 'white' ? 'black' : color === 'black' ? 'white' : null;
+    const opp = oppColor ? game.players?.[oppColor]?.user?.name : null;
+    const oppRating = oppColor ? game.players?.[oppColor]?.rating : null;
+    const oppHtml = opp ? `${escapeHtml(opp)}${oppRating?` <span class="grating">${oppRating}</span>`:''}`
+      : (game.source === 'chesscom' || (!game.players) ? '<span class="grating">— no details —</span>' : '');
+    const resTxt = oc==='win'?'1':oc==='loss'?'0':oc==='draw'?'½':'?';
+    const resCls = oc || 'unk';
+    const how = oc && game.status && GAME_STATUS_LABEL[game.status] ? `<span class="games-how">${GAME_STATUS_LABEL[game.status]}</span>` : '';
+    const moveIsUsers = color && color[0] === sideToMove;
+    const moveHtml = move
+      ? `<span class="games-col-move">${moveIsUsers?'<span class="gyou">':''}${escapeHtml(move)}${moveIsUsers?'</span>':''}</span>`
+      : '<span class="games-col-move">·</span>';
+    const link = gameLink(game);
+    return `<${link?`a class="games-row" href="${escapeHtml(link)}" target="_blank" rel="noopener"`:'div class="games-row no-link"'}>
+      <span class="games-col-date">${date}</span>
+      ${GAME_SOURCE_BADGE[gameSource(game)]}
+      ${sideChip}
+      <span class="games-col-opp">${oppHtml}</span>
+      <span style="display:flex;align-items:center;gap:.4rem">${moveHtml}${how}</span>
+      <span class="games-res ${resCls}">${resTxt}</span>
+    </${link?'a':'div'}>`;
+  }).join('') + (matches.length > CAP ? `<div class="games-list-more">showing ${CAP} of ${matches.length}</div>` : '');
 }
 
 /* ---------- FEN for a move sequence ---------- */
@@ -1968,6 +2298,12 @@ async function showRoomInfoPanel(roomEl){
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
+
+// games-with-this-position modal wiring
+$('gamesListCloseBtn').onclick = () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; };
+$('gamesListOverlay').addEventListener('click', e => { if(e.target === $('gamesListOverlay')){ $('gamesListOverlay').style.display='none'; _gamesModalState=null; } });
+$('gamesModePos').onclick = () => renderGamesList('pos');
+$('gamesModeLine').onclick = () => renderGamesList('line');
 // "Jump to VR" (Part B): try the fast path first -- VR already open and this
 // room already registered in that session (jumpToRoom) -- and only fall back
 // to (re)building the whole main world when that's not possible (VR closed,
@@ -2695,6 +3031,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
                <span class="rmq-label">Move quality</span>
@@ -2930,6 +3267,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       rowMenu.classList.remove('show');
       if(childrenSeq) showNodeStats(games,childrenSeq);
     };
+    rowMenu.querySelector('[data-act="gamesHere"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      showGamesAtNode(lineSeq);
+    };
     rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -3072,6 +3414,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
            <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
@@ -3258,6 +3601,11 @@ function renderBlackRoot(parent,games,trigger){
     rowMenu.classList.remove('show');
     if(childrenSeq) showNodeStats(games,childrenSeq);
   };
+  rowMenu.querySelector('[data-act="gamesHere"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    showGamesAtNode(lineSeq);
+  };
   rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
@@ -3327,6 +3675,7 @@ $('fileImport').addEventListener('change', async e=>{
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+  invalidatePositionIndexCache();
   clr();
   // renderTreeBody (not openLine) -- this re-renders the ALREADY-open line
   // from the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -3800,6 +4149,14 @@ $('dlBtn').onclick = async ()=>{
       logDl('fetching…');
       fetched = await fetchChessCom(fetchUser,months,
         (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
+      // chess.com re-import REPLACES (not merges) this user's chess.com games:
+      // the metadata enrichment changed their id scheme, so a merge would leave
+      // the old, sparser copies behind as duplicates. Only runs after a
+      // successful fetch, and only touches chess.com games -- Lichess untouched.
+      console.log(`[chess.com import] clearing old chess.com games for "${CURRENT_USER}"…`);
+      const wiped = await clearChessComGames(CURRENT_USER);
+      console.log(`[chess.com import] cleared ${wiped} old chess.com game(s) for "${CURRENT_USER}"`);
+      if(wiped) logDl(`replaced ${wiped} existing chess.com game(s)…`);
     } else {
       const max=+$('maxGames').value||300;
       localStorage.setItem(LS_MAX,max);
@@ -3810,6 +4167,7 @@ $('dlBtn').onclick = async ()=>{
     await putGames(CURRENT_USER,fetched);
     GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+    invalidatePositionIndexCache();
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -3890,8 +4248,10 @@ $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'
    and base64 inflates binary by ~33%. gzip recovers almost all of that (plus
    near-total compression of the JSON keys/whitespace), shrinking a backup by
    ~30% with zero dependencies via the native CompressionStream API.
-   Older browsers without CompressionStream fall back to plain JSON. */
-const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+   Older browsers without CompressionStream fall back to plain JSON.
+   (GZIP_OK itself is declared near the top of the file -- maybeOfferDefaultMnemonics
+   also reads it, and is called from this module's own top-level boot code
+   before this section would otherwise run.) */
 async function gzipString(str){
   const stream = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'));
   return await new Response(stream).blob();
@@ -4008,6 +4368,7 @@ async function importBackup(data, onMnemProgress){
   // so the next "Run VR" rebuilds against the restored data instead of
   // showing whatever was cached from before the restore.
   invalidateBuiltCastlesCache();
+  invalidatePositionIndexCache();
 
   CURRENT_USER = data.user;
   localStorage.setItem(LS_ID, CURRENT_USER);
@@ -4153,15 +4514,10 @@ async function exportAssets(){
   log(`exported ${assets.length} asset(s)`);
 }
 
-/* recognises a mnemonics-only bundle: explicitly tagged, or (defensively) a
-   file that carries a `mnemonics` array but none of the other top-level stores
-   a full backup / asset bundle would have. */
-const isMnemonicsBundle = d =>
-  !!d && (d.repchessMnemonics != null ||
-    (Array.isArray(d.mnemonics) && !Array.isArray(d.lines) &&
-     !Array.isArray(d.assets) && d.repchessAssets == null));
+/* isMnemonicsBundle is declared near the top of the file now -- see the
+   comment there (a boot-time TDZ fix).
 
-/* mnemonics-only REPLACE: wipes the mnemonics store (and notes) and writes the
+   mnemonics-only REPLACE: wipes the mnemonics store (and notes) and writes the
    bundle's entries, leaving games/lines/assets untouched. No merge. Destructive;
    caller confirms first. `onProgress`, if given, is called with the running
    count of squares written so far -- same slow-write-loop rationale as
@@ -4191,9 +4547,9 @@ async function importMnemonicsBundle(data, onProgress){
    (same repchessMnemonics shape as an exported bundle) committed to the repo,
    so a brand-new user can start with a ready-made set of memory-palace
    words/images instead of a blank grid. Offered once: the decision (install
-   or skip) is remembered in meta so it doesn't nag on every boot after that. */
-const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
-const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+   or skip) is remembered in meta so it doesn't nag on every boot after that.
+   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY are declared near the top of the
+   file now (a boot-time TDZ fix). */
 async function maybeOfferDefaultMnemonics(){
   if(!GZIP_OK) return;   // the bundle is gzipped; can't read it without DecompressionStream
   if(await getMeta(MNEM_DEFAULT_OFFERED_KEY)) return;
@@ -4672,9 +5028,9 @@ $('menuAbout').onclick = ()=>{
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
 
 /* ---------- manage mnemonics ---------- */
-const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
+// MNEM_PIECES/MNEMONICS are declared near the top of the file now (a
+// boot-time TDZ fix).
 const MNEM_PIECE_ICON = {pawn:'fa-chess-pawn',knight:'fa-chess-knight',bishop:'fa-chess-bishop',rook:'fa-chess-rook',queen:'fa-chess-queen',king:'fa-chess-king'};
-let MNEMONICS = {};
 let MNEM_EDIT_SQUARE = null;
 let MNEM_VIEW_MODE = 'words';   // 'words' = show move words; else a piece name = show that piece's images
 
@@ -5132,7 +5488,7 @@ $('mnemonicsCoverageSelect').onchange = async (e)=>{
 };
 
 /* ---------- mnemonics notes (autosave) ---------- */
-const MNEM_NOTES_KEY = 'mnemonicsNotes';
+// MNEM_NOTES_KEY is declared near the top of the file now (a boot-time TDZ fix).
 let mnemNotesSaveTimer = null;
 function saveMnemonicsNotes(){
   clearTimeout(mnemNotesSaveTimer);
@@ -5154,7 +5510,7 @@ $('mnemonicsNotes').addEventListener('blur', ()=>{
 });
 
 /* ---------- move disambiguator image (one global "older-piece beard") ---------- */
-const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
+// MNEM_DISAMBIG_KEY is declared near the top of the file now (a boot-time TDZ fix).
 function renderDisambigPreview(dataUrl){
   const img = $('mnemDisambigPreview'), drop = $('mnemDisambigDrop');
   if(dataUrl){ img.src = dataUrl; img.style.display=''; drop.classList.add('has-img'); }
@@ -7304,3 +7660,47 @@ if(localStorage.getItem('threeTestDebug')){
     getOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
   };
 }
+
+// test-only hook for the "Games with this Position" matching/perspective math
+// (pure functions over the in-memory GAMES array, no DOM/network needed).
+if(localStorage.getItem('threeTestDebug')){
+  window.__gamesListHooks = {
+    gamesAtPosition: async (fen) => (await gamesAtPosition(GAMES, fen)).map(m => ({ id: m.game.id || null, source: m.game.source || null, move: m.move })),
+    gamesAlongLine: (seq) => gamesAlongLine(GAMES, seq).map(m => ({ id: m.game.id || null, move: m.move })),
+    outcome: (game) => gameOutcomeForUser(game, userColorInGame(game)),
+    color: (game) => userColorInGame(game),
+    link: (game) => gameLink(game),
+    fenForSeq: (seq) => fenForSeq(seq),
+    provider: (game) => gameSource(game),
+    // position-index persistence (Phase: persisted games index) -- so a test
+    // can confirm the index survives a reload instead of rebuilding, and that
+    // the three real games-content-changing write paths drop it.
+    isIndexPersisted: async () => !!(await getMeta(POSITION_INDEX_CACHE_KEY)),
+    isIndexCachedInMemory: () => _posIndex.games === GAMES,
+    invalidateIndex: () => invalidatePositionIndexCache(),
+    indexBuildCount: () => _posIndexBuildCount,
+    // forces a fresh (uncached) build and captures every onProgress(done,total)
+    // call -- deterministic alternative to polling the DOM for the
+    // "Indexing your games… N of M" text mid-build, which for a build fast
+    // enough to finish inside one Playwright poll interval would be flaky.
+    buildIndexWithProgress: async () => {
+      invalidatePositionIndexCache();
+      const calls = [];
+      await positionIndex(GAMES, (done, total) => calls.push([done, total]));
+      return calls;
+    },
+  };
+}
+
+// test-only hook for the games importer -- the chess.com normalization is a
+// pure function (unit-testable with synthetic archive objects, no network),
+// and the source-selective clear is real IDB (works in the offline harness).
+if(localStorage.getItem('threeTestDebug')){
+  window.__importTestHooks = {
+    normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
+    clearChessComGames: (user) => clearChessComGames(user),
+    putGames: (user, games) => putGames(user, games),
+    getGames: (user) => getGames(user),
+  };
+}
+
