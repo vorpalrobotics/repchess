@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-187';
+const BUILD_TAG = '-188';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7716,3 +7716,27 @@ if(localStorage.getItem('threeTestDebug')){
     getGames: (user) => getGames(user),
   };
 }
+
+// TEMP debug: run debugChessComCoverage() from the DevTools console (works in
+// a normal, non-threeTestDebug real-browser session -- unlike the __xTestHooks
+// above, deliberately NOT gated behind that flag) to scan every stored
+// chess.com-shaped game (source:'chesscom', or the legacy bare {moves} shape)
+// and report what fraction actually has player names/ratings. Distinguishes
+// "the recent import genuinely came back sparse (e.g. didn't go back far
+// enough / hit older archives with less data)" from "the data's there but
+// something else is preventing it from displaying." Remove once the
+// "-- no details --" issue is resolved.
+window.debugChessComCoverage = async () => {
+  const games = await getGames(CURRENT_USER);
+  const cc = games.filter(g => g.source === 'chesscom' || !g.players);
+  const withName = cc.filter(g => g.players?.white?.user?.name || g.players?.black?.user?.name);
+  const withRating = cc.filter(g => g.players?.white?.rating != null || g.players?.black?.rating != null);
+  const pct = n => cc.length ? (n / cc.length * 100).toFixed(1) : '0.0';
+  console.log(`[chess.com coverage] CURRENT_USER = ${CURRENT_USER}`);
+  console.log(`[chess.com coverage] ${cc.length} chess.com-shaped game(s) of ${games.length} total`);
+  console.log(`[chess.com coverage] with a player name: ${withName.length} (${pct(withName.length)}%)`);
+  console.log(`[chess.com coverage] with a rating: ${withRating.length} (${pct(withRating.length)}%)`);
+  console.log('[chess.com coverage] sample WITH data:', withName[0] || null);
+  console.log('[chess.com coverage] sample WITHOUT data:', cc.find(g => !(g.players?.white?.user?.name || g.players?.black?.user?.name)) || null);
+  return { total: games.length, chesscomShaped: cc.length, withName: withName.length, withRating: withRating.length };
+};
