@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-183';
+const BUILD_TAG = '-184';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4109,7 +4109,9 @@ $('dlBtn').onclick = async ()=>{
       // the metadata enrichment changed their id scheme, so a merge would leave
       // the old, sparser copies behind as duplicates. Only runs after a
       // successful fetch, and only touches chess.com games -- Lichess untouched.
+      console.log(`[chess.com import] clearing old chess.com games for "${CURRENT_USER}"…`);
       const wiped = await clearChessComGames(CURRENT_USER);
+      console.log(`[chess.com import] cleared ${wiped} old chess.com game(s) for "${CURRENT_USER}"`);
       if(wiped) logDl(`replaced ${wiped} existing chess.com game(s)…`);
     } else {
       const max=+$('maxGames').value||300;
