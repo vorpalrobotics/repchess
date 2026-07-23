@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-188';
+const BUILD_TAG = '-189';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7736,7 +7736,16 @@ window.debugChessComCoverage = async () => {
   console.log(`[chess.com coverage] ${cc.length} chess.com-shaped game(s) of ${games.length} total`);
   console.log(`[chess.com coverage] with a player name: ${withName.length} (${pct(withName.length)}%)`);
   console.log(`[chess.com coverage] with a rating: ${withRating.length} (${pct(withRating.length)}%)`);
-  console.log('[chess.com coverage] sample WITH data:', withName[0] || null);
-  console.log('[chess.com coverage] sample WITHOUT data:', cc.find(g => !(g.players?.white?.user?.name || g.players?.black?.user?.name)) || null);
+  const sample = withName[0];
+  if(sample){
+    const u = (CURRENT_USER || '').trim().toLowerCase();
+    const w = sample.players?.white?.user?.name || null;
+    const b = sample.players?.black?.user?.name || null;
+    console.log(`[chess.com coverage] sample game white="${w}" black="${b}"`);
+    console.log(`[chess.com coverage] CURRENT_USER="${CURRENT_USER}" (normalized "${u}") -- matches white? ${(w||'').trim().toLowerCase()===u} -- matches black? ${(b||'').trim().toLowerCase()===u}`);
+    console.log(`[chess.com coverage] userColorInGame(sample) = ${userColorInGame(sample)} (null means neither name matched -- that's why the row shows "no details" even though player data IS present)`);
+  } else {
+    console.log('[chess.com coverage] no chess.com game with a player name found at all');
+  }
   return { total: games.length, chesscomShaped: cc.length, withName: withName.length, withRating: withRating.length };
 };
