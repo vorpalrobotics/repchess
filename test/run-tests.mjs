@@ -5949,6 +5949,18 @@ try {
     );
     ok('importBackup shows a spinner with running progress while restoring, then hides it');
   } catch(e){ bad('backup restore spinner', e); }
+
+  // 85. #backupImport carries no `accept` filter -- cloud file pickers
+  //     (Google Drive, Dropbox) apply their OWN provider-reported MIME type,
+  //     which is often wrong/generic for .json.gz backups (e.g.
+  //     application/octet-stream), so an accept list greys the file out with
+  //     no way to select it. readMaybeGzipped already sniffs gzip vs. plain
+  //     JSON by content, not filename/MIME, so no filter is needed.
+  try {
+    const accept = await appBH.page.evaluate(() => document.getElementById('backupImport').getAttribute('accept'));
+    assert(!accept, `expected #backupImport to have no accept filter (cloud pickers exclude files on MIME mismatch), got ${JSON.stringify(accept)}`);
+    ok('#backupImport has no accept filter, so cloud-picked files (Drive, Dropbox) are always selectable');
+  } catch(e){ bad('#backupImport accept filter removed', e); }
 } finally {
   await appBH.close();
 }

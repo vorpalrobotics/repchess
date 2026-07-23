@@ -1250,7 +1250,13 @@
 <input id="fileImport" type="file" accept=".ndjson,.jsonl,.txt" style="display:none">
 
 <!-- hidden file chooser for backup restore -->
-<input id="backupImport" type="file" accept=".json,.gz,.json.gz,application/gzip,application/json" style="display:none">
+<!-- no accept filter: cloud pickers (Google Drive, Dropbox) apply their own
+     provider-reported MIME type, which is often wrong/generic for .json.gz
+     files (e.g. application/octet-stream) and gets excluded by an accept
+     list, greying the file out with no way to select it. The importer
+     already sniffs gzip vs. plain JSON by content (readMaybeGzipped), not
+     filename/MIME, so no filter is needed for correctness. -->
+<input id="backupImport" type="file" style="display:none">
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
@@ -1271,6 +1277,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260722-173"></script>
+<script type="module" src="js/app.js?v=20260722-174"></script>
 </body>
 </html>
