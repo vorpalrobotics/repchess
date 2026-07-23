@@ -7530,6 +7530,15 @@ try {
     }
     ok('games-list: buildPositionIndex\'s chunked (yielding) replay indexes every game, incl. across chunk boundaries');
   } catch(e){ bad('games-list: chunked index build correctness', e); }
+
+  // 155b. The "Indexing your games… N of M" progress callback fires once per
+  //       chunk boundary with a running count, not just at the very end.
+  try {
+    const calls = await appAW2.page.evaluate(() => window.__gamesListHooks.buildIndexWithProgress());
+    assert(JSON.stringify(calls) === JSON.stringify([[100, BIG_N], [200, BIG_N]]),
+      `expected progress calls at the two 100-game chunk boundaries (100/${BIG_N} then 200/${BIG_N}), got ${JSON.stringify(calls)}`);
+    ok('games-list: indexing progress callback reports a running "N of M" count per chunk');
+  } catch(e){ bad('games-list: indexing progress callback', e); }
 } finally {
   await appAW2.close();
 }

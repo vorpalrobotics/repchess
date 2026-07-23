@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-182';
+const BUILD_TAG = '-183';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -452,16 +452,19 @@ function indexOneGame(add, game, gi){
 // warning. Yield to the event loop every CHUNK games so the "Indexing your
 // games…" message the caller already shows stays live/responsive throughout.
 const POSITION_INDEX_CHUNK = 100;
-async function buildPositionIndex(games){
+async function buildPositionIndex(games, onProgress){
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
   for(let gi=0; gi<games.length; gi++){
     indexOneGame(add, games[gi], gi);
-    if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1) await nextPaint();
+    if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
+      onProgress?.(gi + 1, games.length);
+      await nextPaint();
+    }
   }
   return map;
 }
-async function positionIndex(games){
+async function positionIndex(games, onProgress){
   if(_posIndex.games === games) return _posIndex.map;
   // the persisted copy is checked at most once per page load -- once we know
   // one way or the other, _posIndex itself (games:null or populated) is
@@ -477,15 +480,15 @@ async function positionIndex(games){
       }
     } catch(e){ console.warn('[games index] failed to read the persisted index, rebuilding', e); }
   }
-  const map = await buildPositionIndex(games);
+  const map = await buildPositionIndex(games, onProgress);
   _posIndex = { games, map };
   _posIndexBuildCount++;
   setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
   return map;
 }
 // games (+ the move played from here) that reached `fen`'s position by ANY move order.
-async function gamesAtPosition(games, fen){
-  const map = await positionIndex(games);
+async function gamesAtPosition(games, fen, onProgress){
+  const map = await positionIndex(games, onProgress);
   const hits = map.get(positionKey(fen)) || [];
   return hits.map(h => ({ game: games[h.g], move: h.move }));
 }
@@ -563,11 +566,15 @@ async function renderGamesList(mode){
 
   const body = $('gamesListBody');
   // the position index build can take a moment on a big DB — show a spinner the
-  // first time (subsequent opens reuse the cache).
+  // first time (subsequent opens reuse the cache), with a running "N of M"
+  // count so a large database (thousands of games) doesn't look stalled.
   const needsIndex = mode === 'pos' && _posIndex.games !== GAMES;
+  const showIndexingProgress = (done, total) => {
+    body.innerHTML = `<div class="games-list-empty">Indexing your games… ${done} of ${total}</div>`;
+  };
   if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
 
-  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen) : gamesAlongLine(GAMES, seq);
+  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
   const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
 
   // summary: count + result tally (from the user's perspective, where known) +
@@ -7629,6 +7636,16 @@ if(localStorage.getItem('threeTestDebug')){
     isIndexCachedInMemory: () => _posIndex.games === GAMES,
     invalidateIndex: () => invalidatePositionIndexCache(),
     indexBuildCount: () => _posIndexBuildCount,
+    // forces a fresh (uncached) build and captures every onProgress(done,total)
+    // call -- deterministic alternative to polling the DOM for the
+    // "Indexing your games… N of M" text mid-build, which for a build fast
+    // enough to finish inside one Playwright poll interval would be flaky.
+    buildIndexWithProgress: async () => {
+      invalidatePositionIndexCache();
+      const calls = [];
+      await positionIndex(GAMES, (done, total) => calls.push([done, total]));
+      return calls;
+    },
   };
 }
 
