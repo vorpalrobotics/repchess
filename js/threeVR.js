@@ -2239,7 +2239,7 @@ function applyAccessoryTransform(obj, room, slot, asset, xform){
 let slotMarkerMat = null;
 function slotMarkerMaterial(){
   if(!slotMarkerMat){
-    slotMarkerMat = new THREE.MeshBasicMaterial({ color: 0x21d4d4, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+    slotMarkerMat = tagShared(new THREE.MeshBasicMaterial({ color: 0x21d4d4, transparent: true, opacity: 0.4, side: THREE.DoubleSide }));
   }
   return slotMarkerMat;
 }
@@ -2274,7 +2274,7 @@ function buildSlotMarker(room, slot){
 let facadeMarkerMat = null;
 function facadeMarkerMaterial(){
   if(!facadeMarkerMat){
-    facadeMarkerMat = new THREE.MeshBasicMaterial({ color: 0xff9800, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+    facadeMarkerMat = tagShared(new THREE.MeshBasicMaterial({ color: 0xff9800, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
   }
   return facadeMarkerMat;
 }
@@ -2292,7 +2292,7 @@ function buildFacadeMarker(size, b, roomKey, buildingKey, faceWidth, faceHeight)
 let signMarkerMat = null;
 function signMarkerMaterial(){
   if(!signMarkerMat){
-    signMarkerMat = new THREE.MeshBasicMaterial({ color: 0xab47bc, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
+    signMarkerMat = tagShared(new THREE.MeshBasicMaterial({ color: 0xab47bc, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
   }
   return signMarkerMat;
 }
@@ -2317,7 +2317,7 @@ function buildSignMarker(signPos, roomKey, buildingKey, size){
 let yardMarkerMat = null;
 function yardMarkerMaterial(){
   if(!yardMarkerMat){
-    yardMarkerMat = new THREE.MeshBasicMaterial({ color: 0x7ad17a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+    yardMarkerMat = tagShared(new THREE.MeshBasicMaterial({ color: 0x7ad17a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
   }
   return yardMarkerMat;
 }
@@ -3967,7 +3967,7 @@ function makeLockIconTexture(){
 let lockIconMat = null;
 function lockIconMaterial(){
   if(!lockIconMat){
-    lockIconMat = new THREE.MeshBasicMaterial({ map: makeLockIconTexture(), transparent: true, side: THREE.DoubleSide });
+    lockIconMat = tagShared(new THREE.MeshBasicMaterial({ map: makeLockIconTexture(), transparent: true, side: THREE.DoubleSide }));
   }
   return lockIconMat;
 }
@@ -3992,7 +3992,7 @@ function buildLockedDoorIcon(size, wall, offset){
 let doorMarkerMat = null;
 function doorMarkerMaterial(){
   if(!doorMarkerMat){
-    doorMarkerMat = new THREE.MeshBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false });
+    doorMarkerMat = tagShared(new THREE.MeshBasicMaterial({ color: 0xffeb3b, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false }));
   }
   return doorMarkerMat;
 }
@@ -4625,7 +4625,10 @@ function buildTwoTrackDivider(room){
   const b = twoTrackDividerBox(room);
   const len = Math.max(1, b.zMax - b.zMin);
   const wallH = Math.min(1.4, room.size.h - 0.2);
-  const tex = makeBrickTexture(0x8a7f6a);
+  // .clone() before mutating -- makeBrickTexture hands out a SHARED, cached
+  // base texture per tint (see _brickTexCache); wrapS/wrapT/repeat set
+  // directly on it would leak into every other room sharing this same tint.
+  const tex = makeBrickTexture(0x8a7f6a).clone();
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(Math.max(1, len / 2), 1);
   const mesh = new THREE.Mesh(
@@ -4735,12 +4738,54 @@ function reconcileRoomBounds(roomKey){
   return fixed;
 }
 
+// tags a material/texture as a permanent, session-lifetime SINGLETON (a
+// lazily-created-once-and-reused module-level resource, e.g. the selection
+// gear icon or an edit-mode marker material shared by every room) so
+// disposeSceneContents below skips it instead of disposing something every
+// OTHER room still needs.
+function tagShared(resource){
+  resource.userData = resource.userData || {};
+  resource.userData.shared = true;
+  return resource;
+}
+
+// Frees GPU resources (geometry, materials, and their texture maps) for
+// everything currently in `root`, before buildRoom's scene.clear() detaches
+// it all. Object3D.clear()/Scene.clear() only unlinks children from the
+// scene graph -- it never calls .dispose() on anything -- so without this,
+// every single edit (buildRoom runs on nearly all of them: drags, clicks,
+// door skin/floor picks, resizes...) leaks the previous scene's geometries,
+// materials and textures. Two things are deliberately left alone:
+//   - THREE.Sprite geometry: every Sprite in three.js shares ONE static
+//     built-in geometry (created once, lazily, internal to the Sprite
+//     class itself) -- disposing it here would silently break every
+//     sprite in the app (billboards, gear icons, exit signs...) from that
+//     point on, not just this room's.
+//   - anything tagged tagShared() (gearMat, the edit-mode marker
+//     materials, etc.) -- session-lifetime singletons reused across every
+//     room, not rebuilt per room, so disposing one breaks it for every
+//     OTHER room too.
+function disposeSceneContents(root){
+  root.traverse(obj => {
+    if(obj.geometry && !obj.isSprite) obj.geometry.dispose();
+    const mats = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+    for(const mat of mats){
+      if(mat.userData && mat.userData.shared) continue;
+      for(const key of ['map', 'alphaMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap']){
+        if(mat[key] && mat[key].dispose) mat[key].dispose();
+      }
+      mat.dispose();
+    }
+  });
+}
+
 function buildRoom(roomKey){
   const boundsFixed = reconcileRoomBounds(roomKey);
   if(boundsFixed) showToast(`Moved ${boundsFixed} item${boundsFixed === 1 ? '' : 's'} back inside the room`);
   const room = mergedRoom(roomKey);
   buildGeneration++;
   const myGeneration = buildGeneration;
+  disposeSceneContents(scene);
   scene.clear();
   billboards = [];
   floorLabels = [];
@@ -5319,7 +5364,7 @@ function buildGearSprite(){
     ctx.beginPath(); ctx.arc(32, 32, 9, 0, Math.PI*2); ctx.fill();
     gearTexture = new THREE.CanvasTexture(c);
   }
-  if(!gearMat) gearMat = new THREE.SpriteMaterial({ map: gearTexture, depthTest: false });
+  if(!gearMat) gearMat = tagShared(new THREE.SpriteMaterial({ map: gearTexture, depthTest: false }));
   const sprite = new THREE.Sprite(gearMat);
   sprite.scale.set(0.35, 0.35, 1);
   return sprite;
@@ -7122,6 +7167,12 @@ export async function openThreeTest(containerEl, opts){
       // showToast() has no DOM id, so this is the only way to check it fired
       // without scraping the whole container for an untagged div.
       toastText: () => (toastEl && toastEl.style.display !== 'none') ? toastEl.textContent : null,
+      // live WebGL resource counts (renderer.info.memory), incremented on
+      // GPU upload and decremented on .dispose() -- for testing that
+      // repeated rebuilds (buildRoom runs on nearly every edit) actually
+      // free the PREVIOUS scene's geometries/textures via
+      // disposeSceneContents, rather than leaking them on every edit.
+      rendererMemory: () => renderer ? { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures } : null,
       // the bordered "chip" wrapping Edit + its edit-only buttons -- whether
       // it actually has a visible border, and which icons it contains (in
       // order), for testing the grouping without depending on exact colors.
