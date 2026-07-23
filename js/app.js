@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-190';
+const BUILD_TAG = '-191';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -272,7 +272,6 @@ async function fetchChessCom(user,months,onProgress){
 
   const chosen = archives.slice(-months);
   const games = [];
-  let loggedSample = false;
   for(let i=0;i<chosen.length;i++){
     const {games: monthGames} = await ccFetch(chosen[i]);
     for(const g of monthGames){
@@ -281,21 +280,7 @@ async function fetchChessCom(user,months,onProgress){
       if(!chess.load_pgn(g.pgn)) continue;
       const moves = chess.history().join(' ');
       if(!moves) continue;
-      const normalized = normalizeChessComGame(g, moves);
-      // one-time sample, not per-game (would flood the console over thousands
-      // of games) -- shows the RAW chess.com archive shape next to what we
-      // derived from it, so a mismatch between what the live API actually
-      // returns and what normalizeChessComGame assumes is visible immediately,
-      // and CURRENT_USER is echoed alongside since "Games with this Position"
-      // matches games to you by comparing this exact username against
-      // players.white/black.user.name.
-      if(!loggedSample){
-        loggedSample = true;
-        console.log('[fetchChessCom] CURRENT_USER =', CURRENT_USER);
-        console.log('[fetchChessCom] sample raw game.white/black =', { white: g.white, black: g.black });
-        console.log('[fetchChessCom] sample normalized players =', normalized.players, 'source =', normalized.source);
-      }
-      games.push(normalized);
+      games.push(normalizeChessComGame(g, moves));
     }
     onProgress?.(games.length, i+1, chosen.length);
   }
@@ -681,14 +666,6 @@ async function renderGamesList(mode){
     const oppRating = oppColor ? game.players?.[oppColor]?.rating : null;
     const oppHtml = opp ? `${escapeHtml(opp)}${oppRating?` <span class="grating">${oppRating}</span>`:''}`
       : (game.source === 'chesscom' || (!game.players) ? '<span class="grating">— no details —</span>' : '');
-    // temporary debug: why did THIS row fall through to "no details"? color is
-    // userColorInGame's match of CURRENT_USER against players.white/black.user.name
-    // -- null here (with players present) means neither name matched CURRENT_USER,
-    // not that the data itself is missing.
-    if(!opp) console.log('[games-list debug] no-details row:', {
-      source: game.source, id: game.id, CURRENT_USER, color, oppColor,
-      players: game.players, hasPlayers: !!game.players,
-    });
     const resTxt = oc==='win'?'1':oc==='loss'?'0':oc==='draw'?'½':'?';
     const resCls = oc || 'unk';
     const how = oc && game.status && GAME_STATUS_LABEL[game.status] ? `<span class="games-how">${GAME_STATUS_LABEL[game.status]}</span>` : '';
@@ -7727,35 +7704,3 @@ if(localStorage.getItem('threeTestDebug')){
   };
 }
 
-// TEMP debug: run debugChessComCoverage() from the DevTools console (works in
-// a normal, non-threeTestDebug real-browser session -- unlike the __xTestHooks
-// above, deliberately NOT gated behind that flag) to scan every stored
-// chess.com-shaped game (source:'chesscom', or the legacy bare {moves} shape)
-// and report what fraction actually has player names/ratings. Distinguishes
-// "the recent import genuinely came back sparse (e.g. didn't go back far
-// enough / hit older archives with less data)" from "the data's there but
-// something else is preventing it from displaying." Remove once the
-// "-- no details --" issue is resolved.
-window.debugChessComCoverage = async () => {
-  const games = await getGames(CURRENT_USER);
-  const cc = games.filter(g => g.source === 'chesscom' || !g.players);
-  const withName = cc.filter(g => g.players?.white?.user?.name || g.players?.black?.user?.name);
-  const withRating = cc.filter(g => g.players?.white?.rating != null || g.players?.black?.rating != null);
-  const pct = n => cc.length ? (n / cc.length * 100).toFixed(1) : '0.0';
-  console.log(`[chess.com coverage] CURRENT_USER = ${CURRENT_USER}`);
-  console.log(`[chess.com coverage] ${cc.length} chess.com-shaped game(s) of ${games.length} total`);
-  console.log(`[chess.com coverage] with a player name: ${withName.length} (${pct(withName.length)}%)`);
-  console.log(`[chess.com coverage] with a rating: ${withRating.length} (${pct(withRating.length)}%)`);
-  const sample = withName[0];
-  if(sample){
-    const u = (CURRENT_USER || '').trim().toLowerCase();
-    const w = sample.players?.white?.user?.name || null;
-    const b = sample.players?.black?.user?.name || null;
-    console.log(`[chess.com coverage] sample game white="${w}" black="${b}"`);
-    console.log(`[chess.com coverage] CURRENT_USER="${CURRENT_USER}" (normalized "${u}") -- matches white? ${(w||'').trim().toLowerCase()===u} -- matches black? ${(b||'').trim().toLowerCase()===u}`);
-    console.log(`[chess.com coverage] userColorInGame(sample) = ${userColorInGame(sample)} (null means neither name matched -- that's why the row shows "no details" even though player data IS present)`);
-  } else {
-    console.log('[chess.com coverage] no chess.com game with a player name found at all');
-  }
-  return { total: games.length, chesscomShaped: cc.length, withName: withName.length, withRating: withRating.length };
-};
