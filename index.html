@@ -193,12 +193,15 @@
   .games-score-bar .gd{background:#bdbdbd}
   .games-score-bar .gl{background:#c62828}
   .games-list-body{overflow-y:auto;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:.3rem}
-  .games-row{display:grid;grid-template-columns:5.5em 1.4em 1fr auto auto;align-items:center;gap:.5rem;
+  .games-row{display:grid;grid-template-columns:5.5em 1.2em 1.4em 1fr auto auto;align-items:center;gap:.5rem;
     padding:.35rem .5rem;border:1px solid #e0e0e0;border-radius:5px;font-size:.85rem;cursor:pointer;text-decoration:none;color:inherit}
   .games-row:hover{border-color:#1565c0;background:#f5f9ff}
   .games-row.no-link{cursor:default}
   .games-row.no-link:hover{border-color:#e0e0e0;background:none}
   .games-col-date{color:#666;font-size:.8rem}
+  .games-col-src{text-align:center;color:#999}
+  .games-col-src.cc{color:#7ba648}
+  .games-col-src.lichess{color:#555}
   .games-col-side{font-weight:700;text-align:center}
   .games-col-side.w{color:#8a6d00}
   .games-col-side.b{color:#333}
@@ -1329,6 +1332,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260723-180"></script>
+<script type="module" src="js/app.js?v=20260723-181"></script>
 </body>
 </html>

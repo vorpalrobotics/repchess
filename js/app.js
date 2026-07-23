@@ -44,7 +44,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-180';
+const BUILD_TAG = '-181';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -419,27 +419,38 @@ function refreshSystemStats(){
 // Cached against the GAMES array identity, same pattern as the reply trie --
 // so the first query pays the replay cost once and the rest are instant.
 let _posIndex = { games: null, map: null };
-function buildPositionIndex(games){
+function indexOneGame(add, game, gi){
+  const chess = new Chess();
+  const sans = (game.moves || '').split(' ').filter(Boolean);
+  for(let i=0;i<sans.length;i++){
+    add(positionKey(chess.fen()), { g: gi, move: sans[i] });
+    if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
+  }
+  add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
+}
+// Replays every game move-by-move through chess.js -- for a large game
+// database (e.g. months of chess.com history) that's slow enough as one
+// unbroken synchronous loop to trip the browser's "page unresponsive"
+// warning. Yield to the event loop every CHUNK games so the "Indexing your
+// games…" message the caller already shows stays live/responsive throughout.
+const POSITION_INDEX_CHUNK = 100;
+async function buildPositionIndex(games){
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
-  games.forEach((game, gi) => {
-    const chess = new Chess();
-    const sans = (game.moves || '').split(' ').filter(Boolean);
-    for(let i=0;i<sans.length;i++){
-      add(positionKey(chess.fen()), { g: gi, move: sans[i] });
-      if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
-    }
-    add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
-  });
+  for(let gi=0; gi<games.length; gi++){
+    indexOneGame(add, games[gi], gi);
+    if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1) await nextPaint();
+  }
   return map;
 }
-function positionIndex(games){
-  if(_posIndex.games !== games) _posIndex = { games, map: buildPositionIndex(games) };
+async function positionIndex(games){
+  if(_posIndex.games !== games) _posIndex = { games, map: await buildPositionIndex(games) };
   return _posIndex.map;
 }
 // games (+ the move played from here) that reached `fen`'s position by ANY move order.
-function gamesAtPosition(games, fen){
-  const hits = positionIndex(games).get(positionKey(fen)) || [];
+async function gamesAtPosition(games, fen){
+  const map = await positionIndex(games);
+  const hits = map.get(positionKey(fen)) || [];
   return hits.map(h => ({ game: games[h.g], move: h.move }));
 }
 // games that followed EXACTLY `seq` (a prefix match on the SAN move list), with
@@ -486,6 +497,21 @@ function gameLink(game){
 }
 // a short, human "how it ended" from the (Lichess-style) status field.
 const GAME_STATUS_LABEL = { mate:'checkmate', resign:'resignation', outoftime:'time', stalemate:'stalemate', draw:'draw', aborted:'aborted', timeout:'time' };
+// which provider a game came from, for the games-list badge. Lichess games
+// always carry `players`; chess.com games are either tagged source:'chesscom'
+// (post-enrichment) or -- for legacy pre-enrichment imports -- bare {moves}
+// objects with no players/id/createdAt at all (same shape clearChessComGames
+// uses to recognize them). Nothing else produces that bare shape (manual file
+// imports are always Lichess-shaped ndjson), so it's an unambiguous chess.com signal.
+function gameSource(game){
+  if(game.source === 'chesscom') return 'chesscom';
+  if(game.players) return 'lichess';
+  return 'chesscom';
+}
+const GAME_SOURCE_BADGE = {
+  chesscom: '<i class="fa-solid fa-chess-pawn games-col-src cc" title="chess.com"></i>',
+  lichess:  '<i class="fa-solid fa-chess-knight games-col-src lichess" title="Lichess"></i>',
+};
 
 let _gamesModalState = null;   // { seq, fen } for the currently open modal, so the toggle can re-render
 function showGamesAtNode(seq){
@@ -505,7 +531,7 @@ async function renderGamesList(mode){
   const needsIndex = mode === 'pos' && _posIndex.games !== GAMES;
   if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
 
-  const matches = mode === 'pos' ? gamesAtPosition(GAMES, fen) : gamesAlongLine(GAMES, seq);
+  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen) : gamesAlongLine(GAMES, seq);
   const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
 
   // summary: count + result tally (from the user's perspective, where known) +
@@ -563,6 +589,7 @@ async function renderGamesList(mode){
     const link = gameLink(game);
     return `<${link?`a class="games-row" href="${escapeHtml(link)}" target="_blank" rel="noopener"`:'div class="games-row no-link"'}>
       <span class="games-col-date">${date}</span>
+      ${GAME_SOURCE_BADGE[gameSource(game)]}
       ${sideChip}
       <span class="games-col-opp">${oppHtml}</span>
       <span style="display:flex;align-items:center;gap:.4rem">${moveHtml}${how}</span>
@@ -7549,12 +7576,13 @@ if(localStorage.getItem('threeTestDebug')){
 // (pure functions over the in-memory GAMES array, no DOM/network needed).
 if(localStorage.getItem('threeTestDebug')){
   window.__gamesListHooks = {
-    gamesAtPosition: (fen) => gamesAtPosition(GAMES, fen).map(m => ({ id: m.game.id || null, source: m.game.source || null, move: m.move })),
+    gamesAtPosition: async (fen) => (await gamesAtPosition(GAMES, fen)).map(m => ({ id: m.game.id || null, source: m.game.source || null, move: m.move })),
     gamesAlongLine: (seq) => gamesAlongLine(GAMES, seq).map(m => ({ id: m.game.id || null, move: m.move })),
     outcome: (game) => gameOutcomeForUser(game, userColorInGame(game)),
     color: (game) => userColorInGame(game),
     link: (game) => gameLink(game),
     fenForSeq: (seq) => fenForSeq(seq),
+    provider: (game) => gameSource(game),
   };
 }
 

@@ -7341,6 +7341,7 @@ try {
 
 // --- Phase AV: "Games with this Position" -- matching (transposition vs exact
 //     line), result-from-your-perspective, and the modal itself. ---
+if(shouldRunPhase(['move-table'])){
 const appAV = await launchApp();
 try {
   await seedBackup(appAV.page, {
@@ -7406,6 +7407,20 @@ try {
     ok('games-list: click-out link resolves per source (lichess id / chess.com url / none)');
   } catch(e){ bad('games-list: game link resolution', e); }
 
+  // 153b. Provider badge classification: explicit chess.com tag, Lichess
+  //       (has `players`), and a legacy bare game (no source/players at all --
+  //       the only shape a pre-enrichment chess.com import produces) all
+  //       resolve to the right provider for the pawn/knight badge.
+  try {
+    const cc = await H('provider', { source: 'chesscom', players: { white:{}, black:{} } });
+    const li = await H('provider', { players: { white:{user:{name:'x'}}, black:{user:{name:'y'}} } });
+    const bare = await H('provider', { moves: 'e4 e5' });
+    assert(cc === 'chesscom', `expected an explicit source:'chesscom' game to badge as chesscom, got ${cc}`);
+    assert(li === 'lichess', `expected a players-shaped game to badge as lichess, got ${li}`);
+    assert(bare === 'chesscom', `expected a legacy bare game to badge as chesscom (the only shape it can come from), got ${bare}`);
+    ok('games-list: provider badge classifies chess.com (tagged + legacy bare) vs Lichess correctly');
+  } catch(e){ bad('games-list: provider badge classification', e); }
+
   // 154. The modal opens from the three-dot menu and lists the games reaching
   //      the shallow "d4 Nf6" position (lg1, lg2, and the bare game), with a
   //      clickable lichess link on a Lichess row.
@@ -7418,15 +7433,65 @@ try {
       rows: document.querySelectorAll('#gamesListBody .games-row').length,
       summary: document.getElementById('gamesListSummary').textContent,
       hasLichessLink: !!document.querySelector('#gamesListBody a.games-row[href^="https://lichess.org/"]'),
+      lichessBadges: document.querySelectorAll('#gamesListBody .games-col-src.lichess').length,
+      chesscomBadges: document.querySelectorAll('#gamesListBody .games-col-src.cc').length,
     }));
     assert(info.rows === 3, `expected 3 games reaching d4 Nf6 (lg1, lg2, bare), got ${info.rows}`);
     assert(/\b3\b/.test(info.summary), `expected the summary to report 3 games, got "${info.summary}"`);
     assert(info.hasLichessLink, 'expected at least one clickable lichess-linked row');
+    assert(info.lichessBadges === 2, `expected 2 lichess (knight) badges (lg1, lg2), got ${info.lichessBadges}`);
+    assert(info.chesscomBadges === 1, `expected 1 chess.com (pawn) badge (the legacy bare game), got ${info.chesscomBadges}`);
     ok('games-list: modal opens from the menu and lists the games reaching this position');
     await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
   } catch(e){ bad('games-list: modal open + render', e); }
 } finally {
   await appAV.close();
+}
+}
+
+// --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
+//     (yielding to the event loop every POSITION_INDEX_CHUNK games) instead of
+//     running as one long unbroken synchronous loop -- for a large game
+//     database (e.g. months of chess.com history) that loop was slow enough to
+//     trip the browser's "page unresponsive" warning on open (the reported
+//     bug). A separate app instance with a big synthetic game set, well past
+//     one chunk boundary, checks the chunking didn't drop or miscount any
+//     game in the process. ---
+if(shouldRunPhase(['move-table'])){
+const appAW2 = await launchApp();
+try {
+  const BIG_N = 230;   // > POSITION_INDEX_CHUNK (100), spans two chunk boundaries
+  await seedBackup(appAW2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['e4'], prefs: [] }],
+    games: Array.from({ length: BIG_N }, (_, i) => ({
+      id: `sg${i}`, moves: 'e4 e5 Nf3 Nc6', createdAt: i,
+      players: { white: { user: { name: 'tester' }, rating: 1500 }, black: { user: { name: 'opp' }, rating: 1500 } },
+    })),
+  });
+  await appAW2.page.click('.line-row');
+  await appAW2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+
+  // 155. Every one of the BIG_N games -- including ones on both sides of the
+  //      100-game chunk boundary -- is still found by position after the
+  //      chunked (yielding) index build.
+  try {
+    const fen = await appAW2.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['e4','e5','Nf3','Nc6']) c.move(m, { sloppy: true });
+      return c.fen();
+    });
+    const hits = await appAW2.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const ids = new Set(hits.map(h => h.id));
+    assert(hits.length === BIG_N, `expected all ${BIG_N} games indexed, got ${hits.length}`);
+    for(const i of [0, 99, 100, 101, BIG_N - 1]){
+      assert(ids.has(`sg${i}`), `expected sg${i} (around a chunk boundary) present in the index, got ${JSON.stringify([...ids]).slice(0,200)}`);
+    }
+    ok('games-list: buildPositionIndex\'s chunked (yielding) replay indexes every game, incl. across chunk boundaries');
+  } catch(e){ bad('games-list: chunked index build correctness', e); }
+} finally {
+  await appAW2.close();
+}
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
