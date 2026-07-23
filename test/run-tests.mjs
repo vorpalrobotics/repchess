@@ -48,6 +48,7 @@ const SUBSYSTEMS = {
   'engine':            'live engine panel, threads, analyze()',
   'castle-generation': "gatherBuiltCastles' cache and its invalidation",
   'import-export':     'full backup import/export',
+  'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
@@ -7541,6 +7542,59 @@ try {
   } catch(e){ bad('games-list: indexing progress callback', e); }
 } finally {
   await appAW2.close();
+}
+}
+
+// --- Phase AY2: Object List Manager's room-database JSON import -- two code
+//     review fixes: (1) an auto-generated list id (no explicit list.id) is
+//     disambiguated against every id already produced in the SAME import, so
+//     two different rooms that slugify to the same room/list name pair don't
+//     silently clobber each other; (2) a duplicate item name within one
+//     list's items array is deduped (first occurrence wins), matching what
+//     the editor's own "Add item" already enforces by hand. ---
+if(shouldRunPhase(['object-lists'])){
+const appAY2 = await launchApp();
+try {
+  await appAY2.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appAY2.page.waitForSelector('#objectListsOverlay', { state: 'visible', timeout: 5000 });
+
+  // 161. Import a room-database file with two rooms that both omit room.id
+  //      and share the same name ("Kitchen"), each with a same-named list
+  //      ("Fixtures") -- without the fix both would generate the same auto
+  //      id (kitchen__fixtures) and the second import would silently
+  //      overwrite the first via the upsert. Also duplicates an item name
+  //      ("Oven") within the first list to check the item-level dedupe.
+  try {
+    await appAY2.page.setInputFiles('#objlistImportFile', {
+      name: 'rooms.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        rooms: [
+          { name: 'Kitchen', category: 'Home', lists: [
+            { name: 'Fixtures', items: ['Oven', 'Sink', 'Oven'] },
+          ]},
+          { name: 'Kitchen', category: 'Home', lists: [
+            { name: 'Fixtures', items: ['Fridge', 'Stove'] },
+          ]},
+        ],
+      })),
+    });
+    await appAY2.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    const cards = await appAY2.page.evaluate(() => [...document.querySelectorAll('#objlistGrid .objlist-card')].map(c => ({
+      items: c.querySelector('.objlist-card-items').textContent,
+      count: c.querySelector('.objlist-card-count').textContent,
+    })));
+    assert(cards.length === 2,
+      `expected 2 separate list cards (not clobbered into 1 via an id collision), got ${cards.length}: ${JSON.stringify(cards)}`);
+    const fixturesCard = cards.find(c => c.items.includes('Oven'));
+    const secondCard = cards.find(c => c.items.includes('Fridge'));
+    assert(fixturesCard && /^2 item/.test(fixturesCard.count),
+      `expected the first Fixtures list to have 2 items (Oven deduped), got ${JSON.stringify(fixturesCard)}`);
+    assert(secondCard && /^2 item/.test(secondCard.count),
+      `expected the second (id-disambiguated) Fixtures list to import intact with 2 items, got ${JSON.stringify(secondCard)}`);
+    ok('object lists: auto-generated ids disambiguate across a collision, and duplicate item names dedupe on import');
+  } catch(e){ bad('object lists: room-database import id/item dedup', e); }
+} finally {
+  await appAY2.close();
 }
 }
 

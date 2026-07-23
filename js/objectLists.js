@@ -4,8 +4,10 @@
    See Documents/ObjectListsAndRoomAssignment.md for the design and
    Documents/MnemonicListDesignPrinciples.html for the ordering philosophy.
 
-   Phase 1 (this module): the list database itself + JSON import + per-item
-   asset binding. No VR/room-assignment yet.
+   This module owns the list database itself: JSON import, per-item asset
+   binding, and the manager UI. VR room-assignment (picking which list skins
+   a room's walls) is a separate later layer built on top of this data --
+   see js/threeVR.js's openWallListsDialog/moveObjectListResolved/OBJECT_LISTS.
 
    Lists live in the 'objectLists' IndexedDB store (see js/db.js). Each item
    has an immutable `name` (the stable key an asset binding hangs off) and an
@@ -356,6 +358,16 @@ async function saveEditor(){
   if(!/^[a-z0-9][a-z0-9_-]*$/.test(l.id)){ setError('List id must be lowercase letters, numbers, underscores and dashes, starting with a letter or number.'); return; }
   if(EDIT_IS_NEW && LISTS.some(x => x.id === l.id)){ setError(`A list with id "${l.id}" already exists.`); return; }
   if(!l.name.trim()){ setError('List name is required.'); return; }
+  // addItem already blocks a duplicate at entry time, but re-check here too --
+  // item names are the immutable binding key everything else hangs off, so a
+  // silent duplicate slipping through some other path (a future edit feature,
+  // a bug) would be worse saved than caught.
+  const seenNames = new Set();
+  for(const it of l.items){
+    const key = it.name.toLowerCase();
+    if(seenNames.has(key)){ setError(`"${it.name}" appears more than once (item names must be unique).`); return; }
+    seenNames.add(key);
+  }
   setError('');
   await setObjectList(l.id, {
     name: l.name.trim(), roomName: l.roomName.trim(), category: l.category.trim(),
@@ -446,10 +458,34 @@ async function onImportFile(e){
 
 function normalizeImport(data){
   const out = [];
+  // auto-generated ids (list.id absent -- the room-database branch below) are
+  // disambiguated against every id already produced THIS import, so two
+  // different rooms that happen to slugify to the same room-name/list-name
+  // pair (e.g. both missing room.id) don't silently clobber each other via
+  // setObjectList's upsert. Explicit ids are left as-is -- a file explicitly
+  // repeating one is the source data saying they're the same list.
+  const usedAutoIds = new Set();
+  const uniqueAutoId = (id) => {
+    let candidate = id, n = 2;
+    while(usedAutoIds.has(candidate)) candidate = `${id}-${n++}`;
+    usedAutoIds.add(candidate);
+    return candidate;
+  };
   const pushList = (id, name, roomName, category, list) => {
-    const items = (list.items||[]).map(it =>
-      typeof it === 'string' ? { name: it, assetId: null }
-                             : { name: it.name, assetId: it.assetId || null });
+    // item names are immutable binding keys -- a duplicate within one list
+    // would be ambiguous to bind an image to, so keep the first occurrence
+    // and drop later duplicates rather than importing something the editor's
+    // own addItem() would never let you create by hand.
+    const items = [];
+    const seenNames = new Set();
+    for(const it of (list.items||[])){
+      const shaped = typeof it === 'string' ? { name: it, assetId: null }
+                                             : { name: it.name, assetId: it.assetId || null };
+      const key = shaped.name.toLowerCase();
+      if(seenNames.has(key)) continue;
+      seenNames.add(key);
+      items.push(shaped);
+    }
     out.push({
       id,
       name: name || list.name || id,
@@ -474,7 +510,7 @@ function normalizeImport(data){
     for(const room of data.rooms){
       const lists = room.lists || [];
       for(const list of lists){
-        const id = list.id || `${slug(room.id||room.name)}__${slug(list.name)}`;
+        const id = list.id || uniqueAutoId(`${slug(room.id||room.name)}__${slug(list.name)}`);
         pushList(id, `${room.name || room.id}: ${list.name}`, room.name || room.id, room.category, list);
       }
     }
