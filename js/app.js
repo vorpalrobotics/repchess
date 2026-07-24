@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-197';
+const BUILD_TAG = '-198';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -131,6 +131,7 @@ const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_AQ_THREADS='aq_lastThreads';
+const LS_COMPARE_DEPTH='compare_lastDepth';
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
@@ -640,15 +641,17 @@ function gamesAlongLine(games, seq){
   return out;
 }
 
-/* ---------- "Compare to Actual Games" (three-dot menu) ----------
-   Shown as commentary lines under a node, not a modal (unlike "Games with
-   this Position") -- lists every move YOU actually played from this exact
-   position (exact-line match only, not any-transposition: this is about
-   what happened down THIS specific prep path, not the position in general),
-   grouped by move with a play count, sorted by frequency. The row's own
-   configured standard reply is boldfaced among them (not excluded) so you
-   can see at a glance how often you actually followed your own prep versus
-   drifting to some alternate. */
+/* ---------- "Compare Games" (three-dot menu) ----------
+   Shown as commentary rows under a node, not a modal (unlike "Find Games")
+   -- one row per move YOU actually played from this exact position (exact-
+   line match only, not any-transposition: this is about what happened down
+   THIS specific prep path, not the position in general). The header row
+   carries the node's own configured standard reply, boldfaced -- its eval
+   (if any) is read straight from that child's own PREFS entry, since it's a
+   real expanded tree branch with its own Analyse/queue affordances already.
+   Every OTHER move actually played gets its own indented row below it,
+   sorted by play count, with an "Analyze Others" icon on the header row to
+   background-analyze all of them at once (see queueAlternatesForAnalysis). */
 function actualMoveComparison(seq){
   const counts = {};
   for(const { move } of gamesAlongLine(GAMES || [], seq)){
@@ -657,65 +660,62 @@ function actualMoveComparison(seq){
   }
   return Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([move,count]) => ({move,count}));
 }
-// HTML for the meta-row commentary line -- always non-empty while the toggle
-// is on, even when there's nothing to show (no games reach this exact line
-// at all), so toggling the menu item never silently does nothing: it renders
-// a "no games to compare" placeholder instead. The leading icon is itself a
-// dismiss control (click it to toggle the line back off, same as re-picking
-// "Compare Games" from the row menu). data-move on the "Use as Standard"
-// button is always the TOP (most-played) alternate -- only rendered when no
-// reply is set yet.
-//
-// evalCache (Phase 2, optional) is a per-row Map<move, 'pending'|evalObj>,
-// owned and refreshed by the caller (renderBranch/renderBlackRoot's own
-// refreshMeta closure) -- ephemeral, same as showActualGames itself, not
-// persisted anywhere. A move with no cache entry gets a small "Analyze"
-// affordance instead of a score; the caller wires its click.
-function actualMoveEvalHtml(move, evalCache){
-  const ev = evalCache?.get(move);
-  if(ev === 'pending') return `<span class="meta-actual-eval meta-actual-eval-live">…</span>`;
-  if(ev) return `<span class="meta-actual-eval meta-pv-score ${evalClass(ev, CURRENT_LINE.color)}">${escapeHtml(formatEvalTag(ev))}</span>`;
-  return `<button type="button" class="meta-actual-analyze" data-move="${escapeHtml(move)}" title="Analyze this move on the live board"><i class="fa-solid fa-chess-board"></i></button>`;
+
+// "3." or "3..." -- the SAN move-number prefix for whichever ply comes right
+// after `seq` (White to move on an even ply count, Black on an odd one).
+function compareMoveNumberLabel(seq){
+  const num = Math.floor(seq.length/2) + 1;
+  return seq.length % 2 === 0 ? `${num}.` : `${num}...`;
 }
+
+// Eval tag for a played move at this node, read straight from PREFS -- the
+// SAME per-seq store every other part of the app reads/writes, whether the
+// seq is a real expanded tree branch (the standard reply) or a hypothetical
+// one only ever reached through this panel's "Analyze Others" icon. A move
+// with a matching entry in the background analysis queue also shows a small
+// pending/processing indicator, so a still-running analysis is visible
+// rather than just silently absent.
+function actualEvalTagHtml(lineId, seq){
+  const savedEval = PREFS[prefKey(lineId, seq)]?.eval;
+  const evalHtml = savedEval
+    ? `<span class="meta-actual-eval meta-pv-score ${evalClass(savedEval, CURRENT_LINE.color)}">${escapeHtml(formatEvalTag(savedEval))}</span>`
+    : '';
+  const queued = ANALYSIS_QUEUE.find(it => it.lineId === lineId && seqEq(it.seq, seq));
+  if(!queued) return evalHtml;
+  const processing = aqCurrentItem?.id === queued.id;
+  return evalHtml + `<i class="fa-solid fa-hourglass-half meta-actual-pending${processing ? ' fa-fade' : ''}" ` +
+    `title="${processing ? 'Analyzing…' : 'Queued for analysis'}"></i>`;
+}
+
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
-function actualMovesHtml(seq, reply, evalCache){
+const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
+
+function actualMovesHtml(lineId, seq, reply){
   const alts = actualMoveComparison(seq);
   if(!alts.length){
     return `<div class="meta-actual meta-actual-none" title="No games in your own history reach this position">` +
-      `${ACTUAL_DISMISS_ICON} No games to compare</div>`;
+      `<div class="meta-actual-row meta-actual-header">${ACTUAL_DISMISS_ICON} No games to compare</div></div>`;
   }
   const replyLower = (reply || '').toLowerCase();
-  return `<div class="meta-actual" title="Moves you've actually played here, from your own games -- your standard response (if any) is boldfaced. Click a move for a mini board.">` +
-    ACTUAL_DISMISS_ICON +
-    alts.map(({move,count}) => {
-      const isStandard = move.toLowerCase() === replyLower;
-      const fenAfter = fenForSeq([...seq, move]);
-      const moveLabel = isStandard ? `<strong>${escapeHtml(move)}</strong>` : escapeHtml(move);
-      return `<span class="meta-actual-move${isStandard ? ' meta-actual-standard' : ''}">` +
-        `<span class="pv-move" data-fen="${escapeHtml(fenAfter)}">${moveLabel}</span> ` +
-        `<em>(${count}×)</em> ${actualMoveEvalHtml(move, evalCache)}</span>`;
-    }).join('') +
-    (!reply ? `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>` : '') +
+  const others = alts.filter(({move}) => move.toLowerCase() !== replyLower);
+  const moveChip = move => {
+    const fenAfter = fenForSeq([...seq, move]);
+    return `<span class="pv-move meta-actual-move" data-fen="${escapeHtml(fenAfter)}">${escapeHtml(move)}</span>`;
+  };
+  const headerReplyHtml = reply
+    ? `<strong>${moveChip(reply)}</strong> ${actualEvalTagHtml(lineId, [...seq, reply])}`
+    : `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>`;
+  const headerRow =
+    `<div class="meta-actual-row meta-actual-header">` +
+    ACTUAL_DISMISS_ICON + (others.length ? ACTUAL_ANALYZE_ALL_ICON : '') +
+    `<span class="meta-actual-move-number">${compareMoveNumberLabel(seq)}</span> ` +
+    headerReplyHtml +
     `</div>`;
-}
-// Phase 2: runs the one shared engine against [...seq, move]'s resulting
-// position and updates evalCache + re-renders as results come in. Ephemeral
-// -- evalCache is the caller's throwaway per-row Map, nothing saved to
-// PREFS, since this is exploring an off-repertoire alternate, not the row's
-// own tracked node (compare recordEvalIfDeeper, which IS for the row's own
-// saved eval). Silently no-ops if `move` isn't actually legal here (stale
-// button after an unrelated edit changed what's playable).
-function analyzeActualMove(seq, move, evalCache, refreshMeta){
-  const chess = new Chess(fenForSeq(seq));
-  const mv = chess.move(move, { sloppy: true });
-  if(!mv) return;
-  const fen = chess.fen();
-  evalCache.set(move, 'pending');
-  refreshMeta();
-  showPosition(fen,
-    (d, score) => { evalCache.set(move, { ...evalToWhiteRelative(score, fen), depth: d }); refreshMeta(); },
-    () => {},
-    [...seq, mv.san]);
+  const altRows = others.map(({move,count}) =>
+    `<div class="meta-actual-row meta-actual-alt-row">${moveChip(move)} <em>(${count}×)</em> ${actualEvalTagHtml(lineId, [...seq, move])}</div>`
+  ).join('');
+  return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
+    headerRow + altRows + `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
@@ -3281,21 +3281,19 @@ function renderBranch(parent,games,seq,depth,flip=false){
     function continuationHtml(){
       return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
     }
-    // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
-    // above, not persisted: resets to hidden on the next full re-render.
-    // actualEvalCache (Phase 2) is likewise ephemeral -- Map<move,
-    // 'pending'|evalObj>, thrown away on the next full re-render.
-    let showActualGames = false;
-    const actualEvalCache = new Map();
     // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
     // below) -- they're a room attribute like name/castleName, shared across any
     // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
+    // "Compare Games" (saved?.compareGames) is PERSISTED, unlike showContinuation
+    // above -- it needs to survive the full-tree rebuild that lands each background
+    // analysis result (saveAnalysisQueueResult), so the panel stays open and its
+    // eval columns visibly fill in as "Analyze Others" results arrive.
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
       const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
       const pvHtml = continuationHtml();
-      const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
+      const actualHtml = saved?.compareGames ? actualMovesHtml(CURRENT_LINE.id, lineSeq, saved?.reply) : '';
       if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
@@ -3308,17 +3306,15 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const noteEl = metaTd.querySelector('.meta-note');
       if(noteEl) noteEl.onclick = () => openRoomAttributes();
       const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
-      if(dismissActualBtn) dismissActualBtn.onclick = () => { showActualGames = false; refreshMeta(); };
+      if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
+      const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
+      if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
+        const replyLower = (saved?.reply || '').toLowerCase();
+        const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
+        if(others.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, others, refreshMeta);
+      };
       const useActualBtn = metaTd.querySelector('.meta-actual-use');
       if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
-      // one alternate analyzing at a time (the engine is a single shared
-      // worker, same constraint as the row's own Analyse button) -- disable
-      // the rest until it settles.
-      const anyPending = [...actualEvalCache.values()].includes('pending');
-      metaTd.querySelectorAll('.meta-actual-analyze').forEach(btn => {
-        btn.disabled = anyPending;
-        btn.onclick = () => analyzeActualMove(lineSeq, btn.dataset.move, actualEvalCache, refreshMeta);
-      });
       wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
     }
     refreshMeta();
@@ -3496,7 +3492,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      showActualGames = !showActualGames;
+      savePrefField(lineSeq, 'compareGames', !currentSaved()?.compareGames);
       refreshMeta();
     };
     rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
@@ -3677,21 +3673,19 @@ function renderBlackRoot(parent,games,trigger){
   function continuationHtml(){
     return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
   }
-  // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
-  // above, not persisted: resets to hidden on the next full re-render.
-  // actualEvalCache (Phase 2) is likewise ephemeral -- Map<move,
-  // 'pending'|evalObj>, thrown away on the next full re-render.
-  let showActualGames = false;
-  const actualEvalCache = new Map();
   // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
   // below) -- they're a room attribute like name/castleName, shared across any
   // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
+  // "Compare Games" (saved?.compareGames) is PERSISTED, unlike showContinuation
+  // above -- it needs to survive the full-tree rebuild that lands each background
+  // analysis result (saveAnalysisQueueResult), so the panel stays open and its
+  // eval columns visibly fill in as "Analyze Others" results arrive.
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
     const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
     const pvHtml = continuationHtml();
-    const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
+    const actualHtml = saved?.compareGames ? actualMovesHtml(CURRENT_LINE.id, lineSeq, saved?.reply) : '';
     if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
@@ -3704,14 +3698,15 @@ function renderBlackRoot(parent,games,trigger){
     const noteEl = metaTd.querySelector('.meta-note');
     if(noteEl) noteEl.onclick = () => openRoomAttributes();
     const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
-    if(dismissActualBtn) dismissActualBtn.onclick = () => { showActualGames = false; refreshMeta(); };
+    if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
+    const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
+    if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
+      const replyLower = (saved?.reply || '').toLowerCase();
+      const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
+      if(others.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, others, refreshMeta);
+    };
     const useActualBtn = metaTd.querySelector('.meta-actual-use');
     if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
-    const anyPending = [...actualEvalCache.values()].includes('pending');
-    metaTd.querySelectorAll('.meta-actual-analyze').forEach(btn => {
-      btn.disabled = anyPending;
-      btn.onclick = () => analyzeActualMove(lineSeq, btn.dataset.move, actualEvalCache, refreshMeta);
-    });
     wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
   }
   refreshMeta();
@@ -3855,7 +3850,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    showActualGames = !showActualGames;
+    savePrefField(lineSeq, 'compareGames', !currentSaved()?.compareGames);
     refreshMeta();
   };
   rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
@@ -7218,6 +7213,71 @@ async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
   log(`${seqs.length} child${seqs.length===1?'':'ren'}: ${bits.join(', ') || 'nothing to do'}`);
 }
 
+/* ---------- "Analyze Others" (Compare Games' analyze-all icon) ----------
+   Queues every non-standard move actually played at a node for a quick,
+   single-line background analysis. Deliberately separate from "Add to
+   Analysis Queue"/"Add Children to Analysis Queue": its own (usually much
+   shallower) depth default saved to its own localStorage key so it doesn't
+   fight with the deeper default used for real children, always a single PV
+   line (multipv 1 -- there's no need for alternatives on a position that's
+   itself already an alternative), and run at the LIVE engine panel's own
+   thread count rather than the queue's own independent setting, since the
+   user is actively watching this row, not leaving it to churn in the
+   background like a normal queue item. Every item queued this way also
+   jumps to the very front of the queue, ahead of (and interrupting) whatever
+   was already processing -- this is meant to be a fast "let me see" action,
+   not a to-do added for later. */
+let compareAnalyzeCtx = null;   // {lineId, seq, moves, onQueued} pending in the depth dialog
+function openCompareAnalyzeModal(lineId, seq, moves, onQueued){
+  compareAnalyzeCtx = {lineId, seq, moves, onQueued};
+  $('compareAnalyzeDepth').value = localStorage.getItem(LS_COMPARE_DEPTH) || 20;
+  $('compareAnalyzeError').textContent = '';
+  $('compareAnalyzeOverlay').style.display='flex';
+}
+$('compareAnalyzeCancelBtn').onclick = () => {
+  $('compareAnalyzeOverlay').style.display='none';
+  compareAnalyzeCtx = null;
+};
+$('compareAnalyzeGoBtn').onclick = async () => {
+  if(!compareAnalyzeCtx) return;
+  const depth = parseInt($('compareAnalyzeDepth').value, 10);
+  if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
+  localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
+  const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
+  $('compareAnalyzeOverlay').style.display='none';
+  compareAnalyzeCtx = null;
+  await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
+  onQueued?.();
+};
+
+async function queueAlternatesForAnalysis(lineId, seqs, depth){
+  const orderOf = it => it.order ?? it.createdAt;
+  for(const seq of seqs){
+    const status = await addToAnalysisQueue(lineId, seq, depth, 1, {silent:true});
+    if(status === 'skipped') continue;
+    const item = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
+    if(item) item.useLiveThreads = true;
+  }
+  // jump every item just touched to the front, ahead of anything already
+  // queued -- including whatever's at index 0, which processAnalysisQueueLoop
+  // treats as "currently processing". engine.stop() below interrupts it, and
+  // processAnalysisQueueLoop's own "outranked" check (it's still queued, just
+  // no longer at the front) resumes the loop immediately for the new front
+  // item, rather than waiting for an external idle trigger.
+  const minOrder = ANALYSIS_QUEUE.length ? Math.min(...ANALYSIS_QUEUE.map(orderOf)) : Date.now();
+  let nextOrder = minOrder - 1;
+  for(const seq of seqs){
+    const item = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
+    if(!item) continue;
+    item.order = nextOrder--;
+    await putAnalysisQueueItem(item);
+  }
+  ANALYSIS_QUEUE.sort((a,b) => orderOf(a) - orderOf(b));
+  renderAnalysisQueueModalIfOpen();
+  refreshAnalysisQueueRowMarkers();
+  if(aqCurrentItem) engine.stop(); else maybeResumeAnalysisQueue();
+}
+
 async function cancelAnalysisQueueItem(id){
   const idx = ANALYSIS_QUEUE.findIndex(it => it.id === id);
   if(idx === -1) return;
@@ -7469,11 +7529,14 @@ async function processAnalysisQueueLoop(){
         // just ran at a different thread count, this request may no longer
         // match _currentThreads. That's fine (safe now -- see analyze()'s
         // own comment); it just means a handshake beat whenever control
-        // passes between two different thread-count choices.
+        // passes between two different thread-count choices. An item queued
+        // via "Analyze Others" (useLiveThreads) instead rides the live
+        // engine panel's own thread count -- the user is actively watching
+        // it, not leaving it to churn independently in the background.
         result = await engine.analyze(fen, {
           multipv,
           depth: item.depth,
-          threads: aqThreads(),
+          threads: item.useLiveThreads ? engineThreads() : aqThreads(),
           onInfo: (d, lines) => {
             aqCurrentProgress = {depth: d, lines};
             renderAnalysisQueueModalIfOpen();
@@ -7511,7 +7574,15 @@ async function processAnalysisQueueLoop(){
       aqCurrentProgress = null;
       renderAnalysisQueueModalIfOpen();
       refreshAnalysisQueueRowMarkers();
-      if(!finished && !cancelled) break;
+      // an item merely OUTRANKED -- still present but no longer at the front,
+      // e.g. "Analyze Others" jumping its own items ahead of it -- resumes
+      // the loop immediately for that new front item, same as a cancellation:
+      // the engine IS still free, only the to-do list's order changed. Only
+      // an item preempted by something outside this loop's control (the live
+      // engine panel claiming the engine) with nothing reordered ahead of it
+      // actually needs to wait for an external idle transition.
+      const outranked = !cancelled && !finished && ANALYSIS_QUEUE[0] !== item;
+      if(!finished && !cancelled && !outranked) break;
     }
   } finally {
     aqProcessing = false;

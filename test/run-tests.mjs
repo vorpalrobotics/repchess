@@ -7726,14 +7726,16 @@ try {
 }
 }
 
-// --- Phase AZ2: "Compare Games" (three-dot menu) -- commentary lines under
-//     a node (not a modal, unlike "Find Games") listing every move you've
-//     actually played from this exact line in your own games, grouped with
-//     a play count and sorted by frequency. The row's own configured
-//     standard reply is boldfaced among them (not excluded), so the list
-//     doubles as "how often did I actually follow my own prep." When no
-//     reply is configured yet, a "Use as Standard" quick action appears on
-//     the most-played alternate. ---
+// --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
+//     actually played from this exact line in your own games (not a modal,
+//     unlike "Find Games"). The header row carries the node's own configured
+//     standard reply, boldfaced, with its eval read straight from that real
+//     child node's own PREFS entry; every OTHER played move gets its own
+//     indented row below, sorted by count. "Analyze Others" (the header's
+//     bolt icon) background-analyzes all the "other" rows at once, at a
+//     shallow, independently-configured depth, jumped to the front of the
+//     analysis queue (interrupting whatever's running) and run at the live
+//     engine panel's own thread count. ---
 if(shouldRunPhase(['move-table'])){
 const appAZ2 = await launchApp();
 try {
@@ -7741,6 +7743,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4' },   // has a configured standard -- tests 162/163
+      { seq: ['d4','Nf6','c4'], eval: { type:'cp', value:60, depth:20, pv:'1.d4 Nf6 2.c4' } },   // the standard's OWN eval (a real child node)
       // ['d4','g6'] has NO configured reply at all -- test 164
     ]}],
     games: [
@@ -7756,126 +7759,254 @@ try {
   await appAZ2.page.click('.line-row');
   await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+  const metaSel = (sel) => document.querySelector(sel).nextElementSibling;
 
-  // 162. Toggling "Compare Games" shows every played move sorted by count
-  //      (Nf3 x2, c4 x1, g3 x1 -- ties keep game order), with the row's
-  //      configured standard reply (c4) boldfaced among them, not excluded.
+  // 162. Toggling "Compare Games" shows a header row (move-number "2.", the
+  //      configured standard c4 boldfaced with its own already-saved eval)
+  //      plus one indented row per OTHER played move, sorted by count
+  //      (Nf3 x2, then g3 x1) -- c4 itself does NOT get a duplicate row.
   try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
-    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
-    const moves = await appAZ2.page.evaluate((sel) =>
-      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), rowSel);
-    assert(moves.length === 3, `expected all 3 played moves (Nf3, c4, g3), got ${JSON.stringify(moves)}`);
-    assert(moves[0].startsWith('Nf3'), `expected Nf3 (2x, most-played) listed first, got ${JSON.stringify(moves)}`);
-    assert(moves[0].includes('2'), `expected Nf3 shown with its count of 2, got ${JSON.stringify(moves)}`);
-    assert(moves.some(m => m.startsWith('c4')), `expected the configured standard (c4) included, not excluded, got ${JSON.stringify(moves)}`);
-    const standardBold = await appAZ2.page.evaluate((sel) => {
-      const el = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-standard strong');
-      return el ? el.textContent.trim() : null;
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const state = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      const header = meta.querySelector('.meta-actual-header');
+      const altRows = [...meta.querySelectorAll('.meta-actual-alt-row')];
+      return {
+        moveNumber: header.querySelector('.meta-actual-move-number')?.textContent.trim(),
+        standardBold: header.querySelector('strong .meta-actual-move')?.textContent.trim(),
+        standardEval: header.querySelector('.meta-actual-eval')?.textContent.trim(),
+        hasUseBtn: !!header.querySelector('.meta-actual-use'),
+        altMoves: altRows.map(r => r.querySelector('.meta-actual-move').textContent.trim()),
+        altCounts: altRows.map(r => r.textContent),
+      };
     }, rowSel);
-    assert(standardBold === 'c4', `expected the configured standard (c4) boldfaced via .meta-actual-standard strong, got "${standardBold}"`);
-    const hasUseBtn = await appAZ2.page.evaluate((sel) => !!document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use'), rowSel);
-    assert(!hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
-    ok('Compare Games: shows every played move sorted by count, with the configured standard boldfaced (not excluded)');
-  } catch(e){ bad('Compare Games: full list with standard boldfaced', e); }
+    assert(state.moveNumber === '2.', `expected header move-number "2.", got "${state.moveNumber}"`);
+    assert(state.standardBold === 'c4', `expected the configured standard (c4) boldfaced in the header, got "${state.standardBold}"`);
+    assert(state.standardEval === '+0.6/20', `expected the standard's own saved eval "+0.6/20", got "${state.standardEval}"`);
+    assert(!state.hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
+    assert(JSON.stringify(state.altMoves) === JSON.stringify(['Nf3','g3']),
+      `expected alt rows Nf3 then g3 (c4 excluded, it's the header), got ${JSON.stringify(state.altMoves)}`);
+    assert(state.altCounts[0].includes('2') && state.altCounts[1].includes('1'),
+      `expected counts 2x then 1x, got ${JSON.stringify(state.altCounts)}`);
+    ok('Compare Games: header row (standard boldfaced + its own eval) plus one sorted row per other played move');
+  } catch(e){ bad('Compare Games: header + alt rows', e); }
 
   // 162b. Each move is a clickable mini-board chip (reusing the PV float
   //       mechanism -- .pv-move + data-fen): clicking one opens the float
   //       positioned at that move's resulting FEN.
   try {
     const fenCheck = await appAZ2.page.evaluate((sel) => {
-      const chip = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-move .pv-move');
+      const chip = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-alt-row .meta-actual-move');
       return chip ? chip.dataset.fen : null;
     }, rowSel);
-    assert(fenCheck && fenCheck.includes(' b '), `expected the first move chip's data-fen to be a Black-to-move position, got "${fenCheck}"`);
-    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-move .pv-move').click(), rowSel);
+    assert(fenCheck && fenCheck.includes(' b '), `expected the first alt chip's data-fen to be a Black-to-move position, got "${fenCheck}"`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-alt-row .meta-actual-move').click(), rowSel);
     const floatState = await appAZ2.page.evaluate(() => ({
       visible: document.getElementById('pvFloat').style.display === 'block',
-      activeChip: !!document.querySelector('.meta-actual-move .pv-move.pv-move-active'),
+      activeChip: !!document.querySelector('.meta-actual-alt-row .meta-actual-move.pv-move-active'),
     }));
     assert(floatState.visible, 'expected clicking a compare-line move to open the mini-board float');
     assert(floatState.activeChip, 'expected the clicked move chip to be marked active');
     ok('Compare Games: clicking a move opens a mini board at that move\'s position');
   } catch(e){ bad('Compare Games: click-to-miniboard', e); }
 
-  // 163. Toggling again (via the row menu) hides the commentary line
-  //      (ephemeral, not persisted).
+  // 163. Toggling again (via the row menu) hides the commentary rows.
   try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
     const stillThere = await appAZ2.page.evaluate((sel) => {
       const meta = document.querySelector(sel).nextElementSibling;
-      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-move');
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-header');
     }, rowSel);
     assert(!stillThere, 'expected toggling again to hide the actual-games commentary');
-    ok('Compare Games: toggling again via the row menu hides the commentary line');
+    ok('Compare Games: toggling again via the row menu hides the commentary rows');
   } catch(e){ bad('Compare Games: toggle off via row menu', e); }
 
   // 163b. The leading icon is itself a dismiss control -- clicking it hides
-  //       the comparison line too, without going back through the row menu.
+  //       the comparison rows too, without going back through the row menu.
+  //       It's PERSISTED (unlike the old ephemeral toggle) so it survives a
+  //       full tree rebuild -- reload the app to prove that, not just re-render.
   try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
     await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-dismiss`, { timeout: 5000 });
+
+    await appAZ2.page.reload({ waitUntil: 'domcontentloaded' });
+    await appAZ2.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAZ2.page.click('.line-row');
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 10000 });
+    ok('Compare Games: staying open is persisted -- survives a full reload/rebuild, not just an in-place re-render');
+
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-dismiss').click(), rowSel);
     const stillThere = await appAZ2.page.evaluate((sel) => {
       const meta = document.querySelector(sel).nextElementSibling;
-      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-move');
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-header');
     }, rowSel);
-    assert(!stillThere, 'expected clicking the leading icon to dismiss the comparison line');
-    ok('Compare Games: clicking the leading icon dismisses the comparison line');
-  } catch(e){ bad('Compare Games: dismiss via leading icon', e); }
+    assert(!stillThere, 'expected clicking the leading icon to dismiss the comparison rows');
+    ok('Compare Games: clicking the leading icon dismisses the comparison rows');
+  } catch(e){ bad('Compare Games: persisted open state + dismiss via leading icon', e); }
 
   // 164. With no reply configured yet (a DIFFERENT row, seq d4,g6, seeded
-  //      with no pref at all), nothing is excluded and "Use as Standard" on
-  //      the top alternate sets it as the row's reply.
+  //      with no pref at all), the header shows "Use as Standard" instead of
+  //      a boldfaced move, EVERY played move gets its own alt row (nothing
+  //      excluded), and using the button sets the top (most-played) one as
+  //      the row's reply.
   try {
     const rowSel2 = 'tr.data-row[data-seq="d4,g6"]';
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel2);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel2);
     await appAZ2.page.waitForSelector(`${rowSel2} + tr.meta-row .meta-actual-use`, { timeout: 5000 });
-    const movesNoReply = await appAZ2.page.evaluate((sel) =>
-      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), rowSel2);
-    assert(movesNoReply.length === 2, `expected both actually-played moves (c4, Nf3) with no reply configured, got ${JSON.stringify(movesNoReply)}`);
-    assert(movesNoReply[0].startsWith('Nf3'), `expected Nf3 (2x, most-played) listed first, got ${JSON.stringify(movesNoReply)}`);
+    const altMoves = await appAZ2.page.evaluate((sel) =>
+      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-move')].map(el => el.textContent.trim()), rowSel2);
+    assert(JSON.stringify(altMoves) === JSON.stringify(['Nf3','c4']),
+      `expected both actually-played moves (Nf3 most-played first, then c4), got ${JSON.stringify(altMoves)}`);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use').click(), rowSel2);
     const newReply = await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .ourReply').textContent, rowSel2);
     assert(newReply === 'Nf3', `expected "Use as Standard" to set the top (most-played) alternate Nf3 as the reply, got "${newReply}"`);
-    ok('Compare Games: with no reply configured, nothing is excluded and "Use as Standard" sets the top alternate');
+    ok('Compare Games: with no reply configured, "Use as Standard" appears and sets the top alternate');
   } catch(e){ bad('Compare Games: no-reply-yet + Use as Standard', e); }
 
-  // 165. Phase 2: each played move gets an "Analyze" affordance; clicking
-  //      one transitions it to a pending/live state and disables the other
-  //      alternates' Analyze buttons (single-flight -- the engine is one
-  //      shared worker, same constraint as the row's own Analyse button).
-  //      The live engine itself isn't available in this offline harness
-  //      (cm-chessboard/Stockfish aren't vendored -- same established
-  //      limitation as the row's own eval flow, covered by manual
-  //      verification instead), so this only verifies the wiring up to
-  //      the point showPosition's own no-Chessboard no-op kicks in.
+  // 165. "Analyze Others": the depth dialog defaults to (or restores) the
+  //      independent compare-depth localStorage setting; saving it queues
+  //      every OTHER played move (not the standard, which already has its
+  //      own real tree node) at that depth, multipv 1, flagged to run on the
+  //      live engine panel's thread count -- and the panel shows a pending
+  //      indicator on each right away, before any result has landed.
   try {
     // re-toggle d4,Nf6 back on -- test 163b left it closed.
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
-    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-analyze`, { timeout: 5000 });
-    const beforeCount = await appAZ2.page.evaluate((sel) =>
-      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-analyze').length, rowSel);
-    assert(beforeCount === 3, `expected an Analyze button for each of the 3 played moves (Nf3, c4, g3), got ${beforeCount}`);
-    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze').click(), rowSel);
-    const afterClick = await appAZ2.page.evaluate((sel) => {
-      const meta = document.querySelector(sel).nextElementSibling;
-      return {
-        liveCount: meta.querySelectorAll('.meta-actual-eval-live').length,
-        remainingAnalyzeButtons: meta.querySelectorAll('.meta-actual-analyze').length,
-        allDisabled: [...meta.querySelectorAll('.meta-actual-analyze')].every(b => b.disabled),
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-analyze-all`, { timeout: 5000 });
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    const defaultDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
+    assert(defaultDepth === '20', `expected the depth dialog to default to 20, got "${defaultDepth}"`);
+    await appAZ2.page.fill('#compareAnalyzeDepth', '18');
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+
+    const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const queuedFor = seq => queue.find(it => it.lineId==='L1' && it.seq.join(',')===seq.join(','));
+    const nf3Item = queuedFor(['d4','Nf6','Nf3']), g3Item = queuedFor(['d4','Nf6','g3']);
+    assert(nf3Item && g3Item, `expected both other moves (Nf3, g3) queued, got ${JSON.stringify(queue)}`);
+    for(const item of [nf3Item, g3Item]){
+      assert(item.depth === 18, `expected depth 18, got ${item.depth}`);
+      assert(item.multipv === 1, `expected multipv 1 (a single quick line), got ${item.multipv}`);
+      assert(item.useLiveThreads === true, `expected useLiveThreads flagged, got ${item.useLiveThreads}`);
+    }
+    assert(!queuedFor(['d4','Nf6','c4']), 'expected the standard reply (c4) NOT queued -- it already has its own real tree node');
+
+    // waitForSelector's default visible-state check fails here -- FontAwesome
+    // icons render zero-size in this harness (CDN-blocked), same reason other
+    // tests in this file query/click them via evaluate instead.
+    await appAZ2.page.waitForFunction((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-pending').length === 2, rowSel, { timeout: 5000 });
+    const pendingCount = await appAZ2.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-pending').length, rowSel);
+    assert(pendingCount === 2, `expected a pending indicator on both alt rows right after queueing, got ${pendingCount}`);
+    ok('Compare Games: "Analyze Others" queues every other move at the chosen depth, single line, live-thread-flagged, with an immediate pending indicator');
+  } catch(e){ bad('Compare Games: Analyze Others queues the alternates', e); }
+
+  // 166. The compare-depth setting persists in its OWN localStorage key
+  //      (independent of the "Add to/Add Children to Analysis Queue" depth),
+  //      restored the next time the dialog opens.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    const restoredDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
+    assert(restoredDepth === '18', `expected the just-saved depth (18) restored on reopen, got "${restoredDepth}"`);
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeCancelBtn').click());
+    ok('Compare Games: "Analyze Others" depth persists in its own localStorage key across dialog reopens');
+  } catch(e){ bad('Compare Games: depth persistence', e); }
+
+  // 167. "Analyze Others" jumps its items to the FRONT of the queue, ahead of
+  //      an already-queued/processing item, and interrupts that in-progress
+  //      search (engine.stop()) rather than waiting for it to finish -- then
+  //      the item that actually starts next runs at the LIVE engine panel's
+  //      thread count, not the Analysis Queue modal's own independent one.
+  //      No real Stockfish is available in this harness, so engine.analyze()/
+  //      stop() are monkey-patched with a controllable fake (same established
+  //      pattern as Phase T's cancel-the-processing-item test), driving the
+  //      real scheduler against it.
+  try {
+    // clean slate -- tests 165/166 left Nf3/g3 sitting queued (never actually
+    // processed, since no engine was mocked ready yet), which would otherwise
+    // already occupy the front of the queue before this test's own "pre-
+    // existing item" gets added below.
+    await appAZ2.page.evaluate(async () => {
+      for(const it of window.__aqTestHooks.getQueue().slice()) await window.__aqTestHooks.cancelAnalysisQueueItem(it.id);
+    });
+    await appAZ2.page.evaluate(() => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = true; engine.maxThreads = 8; engine.threads = 8;
+      window.__aqTestHooks.populateEngineThreadsSelect();
+      window.__aqTestHooks.populateAqThreadsSelect();
+    });
+    await appAZ2.page.selectOption('#engineThreadsSelect', '3');
+    // aqThreadsSelect lives inside the Analysis Queue modal -- open it first
+    // (same as Phase VD's own thread-selector tests) so it's actionable.
+    await appAZ2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appAZ2.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.selectOption('#aqThreadsSelect', '6');
+    await appAZ2.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+
+    await appAZ2.page.evaluate(() => {
+      window.__aqFakeEngine = { pending: null, callCount: 0, calls: [] };
+      const { engine } = window.__aqTestHooks;
+      engine.ready = true;
+      engine.analyze = (fen, opts) => {
+        window.__aqFakeEngine.callCount++;
+        window.__aqFakeEngine.calls.push(opts);
+        return new Promise(resolve => {
+          window.__aqFakeEngine.pending = () =>
+            resolve({ depth: 5, lines: { 1: { score: { type:'cp', value:5 }, depth:5, pv:['e2e4'] } } });
+        });
       };
-    }, rowSel);
-    assert(afterClick.liveCount === 1, `expected 1 move showing a pending "…" indicator, got ${afterClick.liveCount}`);
-    assert(afterClick.remainingAnalyzeButtons === 2, `expected 2 Analyze buttons remaining (the other 2 moves), got ${afterClick.remainingAnalyzeButtons}`);
-    assert(afterClick.allDisabled, 'expected the remaining Analyze buttons disabled while one is pending (single shared engine)');
-    ok('Compare Games: clicking Analyze shows a pending state and disables other alternates (Phase 2 wiring)');
-  } catch(e){ bad('Compare Games: Phase 2 analyze wiring', e); }
+      engine.stop = () => {
+        if(window.__aqFakeEngine.pending){
+          const p = window.__aqFakeEngine.pending;
+          window.__aqFakeEngine.pending = null;
+          p();
+        }
+      };
+    });
+
+    // an unrelated item, queued and already mid-search, well short of ITS
+    // (much deeper) target -- the fake resolve's depth 5 never finishes it.
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','g6'], 40, 1));
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.maybeResumeAnalysisQueue());
+    await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 1, { timeout: 5000 });
+    const preExisting = await appAZ2.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(preExisting?.seq?.join(',') === 'd4,g6', `expected the pre-existing item to start processing first, got ${JSON.stringify(preExisting)}`);
+
+    // now trigger "Analyze Others" on rowSel's g3 alternate -- it should
+    // interrupt the above and jump to the front instead of waiting in line.
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
+    const nowProcessing = await appAZ2.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(nowProcessing && (nowProcessing.seq.join(',') === 'd4,Nf6,Nf3' || nowProcessing.seq.join(',') === 'd4,Nf6,g3'),
+      `expected an "Analyze Others" item to start next (interrupting the pre-existing one), got ${JSON.stringify(nowProcessing)}`);
+    const lastOpts = await appAZ2.page.evaluate(() => window.__aqFakeEngine.calls[1]);
+    assert(lastOpts.threads === 3, `expected the "Analyze Others" search to run at the LIVE panel's thread count (3), not the queue's own (6), got ${lastOpts.threads}`);
+
+    const queueOrder = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(queueOrder.includes('d4,g6') && queueOrder.indexOf('d4,g6') > 0,
+      `expected the interrupted pre-existing item still queued, but behind the priority items, got ${JSON.stringify(queueOrder)}`);
+
+    // let the fake search resolve too, so the background loop doesn't leave
+    // a dangling pending promise behind it.
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.engine.stop());
+    ok('Compare Games: "Analyze Others" jumps to the front, interrupts an in-progress search, and runs at the live thread count');
+  } catch(e){ bad('Compare Games: Analyze Others priority + interrupt + live threads', e); }
 } finally {
   await appAZ2.close();
 }
@@ -7990,11 +8121,16 @@ try {
     const hasCompareBtn = await appBV.page.evaluate(s => !!document.querySelector(`${s} [data-act="compareActual"]`), blackRowSel);
     assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
     await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="compareActual"]`).click(), blackRowSel);
-    await appBV.page.waitForSelector(`${blackRowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
-    const altMoves = await appBV.page.evaluate(s =>
-      [...document.querySelector(s).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), blackRowSel);
-    assert(altMoves.length === 2, `expected both played moves (e5, c5) shown, got ${JSON.stringify(altMoves)}`);
-    assert(altMoves.some(m => m.startsWith('c5')), `expected the divergent alternate (c5) shown, got ${JSON.stringify(altMoves)}`);
+    await appBV.page.waitForSelector(`${blackRowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const state = await appBV.page.evaluate(s => {
+      const meta = document.querySelector(s).nextElementSibling;
+      return {
+        standardBold: meta.querySelector('.meta-actual-header strong .meta-actual-move')?.textContent.trim(),
+        altMoves: [...meta.querySelectorAll('.meta-actual-alt-row .meta-actual-move')].map(el => el.textContent.trim()),
+      };
+    }, blackRowSel);
+    assert(state.standardBold === 'e5', `expected the configured standard (e5) boldfaced in the header, got "${state.standardBold}"`);
+    assert(JSON.stringify(state.altMoves) === JSON.stringify(['c5']), `expected the divergent alternate (c5) as its own row, got ${JSON.stringify(state.altMoves)}`);
     ok('renderBlackRoot regression: "Compare Games" button exists and works (previously missing HTML for a wired handler)');
   } catch(e){ bad('renderBlackRoot: Compare Games button', e); }
 } finally {

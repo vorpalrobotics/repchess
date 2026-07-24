@@ -16,22 +16,29 @@ score from these games, plus how often you actually followed your own
 standard response when one's set.</p>
 
 <h3>Compare Games</h3>
-<p>Toggles a commentary line right under the row, listing every move you've
-actually played from that exact position in your own games -- grouped with
-a play count, sorted by how often you played each. Your current standard
-response (if one's set) is boldfaced right in the list rather than left
-out, so you can see at a glance how often you actually followed your own
-prep versus drifting to something else. Click a move to pop up a mini board
-at the resulting position; click the leading icon to dismiss the line again
-(same as toggling the menu item a second time). If no games reach this
-position at all, it says so instead of showing nothing.</p>
+<p>Toggles a small table right under the row: one row per move you've
+actually played from that exact position in your own games, sorted by how
+often you played each. The header row carries your configured standard
+response boldfaced, with its own eval alongside if you've already analyzed
+that node; every other move you've actually played gets its own indented
+row below it. Click any move to pop up a mini board at the resulting
+position; click the leading icon to dismiss the table again (same as
+toggling the menu item a second time). If no games reach this position at
+all, it says so instead of showing nothing.</p>
 
 <p>If a row has no standard response configured yet, a <strong>Use as
-Standard</strong> button appears on the most-played move -- a quick way to
-set a new node's reply from what you've actually been doing rather than
-typing one in cold.</p>
+Standard</strong> button appears on the header row instead of a boldfaced
+move -- a quick way to set a new node's reply from what you've actually
+been doing rather than typing one in cold.</p>
 
-<p>Each move also has a small board icon to run the engine on it right
-there, showing a live score alongside the move -- handy for checking
-whether a move you've drifted into (or your existing standard) is still
-objectively sound.</p>
+<h4>Analyze Others</h4>
+<p>The lightning-bolt icon on the header row background-analyzes every
+OTHER move at once -- a quick way to see at a glance whether the moves
+you've drifted into are still objectively sound. It asks for a depth (its
+own setting, independent of the deeper default used for children), always
+runs a single quick line per move at whatever thread count your live
+analysis board is set to, and jumps straight to the front of the analysis
+queue -- interrupting anything already running there, since this is meant
+to be a fast "let me see" rather than something left to churn in the
+background. Evals fill in as each one finishes; a small hourglass marks a
+move that's queued or currently being analyzed.</p>
