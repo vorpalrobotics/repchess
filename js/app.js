@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-192';
+const BUILD_TAG = '-193';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -620,6 +620,39 @@ function gamesAlongLine(games, seq){
     if(ok) out.push({ game, move: sans[lower.length] || null });
   }
   return out;
+}
+
+/* ---------- "Compare to Actual Games" (three-dot menu) ----------
+   Shown as commentary lines under a node, not a modal (unlike "Games with
+   this Position") -- lists the moves YOU actually played from this exact
+   position (exact-line match only, not any-transposition: this is about
+   what happened down THIS specific prep path, not the position in general),
+   grouped by move with a play count, excluding whichever move matches the
+   row's own configured standard reply -- the point is to surface
+   divergence, not restate the standard. When there's no reply configured
+   yet, nothing is excluded, so this doubles as "what have you actually
+   played here" to help pick one. */
+function actualMoveComparison(seq, reply){
+  const replyLower = (reply || '').toLowerCase();
+  const counts = {};
+  for(const { move } of gamesAlongLine(GAMES || [], seq)){
+    if(!move || move.toLowerCase() === replyLower) continue;
+    counts[move] = (counts[move] || 0) + 1;
+  }
+  return Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([move,count]) => ({move,count}));
+}
+// HTML for the meta-row commentary line, or '' when there's nothing to show
+// (no games reached this exact line, or every game that did just played the
+// configured standard). data-move on the "Use as Standard" button is always
+// the TOP (most-played) alternate -- only rendered when no reply is set yet.
+function actualMovesHtml(seq, reply){
+  const alts = actualMoveComparison(seq, reply);
+  if(!alts.length) return '';
+  return `<div class="meta-actual" title="Moves you've actually played here, from your own games">` +
+    `<i class="fa-solid fa-code-compare"></i>` +
+    alts.map(({move,count}) => `<span class="meta-actual-move">${escapeHtml(move)} <em>(${count}×)</em></span>`).join('') +
+    (!reply ? `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>` : '') +
+    `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
@@ -3113,6 +3146,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
              <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
+             <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare to Actual Games</button>
              <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
              <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
                <span class="rmq-label">Move quality</span>
@@ -3182,22 +3216,28 @@ function renderBranch(parent,games,seq,depth,flip=false){
     function continuationHtml(){
       return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
     }
+    // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
+    // above, not persisted: resets to hidden on the next full re-render.
+    let showActualGames = false;
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
       const note = saved?.note || '';
       const pvHtml = continuationHtml();
-      if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
+      const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply) : '';
+      if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
         (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
-        pvHtml;
+        pvHtml + actualHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
       const noteEl = metaTd.querySelector('.meta-note');
       if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      const useActualBtn = metaTd.querySelector('.meta-actual-use');
+      if(useActualBtn) useActualBtn.onclick = () => setStandardResponse(useActualBtn.dataset.move);
       wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
     }
     refreshMeta();
@@ -3352,6 +3392,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       showGamesAtNode(lineSeq);
+    };
+    rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      showActualGames = !showActualGames;
+      refreshMeta();
     };
     rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
       e.stopPropagation();
@@ -3546,22 +3592,28 @@ function renderBlackRoot(parent,games,trigger){
   function continuationHtml(){
     return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
   }
+  // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
+  // above, not persisted: resets to hidden on the next full re-render.
+  let showActualGames = false;
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
     const note = saved?.note || '';
     const pvHtml = continuationHtml();
-    if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
+    const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply) : '';
+    if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
       (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
-      pvHtml;
+      pvHtml + actualHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     const noteEl = metaTd.querySelector('.meta-note');
     if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+    const useActualBtn = metaTd.querySelector('.meta-actual-use');
+    if(useActualBtn) useActualBtn.onclick = () => setStandardResponse(useActualBtn.dataset.move);
     wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
   }
   refreshMeta();
@@ -3686,6 +3738,12 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     showGamesAtNode(lineSeq);
+  };
+  rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    showActualGames = !showActualGames;
+    refreshMeta();
   };
   rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
     e.stopPropagation();

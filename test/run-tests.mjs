@@ -7699,5 +7699,86 @@ try {
 }
 }
 
+// --- Phase AZ2: "Compare to Actual Games" (three-dot menu) -- commentary
+//     lines under a node (not a modal, unlike "Games with this Position")
+//     listing the moves you've actually played from this exact line in your
+//     own games, grouped with a play count, excluding whatever matches the
+//     row's own configured standard reply. When no reply is configured yet,
+//     nothing is excluded and a "Use as Standard" quick action appears on
+//     the most-played alternate. ---
+if(shouldRunPhase(['move-table'])){
+const appAZ2 = await launchApp();
+try {
+  await seedBackup(appAZ2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },   // has a configured standard -- tests 162/163
+      // ['d4','g6'] has NO configured reply at all -- test 164
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6' },    // played the configured standard (c4) -- must be excluded
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6' },   // divergent: Nf3 x1
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5' },   // divergent: Nf3 x2 total
+      { id: 'g4', moves: 'd4 Nf6 g3 g6' },    // divergent: g3 x1
+      { id: 'g5', moves: 'd4 g6 c4 Bg7' },    // no reply configured here: c4 x1
+      { id: 'g6', moves: 'd4 g6 Nf3 Bg7' },   // Nf3 x2 total
+      { id: 'g7', moves: 'd4 g6 Nf3 d6' },
+    ],
+  });
+  await appAZ2.page.click('.line-row');
+  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+
+  // 162. Toggling "Compare to Actual Games" shows divergent moves sorted by
+  //      count, excluding the row's own configured standard reply.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
+    const moves = await appAZ2.page.evaluate((sel) =>
+      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), rowSel);
+    assert(moves.length === 2, `expected 2 divergent alternate moves, got ${JSON.stringify(moves)}`);
+    assert(moves[0].startsWith('Nf3'), `expected Nf3 (2x, most-played) listed first, got ${JSON.stringify(moves)}`);
+    assert(moves[0].includes('2') && moves[1].includes('1'), `expected counts 2 then 1, got ${JSON.stringify(moves)}`);
+    assert(!moves.some(m => m.startsWith('c4')), `expected the configured standard (c4) excluded, got ${JSON.stringify(moves)}`);
+    const hasUseBtn = await appAZ2.page.evaluate((sel) => !!document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use'), rowSel);
+    assert(!hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
+    ok('Compare to Actual Games: shows divergent moves with counts, excludes the configured standard, sorted by frequency');
+  } catch(e){ bad('Compare to Actual Games: divergence + counts', e); }
+
+  // 163. Toggling again hides the commentary line (ephemeral, not persisted).
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    const stillThere = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-move');
+    }, rowSel);
+    assert(!stillThere, 'expected toggling again to hide the actual-games commentary');
+    ok('Compare to Actual Games: toggling again hides the commentary line');
+  } catch(e){ bad('Compare to Actual Games: toggle off', e); }
+
+  // 164. With no reply configured yet (a DIFFERENT row, seq d4,g6, seeded
+  //      with no pref at all), nothing is excluded and "Use as Standard" on
+  //      the top alternate sets it as the row's reply.
+  try {
+    const rowSel2 = 'tr.data-row[data-seq="d4,g6"]';
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel2);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel2);
+    await appAZ2.page.waitForSelector(`${rowSel2} + tr.meta-row .meta-actual-use`, { timeout: 5000 });
+    const movesNoReply = await appAZ2.page.evaluate((sel) =>
+      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), rowSel2);
+    assert(movesNoReply.length === 2, `expected both actually-played moves (c4, Nf3) with no reply configured, got ${JSON.stringify(movesNoReply)}`);
+    assert(movesNoReply[0].startsWith('Nf3'), `expected Nf3 (2x, most-played) listed first, got ${JSON.stringify(movesNoReply)}`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use').click(), rowSel2);
+    const newReply = await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .ourReply').textContent, rowSel2);
+    assert(newReply === 'Nf3', `expected "Use as Standard" to set the top (most-played) alternate Nf3 as the reply, got "${newReply}"`);
+    ok('Compare to Actual Games: with no reply configured, nothing is excluded and "Use as Standard" sets the top alternate');
+  } catch(e){ bad('Compare to Actual Games: no-reply-yet + Use as Standard', e); }
+} finally {
+  await appAZ2.close();
+}
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
