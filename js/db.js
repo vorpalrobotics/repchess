@@ -110,36 +110,6 @@ async function getGames(user){
   });
 }
 
-/* Delete only this user's chess.com games, leaving Lichess (and any other
-   source) untouched -- so a chess.com re-import can REPLACE rather than merge
-   (the metadata-enrichment changed chess.com games' id scheme, so a plain
-   merge would leave the old, sparser copies behind as duplicates). A game is
-   chess.com if it's tagged source:'chesscom' (new, enriched imports) OR it's a
-   legacy bare {moves} object with none of Lichess's always-present markers
-   (players / id / createdAt) -- the shape the old importer produced. Lichess
-   games and manual ndjson imports always carry `players`, so they're never
-   matched. Resolves the number removed. */
-async function clearChessComGames(user){
-  const db = await openDB();
-  return new Promise((resolve,reject)=>{
-    const txn = db.transaction('games','readwrite');
-    const store = txn.objectStore('games');
-    let removed = 0;
-    txn.oncomplete = () => { console.log(`[db] cleared ${removed} chess.com game(s) for ${user}`); resolve(removed); };
-    txn.onerror    = () => { console.error('[db] clearChessComGames failed',txn.error); reject(txn.error); };
-    const req = store.index('user').getAll(user);
-    req.onsuccess = () => {
-      for(const rec of req.result){
-        const raw = rec.raw || {};
-        const isChessCom = raw.source === 'chesscom' ||
-          (!raw.source && !raw.players && !raw.id && !raw.createdAt);
-        if(isChessCom){ store.delete(rec.id); removed++; }
-      }
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
 /* ---------- lines (named repertoire roots) ---------- */
 // `id` may be supplied to recreate a line under its original id (e.g. restoring
 // a backup) — VR decoration keys embed the line id via castleInstanceId(), so a
@@ -438,6 +408,19 @@ async function setMeta(key, value){
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('meta','readwrite');
     txn.objectStore('meta').put({key, value});
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+// true removal (not just blanking the value with setMeta(key,'')) -- for
+// cleaning up a row under a since-abandoned key entirely, e.g. a cache key
+// renamed across a breaking format/logic change.
+async function deleteMeta(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('meta','readwrite');
+    txn.objectStore('meta').delete(key);
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });

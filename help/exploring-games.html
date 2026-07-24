@@ -1,0 +1,67 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Exploring Your Games</h2>
+
+<p>Beyond feeding the move tree's frequencies, your imported games are
+their own source of insight -- both available from any row's &vellip; menu
+in the move table.</p>
+
+<p>Both only ever count a game where you were actually playing the opening
+system's own color -- a game reached by the same moves where you were on
+the OTHER side (an opponent's choice, not yours) doesn't count as something
+you played, and neither does a game whose color can't be determined at all
+(an old, pre-detail chess.com import).</p>
+
+<h3>Find Games</h3>
+<p>Lists your own games that reached that row's position, with date,
+opponent, rating, result, and the move you played -- a pawn or knight badge
+marks whether each came from Chess.com or Lichess, and clicking a row opens
+it on the original site. Choose <strong>Any transposition</strong> to match
+the position by any move order, or <strong>This line only</strong> for an
+exact match of your prepared sequence. A summary line reports your overall
+score from these games, plus how often you actually followed your own
+standard response when one's set.</p>
+
+<h3>Compare Games</h3>
+<p>Toggles a small table right under the row: one row per move you've
+actually played from that exact position in your own games, sorted by how
+often you played each. The header row carries your configured standard
+response boldfaced, with its own eval alongside if you've already analyzed
+that node; every other move you've actually played gets its own indented
+row below it. Each row also shows that move's own win/loss/draw record from
+your games (<em>+2 =1 &minus;0</em>, same notation as Find Games' own
+summary line), including the standard -- so you can see not just how often
+you've played each move, but how it's actually turned out. Click any move
+to pop up a mini board at the resulting position; click the leading icon to
+dismiss the table again (same as toggling the menu item a second time). If
+no games reach this position at all, it says so instead of showing
+nothing.</p>
+
+<p>If a row has no standard response configured yet, a <strong>Use as
+Standard</strong> button appears on the header row instead of a boldfaced
+move -- a quick way to set a new node's reply from what you've actually
+been doing rather than typing one in cold.</p>
+
+<h4>Analyze Others</h4>
+<p>The lightning-bolt icon on the header row background-analyzes every
+OTHER move at once (the standard reply rides along too, if its own eval
+isn't already at least as deep as what you ask for) -- a quick way to see
+at a glance whether the moves you've drifted into are still objectively
+sound. It asks for a depth (its own setting, independent of the deeper
+default used for children), always runs a single quick line per move at
+whatever thread count your live analysis board is set to, and jumps
+straight to the front of the analysis queue -- interrupting anything
+already running there, since this is meant to be a fast "let me see"
+rather than something left to churn in the background. Evals fill in as
+each one finishes; a small hourglass marks a move that's queued or
+currently being analyzed.</p>
+
+<p>Once every other move has its own eval at least as deep as the depth
+you last asked for, a summary line appears: <em>"Standard vs. other moves:
++0.4"</em> -- your standard's own eval compared against the play-count-
+weighted average of everything else you've actually played, from your
+side's perspective (a Black line's numbers are flipped accordingly, so
+positive always means the standard did better). A positive number means
+you're measurably losing eval whenever you drift away from your prep; a
+negative one isn't necessarily bad news -- it can just mean your standard
+is an intentionally speculative choice (a gambit, say) that scores lower
+objectively than the safer moves you've sometimes played instead.</p>

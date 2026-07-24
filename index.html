@@ -107,6 +107,28 @@
   tr.meta-row .meta-pv-score.eval-losing   {color:#c62828}
   tr.meta-row .meta-pv-score.eval-superior {color:#1565c0}
   tr.meta-row .meta-pv-score.eval-winning  {color:#2e7d32}
+  tr.meta-row .meta-actual{display:block;margin-top:.25em;font-style:italic;color:#999}
+  tr.meta-row .meta-actual-row{display:flex;align-items:center;gap:.35em;padding-left:2em}
+  tr.meta-row .meta-actual-alt-table{border-collapse:collapse;margin:.1em 0 0 4em;font-size:inherit}
+  tr.meta-row .meta-actual-alt-table td{padding:0 .6em 0 0;white-space:nowrap;vertical-align:middle}
+  tr.meta-row .meta-actual-alt-table td:last-child{padding-right:0}
+  tr.meta-row .meta-actual-dismiss,
+  tr.meta-row .meta-actual-analyze-all{cursor:pointer;padding:.1em .2em;border-radius:3px}
+  tr.meta-row .meta-actual-dismiss:hover,
+  tr.meta-row .meta-actual-analyze-all:hover{background:#e3f2fd;color:#1565c0}
+  tr.meta-row .meta-actual-move-number{color:#bbb;font-style:normal}
+  tr.meta-row .meta-actual em{font-style:normal;color:#bbb}
+  tr.meta-row .meta-actual-use{margin-left:.3em;font-size:.72rem;font-style:normal;padding:.05em .5em}
+  tr.meta-row .meta-actual-eval{font-style:normal;font-size:.78rem}
+  tr.meta-row .meta-actual-pending{font-style:normal;font-size:.7rem;color:#999;margin-left:.1em}
+  tr.meta-row .meta-actual-record{font-style:normal;font-size:.72rem;color:#888}
+  tr.meta-row .meta-actual-record-good{color:#2e7d32;font-weight:600}
+  tr.meta-row .meta-actual-record-bad{color:#c62828;font-weight:600}
+  tr.meta-row .meta-actual-record-neutral{color:#888}
+  tr.meta-row .meta-actual-summary{font-style:normal;font-size:.78rem;margin-top:.2em}
+  tr.meta-row .meta-actual-summary-good{color:#2e7d32}
+  tr.meta-row .meta-actual-summary-bad{color:#c62828}
+  tr.meta-row .meta-actual-summary-neutral{color:#999}
 
   .row-menu-wrap{position:relative;display:inline-block}
   .row-menu{position:absolute;left:0;top:1.7em;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:10em;z-index:10}
@@ -115,10 +137,10 @@
   .row-menu button:hover{background:#f0f0f0}
   .row-menu i{width:1.1em;text-align:center;color:#888}
   .row-menu-sep{width:100%;border:none;border-top:1px solid #ddd;margin:.3em 0}
-  /* opponent-move quality picker: a one-click glyph strip inside the row menu */
-  .row-menu-quality{padding:.35em .8em;display:flex;flex-direction:column;gap:.25em}
-  .rmq-label{font-size:.72rem;color:#888;font-weight:500}
-  .rmq-strip{display:flex;gap:.25em}
+  /* opponent-move quality picker: "Set Move Quality" toggles the glyph strip below it */
+  .row-menu-quality{display:flex;flex-direction:column}
+  .row-menu-quality .rmq-strip{display:none;gap:.25em;padding:.3em .8em .5em}
+  .row-menu-quality.expanded .rmq-strip{display:flex}
   .rmq{border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;
        font-weight:700;font-size:.8rem;min-width:2em;padding:.15em .3em;text-align:center;line-height:1.2}
   .rmq:hover{background:#eee}
@@ -253,6 +275,8 @@
   .attr-section .field label{min-width:8em;flex-shrink:0}
   .attr-section .field select,.attr-section .field input[type="text"]{flex:1;padding:.3rem .4rem}
   .checkbox-field label{min-width:0;display:flex;align-items:center;gap:.5em;font-weight:normal}
+  .attr-note-field{display:block;width:100%}
+  .attr-note-field textarea{width:100%;box-sizing:border-box;resize:vertical;font:inherit;line-height:1.3;margin-top:.3rem}
   .asset-field-label{min-width:8em;flex-shrink:0}
   .asset-picker{display:flex;align-items:center;gap:.6em;flex:1}
   .asset-thumb{width:50px;height:50px;object-fit:contain;border:1px solid #ddd;border-radius:4px}
@@ -970,6 +994,10 @@
       <select id="attrCastleOwner"></select>
       <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only needed to resolve a transposition shared by two castles; otherwise leave on Auto.</div>
     </div>
+    <div class="field attr-note-field">
+      <label for="attrNote">Notes</label>
+      <textarea id="attrNote" rows="3" placeholder="Any notes about this move or position"></textarea>
+    </div>
     <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
     <div class="modal-actions">
@@ -1030,6 +1058,24 @@
     <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
       <button id="analysisAddCancelBtn">Cancel</button>
       <button id="analysisAddGoBtn">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- "Analyze Others" depth modal (Compare Games' analyze-all icon) -->
+<div id="compareAnalyzeOverlay" class="overlay">
+  <div class="modal" style="max-width:22em">
+    <h2 style="margin-top:0">Analyze Other Replies</h2>
+    <div class="field">
+      <label for="compareAnalyzeDepth">Depth</label>
+      <input type="number" id="compareAnalyzeDepth" min="1" step="1" value="20" style="width:6em">
+    </div>
+    <div style="font-size:.72rem;color:#888;margin-top:-.4rem">A single quick line per move, at the live board's
+      thread count, jumped to the front of the analysis queue.</div>
+    <div id="compareAnalyzeError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
+    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
+      <button id="compareAnalyzeCancelBtn">Cancel</button>
+      <button id="compareAnalyzeGoBtn">Analyze</button>
     </div>
   </div>
 </div>
@@ -1315,7 +1361,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260723-42"></script>
+<script src="js/db.js?v=20260724-44"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1332,6 +1378,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260723-191"></script>
+<script type="module" src="js/app.js?v=20260724-205"></script>
 </body>
 </html>

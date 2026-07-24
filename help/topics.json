@@ -2,6 +2,7 @@
   { "id": "intro", "title": "Intro", "file": "intro.html" },
   { "id": "building-repertoire", "title": "Building Your Repertoire", "file": "building-repertoire.html" },
   { "id": "importing-games", "title": "Importing Your Games", "file": "importing-games.html" },
+  { "id": "exploring-games", "title": "Exploring Your Games", "file": "exploring-games.html" },
   { "id": "digraph-view", "title": "The Digraph View", "file": "digraph-view.html" },
   { "id": "mnemonics-default", "title": "Move Mnemonics: The Default System", "file": "mnemonics-default.html" },
   { "id": "mnemonics-customizing", "title": "Move Mnemonics: Customizing Your Images", "file": "mnemonics-customizing.html" },

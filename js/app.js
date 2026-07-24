@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260721-4';
+import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260722-109';
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-191';
+const BUILD_TAG = '-205';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -131,6 +131,8 @@ const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
 const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_AQ_THREADS='aq_lastThreads';
+const LS_COMPARE_DEPTH='compare_lastDepth';
+const COMPARE_DEFAULT_DEPTH=20;
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
@@ -303,6 +305,25 @@ async function fetchChessCom(user,months,onProgress){
    The trie is cached against the GAMES array identity. Every place that loads or
    replaces the game set assigns a brand-new array, so a changed identity rebuilds
    the index automatically; nothing mutates a game's moves in place. */
+// games where the user actually played `color` -- the SAME filter Find
+// Games/Compare Games already apply (userColorInGame, defined further down,
+// hoisted), but feeding the CORE move-frequency trie here, so a game
+// reached by the same moves where the user was on the OTHER side (an
+// opponent's choice, not theirs) doesn't shape the tree's own rows/
+// percentages, node stats, or castle/VR generation either -- not just Find
+// Games/Compare Games. Memoized per color (there are only ever two) against
+// the `games` array's own identity, so gatherBuiltCastles -- which builds
+// every opening system's castles, White and Black alike, in one pass --
+// doesn't thrash a single-slot cache alternating between them.
+let _gamesForColor = { games: null, byColor: new Map() };
+function gamesForLineColor(games, color){
+  if(_gamesForColor.games !== games) _gamesForColor = { games, byColor: new Map() };
+  if(!_gamesForColor.byColor.has(color)){
+    _gamesForColor.byColor.set(color, (games || []).filter(g => userColorInGame(g) === color));
+  }
+  return _gamesForColor.byColor.get(color);
+}
+
 let _gamesTrie = { games: null, root: null };
 function buildGamesTrie(games){
   const root = { pass: 0, label: null, kids: new Map() };
@@ -437,7 +458,7 @@ function refreshSystemStats(){
   if(!span) return;
   if(!ENABLE_NODE_STATS){ span.textContent = ''; return; }
   if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
-  span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
+  span.textContent = formatNodeStats(computeSystemStats(gamesForLineColor(GAMES, CURRENT_LINE.color), CURRENT_LINE));
 }
 
 /* ---------- games with this position (three-dot menu → Games with this Position) ----------
@@ -448,37 +469,61 @@ function refreshSystemStats(){
    sequence). Rich columns show for Lichess and (post-enrichment) chess.com
    games; legacy bare {moves} games still count but show moves only. */
 
-// positionKey -> [{ g:gameIndex, move:SAN|null }] for EVERY position in every
-// game (`move` is the one played FROM that position; null at game's end).
+// positionKey -> [{ key:gameIndexKey, move:SAN|null }] for EVERY position in
+// every game (`move` is the one played FROM that position; null at game's
+// end). Entries are keyed by a STABLE, CONTENT-based per-game key (see
+// gameIndexKey below) rather than the game's position in any particular
+// GAMES array, specifically so reindexAfterImport (below) can APPEND newly
+// imported games onto an existing index without caring what order getGames()
+// happens to return things in.
+//
 // Cached in memory against the GAMES array identity (so repeat queries within
 // the same page load are instant, same pattern as the reply trie) AND
 // persisted to IndexedDB (meta key POSITION_INDEX_CACHE_KEY, same pattern as
 // BUILT_CASTLES_CACHE_KEY/gatherBuiltCastles) -- for a large game database
 // (thousands of games) the chess.js replay is expensive enough to be worth
 // surviving a browser refresh instead of paying that cost every session.
-// invalidatePositionIndexCache() clears both layers and is called at the
-// three places GAMES' actual CONTENT changes: the chess.com/Lichess download
-// handler, local file import, and importBackup's full restore. It's
-// deliberately NOT invalidated by every GAMES reassignment -- GAMES is also
+//
+// Two ways the index gets updated:
+//  - invalidatePositionIndexCache() drops it entirely -- used only by
+//    importBackup's full restore, which can swap in a completely different
+//    user's data, so there's nothing to sensibly diff/append against.
+//  - reindexAfterImport() updates it AT IMPORT TIME for the two routine
+//    import paths (chess.com/Lichess download, local file import): appends
+//    just the games it hasn't seen before rather than rebuilding everything,
+//    so a "check for new games" import stays fast even against a large
+//    existing database, and the index is already current by the time the
+//    import finishes (not deferred to the next "Games with this Position"
+//    open).
+// Neither is triggered by every GAMES reassignment -- GAMES is also
 // reassigned on every ordinary page load via the lazy
 // `if(!GAMES) GAMES = await getGames()` reads, which don't change content.
 const POSITION_INDEX_CACHE_KEY = 'gamesPositionIndexCache';
 let _posIndex = { games: null, map: null };
 let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
-let _posIndexBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
+let _posIndexBuildCount = 0;       // real (non-cache-hit) FULL builds this page load -- test-only signal
 function invalidatePositionIndexCache(){
   _posIndex = { games: null, map: null };
   _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache
 }
-function indexOneGame(add, game, gi){
+// A stable key for one game, independent of its position in any array --
+// same scheme putGames (db.js) already uses to dedupe by id at the storage
+// layer: the game's own id when present (every chess.com/Lichess game has
+// one), falling back to a content hash for the legacy bare {moves}-only
+// shape (pre-metadata-enrichment chess.com imports) that predates ids.
+function gameIndexKey(game){
+  return game.id || hashStr(JSON.stringify(game));
+}
+function indexOneGame(add, game){
+  const key = gameIndexKey(game);
   const chess = new Chess();
   const sans = (game.moves || '').split(' ').filter(Boolean);
   for(let i=0;i<sans.length;i++){
-    add(positionKey(chess.fen()), { g: gi, move: sans[i] });
+    add(positionKey(chess.fen()), { key, move: sans[i] });
     if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
   }
-  add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
+  add(positionKey(chess.fen()), { key, move: null });   // final position, no move after
 }
 // Replays every game move-by-move through chess.js -- for a large game
 // database (e.g. months of chess.com history) that's slow enough as one
@@ -490,7 +535,7 @@ async function buildPositionIndex(games, onProgress){
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
   for(let gi=0; gi<games.length; gi++){
-    indexOneGame(add, games[gi], gi);
+    indexOneGame(add, games[gi]);
     if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
       onProgress?.(gi + 1, games.length);
       await nextPaint();
@@ -498,21 +543,47 @@ async function buildPositionIndex(games, onProgress){
   }
   return map;
 }
+// loads the persisted copy into _posIndex.map (at most once per page load,
+// leaving _posIndex.games null -- the caller decides what games array the
+// resulting map should be considered current for). Shared by positionIndex
+// (the lazy, query-time path) and reindexAfterImport (the eager, import-time
+// path) so both agree on when a persisted copy has already been checked.
+async function loadPersistedIndexOnce(){
+  if(_posIndex.map || _posIndexIdbChecked) return;
+  _posIndexIdbChecked = true;
+  try {
+    const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
+    if(!raw) return;
+    const map = new Map(JSON.parse(raw));
+    // Sanity-check the entry shape before trusting it. The very first version
+    // of this persisted format (before gameIndexKey existed) stored entries
+    // as {g:arrayIndex, move} instead of {key:gameIndexKey, move} -- a blob
+    // saved under that shape (e.g. still sitting in a browser's IndexedDB
+    // from before this format changed) would otherwise load silently and
+    // EVERY lookup would just quietly return zero matches (gamesAtPosition's
+    // byKey.get(undefined) for every hit, since old entries have no .key) --
+    // "Games with this Position" reporting no games for a position that
+    // obviously has some, with no error anywhere. Bail out to a fresh
+    // rebuild instead of trusting a shape that doesn't match what this
+    // build's code actually reads.
+    const [sample] = map.values();
+    if(map.size && !(sample?.[0] && 'key' in sample[0])){
+      console.warn('[games index] persisted index is in an old/incompatible format -- rebuilding');
+      return;
+    }
+    _posIndex = { games: null, map };
+  } catch(e){ console.warn('[games index] failed to read the persisted index, will rebuild', e); }
+}
 async function positionIndex(games, onProgress){
   if(_posIndex.games === games) return _posIndex.map;
-  // the persisted copy is checked at most once per page load -- once we know
-  // one way or the other, _posIndex itself (games:null or populated) is
-  // authoritative and this branch is skipped from then on.
-  if(!_posIndexIdbChecked){
-    _posIndexIdbChecked = true;
-    try {
-      const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
-      if(raw){
-        const map = new Map(JSON.parse(raw));
-        _posIndex = { games, map };
-        return map;
-      }
-    } catch(e){ console.warn('[games index] failed to read the persisted index, rebuilding', e); }
+  await loadPersistedIndexOnce();
+  if(_posIndex.map){
+    // a persisted (or already in-memory) copy exists -- there's no path in
+    // this codebase that changes GAMES' content without going through
+    // reindexAfterImport/invalidatePositionIndexCache, so it's safe to treat
+    // it as current for `games` too.
+    _posIndex.games = games;
+    return _posIndex.map;
   }
   const map = await buildPositionIndex(games, onProgress);
   _posIndex = { games, map };
@@ -520,11 +591,60 @@ async function positionIndex(games, onProgress){
   setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
   return map;
 }
+// Called right after a ROUTINE import (chess.com/Lichess download, local file
+// import) writes new/changed games. putGames upserts by a stable id, so
+// `freshGames` (the full post-import array) typically still contains plenty
+// of ALREADY-indexed games -- e.g. a chess.com re-import covering overlapping
+// months -- diffed out here by the same content-based key gamesAtPosition
+// uses, so a routine "check for new games" import only pays to index games it
+// hasn't seen before, not the whole database. Falls back to a full build if
+// there's no existing index anywhere yet (first import ever, or first import
+// this page load with nothing persisted) -- there's no cheaper way to produce
+// a first-ever index.
+async function reindexAfterImport(freshGames, onProgress){
+  await loadPersistedIndexOnce();
+  if(!_posIndex.map){
+    _posIndex = { games: freshGames, map: await buildPositionIndex(freshGames, onProgress) };
+    _posIndexBuildCount++;
+  } else {
+    const already = new Set();
+    for(const entries of _posIndex.map.values()) for(const e of entries) already.add(e.key);
+    const toAdd = freshGames.filter(g => !already.has(gameIndexKey(g)));
+    if(toAdd.length){
+      const add = (key, entry) => { let a = _posIndex.map.get(key); if(!a){ a=[]; _posIndex.map.set(key,a); } a.push(entry); };
+      for(let i=0;i<toAdd.length;i++){
+        indexOneGame(add, toAdd[i]);
+        if(i % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
+          onProgress?.(i + 1, toAdd.length);
+          await nextPaint();
+        }
+      }
+    }
+    _posIndex.games = freshGames;
+  }
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([..._posIndex.map]));   // fire-and-forget: persist across reloads
+}
+// key -> game lookup for the CURRENT games array, memoized against its
+// identity (rebuilding it is cheap -- no chess.js involved -- but still O(n),
+// no reason to redo it for every query against the same array).
+let _posIndexByKey = { games: null, byKey: null };
+function gamesByIndexKey(games){
+  if(_posIndexByKey.games === games) return _posIndexByKey.byKey;
+  const byKey = new Map();
+  for(const g of games) byKey.set(gameIndexKey(g), g);
+  _posIndexByKey = { games, byKey };
+  return byKey;
+}
 // games (+ the move played from here) that reached `fen`'s position by ANY move order.
 async function gamesAtPosition(games, fen, onProgress){
   const map = await positionIndex(games, onProgress);
   const hits = map.get(positionKey(fen)) || [];
-  return hits.map(h => ({ game: games[h.g], move: h.move }));
+  const byKey = gamesByIndexKey(games);
+  // .filter(): a hit whose game no longer exists in `games` (deleted since
+  // it was indexed -- not a path any current import/reindex code takes, but
+  // cheap to guard against a stale entry silently) is dropped rather than
+  // shown as a broken row.
+  return hits.map(h => ({ game: byKey.get(h.key), move: h.move })).filter(x => x.game);
 }
 // games that followed EXACTLY `seq` (a prefix match on the SAN move list), with
 // the move each played immediately after — the strict "this line only" view.
@@ -539,6 +659,156 @@ function gamesAlongLine(games, seq){
     if(ok) out.push({ game, move: sans[lower.length] || null });
   }
   return out;
+}
+
+/* ---------- "Compare Games" (three-dot menu) ----------
+   Shown as commentary rows under a node, not a modal (unlike "Find Games")
+   -- one row per move YOU actually played from this exact position (exact-
+   line match only, not any-transposition: this is about what happened down
+   THIS specific prep path, not the position in general). The header row
+   carries the node's own configured standard reply, boldfaced -- its eval
+   (if any) is read straight from that child's own PREFS entry, since it's a
+   real expanded tree branch with its own Analyse/queue affordances already.
+   Every OTHER move actually played gets its own indented row below it,
+   sorted by play count, with an "Analyze Others" icon on the header row to
+   background-analyze all of them at once (see queueAlternatesForAnalysis). */
+// Only games where the signed-in user was actually playing CURRENT_LINE's
+// own color count here -- gamesAlongLine matches purely on the move text, so
+// without this a game reached via the SAME move order but where the user was
+// on the other side (an opponent's choice, not the user's own) would get
+// counted as something the user "played." A game whose color can't be
+// determined at all (a legacy bare chess.com import) is excluded the same
+// way, for the same reason: it can't be confirmed to be the user's own move
+// either. Uses userColorInGame/gameOutcomeForUser, the same helpers "Find
+// Games"' own summary line does (defined further down, hoisted).
+function actualMoveComparison(seq){
+  const stats = {};
+  for(const { game, move } of gamesAlongLine(GAMES || [], seq)){
+    if(!move) continue;
+    const userColor = userColorInGame(game);
+    if(userColor !== CURRENT_LINE.color) continue;
+    const rec = stats[move] ??= { move, count:0, win:0, loss:0, draw:0 };
+    rec.count++;
+    const outcome = gameOutcomeForUser(game, userColor);
+    if(outcome) rec[outcome]++;
+  }
+  return Object.values(stats).sort((a,b) => b.count - a.count);
+}
+
+// "3." or "3..." -- the SAN move-number prefix for whichever ply comes right
+// after `seq` (White to move on an even ply count, Black on an odd one).
+function compareMoveNumberLabel(seq){
+  const num = Math.floor(seq.length/2) + 1;
+  return seq.length % 2 === 0 ? `${num}.` : `${num}...`;
+}
+
+// Eval tag for a played move at this node, read straight from PREFS -- the
+// SAME per-seq store every other part of the app reads/writes, whether the
+// seq is a real expanded tree branch (the standard reply) or a hypothetical
+// one only ever reached through this panel's "Analyze Others" icon. A move
+// with a matching entry in the background analysis queue also shows a small
+// pending/processing indicator, so a still-running analysis is visible
+// rather than just silently absent.
+function actualEvalTagHtml(lineId, seq){
+  const savedEval = PREFS[prefKey(lineId, seq)]?.eval;
+  const evalHtml = savedEval
+    ? `<span class="meta-actual-eval meta-pv-score ${evalClass(savedEval, CURRENT_LINE.color)}">${escapeHtml(formatEvalTag(savedEval))}</span>`
+    : '';
+  const queued = ANALYSIS_QUEUE.find(it => it.lineId === lineId && seqEq(it.seq, seq));
+  if(!queued) return evalHtml;
+  const processing = aqCurrentItem?.id === queued.id;
+  return evalHtml + `<i class="fa-solid fa-hourglass-half meta-actual-pending${processing ? ' fa-fade' : ''}" ` +
+    `title="${processing ? 'Analyzing…' : 'Queued for analysis'}"></i>`;
+}
+
+const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
+const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
+
+// "+W =D −L", the same win/loss/draw notation "Find Games"' own summary line
+// uses -- '' when none of this move's games have a determinable outcome
+// (all legacy bare/unknown-color games), so it doesn't misleadingly print
+// "+0 =0 −0" for a move that actually has games, just none with a known result.
+// Only the win count itself is colour-coded (green/red/neutral, by whether
+// wins outnumber losses) -- colouring the whole record would be noisy given
+// how many of these can be on screen in a busy comparison.
+function actualRecordHtml(rec){
+  if(!rec.win && !rec.loss && !rec.draw) return '';
+  const cls = rec.win > rec.loss ? 'meta-actual-record-good' : rec.win < rec.loss ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
+  return `<span class="meta-actual-record" title="${rec.win}W ${rec.draw}D ${rec.loss}L from games with a determinable result">` +
+    `<span class="${cls}">+${rec.win}</span> =${rec.draw} −${rec.loss}</span>`;
+}
+
+// a mate score isn't linearly comparable to a centipawn one, but the
+// weighted-average comparison below needs SOME number -- treat it as a
+// decisively large pawn value (same convention formatEvalTag-adjacent code
+// elsewhere uses when a rough magnitude, not the exact mate distance, is
+// what matters).
+const MATE_PAWNS_PROXY = 30;
+function evalPawns(evalObj){
+  return evalObj.type === 'mate' ? (evalObj.value >= 0 ? MATE_PAWNS_PROXY : -MATE_PAWNS_PROXY) : evalObj.value / 100;
+}
+
+// "Standard vs. other moves: +N.N" -- how much the standard reply's own eval
+// beat (or, negative, lost to) the play-count-weighted average eval of every
+// OTHER move actually played, from the line's own perspective (so a positive
+// number always means the standard did better -- including a Black line
+// where a lower White-relative eval is the good outcome). Only shown once
+// every other move has actually been analyzed to at least the depth the user
+// last asked "Analyze Others" for -- a partial average would be misleading,
+// not just incomplete. null when there's nothing to compute yet.
+function actualStandardSummary(lineId, seq, reply, others){
+  const standardEval = reply && PREFS[prefKey(lineId, [...seq, reply])]?.eval;
+  if(!standardEval || !others.length) return null;
+  const requestedDepth = parseInt(localStorage.getItem(LS_COMPARE_DEPTH), 10) || COMPARE_DEFAULT_DEPTH;
+  const otherEvals = others.map(({move,count}) => ({eval: PREFS[prefKey(lineId, [...seq, move])]?.eval, count}));
+  if(otherEvals.some(({eval:ev}) => !ev || ev.depth < requestedDepth)) return null;
+  const totalCount = otherEvals.reduce((sum,{count}) => sum + count, 0);
+  const weightedAvgOther = otherEvals.reduce((sum,{eval:ev,count}) => sum + evalPawns(ev) * count, 0) / totalCount;
+  const diffWhiteRelative = evalPawns(standardEval) - weightedAvgOther;
+  return CURRENT_LINE.color === 'black' ? -diffWhiteRelative : diffWhiteRelative;
+}
+
+function actualMovesHtml(lineId, seq, reply){
+  const alts = actualMoveComparison(seq);
+  if(!alts.length){
+    return `<div class="meta-actual meta-actual-none" title="No games in your own history reach this position">` +
+      `<div class="meta-actual-row meta-actual-header">${ACTUAL_DISMISS_ICON} No games to compare</div></div>`;
+  }
+  const replyLower = (reply || '').toLowerCase();
+  const others = alts.filter(({move}) => move.toLowerCase() !== replyLower);
+  const moveChip = move => {
+    const fenAfter = fenForSeq([...seq, move]);
+    return `<span class="pv-move meta-actual-move" data-fen="${escapeHtml(fenAfter)}">${escapeHtml(move)}</span>`;
+  };
+  const moveNumberLabel = compareMoveNumberLabel(seq);
+  const replyRec = alts.find(a => a.move.toLowerCase() === replyLower);
+  const headerReplyHtml = reply
+    ? `<strong>${moveChip(reply)}</strong> <em>(${replyRec?.count || 0}×)</em> ${replyRec ? actualRecordHtml(replyRec) : ''} ${actualEvalTagHtml(lineId, [...seq, reply])}`
+    : `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>`;
+  const headerRow =
+    `<div class="meta-actual-row meta-actual-header">` +
+    ACTUAL_DISMISS_ICON + (others.length ? ACTUAL_ANALYZE_ALL_ICON : '') +
+    `<span class="meta-actual-move-number">${moveNumberLabel}</span> ` +
+    headerReplyHtml +
+    `</div>`;
+  // a real <table>, not more flex rows, so the move/count/record/eval
+  // columns actually line up down the list instead of drifting with each
+  // move's own text width.
+  const altTable = others.length ? `<table class="meta-actual-alt-table"><tbody>` + others.map(rec =>
+    `<tr class="meta-actual-alt-row">` +
+    `<td class="meta-actual-move-number">${moveNumberLabel}</td>` +
+    `<td>${moveChip(rec.move)}</td>` +
+    `<td><em>(${rec.count}×)</em></td>` +
+    `<td>${actualRecordHtml(rec)}</td>` +
+    `<td>${actualEvalTagHtml(lineId, [...seq, rec.move])}</td>` +
+    `</tr>`
+  ).join('') + `</tbody></table>` : '';
+  const summary = actualStandardSummary(lineId, seq, reply, others);
+  const summaryRow = summary === null ? '' :
+    `<div class="meta-actual-row meta-actual-summary ${summary > 0.1 ? 'meta-actual-summary-good' : summary < -0.1 ? 'meta-actual-summary-bad' : 'meta-actual-summary-neutral'}">` +
+    `Standard vs. other moves: <strong>${summary >= 0 ? '+' : ''}${summary.toFixed(1)}</strong></div>`;
+  return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
+    headerRow + altTable + summaryRow + `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
@@ -583,9 +853,9 @@ const GAME_STATUS_LABEL = { mate:'checkmate', resign:'resignation', outoftime:'t
 // which provider a game came from, for the games-list badge. Lichess games
 // always carry `players`; chess.com games are either tagged source:'chesscom'
 // (post-enrichment) or -- for legacy pre-enrichment imports -- bare {moves}
-// objects with no players/id/createdAt at all (same shape clearChessComGames
-// uses to recognize them). Nothing else produces that bare shape (manual file
-// imports are always Lichess-shaped ndjson), so it's an unambiguous chess.com signal.
+// objects with no players/id/createdAt at all. Nothing else produces that
+// bare shape (manual file imports are always Lichess-shaped ndjson), so it's
+// an unambiguous chess.com signal.
 function gameSource(game){
   if(game.source === 'chesscom') return 'chesscom';
   if(game.players) return 'lichess';
@@ -618,7 +888,15 @@ async function renderGamesList(mode){
   };
   if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
 
-  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  // only games where the user was actually playing CURRENT_LINE's own color
+  // count as "my games" here -- gamesAtPosition/gamesAlongLine match purely on
+  // position/move-text, so without this a game the user reached via the same
+  // moves while playing the OTHER side (their opponent's choice, not theirs)
+  // would get shown and counted as if it were their own practice. A game
+  // whose color can't be determined at all (a legacy bare chess.com import)
+  // is excluded for the same reason -- it can't be confirmed either way.
+  const rawMatches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  const matches = rawMatches.filter(({game}) => userColorInGame(game) === CURRENT_LINE.color);
   const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
 
   // summary: count + result tally (from the user's perspective, where known) +
@@ -639,7 +917,7 @@ async function renderGamesList(mode){
   const bar = known ? `<span class="games-score-bar" title="${win}W ${draw}D ${loss}L">`+
       `<i class="gw" style="width:${win/known*100}%"></i><i class="gd" style="width:${draw/known*100}%"></i><i class="gl" style="width:${loss/known*100}%"></i></span>` : '';
   $('gamesListSummary').innerHTML =
-    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'}</span>` +
+    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'} as ${CURRENT_LINE.color==='black'?'Black':'White'}</span>` +
     (known ? `<span>+${win} =${draw} −${loss}${pct!=null?` (${pct}%)`:''}</span>${bar}` : '') +
     (reply && yourTurnGames ? `<span>played your move <strong>${escapeHtml(reply)}</strong> in ${followedReply}/${yourTurnGames}</span>` : '');
 
@@ -1562,7 +1840,7 @@ async function showTranspositionGraph(){
     await loadMemorizedRooms();
     await loadDecoratedRooms();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
-    const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
+    const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount }
       = analyzeCastleStructure(graph);
@@ -1599,7 +1877,7 @@ async function showTranspositionGraph(){
     for(const name of castleNames){
       const castleRootSeq = castleRootRoomSeq(name);
       if(!castleRootSeq) continue;
-      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, GAMES, castleRootSeq, name);
+      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), castleRootSeq, name);
       totalCastleRooms += genRooms.length;
       const instanceId = castleInstanceId(CURRENT_LINE.id, name);
       for(const gr of genRooms){
@@ -2380,6 +2658,7 @@ const escapeHtml = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':
 /* ---------- per-row "more" menu ---------- */
 function closeAllRowMenus(){
   document.querySelectorAll('.row-menu.show').forEach(m=>m.classList.remove('show'));
+  document.querySelectorAll('.row-menu-quality.expanded').forEach(q=>q.classList.remove('expanded'));
 }
 document.addEventListener('click', closeAllRowMenus);
 
@@ -2388,7 +2667,7 @@ document.addEventListener('click', closeAllRowMenus);
    uppercase unconditionally; B is ambiguous with the b-file so left alone. */
 const canonicalizeMoveCase = v => v.replace(/[oqnkr]/gi, c => c.toUpperCase());
 
-/* ---------- add note / mnemonic / response modal ---------- */
+/* ---------- mnemonic / response / rename modal ---------- */
 let fieldModalSave = null, fieldModalValidate = null;
 // `validate(rawInput)` is optional; return {ok:true, value} to accept (value
 // is what gets passed to onSave, letting the caller normalize the input), or
@@ -2396,7 +2675,6 @@ let fieldModalSave = null, fieldModalValidate = null;
 function openFieldModal(field, currentValue, onSave, validate){
   const has = !!currentValue;
   $('fieldModalTitle').textContent =
-    field==='note' ? (has ? 'Edit Note' : 'Add Note') :
     field==='mnemonic' ? (has ? 'Edit Mnemonic' : 'Add Mnemonic') :
     field==='lineName' ? 'Rename Opening System' :
     field==='streetName' ? 'Set Street Name' :
@@ -2442,6 +2720,7 @@ function openAttributesModal(saved, onSave, lineSeq){
   $('attrCastleName').value = saved?.castleName || '';
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
+  $('attrNote').value = saved?.note || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -2545,7 +2824,7 @@ function gatherLinkedCastles(startCastleName, startGenRooms){
     const name = queue.shift();
     const rootSeq = castleRootRoomSeq(name);
     if(!rootSeq) continue;   // named but not built yet -- nothing to link to
-    const genRooms = buildGeneratedCastle(CURRENT_LINE, GAMES, rootSeq, name).genRooms;
+    const genRooms = buildGeneratedCastle(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq, name).genRooms;
     out.push({ name, instanceId: castleInstanceId(CURRENT_LINE.id, name), genRooms });
     collectForeign(genRooms);
   }
@@ -2582,7 +2861,7 @@ function canonicalRoomSeq(seq){
   if(!castle) return seq;
   const rootSeq = castleRootRoomSeq(castle);
   if(!rootSeq) return seq;
-  const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq, false, castle);
+  const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq, false, castle);
   const key = positionKey(fenForSeq(roomSeq));
   const room = graph.rooms.find(r => positionKey(r.fen) === key);
   return room ? room.seq.slice(0, -1) : seq;
@@ -2648,7 +2927,8 @@ $('attributesSaveBtn').onclick = () => {
     isCastleRoot: isRoot,
     castleName,
     castleOwner: $('attrCastleOwner').value,
-    castleStreetNumber: streetNumber
+    castleStreetNumber: streetNumber,
+    note: $('attrNote').value.trim()
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -3021,20 +3301,16 @@ function renderBranch(parent,games,seq,depth,flip=false){
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
-             <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+             <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide this Variation</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
-             <hr class="row-menu-sep">
-             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
-             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
-             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
-             <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+             <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
              <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
-               <span class="rmq-label">Move quality</span>
+               <button type="button" class="row-menu-quality-toggle" data-act="qualityToggle"><i class="fa-solid fa-star-half-stroke"></i>Set Move Quality</button>
                <span class="rmq-strip">
                  <button type="button" class="rmq mq-good" data-q="!" title="good move">!</button>
                  <button type="button" class="rmq mq-good" data-q="!!" title="brilliant move">!!</button>
@@ -3046,8 +3322,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
                </span>
              </div>
              <hr class="row-menu-sep">
-             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
-             <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+             <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
+             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            </div>
          </div>
        </td>
@@ -3101,22 +3382,44 @@ function renderBranch(parent,games,seq,depth,flip=false){
     function continuationHtml(){
       return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
     }
+    // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
+    // below) -- they're a room attribute like name/castleName, shared across any
+    // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
+    // "Compare Games" (saved?.compareGames) is PERSISTED, unlike showContinuation
+    // above -- it needs to survive the full-tree rebuild that lands each background
+    // analysis result (saveAnalysisQueueResult), so the panel stays open and its
+    // eval columns visibly fill in as "Analyze Others" results arrive.
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
-      const note = saved?.note || '';
+      const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
       const pvHtml = continuationHtml();
-      if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
+      const actualHtml = saved?.compareGames ? actualMovesHtml(CURRENT_LINE.id, lineSeq, saved?.reply) : '';
+      if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
-        pvHtml;
+        (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+        pvHtml + actualHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
       const noteEl = metaTd.querySelector('.meta-note');
-      if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      if(noteEl) noteEl.onclick = () => openRoomAttributes();
+      const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
+      if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
+      const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
+      if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
+        const replyLower = (saved?.reply || '').toLowerCase();
+        const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
+        // the standard reply rides along too -- addToAnalysisQueue's own
+        // "already sufficient" check silently skips it if its real tree
+        // node already has an eval at least as deep as what's asked for.
+        const moves = saved?.reply ? [...others, saved.reply] : others;
+        if(moves.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, moves, refreshMeta);
+      };
+      const useActualBtn = metaTd.querySelector('.meta-actual-use');
+      if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
       wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
     }
     refreshMeta();
@@ -3154,8 +3457,28 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const isHidden = !!currentSaved()?.hidden;
       getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
       hideBtn.innerHTML = isHidden
-        ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
-        : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
+        ? '<i class="fa-solid fa-eye"></i>Unhide this Variation'
+        : '<i class="fa-solid fa-eye-slash"></i>Hide this Variation';
+    }
+
+    // room-level attributes live on the room's CANONICAL seq (see canonicalRoomSeq)
+    // so a transposing path always reads/writes the same shared data VR itself
+    // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
+    // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
+    function openRoomAttributes(){
+      const roomSeq = canonicalRoomSeq(lineSeq);
+      const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+      openAttributesModal(roomSaved(), v=>{
+        invalidateBuiltCastlesCache();
+        savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+        savePrefField(roomSeq, 'castleName', v.castleName);
+        savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+        savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+        savePrefField(roomSeq, 'name', v.roomName);
+        savePrefField(roomSeq, 'note', v.note);
+        refreshBranchName(nameSpan, roomSaved());
+        refreshMeta();
+      }, lineSeq);
     }
 
     /* expand the branch table under the chosen standard response */
@@ -3238,10 +3561,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
         return {ok:true, value:mv.san};
       });
     };
-    rowMenu.querySelector('[data-act="note"]').onclick = e => {
+    rowMenu.querySelector('[data-act="qualityToggle"]').onclick = e => {
       e.stopPropagation();
-      rowMenu.classList.remove('show');
-      openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      rowMenu.querySelector('.row-menu-quality').classList.toggle('expanded');
     };
     rowMenu.querySelectorAll('.rmq').forEach(btn => {
       btn.onclick = e => {
@@ -3271,6 +3593,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
       e.stopPropagation();
       rowMenu.classList.remove('show');
       showGamesAtNode(lineSeq);
+    };
+    rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      savePrefField(lineSeq, 'compareGames', !currentSaved()?.compareGames);
+      refreshMeta();
     };
     rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
       e.stopPropagation();
@@ -3303,23 +3631,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      // room-level attributes live on the room's CANONICAL seq (see
-      // canonicalRoomSeq) so a transposing path always reads/writes the same
-      // shared data VR itself reads -- everything else on this row
-      // (mnemonic, note, eval, hidden, ...) still keys off lineSeq as usual.
-      const roomSeq = canonicalRoomSeq(lineSeq);
-      const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-      openAttributesModal(roomSaved(), v=>{
-        // the room's display name, and whether/where it's a castle root, all
-        // feed VR room labels and street layout
-        invalidateBuiltCastlesCache();
-        savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
-        savePrefField(roomSeq, 'castleName', v.castleName);
-        savePrefField(roomSeq, 'castleOwner', v.castleOwner);
-        savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
-        savePrefField(roomSeq, 'name', v.roomName);
-        refreshBranchName(nameSpan, roomSaved());
-      }, lineSeq);
+      openRoomAttributes();
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
@@ -3404,20 +3716,21 @@ function renderBlackRoot(parent,games,trigger){
          <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
          <div class="row-menu">
            <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
-           <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+           <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide this Variation</button>
+           <hr class="row-menu-sep">
+           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
+           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
-           <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
-           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
-           <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+           <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
+           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
+           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
+           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
          </div>
        </div>
      </td>
@@ -3465,22 +3778,44 @@ function renderBlackRoot(parent,games,trigger){
   function continuationHtml(){
     return showContinuation ? evalContinuationHtml(currentSaved(), lineSeq) : '';
   }
+  // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
+  // below) -- they're a room attribute like name/castleName, shared across any
+  // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
+  // "Compare Games" (saved?.compareGames) is PERSISTED, unlike showContinuation
+  // above -- it needs to survive the full-tree rebuild that lands each background
+  // analysis result (saveAnalysisQueueResult), so the panel stays open and its
+  // eval columns visibly fill in as "Analyze Others" results arrive.
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
-    const note = saved?.note || '';
+    const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
     const pvHtml = continuationHtml();
-    if(!mnem && !note && !pvHtml){ metaTr.style.display='none'; return; }
+    const actualHtml = saved?.compareGames ? actualMovesHtml(CURRENT_LINE.id, lineSeq, saved?.reply) : '';
+    if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-      (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
-      pvHtml;
+      (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+      pvHtml + actualHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     const noteEl = metaTd.querySelector('.meta-note');
-    if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+    if(noteEl) noteEl.onclick = () => openRoomAttributes();
+    const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
+    if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
+    const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
+    if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
+      const replyLower = (saved?.reply || '').toLowerCase();
+      const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
+      // the standard reply rides along too -- addToAnalysisQueue's own
+      // "already sufficient" check silently skips it if its real tree
+      // node already has an eval at least as deep as what's asked for.
+      const moves = saved?.reply ? [...others, saved.reply] : others;
+      if(moves.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, moves, refreshMeta);
+    };
+    const useActualBtn = metaTd.querySelector('.meta-actual-use');
+    if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
     wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
   }
   refreshMeta();
@@ -3508,8 +3843,28 @@ function renderBlackRoot(parent,games,trigger){
     const isHidden = !!currentSaved()?.hidden;
     getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
     hideBtn.innerHTML = isHidden
-      ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
-      : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
+      ? '<i class="fa-solid fa-eye"></i>Unhide this Variation'
+      : '<i class="fa-solid fa-eye-slash"></i>Hide this Variation';
+  }
+
+  // room-level attributes live on the room's CANONICAL seq (see canonicalRoomSeq)
+  // so a transposing path always reads/writes the same shared data VR itself
+  // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
+  // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
+  function openRoomAttributes(){
+    const roomSeq = canonicalRoomSeq(lineSeq);
+    const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+    openAttributesModal(roomSaved(), v=>{
+      invalidateBuiltCastlesCache();
+      savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+      savePrefField(roomSeq, 'castleName', v.castleName);
+      savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+      savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+      savePrefField(roomSeq, 'name', v.roomName);
+      savePrefField(roomSeq, 'note', v.note);
+      refreshBranchName(nameSpan, roomSaved());
+      refreshMeta();
+    }, lineSeq);
   }
 
   let childrenSeq = null, branchDiv = null;
@@ -3581,11 +3936,6 @@ function renderBlackRoot(parent,games,trigger){
       return {ok:true, value:mv.san};
     });
   };
-  rowMenu.querySelector('[data-act="note"]').onclick = e => {
-    e.stopPropagation();
-    rowMenu.classList.remove('show');
-    openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
-  };
   rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
@@ -3605,6 +3955,12 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     showGamesAtNode(lineSeq);
+  };
+  rowMenu.querySelector('[data-act="compareActual"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    savePrefField(lineSeq, 'compareGames', !currentSaved()?.compareGames);
+    refreshMeta();
   };
   rowMenu.querySelector('[data-act="openingQuiz"]').onclick = e => {
     e.stopPropagation();
@@ -3637,23 +3993,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    // room-level attributes live on the room's CANONICAL seq (see
-    // canonicalRoomSeq) so a transposing path always reads/writes the same
-    // shared data VR itself reads -- everything else on this row (mnemonic,
-    // note, eval, hidden, ...) still keys off lineSeq as usual.
-    const roomSeq = canonicalRoomSeq(lineSeq);
-    const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-    openAttributesModal(roomSaved(), v=>{
-      // the room's display name, and whether/where it's a castle root, all
-      // feed VR room labels and street layout
-      invalidateBuiltCastlesCache();
-      savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
-      savePrefField(roomSeq, 'castleName', v.castleName);
-      savePrefField(roomSeq, 'castleOwner', v.castleOwner);
-      savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
-      savePrefField(roomSeq, 'name', v.roomName);
-      refreshBranchName(nameSpan, roomSaved());
-    }, lineSeq);
+    openRoomAttributes();
   };
 
   btnEval.onclick = () => {
@@ -3675,7 +4015,7 @@ $('fileImport').addEventListener('change', async e=>{
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-  invalidatePositionIndexCache();
+  await reindexAfterImport(GAMES);
   clr();
   // renderTreeBody (not openLine) -- this re-renders the ALREADY-open line
   // from the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -3823,13 +4163,14 @@ function renderTreeBody(line){
     $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
     return;
   }
+  const lineGames = gamesForLineColor(GAMES, line.color);
   triggers.forEach(mv=>{
     const wrap = document.createElement('div');
     $('tree').appendChild(wrap);
     if(line.color==='black'){
-      renderBlackRoot(wrap,GAMES,mv);
+      renderBlackRoot(wrap,lineGames,mv);
     } else {
-      renderBranch(wrap,GAMES,[mv],0);
+      renderBranch(wrap,lineGames,[mv],0);
     }
   });
   refreshSystemStats();
@@ -4012,7 +4353,7 @@ async function searchForLine(text){
     const seq = moves.slice(0,k);
     const opp = moves[k];
     if(!(color==='black' && k===0)){
-      const {counts} = replies(GAMES,seq);
+      const {counts} = replies(gamesForLineColor(GAMES, color),seq);
       const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
       if(!(opp in counts) && !manual.includes(opp)){
         reportVariationNotFound(`after ${seq.join(' ')||'the start'}, "${opp}" isn't a known reply in this opening system`);
@@ -4149,14 +4490,6 @@ $('dlBtn').onclick = async ()=>{
       logDl('fetching…');
       fetched = await fetchChessCom(fetchUser,months,
         (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
-      // chess.com re-import REPLACES (not merges) this user's chess.com games:
-      // the metadata enrichment changed their id scheme, so a merge would leave
-      // the old, sparser copies behind as duplicates. Only runs after a
-      // successful fetch, and only touches chess.com games -- Lichess untouched.
-      console.log(`[chess.com import] clearing old chess.com games for "${CURRENT_USER}"…`);
-      const wiped = await clearChessComGames(CURRENT_USER);
-      console.log(`[chess.com import] cleared ${wiped} old chess.com game(s) for "${CURRENT_USER}"`);
-      if(wiped) logDl(`replaced ${wiped} existing chess.com game(s)…`);
     } else {
       const max=+$('maxGames').value||300;
       localStorage.setItem(LS_MAX,max);
@@ -4167,7 +4500,8 @@ $('dlBtn').onclick = async ()=>{
     await putGames(CURRENT_USER,fetched);
     GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-    invalidatePositionIndexCache();
+    logDl(`imported ${fetched.length}, indexing…`);
+    await reindexAfterImport(GAMES, (done,total) => logDl(`indexing… ${done} of ${total}`));
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -4815,7 +5149,17 @@ function openThreeTestAssets(){
    the "Run VR" menu item itself: Shift+click or right-click it to force a
    fresh rebuild (see menuThreeTest's own wiring), which also re-persists
    the fresh result so subsequent opens/reloads pick it up too. */
-const BUILT_CASTLES_CACHE_KEY = 'builtCastlesCache';
+const BUILT_CASTLES_CACHE_KEY = 'builtCastlesCacheV2';
+// v1 (plain 'builtCastlesCache') predates filtering castle/room generation
+// down to only the games the user actually played THIS line's own color in
+// (see gamesForLineColor) -- a v1 blob would otherwise silently keep serving
+// stale door/room counts computed under the old (unfiltered) rule forever,
+// since nothing about a code-level rule change trips this cache's own
+// write-path invalidation triggers, only a data write does. Renaming the key
+// forces a fresh rebuild under the new rule on every user's first VR open
+// this build; this one-time, fire-and-forget sweep just tidies up the now-
+// abandoned v1 row rather than leaving it to sit in IDB forever unread.
+deleteMeta('builtCastlesCache');
 let _builtCastlesCache = null;
 let _builtCastlesIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
 let _builtCastlesBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
@@ -4852,8 +5196,9 @@ async function gatherBuiltCastles(lines){
   // always completes atomically once its getAllPrefs() resolves — no other
   // line's continuation can interleave in between, so running every line's
   // getAllPrefs() IDB read in parallel instead of serially is safe.
-  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () =>
-    definedCastles().map(name => {
+  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
+    const lineGames = gamesForLineColor(GAMES, line.color);
+    return definedCastles().map(name => {
       const rootSeq = castleRootRoomSeq(name);
       if(!rootSeq) return null;   // named but not built yet — skip
       let streetNumber = null;
@@ -4871,11 +5216,11 @@ async function gatherBuiltCastles(lines){
       // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
       // move (the room convention everywhere else); the position right
       // before it is what a game "chose to enter this castle" out of.
-      const { counts: entryCounts, tot: entryTot } = replies(GAMES, rootSeq.slice(0, -1));
+      const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
       const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
-      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
-    }).filter(Boolean)
-  )));
+      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
+    }).filter(Boolean);
+  })));
   const out = [];
   lines.forEach((line, i) => {
     for(const c of perLine[i]){
@@ -5078,7 +5423,7 @@ const findCastleRootSeq = (line, castleName) => withLinePrefs(line, () => castle
    matching the generator's own scoping — see buildGeneratedCastle). */
 async function computeMnemonicCoverage(line, rootSeq=null){
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
-  const graph = await withLinePrefs(line, () => buildCastleGraph(line, GAMES, rootSeq, false));
+  const graph = await withLinePrefs(line, () => buildCastleGraph(line, gamesForLineColor(GAMES, line.color), rootSeq, false));
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
   for(const seq of seqs){
@@ -5794,7 +6139,7 @@ let OQ = null;     // {line, color, seq, expected, hits, misses, oppChoices, rep
 let oqBoard = null;
 
 function oqVisibleOpps(seq){
-  const {counts} = replies(GAMES || [], seq);
+  const {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
   const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
   return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);
@@ -6765,8 +7110,6 @@ function refreshBranchStats(statsSpan, games, childrenSeq){
 function refreshRowMenuLabels(rowMenu, saved){
   const responseBtn = rowMenu.querySelector('[data-act="response"]');
   if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
-  const noteBtn = rowMenu.querySelector('[data-act="note"]');
-  if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
 }
 
 /* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
@@ -6989,6 +7332,71 @@ async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
   if(toppedUp) bits.push(`${toppedUp} target updated`);
   if(skipped) bits.push(`${skipped} already sufficient`);
   log(`${seqs.length} child${seqs.length===1?'':'ren'}: ${bits.join(', ') || 'nothing to do'}`);
+}
+
+/* ---------- "Analyze Others" (Compare Games' analyze-all icon) ----------
+   Queues every non-standard move actually played at a node for a quick,
+   single-line background analysis. Deliberately separate from "Add to
+   Analysis Queue"/"Add Children to Analysis Queue": its own (usually much
+   shallower) depth default saved to its own localStorage key so it doesn't
+   fight with the deeper default used for real children, always a single PV
+   line (multipv 1 -- there's no need for alternatives on a position that's
+   itself already an alternative), and run at the LIVE engine panel's own
+   thread count rather than the queue's own independent setting, since the
+   user is actively watching this row, not leaving it to churn in the
+   background like a normal queue item. Every item queued this way also
+   jumps to the very front of the queue, ahead of (and interrupting) whatever
+   was already processing -- this is meant to be a fast "let me see" action,
+   not a to-do added for later. */
+let compareAnalyzeCtx = null;   // {lineId, seq, moves, onQueued} pending in the depth dialog
+function openCompareAnalyzeModal(lineId, seq, moves, onQueued){
+  compareAnalyzeCtx = {lineId, seq, moves, onQueued};
+  $('compareAnalyzeDepth').value = localStorage.getItem(LS_COMPARE_DEPTH) || COMPARE_DEFAULT_DEPTH;
+  $('compareAnalyzeError').textContent = '';
+  $('compareAnalyzeOverlay').style.display='flex';
+}
+$('compareAnalyzeCancelBtn').onclick = () => {
+  $('compareAnalyzeOverlay').style.display='none';
+  compareAnalyzeCtx = null;
+};
+$('compareAnalyzeGoBtn').onclick = async () => {
+  if(!compareAnalyzeCtx) return;
+  const depth = parseInt($('compareAnalyzeDepth').value, 10);
+  if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
+  localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
+  const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
+  $('compareAnalyzeOverlay').style.display='none';
+  compareAnalyzeCtx = null;
+  await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
+  onQueued?.();
+};
+
+async function queueAlternatesForAnalysis(lineId, seqs, depth){
+  const orderOf = it => it.order ?? it.createdAt;
+  for(const seq of seqs){
+    const status = await addToAnalysisQueue(lineId, seq, depth, 1, {silent:true});
+    if(status === 'skipped') continue;
+    const item = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
+    if(item) item.useLiveThreads = true;
+  }
+  // jump every item just touched to the front, ahead of anything already
+  // queued -- including whatever's at index 0, which processAnalysisQueueLoop
+  // treats as "currently processing". engine.stop() below interrupts it, and
+  // processAnalysisQueueLoop's own "outranked" check (it's still queued, just
+  // no longer at the front) resumes the loop immediately for the new front
+  // item, rather than waiting for an external idle trigger.
+  const minOrder = ANALYSIS_QUEUE.length ? Math.min(...ANALYSIS_QUEUE.map(orderOf)) : Date.now();
+  let nextOrder = minOrder - 1;
+  for(const seq of seqs){
+    const item = ANALYSIS_QUEUE.find(it => it.lineId===lineId && seqEq(it.seq, seq));
+    if(!item) continue;
+    item.order = nextOrder--;
+    await putAnalysisQueueItem(item);
+  }
+  ANALYSIS_QUEUE.sort((a,b) => orderOf(a) - orderOf(b));
+  renderAnalysisQueueModalIfOpen();
+  refreshAnalysisQueueRowMarkers();
+  if(aqCurrentItem) engine.stop(); else maybeResumeAnalysisQueue();
 }
 
 async function cancelAnalysisQueueItem(id){
@@ -7242,11 +7650,14 @@ async function processAnalysisQueueLoop(){
         // just ran at a different thread count, this request may no longer
         // match _currentThreads. That's fine (safe now -- see analyze()'s
         // own comment); it just means a handshake beat whenever control
-        // passes between two different thread-count choices.
+        // passes between two different thread-count choices. An item queued
+        // via "Analyze Others" (useLiveThreads) instead rides the live
+        // engine panel's own thread count -- the user is actively watching
+        // it, not leaving it to churn independently in the background.
         result = await engine.analyze(fen, {
           multipv,
           depth: item.depth,
-          threads: aqThreads(),
+          threads: item.useLiveThreads ? engineThreads() : aqThreads(),
           onInfo: (d, lines) => {
             aqCurrentProgress = {depth: d, lines};
             renderAnalysisQueueModalIfOpen();
@@ -7284,7 +7695,15 @@ async function processAnalysisQueueLoop(){
       aqCurrentProgress = null;
       renderAnalysisQueueModalIfOpen();
       refreshAnalysisQueueRowMarkers();
-      if(!finished && !cancelled) break;
+      // an item merely OUTRANKED -- still present but no longer at the front,
+      // e.g. "Analyze Others" jumping its own items ahead of it -- resumes
+      // the loop immediately for that new front item, same as a cancellation:
+      // the engine IS still free, only the to-do list's order changed. Only
+      // an item preempted by something outside this loop's control (the live
+      // engine panel claiming the engine) with nothing reordered ahead of it
+      // actually needs to wait for an external idle transition.
+      const outranked = !cancelled && !finished && ANALYSIS_QUEUE[0] !== item;
+      if(!finished && !cancelled && !outranked) break;
     }
   } finally {
     aqProcessing = false;
@@ -7689,6 +8108,21 @@ if(localStorage.getItem('threeTestDebug')){
       await positionIndex(GAMES, (done, total) => calls.push([done, total]));
       return calls;
     },
+    // import-time incremental reindexing -- so a test can drive it directly
+    // against a controlled games array without needing a real chess.com/
+    // Lichess fetch (not mocked in this harness).
+    reindexAfterImport: async (freshGames) => {
+      const calls = [];
+      await reindexAfterImport(freshGames, (done, total) => calls.push([done, total]));
+      return calls;
+    },
+    gameIndexKey: (game) => gameIndexKey(game),
+    indexEntryCount: () => {
+      if(!_posIndex.map) return 0;
+      let n = 0;
+      for(const entries of _posIndex.map.values()) n += entries.length;
+      return n;
+    },
   };
 }
 
@@ -7698,7 +8132,6 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__importTestHooks = {
     normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
-    clearChessComGames: (user) => clearChessComGames(user),
     putGames: (user, games) => putGames(user, games),
     getGames: (user) => getGames(user),
   };

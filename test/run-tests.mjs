@@ -18,6 +18,14 @@ const ok  = (name) => { passed++; console.log(`  ✓ ${name}`); };
 const bad = (name, e) => { failed++; console.log(`  ✗ ${name}\n      ${e}`); };
 function assert(cond, msg){ if(!cond) throw new Error(msg); }
 
+// seedBackup `games[].players` shorthand for "tester played White/Black
+// against `opp`" -- Compare Games / Find Games only count a game toward the
+// user's own play at all when userColorInGame resolves it to CURRENT_LINE's
+// own color, so most seeds need this now, not just the perspective-specific
+// tests that originally introduced players/winner.
+const pWhite = (opp='opp') => ({ white: { user: { name: 'tester' } }, black: { user: { name: opp } } });
+const pBlack = (opp='opp') => ({ white: { user: { name: opp } }, black: { user: { name: 'tester' } } });
+
 // console errors we expect and ignore. The un-mocked CDNs (cm-chessboard, web
 // fonts, Chart.js, Stockfish) are intentionally aborted and the app degrades
 // gracefully; blocking the COOP/COEP service worker makes its index.html
@@ -176,7 +184,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app2.page.click('.line-row');                                   // open the move table
   await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
@@ -248,7 +256,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app3.page.click('.line-row');
   await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -314,7 +322,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
     threeLayout: JSON.stringify({ [keys.alphaEntry]: { exits: { [keys.betaEntry]: { type: 'stair' } } } }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await appC2.page.click('.line-row');
   await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -386,7 +394,7 @@ try {
       { id:'g5', moves:'d4 Nf6 c4 e5 dxe5 Ng4',white:'a', black:'b', result:'*' },
     ],
     threeLayout: JSON.stringify({ [keys.alpha]: { exits: { [keys.r2]: { type: 'stair' } } } }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await app4.page.click('.line-row');
   await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -451,7 +459,7 @@ try {
       { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' },
       { id:'g2', moves:'d4 Nf6 c4 g6 Nc3 Bg7', white:'a', black:'b', result:'*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app5.page.click('.line-row');
   await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -538,7 +546,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app6.page.click('.line-row');
   await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -598,7 +606,7 @@ try {
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
     mnemonics: [{ square: 'd4', pawn: 'Deer' }],
-  });
+  }, { defaultPlayerColor: 'white' });
 
   // wrapped separately (it guards *setup* used by tests 12-14): a failure
   // here is recorded as its own test instead of throwing past this phase's
@@ -708,7 +716,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app8.page.click('.line-row');
   await app8.page.waitForSelector('.data-row', { timeout: 10000 });
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -769,7 +777,7 @@ try {
       { seq: ['d4','Nf6','c4'], reply: 'e6' },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app9.page.click('.line-row');
   await app9.page.waitForSelector('.data-row', { timeout: 10000 });
   await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -1047,7 +1055,7 @@ try {
       lines: [{ id: 'L1', name: 'WhiteSys', color: 'white', openingMoves: ['d4'], prefs: [
         { seq: ['d4', 'Nf6'], reply: 'c4' },
       ]}],
-    });
+    }, { defaultPlayerColor: 'white' });
     // no .line-row click here -- CURRENT_LINE stays null, exactly the "went
     // straight from the hamburger menu" path that triggered the bug.
     await app11.page.evaluate(() => window.__oqTestHooks.setPrefs({ sentinel: 'before' }));
@@ -1119,7 +1127,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app12.page.click('.line-row');
   await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -1836,7 +1844,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app19.page.click('.line-row');
   await app19.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -1997,7 +2005,7 @@ try {
   await seedBackup(app21.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(app21.page);
 
   // 59. White's move (moveNumber set) gets the badge in ITS quadrant; Black's
@@ -2515,7 +2523,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
     mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appW1.page.click('.line-row');
   await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
   await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2557,7 +2565,7 @@ try {
     ]}],
     games,
     mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'black' });
   await appW2.page.click('.line-row');
   await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
   await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2637,7 +2645,7 @@ try {
       { id: 'door-plain', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
       { id: 'door-columns', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=', oversizePct: 20 },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appX.page.click('.line-row');
   await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -2773,7 +2781,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appY.page);
 
   // 68. mainStreet has no chess position -- the memorized icon is hidden there
@@ -2845,7 +2853,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appZ.page.click('.line-row');
   await appZ.page.waitForSelector('.data-row', { timeout: 10000 });
   await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2926,7 +2934,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   // mark the castle's own root AND the e6 branch's room memorized (not g6) --
   // via the same IDB key the VR toolbar toggle writes (setMeta is a bare
   // global, same as getMeta elsewhere).
@@ -3215,7 +3223,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAC.page);
   const roomKey = await appAC.page.evaluate(() => {
     const c = new Chess();
@@ -3306,7 +3314,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAD.page);
   const keyFor = (moves) => appAD.page.evaluate((mv) => {
     const c = new Chess();
@@ -3381,7 +3389,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAE.page.click('.line-row');
   await appAE.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -3427,7 +3435,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAF.page.click('.line-row');
   await appAF.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAF.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -3537,7 +3545,7 @@ try {
       { seq: ['d4','Nf6'], eval: evalLines[0], evalLines },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAG.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
   await appAG.page.waitForSelector(rowSel, { timeout: 10000 });
@@ -3603,7 +3611,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
     ],
     assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAH.page);
   const keyFor = (moves) => appAH.page.evaluate((mv) => {
     const c = new Chess();
@@ -3719,7 +3727,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
     ],
     assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAH2.page);
   const root = await appAH2.page.evaluate(() => {
     const c = new Chess();
@@ -3880,7 +3888,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAJ.page);
   const root = await appAJ.page.evaluate(() => {
     const c = new Chess();
@@ -4323,7 +4331,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAM.page);
   const roomKey = await appAM.page.evaluate(() => {
     const c = new Chess();
@@ -4382,7 +4390,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAN.page);
   const roomKey = await appAN.page.evaluate(() => {
     const c = new Chess();
@@ -4549,7 +4557,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAP.page.click('.line-row');
   await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -4626,7 +4634,7 @@ try {
         wallLists: { all: { listId: 'nonexistent-list' } },
       },
     }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAQ.page);
   await appAQ.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.root);
   await appAQ.page.waitForTimeout(300);
@@ -4860,7 +4868,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
   await appAS.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAS.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -4919,7 +4927,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAT.page.click('.line-row');
   await appAT.page.waitForSelector('.data-row', { timeout: 10000 });
   const stat = (seq) => appAT.page.evaluate((s) => window.__statsTestHooks.computeNodeStats(s).completeToMove, seq);
@@ -4965,7 +4973,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
-  });
+  }, { defaultPlayerColor: 'white' });
   const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
     await appAU.page.evaluate(() => {
@@ -5048,26 +5056,66 @@ try {
     ok('chess.com importer: a drawn game maps to no winner / status draw');
   } catch(e){ bad('chess.com importer: draw mapping', e); }
 
-  // 150b. clearChessComGames removes ONLY chess.com games -- both the new
-  //      source-tagged ones AND legacy bare {moves} objects -- while leaving
-  //      Lichess-shaped games (which always carry `players`) untouched.
+  // 150b. gameIndexKey (the games-position-index's per-game key, used to
+  //       append newly-imported games without rebuilding everything) is the
+  //       game's own id when present -- independent of anything else about
+  //       the game object -- or a content hash for the legacy bare {moves}
+  //       shape that predates ids.
   try {
+    const withId = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ id: 'abc123', moves: 'e4 e5' }));
+    const sameIdDifferentShape = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ id: 'abc123', moves: 'd4 d5', extra: 'ignored' }));
+    const bare1 = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'e4 e5' }));
+    const bare2 = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'e4 e5' }));
+    const bareDifferent = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'd4 d5' }));
+    assert(withId === sameIdDifferentShape, `expected the key to depend only on id when present, got ${withId} vs ${sameIdDifferentShape}`);
+    assert(bare1 === bare2, `expected identical bare game content to hash to the same key, got ${bare1} vs ${bare2}`);
+    assert(bare1 !== bareDifferent, `expected different bare game content to hash to different keys, got ${bare1} vs ${bareDifferent}`);
+    ok('games index: gameIndexKey uses the game\'s own id when present, a content hash otherwise');
+  } catch(e){ bad('games index: gameIndexKey stability', e); }
+
+  // 150c. reindexAfterImport (called at import time instead of the old
+  //       invalidate-and-rebuild-on-next-query) appends only the games it
+  //       hasn't indexed before -- a routine re-import that overlaps
+  //       already-known games (putGames upserts by id, so the post-import
+  //       array typically still contains them) must not duplicate their
+  //       position entries, and must not pay for a full rebuild the second
+  //       time around.
+  try {
+    await appBA.page.evaluate(() => window.__gamesListHooks.invalidateIndex());
     await appBA.page.evaluate(async () => {
-      const H = window.__importTestHooks;
-      await H.putGames('u1', [
-        { id: 'li-1', players: { white: { user: { name: 'x' } } }, createdAt: 123, moves: 'e4 e5' },   // Lichess
-        { moves: 'd4 d5' },                                                                             // legacy bare chess.com
-        { id: 'cc-1', source: 'chesscom', players: { white: { user: { name: 'y' } } }, moves: 'c4 c5' },// new enriched chess.com
+      await window.__importTestHooks.putGames('incr-user', [
+        { id: 'r1', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r2', moves: 'e4 e5 Nf3 Nc6' },
       ]);
     });
-    const before = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
-    assert(before.length === 3, `test setup issue: expected 3 games stored, got ${before.length}`);
-    const removed = await appBA.page.evaluate(() => window.__importTestHooks.clearChessComGames('u1'));
-    assert(removed === 2, `expected 2 chess.com games removed (legacy + enriched), got ${removed}`);
-    const after = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
-    assert(after.length === 1 && after[0].id === 'li-1', `expected only the Lichess game to survive, got ${JSON.stringify(after.map(g=>g.id||g.moves))}`);
-    ok('chess.com importer: clear removes only chess.com games (tagged + legacy), leaving Lichess untouched');
-  } catch(e){ bad('chess.com importer: source-selective clear', e); }
+    const firstBatch = await appBA.page.evaluate(() => window.__importTestHooks.getGames('incr-user'));
+    await appBA.page.evaluate((games) => window.__gamesListHooks.reindexAfterImport(games), firstBatch);
+    const countAfterFirst = await appBA.page.evaluate(() => window.__gamesListHooks.indexEntryCount());
+    const buildsAfterFirst = await appBA.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(buildsAfterFirst === 1, `expected the first reindex (no base index existed) to do exactly 1 full build, got ${buildsAfterFirst}`);
+    assert(countAfterFirst > 0, `expected the first reindex to actually index something, got ${countAfterFirst} entries`);
+
+    // "re-import" that overlaps r1/r2 (already indexed) and adds r3 (genuinely new)
+    await appBA.page.evaluate(async () => {
+      await window.__importTestHooks.putGames('incr-user', [
+        { id: 'r1', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r2', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r3', moves: 'e4 e5 Nf3 Nc6' },
+      ]);
+    });
+    const secondBatch = await appBA.page.evaluate(() => window.__importTestHooks.getGames('incr-user'));
+    await appBA.page.evaluate((games) => window.__gamesListHooks.reindexAfterImport(games), secondBatch);
+    const countAfterSecond = await appBA.page.evaluate(() => window.__gamesListHooks.indexEntryCount());
+    const buildsAfterSecond = await appBA.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(buildsAfterSecond === 1, `expected the second (overlapping) reindex to NOT trigger a full rebuild, got ${buildsAfterSecond} total build(s)`);
+    // r3 has identical moves to r1/r2, so it contributes exactly one more
+    // game's worth of entries if (and only if) r1/r2 were correctly skipped
+    // as already-indexed rather than re-indexed (duplicated).
+    const perGame = countAfterFirst / 2;
+    assert(countAfterSecond === countAfterFirst + perGame,
+      `expected exactly one more game's worth of entries (r3 only, no r1/r2 duplicates), got ${countAfterFirst} -> ${countAfterSecond} (one game = ${perGame})`);
+    ok('games index: reindexAfterImport appends only newly-seen games, no duplicates, no full rebuild on overlap');
+  } catch(e){ bad('games index: incremental reindex on import', e); }
 } finally {
   await appBA.close();
 }
@@ -5089,7 +5137,7 @@ try {
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAV.page.click('.line-row');
   await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -5204,7 +5252,7 @@ try {
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAW.page.click('.line-row');
   await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -5308,7 +5356,7 @@ try {
       { seq: ['d4','Nf6'], eval: { type: 'cp', value: 35, depth: 20, pv: '2.c4 e6', pvFen: midFen, pvUci: ['c2c4','e7e6'] } },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAX.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
   await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
@@ -5363,7 +5411,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAY.page.click('.line-row');
   await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
   const badge = (seq) => appAY.page.evaluate((s) => {
@@ -5425,7 +5473,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAY.page.click('.line-row');
     await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
     const parentBadge = await badge(['d4','Nf6']);
@@ -5477,7 +5525,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
@@ -5507,7 +5555,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
@@ -5536,15 +5584,21 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
 
+    // the local-file import REPLACES GAMES wholesale, so (now that the move
+    // table only counts games where the signed-in user played the line's own
+    // color) these need real players matching this sub-test's CURRENT_USER
+    // ('tester3') or every row -- including the ones asserted on below --
+    // would vanish under the color filter.
+    const p3 = { white: { user: { name: 'tester3' } }, black: { user: { name: 'opp' } } };
     const ndjson = [
-      { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
-      { id: 'g3', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6', players: p3, result: '*' },
+      { id: 'g2', moves: 'd4 d5', players: p3, result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4', players: p3, result: '*' },
     ].map(g => JSON.stringify(g)).join('\n');
     await appAZ.page.setInputFiles('#fileImport', {
       name: 'games.ndjson', mimeType: 'application/x-ndjson', buffer: Buffer.from(ndjson),
@@ -5576,7 +5630,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
-  });
+  }, { defaultPlayerColor: 'white' });
   const state = () => appBA.page.evaluate(async () => ({
     isCached: window.__vrCacheTestHooks.isCached(),
     isPersisted: await window.__vrCacheTestHooks.isPersisted(),
@@ -5688,7 +5742,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBB.page.click('.line-row');
   await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -5758,7 +5812,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 Nf3 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBC.page.click('.line-row');
   await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -5814,7 +5868,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBD.page.click('.line-row');
   await appBD.page.waitForSelector('.data-row', { timeout: 10000 });
   // repeatedly expand every collapsed branch until none remain, to reach
@@ -6132,7 +6186,7 @@ try {
     await appBI.page.evaluate(() => document.getElementById('menuHelp').click());
     await appBI.page.waitForSelector('#helpOverlay', { state: 'visible', timeout: 5000 });
     const topicCount = await appBI.page.evaluate(() => document.querySelectorAll('#helpTopics .help-topic-btn').length);
-    assert(topicCount >= 11, `expected at least 11 help topics (Intro + 10 new ones), got ${topicCount}`);
+    assert(topicCount >= 12, `expected at least 12 help topics (Intro + 11 others), got ${topicCount}`);
     for(let i = 0; i < topicCount; i++){
       const { title } = await appBI.page.evaluate((idx) => {
         const btns = [...document.querySelectorAll('#helpTopics .help-topic-btn')];
@@ -6251,7 +6305,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBL.page.click('.line-row');
   await appBL.page.waitForSelector('.data-row', { timeout: 10000 });
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -6435,7 +6489,7 @@ try {
       { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 d5 c4 c6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBM.page.click('.line-row');
   await appBM.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -6490,7 +6544,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBN.page.click('.line-row');
   await appBN.page.waitForSelector('.data-row', { timeout: 10000 });
   await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -6605,7 +6659,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
       { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBO.page);
   const keyFor = (moves) => appBO.page.evaluate((mv) => {
     const c = new Chess();
@@ -6677,7 +6731,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 d5 c4 e6 Nc3 Nf6 Bg5 Be7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBP.page);
   const alphaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
@@ -6741,7 +6795,7 @@ try {
       { id: 'frying-pan', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.4, h: 0.2, d: 0.4 }, keywords: 'kitchen housewares' },
       { id: 'toaster', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBQ.page);
   const keyFor = (moves) => appBQ.page.evaluate((mv) => {
     const c = new Chess();
@@ -7065,7 +7119,7 @@ try {
       { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
       { id: 'doorSkin2', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBR.page);
   const keyFor = (moves) => appBR.page.evaluate((mv) => {
     const c = new Chess();
@@ -7183,7 +7237,7 @@ try {
       { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       ...REPLIES_10.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBS.page);
   const keyFor = (moves) => appBS.page.evaluate((mv) => {
     const c = new Chess();
@@ -7266,7 +7320,7 @@ try {
       { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       ...REPLIES_15.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBT.page);
   const keyFor = (moves) => appBT.page.evaluate((mv) => {
     const c = new Chess();
@@ -7312,7 +7366,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBU.page);
   const roomKey = await appBU.page.evaluate(() => {
     const c = new Chess();
@@ -7391,6 +7445,10 @@ try {
         players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp3' }, rating: 1590 } } },
       // a legacy bare game (no players / no id): reaches "d4 Nf6" but has no details.
       { moves: 'd4 Nf6 Bf4' },
+      // tester played BLACK in this one -- still reaches "d4 Nf6" by move text,
+      // but it's an opponent's choice (their 1.d4), not tester's own White prep.
+      { id: 'lg4', moves: 'd4 Nf6 Nf3 g6', createdAt: 500,
+        players: { white: { user: { name: 'opp4' } }, black: { user: { name: 'tester' } } } },
     ],
   });
   await appAV.page.click('.line-row');
@@ -7484,8 +7542,10 @@ try {
   } catch(e){ bad('games-list: provider badge classification', e); }
 
   // 154. The modal opens from the three-dot menu and lists the games reaching
-  //      the shallow "d4 Nf6" position (lg1, lg2, and the bare game), with a
-  //      clickable lichess link on a Lichess row.
+  //      the shallow "d4 Nf6" position where tester actually played White
+  //      (lg1, lg2) -- NOT the bare game (color undeterminable) or lg4
+  //      (tester was Black in that one, an opponent's 1.d4, not tester's own
+  //      White prep), even though both also reach this position by move text.
   try {
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
@@ -7498,14 +7558,15 @@ try {
       lichessBadges: document.querySelectorAll('#gamesListBody .games-col-src.lichess').length,
       chesscomBadges: document.querySelectorAll('#gamesListBody .games-col-src.cc').length,
     }));
-    assert(info.rows === 3, `expected 3 games reaching d4 Nf6 (lg1, lg2, bare), got ${info.rows}`);
-    assert(/\b3\b/.test(info.summary), `expected the summary to report 3 games, got "${info.summary}"`);
+    assert(info.rows === 2, `expected only the 2 games where tester played White (lg1, lg2) -- not the bare game or Black-side lg4, got ${info.rows}`);
+    assert(/\b2\b/.test(info.summary), `expected the summary to report 2 games, got "${info.summary}"`);
+    assert(/as White/.test(info.summary), `expected the summary to say "as White", got "${info.summary}"`);
     assert(info.hasLichessLink, 'expected at least one clickable lichess-linked row');
     assert(info.lichessBadges === 2, `expected 2 lichess (knight) badges (lg1, lg2), got ${info.lichessBadges}`);
-    assert(info.chesscomBadges === 1, `expected 1 chess.com (pawn) badge (the legacy bare game), got ${info.chesscomBadges}`);
-    ok('games-list: modal opens from the menu and lists the games reaching this position');
+    assert(info.chesscomBadges === 0, `expected 0 chess.com badges -- the only chess.com-shaped games here (bare, lg4) are both filtered out, got ${info.chesscomBadges}`);
+    ok('games-list: modal opens from the menu and lists only the games where the user played the line\'s own color');
     await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
-  } catch(e){ bad('games-list: modal open + render', e); }
+  } catch(e){ bad('games-list: modal open + render, filtered to the line\'s own color', e); }
 
   // 154b. The position index (already built once by test 151/154's 'pos'-mode
   //       queries above) is persisted to IndexedDB, so a reload doesn't
@@ -7547,6 +7608,33 @@ try {
     assert(rebuilt, 'expected the next query to rebuild and re-persist the index');
     ok('games-list: invalidating the index (as every real games-content-changing write path does) forces a rebuild');
   } catch(e){ bad('games-list: index invalidation forces a rebuild', e); }
+
+  // 154d. A persisted index blob in the OLD entry format ({g:arrayIndex,move}
+  //       instead of {key:gameIndexKey,move} -- the shape used before
+  //       reindexAfterImport's content-based rekeying) is detected and
+  //       discarded rather than silently trusted. The reported bug: "Games
+  //       with this Position" showed no games for a position that obviously
+  //       had some, because a stale pre-rekeying blob was still sitting in
+  //       IndexedDB from an earlier build -- every lookup quietly returned
+  //       zero matches (byKey.get(undefined) for every old-shaped hit)
+  //       instead of erroring or rebuilding.
+  try {
+    await appAV.page.evaluate(() => setMeta('gamesPositionIndexCache', JSON.stringify([['stale-fake-key', [{ g: 0, move: 'e4' }]]])));
+    await appAV.page.reload();
+    await appAV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAV.page.click('.line-row');
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(JSON.stringify(byPos.map(m=>m.id).sort()) === JSON.stringify(['lg2','lg3']),
+      `expected the real transposition results despite the stale old-format blob, got ${JSON.stringify(byPos)}`);
+    assert(buildCount === 1, `expected the old-format blob to be discarded and a real rebuild to happen, got ${buildCount} build(s)`);
+    ok('games-list: an old-format persisted index blob is detected and discarded, not silently trusted');
+  } catch(e){ bad('games-list: old-format persisted index is rejected, not trusted', e); }
 } finally {
   await appAV.close();
 }
@@ -7656,6 +7744,619 @@ try {
   } catch(e){ bad('object lists: room-database import id/item dedup', e); }
 } finally {
   await appAY2.close();
+}
+}
+
+// --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
+//     actually played from this exact line in your own games (not a modal,
+//     unlike "Find Games"). The header row carries the node's own configured
+//     standard reply, boldfaced, with its eval read straight from that real
+//     child node's own PREFS entry; every OTHER played move gets its own
+//     indented row below, sorted by count. "Analyze Others" (the header's
+//     bolt icon) background-analyzes all the "other" rows at once, at a
+//     shallow, independently-configured depth, jumped to the front of the
+//     analysis queue (interrupting whatever's running) and run at the live
+//     engine panel's own thread count. ---
+if(shouldRunPhase(['move-table'])){
+const appAZ2 = await launchApp();
+try {
+  await seedBackup(appAZ2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },   // has a configured standard -- tests 162/163
+      { seq: ['d4','Nf6','c4'], eval: { type:'cp', value:60, depth:20, pv:'1.d4 Nf6 2.c4' } },   // the standard's OWN eval (a real child node)
+      // ['d4','g6'] has NO configured reply at all -- test 164
+    ]}],
+    games: [
+      // all White (tester's own White-line moves) -- Compare Games now only
+      // counts games where the user actually played the line's own color.
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', players: pWhite('opp1') },    // played the configured standard (c4) x1 -- included, boldfaced
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6', players: pWhite('opp2') },   // alternate: Nf3 x1
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5', players: pWhite('opp3') },   // alternate: Nf3 x2 total
+      { id: 'g4', moves: 'd4 Nf6 g3 g6', players: pWhite('opp4') },    // alternate: g3 x1
+      { id: 'g5', moves: 'd4 g6 c4 Bg7', players: pWhite('opp5') },    // no reply configured here: c4 x1
+      { id: 'g6', moves: 'd4 g6 Nf3 Bg7', players: pWhite('opp6') },   // Nf3 x2 total
+      { id: 'g7', moves: 'd4 g6 Nf3 d6', players: pWhite('opp7') },
+    ],
+  });
+  await appAZ2.page.click('.line-row');
+  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+  const metaSel = (sel) => document.querySelector(sel).nextElementSibling;
+
+  // 162. Toggling "Compare Games" shows a header row (move-number "2.", the
+  //      configured standard c4 boldfaced with its own already-saved eval)
+  //      plus one indented row per OTHER played move, sorted by count
+  //      (Nf3 x2, then g3 x1) -- c4 itself does NOT get a duplicate row.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const state = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      const header = meta.querySelector('.meta-actual-header');
+      const altRows = [...meta.querySelectorAll('.meta-actual-alt-row')];
+      return {
+        moveNumber: header.querySelector('.meta-actual-move-number')?.textContent.trim(),
+        standardBold: header.querySelector('strong .meta-actual-move')?.textContent.trim(),
+        standardCount: header.querySelector('em')?.textContent.trim(),
+        standardEval: header.querySelector('.meta-actual-eval')?.textContent.trim(),
+        hasUseBtn: !!header.querySelector('.meta-actual-use'),
+        altMoveNumbers: altRows.map(r => r.querySelector('.meta-actual-move-number')?.textContent.trim()),
+        altMoves: altRows.map(r => r.querySelector('.meta-actual-move').textContent.trim()),
+        altCounts: altRows.map(r => r.querySelector('em')?.textContent.trim()),
+      };
+    }, rowSel);
+    assert(state.moveNumber === '2.', `expected header move-number "2.", got "${state.moveNumber}"`);
+    assert(state.standardBold === 'c4', `expected the configured standard (c4) boldfaced in the header, got "${state.standardBold}"`);
+    assert(state.standardCount === '(1×)', `expected the standard's own play count (1x), got "${state.standardCount}"`);
+    assert(state.standardEval === '+0.6/20', `expected the standard's own saved eval "+0.6/20", got "${state.standardEval}"`);
+    assert(!state.hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
+    assert(state.altMoveNumbers.every(n => n === '2.'),
+      `expected every alt row to also show the move number "2.", got ${JSON.stringify(state.altMoveNumbers)}`);
+    assert(JSON.stringify(state.altMoves) === JSON.stringify(['Nf3','g3']),
+      `expected alt rows Nf3 then g3 (c4 excluded, it's the header), got ${JSON.stringify(state.altMoves)}`);
+    assert(state.altCounts[0] === '(2×)' && state.altCounts[1] === '(1×)',
+      `expected counts (2x) then (1x), got ${JSON.stringify(state.altCounts)}`);
+    ok('Compare Games: header row (standard boldfaced, count + own eval) plus one sorted, move-numbered row per other played move');
+  } catch(e){ bad('Compare Games: header + alt rows', e); }
+
+  // 162b. Each move is a clickable mini-board chip (reusing the PV float
+  //       mechanism -- .pv-move + data-fen): clicking one opens the float
+  //       positioned at that move's resulting FEN.
+  try {
+    const fenCheck = await appAZ2.page.evaluate((sel) => {
+      const chip = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-alt-row .meta-actual-move');
+      return chip ? chip.dataset.fen : null;
+    }, rowSel);
+    assert(fenCheck && fenCheck.includes(' b '), `expected the first alt chip's data-fen to be a Black-to-move position, got "${fenCheck}"`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-alt-row .meta-actual-move').click(), rowSel);
+    const floatState = await appAZ2.page.evaluate(() => ({
+      visible: document.getElementById('pvFloat').style.display === 'block',
+      activeChip: !!document.querySelector('.meta-actual-alt-row .meta-actual-move.pv-move-active'),
+    }));
+    assert(floatState.visible, 'expected clicking a compare-line move to open the mini-board float');
+    assert(floatState.activeChip, 'expected the clicked move chip to be marked active');
+    ok('Compare Games: clicking a move opens a mini board at that move\'s position');
+  } catch(e){ bad('Compare Games: click-to-miniboard', e); }
+
+  // 163. Toggling again (via the row menu) hides the commentary rows.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    const stillThere = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-header');
+    }, rowSel);
+    assert(!stillThere, 'expected toggling again to hide the actual-games commentary');
+    ok('Compare Games: toggling again via the row menu hides the commentary rows');
+  } catch(e){ bad('Compare Games: toggle off via row menu', e); }
+
+  // 163b. The leading icon is itself a dismiss control -- clicking it hides
+  //       the comparison rows too, without going back through the row menu.
+  //       It's PERSISTED (unlike the old ephemeral toggle) so it survives a
+  //       full tree rebuild -- reload the app to prove that, not just re-render.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-dismiss`, { timeout: 5000 });
+
+    await appAZ2.page.reload({ waitUntil: 'domcontentloaded' });
+    await appAZ2.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAZ2.page.click('.line-row');
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 10000 });
+    ok('Compare Games: staying open is persisted -- survives a full reload/rebuild, not just an in-place re-render');
+
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-dismiss').click(), rowSel);
+    const stillThere = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-header');
+    }, rowSel);
+    assert(!stillThere, 'expected clicking the leading icon to dismiss the comparison rows');
+    ok('Compare Games: clicking the leading icon dismisses the comparison rows');
+  } catch(e){ bad('Compare Games: persisted open state + dismiss via leading icon', e); }
+
+  // 164. With no reply configured yet (a DIFFERENT row, seq d4,g6, seeded
+  //      with no pref at all), the header shows "Use as Standard" instead of
+  //      a boldfaced move, EVERY played move gets its own alt row (nothing
+  //      excluded), and using the button sets the top (most-played) one as
+  //      the row's reply.
+  try {
+    const rowSel2 = 'tr.data-row[data-seq="d4,g6"]';
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel2);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel2);
+    await appAZ2.page.waitForSelector(`${rowSel2} + tr.meta-row .meta-actual-use`, { timeout: 5000 });
+    const altMoves = await appAZ2.page.evaluate((sel) =>
+      [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-move')].map(el => el.textContent.trim()), rowSel2);
+    assert(JSON.stringify(altMoves) === JSON.stringify(['Nf3','c4']),
+      `expected both actually-played moves (Nf3 most-played first, then c4), got ${JSON.stringify(altMoves)}`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use').click(), rowSel2);
+    const newReply = await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .ourReply').textContent, rowSel2);
+    assert(newReply === 'Nf3', `expected "Use as Standard" to set the top (most-played) alternate Nf3 as the reply, got "${newReply}"`);
+    ok('Compare Games: with no reply configured, "Use as Standard" appears and sets the top alternate');
+  } catch(e){ bad('Compare Games: no-reply-yet + Use as Standard', e); }
+
+  // 165. "Analyze Others": the depth dialog defaults to (or restores) the
+  //      independent compare-depth localStorage setting; saving it queues
+  //      every OTHER played move at that depth, multipv 1, flagged to run on
+  //      the live engine panel's thread count -- and the panel shows a
+  //      pending indicator on each right away, before any result has landed.
+  //      The standard reply (c4) rides along too, but its own real tree node
+  //      already has a depth-20 eval (seeded above) -- deeper than the 18
+  //      asked for here, so addToAnalysisQueue's own "already sufficient"
+  //      check silently skips it (proven NOT skipped in test 165b below,
+  //      once a deeper depth is asked for).
+  try {
+    // re-toggle d4,Nf6 back on -- test 163b left it closed.
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-analyze-all`, { timeout: 5000 });
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    const defaultDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
+    assert(defaultDepth === '20', `expected the depth dialog to default to 20, got "${defaultDepth}"`);
+    await appAZ2.page.fill('#compareAnalyzeDepth', '18');
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    // the overlay itself closes synchronously, before queueAlternatesForAnalysis's
+    // sequential per-move awaits (each does its own getPref IDB read) actually
+    // finish -- wait on the real completion signal (both items landing in the
+    // queue) instead of the overlay's visibility, which resolves too early and
+    // can catch this mid-population (a real, if narrow, race in an earlier
+    // version of this test, not just theoretical -- it started reproducing
+    // once a third move, the standard, joined the same per-move await chain).
+    await appAZ2.page.waitForFunction(() =>
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,Nf3') &&
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,g3'), { timeout: 5000 });
+
+    const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const queuedFor = seq => queue.find(it => it.lineId==='L1' && it.seq.join(',')===seq.join(','));
+    const nf3Item = queuedFor(['d4','Nf6','Nf3']), g3Item = queuedFor(['d4','Nf6','g3']);
+    assert(nf3Item && g3Item, `expected both other moves (Nf3, g3) queued, got ${JSON.stringify(queue)}`);
+    for(const item of [nf3Item, g3Item]){
+      assert(item.depth === 18, `expected depth 18, got ${item.depth}`);
+      assert(item.multipv === 1, `expected multipv 1 (a single quick line), got ${item.multipv}`);
+      assert(item.useLiveThreads === true, `expected useLiveThreads flagged, got ${item.useLiveThreads}`);
+    }
+    assert(!queuedFor(['d4','Nf6','c4']), 'expected the standard reply (c4) NOT queued -- it already has its own real tree node');
+
+    // waitForSelector's default visible-state check fails here -- FontAwesome
+    // icons render zero-size in this harness (CDN-blocked), same reason other
+    // tests in this file query/click them via evaluate instead.
+    await appAZ2.page.waitForFunction((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-pending').length === 2, rowSel, { timeout: 5000 });
+    const pendingCount = await appAZ2.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-alt-row .meta-actual-pending').length, rowSel);
+    assert(pendingCount === 2, `expected a pending indicator on both alt rows right after queueing, got ${pendingCount}`);
+    ok('Compare Games: "Analyze Others" queues every other move at the chosen depth, single line, live-thread-flagged, with an immediate pending indicator');
+  } catch(e){ bad('Compare Games: Analyze Others queues the alternates', e); }
+
+  // 165b. Asking for a depth DEEPER than the standard's existing eval (20)
+  //       queues it too, right alongside the others -- "Analyze Others"
+  //       isn't limited to moves without their own tree node, only to moves
+  //       that actually need (re-)analysis at the requested depth.
+  try {
+    // clear the queue first -- test 165 left Nf3/g3 sitting there queued
+    // (at depth 18), which would otherwise just get topped up rather than
+    // demonstrating a fresh decision for c4.
+    await appAZ2.page.evaluate(async () => {
+      for(const it of window.__aqTestHooks.getQueue().slice()) await window.__aqTestHooks.cancelAnalysisQueueItem(it.id);
+    });
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.fill('#compareAnalyzeDepth', '25');
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    // same race as test 165 above -- c4 is the LAST of the three per-move
+    // awaits (Nf3, g3, then the standard), so it's the most likely of all to
+    // still be mid-flight when the overlay's own (synchronous) close fires.
+    await appAZ2.page.waitForFunction(() =>
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,c4'), { timeout: 5000 });
+
+    const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const c4Item = queue.find(it => it.lineId==='L1' && it.seq.join(',') === ['d4','Nf6','c4'].join(','));
+    assert(c4Item, `expected the standard reply (c4) queued once a deeper depth (25 > its saved 20) was asked for, got ${JSON.stringify(queue)}`);
+    assert(c4Item.depth === 25 && c4Item.multipv === 1 && c4Item.useLiveThreads === true,
+      `expected c4 queued the same way as the others (depth 25, multipv 1, live threads), got ${JSON.stringify(c4Item)}`);
+    ok('Compare Games: "Analyze Others" also re-queues the standard reply when its existing eval falls short of the requested depth');
+  } catch(e){ bad('Compare Games: Analyze Others re-queues an insufficiently-analyzed standard', e); }
+
+  // 166. The compare-depth setting persists in its OWN localStorage key
+  //      (independent of the "Add to/Add Children to Analysis Queue" depth),
+  //      restored the next time the dialog opens.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    const restoredDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
+    assert(restoredDepth === '25', `expected the just-saved depth (25, from test 165b) restored on reopen, got "${restoredDepth}"`);
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeCancelBtn').click());
+    ok('Compare Games: "Analyze Others" depth persists in its own localStorage key across dialog reopens');
+  } catch(e){ bad('Compare Games: depth persistence', e); }
+
+  // 167. "Analyze Others" jumps its items to the FRONT of the queue, ahead of
+  //      an already-queued/processing item, and interrupts that in-progress
+  //      search (engine.stop()) rather than waiting for it to finish -- then
+  //      the item that actually starts next runs at the LIVE engine panel's
+  //      thread count, not the Analysis Queue modal's own independent one.
+  //      No real Stockfish is available in this harness, so engine.analyze()/
+  //      stop() are monkey-patched with a controllable fake (same established
+  //      pattern as Phase T's cancel-the-processing-item test), driving the
+  //      real scheduler against it.
+  try {
+    // clean slate -- tests 165/166 left Nf3/g3 sitting queued (never actually
+    // processed, since no engine was mocked ready yet), which would otherwise
+    // already occupy the front of the queue before this test's own "pre-
+    // existing item" gets added below.
+    await appAZ2.page.evaluate(async () => {
+      for(const it of window.__aqTestHooks.getQueue().slice()) await window.__aqTestHooks.cancelAnalysisQueueItem(it.id);
+    });
+    await appAZ2.page.evaluate(() => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = true; engine.maxThreads = 8; engine.threads = 8;
+      window.__aqTestHooks.populateEngineThreadsSelect();
+      window.__aqTestHooks.populateAqThreadsSelect();
+    });
+    await appAZ2.page.selectOption('#engineThreadsSelect', '3');
+    // aqThreadsSelect lives inside the Analysis Queue modal -- open it first
+    // (same as Phase VD's own thread-selector tests) so it's actionable.
+    await appAZ2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appAZ2.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.selectOption('#aqThreadsSelect', '6');
+    await appAZ2.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+
+    await appAZ2.page.evaluate(() => {
+      window.__aqFakeEngine = { pending: null, callCount: 0, calls: [] };
+      const { engine } = window.__aqTestHooks;
+      engine.ready = true;
+      engine.analyze = (fen, opts) => {
+        window.__aqFakeEngine.callCount++;
+        window.__aqFakeEngine.calls.push(opts);
+        return new Promise(resolve => {
+          window.__aqFakeEngine.pending = () =>
+            resolve({ depth: 5, lines: { 1: { score: { type:'cp', value:5 }, depth:5, pv:['e2e4'] } } });
+        });
+      };
+      engine.stop = () => {
+        if(window.__aqFakeEngine.pending){
+          const p = window.__aqFakeEngine.pending;
+          window.__aqFakeEngine.pending = null;
+          p();
+        }
+      };
+    });
+
+    // an unrelated item, queued and already mid-search, well short of ITS
+    // (much deeper) target -- the fake resolve's depth 5 never finishes it.
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4','g6'], 40, 1));
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.maybeResumeAnalysisQueue());
+    await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 1, { timeout: 5000 });
+    const preExisting = await appAZ2.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    assert(preExisting?.seq?.join(',') === 'd4,g6', `expected the pre-existing item to start processing first, got ${JSON.stringify(preExisting)}`);
+
+    // now trigger "Analyze Others" on rowSel's g3 alternate -- it should
+    // interrupt the above and jump to the front instead of waiting in line.
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
+    const nowProcessing = await appAZ2.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
+    // whichever of Nf3/g3/c4 (the standard rides along too, at depth 25 --
+    // deeper than its saved 20) happens to sort first among the priority batch.
+    assert(nowProcessing && ['d4,Nf6,Nf3','d4,Nf6,g3','d4,Nf6,c4'].includes(nowProcessing.seq.join(',')),
+      `expected an "Analyze Others" item to start next (interrupting the pre-existing one), got ${JSON.stringify(nowProcessing)}`);
+    const lastOpts = await appAZ2.page.evaluate(() => window.__aqFakeEngine.calls[1]);
+    assert(lastOpts.threads === 3, `expected the "Analyze Others" search to run at the LIVE panel's thread count (3), not the queue's own (6), got ${lastOpts.threads}`);
+
+    const queueOrder = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(queueOrder.includes('d4,g6') && queueOrder.indexOf('d4,g6') > 0,
+      `expected the interrupted pre-existing item still queued, but behind the priority items, got ${JSON.stringify(queueOrder)}`);
+
+    // let the fake search resolve too, so the background loop doesn't leave
+    // a dangling pending promise behind it.
+    await appAZ2.page.evaluate(() => window.__aqTestHooks.engine.stop());
+    ok('Compare Games: "Analyze Others" jumps to the front, interrupts an in-progress search, and runs at the live thread count');
+  } catch(e){ bad('Compare Games: Analyze Others priority + interrupt + live threads', e); }
+} finally {
+  await appAZ2.close();
+}
+}
+
+// --- Phase BA2: "Standard vs. other moves" summary -- once every OTHER
+//     played move has its own eval at least as deep as the last-requested
+//     compare depth, a play-count-weighted comparison against the standard
+//     reply's own eval appears below the rows. Always from the LINE's own
+//     perspective, so a positive number means the standard did better --
+//     tested on a BLACK line specifically, where a lower White-relative eval
+//     is the actually-better outcome, to prove the sign flip is real and not
+//     coincidentally right for a White line. ---
+if(shouldRunPhase(['move-table'])){
+const appBA2 = await launchApp();
+try {
+  await seedBackup(appBA2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+      { seq: ['e4'], reply: 'e5' },
+      { seq: ['e4','e5'], eval: { type:'cp', value: -20, depth: 20, pv:'' } },   // standard: -0.2 White-relative (good for Black)
+      { seq: ['e4','c5'], eval: { type:'cp', value: 10, depth: 25, pv:'' } },    // other: +0.1 White-relative, played 2x
+      { seq: ['e4','e6'], eval: { type:'cp', value: 50, depth: 30, pv:'' } },    // other: +0.5 White-relative, played 1x
+    ]}],
+    games: [
+      // tester played Black in all of these -- a Black line's Compare Games
+      // only counts games where tester was actually Black.
+      { id: 'g1', moves: 'e4 e5 Nf3 Nc6', players: pBlack('opp1') },
+      { id: 'g2', moves: 'e4 c5 Nf3 d6', players: pBlack('opp2') },
+      { id: 'g3', moves: 'e4 c5 Nf3 Nc6', players: pBlack('opp3') },
+      { id: 'g4', moves: 'e4 e6 d4 d5', players: pBlack('opp4') },
+    ],
+  });
+  await appBA2.page.click('.line-row');
+  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="e4"]';
+
+  // 168. weighted average: (0.1*2 + 0.5*1)/3 = 0.2333 White-relative;
+  //      standard -0.2 - 0.2333 = -0.4333 White-relative, negated for a
+  //      Black line -> +0.4.
+  try {
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-summary`, { timeout: 5000 });
+    const state = await appBA2.page.evaluate((sel) => {
+      const el = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-summary');
+      return { text: el.textContent.trim(), cls: el.className };
+    }, rowSel);
+    assert(state.text === 'Standard vs. other moves: +0.4', `expected the summary "+0.4", got "${state.text}"`);
+    assert(state.cls.includes('meta-actual-summary-good'), `expected the "good" colour class, got "${state.cls}"`);
+    ok('Compare Games summary: play-count-weighted, sign-correct for a Black line, once every other move is deep enough');
+  } catch(e){ bad('Compare Games summary: weighted average + Black-line sign flip', e); }
+
+  // 169. Not shown at all if even ONE other move falls short of the
+  //      requested depth -- a partial average would be misleading, not just
+  //      incomplete. Raising the requested depth (past e6's saved 30, the
+  //      shallower of the two "other" evals stays fine at 25 for c5) is a
+  //      simpler way to prove the gate than trying to shallow-overwrite an
+  //      existing eval -- saveAnalysisQueueResult itself refuses to ever
+  //      downgrade a saved eval, by design.
+  try {
+    await appBA2.page.evaluate(() => localStorage.setItem('compare_lastDepth', '35'));
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const summaryGone = await appBA2.page.evaluate((sel) =>
+      !document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-summary'), rowSel);
+    assert(summaryGone, 'expected the summary to disappear once the requested depth exceeds what either other move was actually analyzed to');
+    ok('Compare Games summary: hidden again once any other move falls short of the (now raised) requested depth');
+  } catch(e){ bad('Compare Games summary: depth-gating', e); }
+} finally {
+  await appBA2.close();
+}
+}
+
+// --- Phase BC2: Compare Games rows also show each move's win/loss/draw
+//     record ("+W =D −L", the same notation "Find Games"' own summary line
+//     uses), computed from the SAME userColorInGame/gameOutcomeForUser
+//     helpers. Only games where tester actually played CURRENT_LINE's own
+//     color count at all (toward the play count, not just the record) --
+//     a legacy bare/unknown-color game, or one where tester played the
+//     OTHER side (an opponent's choice, not tester's own repertoire move),
+//     is excluded outright, not just missing a record. ---
+if(shouldRunPhase(['move-table'])){
+const appBC2 = await launchApp();
+try {
+  await seedBackup(appBC2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', winner: 'white',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp1' } } } },   // c4: a win
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6', winner: 'black',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp2' } } } },   // Nf3: a loss
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp3' } } } },   // Nf3: a draw (no winner)
+      { id: 'g4', moves: 'd4 Nf6 g3 g6', winner: 'white',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp4' } } } },   // g3: a win
+      // tester played BLACK here (an opponent's 1.d4, not tester's own White
+      // prep) -- reaches "d4 Nf6" by move text but must be excluded entirely,
+      // not just missing a record. If it leaked in, it'd inflate Nf3 to 3x.
+      { id: 'g5', moves: 'd4 Nf6 Nf3 e5',
+        players: { white: { user: { name: 'opp5' } }, black: { user: { name: 'tester' } } } },
+    ],
+  });
+  await appBC2.page.click('.line-row');
+  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+
+  // 170. c4 (the standard, 1 win) shows "+1 =0 −0" on the header row; Nf3
+  //      (1 loss, 1 draw) shows "+0 =1 −1"; g3 (1 win) shows "+1 =0 −0".
+  try {
+    await appBC2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBC2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBC2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header .meta-actual-record`, { timeout: 5000 });
+    const state = await appBC2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      const rowRecord = row => row.querySelector('.meta-actual-record')?.textContent.trim();
+      const winClass = row => row.querySelector('.meta-actual-record span')?.className;
+      return {
+        standard: rowRecord(meta.querySelector('.meta-actual-header')),
+        standardWinClass: winClass(meta.querySelector('.meta-actual-header')),
+        alts: [...meta.querySelectorAll('.meta-actual-alt-row')].map(r => ({
+          move: r.querySelector('.meta-actual-move').textContent.trim(),
+          count: r.querySelector('em').textContent.trim(),
+          record: rowRecord(r),
+          winClass: winClass(r),
+        })),
+        isRealTable: meta.querySelector('.meta-actual-alt-table')?.tagName === 'TABLE'
+          && meta.querySelectorAll('.meta-actual-alt-table tr.meta-actual-alt-row').length === 2,
+      };
+    }, rowSel);
+    assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
+    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's win count coloured "good" (1 win, 0 losses), got "${state.standardWinClass}"`);
+    const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
+    assert(nf3?.count === '(2×)', `expected Nf3's count to stay 2x (g5, where tester played Black, must be excluded), got "${nf3?.count}"`);
+    assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
+    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's win count coloured "bad" (0 wins, 1 loss), got "${nf3?.winClass}"`);
+    assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
+    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's win count coloured "good" (1 win, 0 losses), got "${g3?.winClass}"`);
+    assert(state.isRealTable, 'expected the "other move" rows to be a real <table> (Nf3 + g3 as <tr>s), so their columns actually align');
+    ok('Compare Games: each row shows its own win/loss/draw record (win count colour-coded), aligned in a real table');
+  } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }
+} finally {
+  await appBC2.close();
+}
+}
+
+// --- Phase BV: three-dot row-menu reorg -- "Set Move Quality" now needs a
+//     click to reveal its glyph strip (previously always visible), and
+//     "Add Note" was folded into "Set Attributes" as a room-level attribute
+//     (like room name/castle name -- notes now live on the room's CANONICAL
+//     seq, shared across any transposing path into that room, unlike
+//     mnemonic/eval which stay per literal lineSeq). Also regression-covers
+//     a bug this reorg fixed in passing: renderBlackRoot's row menu wired a
+//     "Compare Games" click handler with no matching HTML button (a gap from
+//     the original Compare-to-Actual-Games rollout, which only added the
+//     button to renderBranch) -- opening a black-root row's menu and using
+//     that item threw. ---
+if(shouldRunPhase(['move-table'])){
+const appBV = await launchApp();
+try {
+  await seedBackup(appBV.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'White Test', color: 'white', openingMoves: ['d4'], prefs: [] },
+      { id: 'L2', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+        { seq: ['e4'], reply: 'e5' },
+      ]},
+    ],
+    games: [
+      // tester played White here -- the White line's move table only
+      // counts games where tester actually played White.
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', players: pWhite('opp1') },
+      // tester played Black in both -- the Black line's Compare Games only
+      // counts games where tester actually played Black.
+      { id: 'g2', moves: 'e4 e5 Nf3 Nc6', players: pBlack('opp2') },   // matches the configured Black reply (e5) -- boldfaced in the header, not excluded
+      { id: 'g3', moves: 'e4 c5 Nf3 d6', players: pBlack('opp3') },    // divergent: Black played c5 instead
+    ],
+  });
+
+  await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+  await appBV.page.evaluate((name) => {
+    const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+    if(row) row.click();
+  }, 'White Test');
+  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+
+  // 166. The glyph strip is collapsed until "Set Move Quality" is clicked,
+  //      and clicking it leaves the row menu itself open (unlike every other
+  //      menu item, which closes the menu on click).
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    const collapsedBefore = await appBV.page.evaluate(s =>
+      !document.querySelector(`${s} .row-menu-quality`).classList.contains('expanded'), rowSel);
+    assert(collapsedBefore, 'expected the move-quality strip collapsed by default');
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="qualityToggle"]`).click(), rowSel);
+    const state = await appBV.page.evaluate(s => ({
+      expanded: document.querySelector(`${s} .row-menu-quality`).classList.contains('expanded'),
+      menuStillOpen: document.querySelector(`${s} .row-menu`).classList.contains('show'),
+    }), rowSel);
+    assert(state.expanded, 'expected "Set Move Quality" to reveal the glyph strip');
+    assert(state.menuStillOpen, 'expected clicking "Set Move Quality" to leave the row menu open');
+    ok('Set Move Quality: glyph strip collapsed by default, click-to-reveal without closing the menu');
+  } catch(e){ bad('Set Move Quality click-to-reveal', e); }
+
+  // 167. Picking a glyph through the newly-revealed strip still annotates
+  //      the move and closes the menu (existing behaviour, unaffected).
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rmq[data-q="!"]`).click(), rowSel);
+    const glyph = (await appBV.page.textContent(`${rowSel} .moveQual`)).trim();
+    assert(glyph === '!', `expected '!' on the move, got '${glyph}'`);
+    ok('Set Move Quality: picking a glyph through the new toggle still annotates the move');
+  } catch(e){ bad('Set Move Quality: pick glyph via new toggle', e); }
+
+  // 168. "Add Note" is gone from the row menu; notes are set via "Set
+  //      Attributes" instead and still show as a meta-row badge, same as
+  //      before.
+  try {
+    const noteItemGone = await appBV.page.evaluate(s => !document.querySelector(`${s} [data-act="note"]`), rowSel);
+    assert(noteItemGone, 'expected the standalone "Add Note" menu item to be removed');
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
+    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appBV.page.fill('#attrNote', 'watch the e6 setup');
+    await appBV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appBV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+    await appBV.page.waitForSelector(`${rowSel} + tr.meta-row .meta-note`, { timeout: 5000 });
+    const noteText = (await appBV.page.textContent(`${rowSel} + tr.meta-row .meta-note`)).trim();
+    assert(noteText === 'watch the e6 setup', `expected the note badge to show the saved note, got "${noteText}"`);
+    ok('Notes folded into Set Attributes: saving a note there shows the meta-row badge');
+  } catch(e){ bad('Notes folded into Set Attributes: save + badge', e); }
+
+  // 169. Reopening Set Attributes -- via the meta-row note badge itself --
+  //      shows the previously-saved note pre-filled.
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note`).click(), rowSel);
+    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    const prefilled = await appBV.page.inputValue('#attrNote');
+    assert(prefilled === 'watch the e6 setup', `expected attrNote pre-filled with the saved note, got "${prefilled}"`);
+    await appBV.page.evaluate(() => document.getElementById('attributesCancelBtn').click());
+    ok('Notes folded into Set Attributes: clicking the meta-row badge reopens Attributes with the note pre-filled');
+  } catch(e){ bad('Notes folded into Set Attributes: badge reopens pre-filled', e); }
+
+  // 170. renderBlackRoot regression: the black-root row's menu now has a
+  //      matching "Compare Games" button for its (previously dangling)
+  //      click handler, and using it works like the white-side version.
+  try {
+    await appBV.page.evaluate(() => document.getElementById('backBtn').click());
+    await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+    await appBV.page.evaluate((name) => {
+      const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+      if(row) row.click();
+    }, 'Black Test');
+    const blackRowSel = 'tr.data-row[data-seq="e4"]';
+    await appBV.page.waitForSelector(blackRowSel, { timeout: 10000 });
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), blackRowSel);
+    const hasCompareBtn = await appBV.page.evaluate(s => !!document.querySelector(`${s} [data-act="compareActual"]`), blackRowSel);
+    assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="compareActual"]`).click(), blackRowSel);
+    await appBV.page.waitForSelector(`${blackRowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const state = await appBV.page.evaluate(s => {
+      const meta = document.querySelector(s).nextElementSibling;
+      return {
+        standardBold: meta.querySelector('.meta-actual-header strong .meta-actual-move')?.textContent.trim(),
+        altMoves: [...meta.querySelectorAll('.meta-actual-alt-row .meta-actual-move')].map(el => el.textContent.trim()),
+      };
+    }, blackRowSel);
+    assert(state.standardBold === 'e5', `expected the configured standard (e5) boldfaced in the header, got "${state.standardBold}"`);
+    assert(JSON.stringify(state.altMoves) === JSON.stringify(['c5']), `expected the divergent alternate (c5) as its own row, got ${JSON.stringify(state.altMoves)}`);
+    ok('renderBlackRoot regression: "Compare Games" button exists and works (previously missing HTML for a wired handler)');
+  } catch(e){ bad('renderBlackRoot: Compare Games button', e); }
+} finally {
+  await appBV.close();
 }
 }
 
