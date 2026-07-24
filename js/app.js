@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-194';
+const BUILD_TAG = '-195';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -532,7 +532,25 @@ async function loadPersistedIndexOnce(){
   _posIndexIdbChecked = true;
   try {
     const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
-    if(raw) _posIndex = { games: null, map: new Map(JSON.parse(raw)) };
+    if(!raw) return;
+    const map = new Map(JSON.parse(raw));
+    // Sanity-check the entry shape before trusting it. The very first version
+    // of this persisted format (before gameIndexKey existed) stored entries
+    // as {g:arrayIndex, move} instead of {key:gameIndexKey, move} -- a blob
+    // saved under that shape (e.g. still sitting in a browser's IndexedDB
+    // from before this format changed) would otherwise load silently and
+    // EVERY lookup would just quietly return zero matches (gamesAtPosition's
+    // byKey.get(undefined) for every hit, since old entries have no .key) --
+    // "Games with this Position" reporting no games for a position that
+    // obviously has some, with no error anywhere. Bail out to a fresh
+    // rebuild instead of trusting a shape that doesn't match what this
+    // build's code actually reads.
+    const [sample] = map.values();
+    if(map.size && !(sample?.[0] && 'key' in sample[0])){
+      console.warn('[games index] persisted index is in an old/incompatible format -- rebuilding');
+      return;
+    }
+    _posIndex = { games: null, map };
   } catch(e){ console.warn('[games index] failed to read the persisted index, will rebuild', e); }
 }
 async function positionIndex(games, onProgress){

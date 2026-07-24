@@ -7587,6 +7587,33 @@ try {
     assert(rebuilt, 'expected the next query to rebuild and re-persist the index');
     ok('games-list: invalidating the index (as every real games-content-changing write path does) forces a rebuild');
   } catch(e){ bad('games-list: index invalidation forces a rebuild', e); }
+
+  // 154d. A persisted index blob in the OLD entry format ({g:arrayIndex,move}
+  //       instead of {key:gameIndexKey,move} -- the shape used before
+  //       reindexAfterImport's content-based rekeying) is detected and
+  //       discarded rather than silently trusted. The reported bug: "Games
+  //       with this Position" showed no games for a position that obviously
+  //       had some, because a stale pre-rekeying blob was still sitting in
+  //       IndexedDB from an earlier build -- every lookup quietly returned
+  //       zero matches (byKey.get(undefined) for every old-shaped hit)
+  //       instead of erroring or rebuilding.
+  try {
+    await appAV.page.evaluate(() => setMeta('gamesPositionIndexCache', JSON.stringify([['stale-fake-key', [{ g: 0, move: 'e4' }]]])));
+    await appAV.page.reload();
+    await appAV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAV.page.click('.line-row');
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(JSON.stringify(byPos.map(m=>m.id).sort()) === JSON.stringify(['lg2','lg3']),
+      `expected the real transposition results despite the stale old-format blob, got ${JSON.stringify(byPos)}`);
+    assert(buildCount === 1, `expected the old-format blob to be discarded and a real rebuild to happen, got ${buildCount} build(s)`);
+    ok('games-list: an old-format persisted index blob is detected and discarded, not silently trusted');
+  } catch(e){ bad('games-list: old-format persisted index is rejected, not trusted', e); }
 } finally {
   await appAV.close();
 }
