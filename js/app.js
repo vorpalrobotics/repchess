@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-193';
+const BUILD_TAG = '-194';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -645,14 +645,45 @@ function actualMoveComparison(seq, reply){
 // (no games reached this exact line, or every game that did just played the
 // configured standard). data-move on the "Use as Standard" button is always
 // the TOP (most-played) alternate -- only rendered when no reply is set yet.
-function actualMovesHtml(seq, reply){
+//
+// evalCache (Phase 2, optional) is a per-row Map<move, 'pending'|evalObj>,
+// owned and refreshed by the caller (renderBranch/renderBlackRoot's own
+// refreshMeta closure) -- ephemeral, same as showActualGames itself, not
+// persisted anywhere. A move with no cache entry gets a small "Analyze"
+// affordance instead of a score; the caller wires its click.
+function actualMoveEvalHtml(move, evalCache){
+  const ev = evalCache?.get(move);
+  if(ev === 'pending') return `<span class="meta-actual-eval meta-actual-eval-live">…</span>`;
+  if(ev) return `<span class="meta-actual-eval meta-pv-score ${evalClass(ev, CURRENT_LINE.color)}">${escapeHtml(formatEvalTag(ev))}</span>`;
+  return `<button type="button" class="meta-actual-analyze" data-move="${escapeHtml(move)}" title="Analyze this move on the live board"><i class="fa-solid fa-chess-board"></i></button>`;
+}
+function actualMovesHtml(seq, reply, evalCache){
   const alts = actualMoveComparison(seq, reply);
   if(!alts.length) return '';
   return `<div class="meta-actual" title="Moves you've actually played here, from your own games">` +
     `<i class="fa-solid fa-code-compare"></i>` +
-    alts.map(({move,count}) => `<span class="meta-actual-move">${escapeHtml(move)} <em>(${count}×)</em></span>`).join('') +
+    alts.map(({move,count}) => `<span class="meta-actual-move">${escapeHtml(move)} <em>(${count}×)</em> ${actualMoveEvalHtml(move, evalCache)}</span>`).join('') +
     (!reply ? `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>` : '') +
     `</div>`;
+}
+// Phase 2: runs the one shared engine against [...seq, move]'s resulting
+// position and updates evalCache + re-renders as results come in. Ephemeral
+// -- evalCache is the caller's throwaway per-row Map, nothing saved to
+// PREFS, since this is exploring an off-repertoire alternate, not the row's
+// own tracked node (compare recordEvalIfDeeper, which IS for the row's own
+// saved eval). Silently no-ops if `move` isn't actually legal here (stale
+// button after an unrelated edit changed what's playable).
+function analyzeActualMove(seq, move, evalCache, refreshMeta){
+  const chess = new Chess(fenForSeq(seq));
+  const mv = chess.move(move, { sloppy: true });
+  if(!mv) return;
+  const fen = chess.fen();
+  evalCache.set(move, 'pending');
+  refreshMeta();
+  showPosition(fen,
+    (d, score) => { evalCache.set(move, { ...evalToWhiteRelative(score, fen), depth: d }); refreshMeta(); },
+    () => {},
+    [...seq, mv.san]);
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
@@ -3218,13 +3249,16 @@ function renderBranch(parent,games,seq,depth,flip=false){
     }
     // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
     // above, not persisted: resets to hidden on the next full re-render.
+    // actualEvalCache (Phase 2) is likewise ephemeral -- Map<move,
+    // 'pending'|evalObj>, thrown away on the next full re-render.
     let showActualGames = false;
+    const actualEvalCache = new Map();
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
       const note = saved?.note || '';
       const pvHtml = continuationHtml();
-      const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply) : '';
+      const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
       if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
@@ -3237,7 +3271,15 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const noteEl = metaTd.querySelector('.meta-note');
       if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
       const useActualBtn = metaTd.querySelector('.meta-actual-use');
-      if(useActualBtn) useActualBtn.onclick = () => setStandardResponse(useActualBtn.dataset.move);
+      if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
+      // one alternate analyzing at a time (the engine is a single shared
+      // worker, same constraint as the row's own Analyse button) -- disable
+      // the rest until it settles.
+      const anyPending = [...actualEvalCache.values()].includes('pending');
+      metaTd.querySelectorAll('.meta-actual-analyze').forEach(btn => {
+        btn.disabled = anyPending;
+        btn.onclick = () => analyzeActualMove(lineSeq, btn.dataset.move, actualEvalCache, refreshMeta);
+      });
       wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
     }
     refreshMeta();
@@ -3594,13 +3636,16 @@ function renderBlackRoot(parent,games,trigger){
   }
   // "Compare to Actual Games" toggle -- ephemeral per row like showContinuation
   // above, not persisted: resets to hidden on the next full re-render.
+  // actualEvalCache (Phase 2) is likewise ephemeral -- Map<move,
+  // 'pending'|evalObj>, thrown away on the next full re-render.
   let showActualGames = false;
+  const actualEvalCache = new Map();
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
     const note = saved?.note || '';
     const pvHtml = continuationHtml();
-    const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply) : '';
+    const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
     if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
@@ -3613,7 +3658,12 @@ function renderBlackRoot(parent,games,trigger){
     const noteEl = metaTd.querySelector('.meta-note');
     if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
     const useActualBtn = metaTd.querySelector('.meta-actual-use');
-    if(useActualBtn) useActualBtn.onclick = () => setStandardResponse(useActualBtn.dataset.move);
+    if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
+    const anyPending = [...actualEvalCache.values()].includes('pending');
+    metaTd.querySelectorAll('.meta-actual-analyze').forEach(btn => {
+      btn.disabled = anyPending;
+      btn.onclick = () => analyzeActualMove(lineSeq, btn.dataset.move, actualEvalCache, refreshMeta);
+    });
     wireEvalContinuationMenus(metaTd, lineSeq, currentSaved);
   }
   refreshMeta();

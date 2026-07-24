@@ -7775,6 +7775,38 @@ try {
     assert(newReply === 'Nf3', `expected "Use as Standard" to set the top (most-played) alternate Nf3 as the reply, got "${newReply}"`);
     ok('Compare to Actual Games: with no reply configured, nothing is excluded and "Use as Standard" sets the top alternate');
   } catch(e){ bad('Compare to Actual Games: no-reply-yet + Use as Standard', e); }
+
+  // 165. Phase 2: each alternate gets an "Analyze" affordance; clicking one
+  //      transitions it to a pending/live state and disables the other
+  //      alternates' Analyze buttons (single-flight -- the engine is one
+  //      shared worker, same constraint as the row's own Analyse button).
+  //      The live engine itself isn't available in this offline harness
+  //      (cm-chessboard/Stockfish aren't vendored -- same established
+  //      limitation as the row's own eval flow, covered by manual
+  //      verification instead), so this only verifies the wiring up to
+  //      the point showPosition's own no-Chessboard no-op kicks in.
+  try {
+    // re-toggle d4,Nf6 back on -- test 163 left it closed.
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-analyze`, { timeout: 5000 });
+    const beforeCount = await appAZ2.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-analyze').length, rowSel);
+    assert(beforeCount === 2, `expected an Analyze button for each of the 2 alternates (Nf3, g3), got ${beforeCount}`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze').click(), rowSel);
+    const afterClick = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      return {
+        liveCount: meta.querySelectorAll('.meta-actual-eval-live').length,
+        remainingAnalyzeButtons: meta.querySelectorAll('.meta-actual-analyze').length,
+        allDisabled: [...meta.querySelectorAll('.meta-actual-analyze')].every(b => b.disabled),
+      };
+    }, rowSel);
+    assert(afterClick.liveCount === 1, `expected 1 alternate showing a pending "…" indicator, got ${afterClick.liveCount}`);
+    assert(afterClick.remainingAnalyzeButtons === 1, `expected 1 Analyze button remaining (the other alternate), got ${afterClick.remainingAnalyzeButtons}`);
+    assert(afterClick.allDisabled, 'expected the remaining Analyze button disabled while one is pending (single shared engine)');
+    ok('Compare to Actual Games: clicking Analyze shows a pending state and disables other alternates (Phase 2 wiring)');
+  } catch(e){ bad('Compare to Actual Games: Phase 2 analyze wiring', e); }
 } finally {
   await appAZ2.close();
 }
