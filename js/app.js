@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260724-111';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260724-112';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260723-42';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-212';
+const BUILD_TAG = '-213';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5328,7 +5328,11 @@ async function gatherBuiltCastles(lines){
 // menuThreeTest's own Shift+click/right-click gesture sets it; "Jump to VR"
 // never does, so that path stays on the normal cache-aware behavior.
 async function openMainVRWorld(startRoomKey, forceRebuild){
-  const spinner = showSpinner('Building world…');
+  // forceRebuild's spinner text says "Cache cleared" up front, not just
+  // "Building world…" -- Shift+click/right-click's whole point is bypassing
+  // a stale cache, and the identical spinner text otherwise gave no
+  // confirmation the cache was actually cleared rather than just reused.
+  const spinner = showSpinner(forceRebuild ? 'Cache cleared — rebuilding…' : 'Building world…');
   let systems = [], castles = [];
   try {
     await nextPaint();

@@ -1127,20 +1127,38 @@ function evaluateDecorated(roomKey){
   persistDecorated();
 }
 
-// A room is "empty" when it has no forward (non-back) exits at all -- a
-// genuine dead end, nothing further has been built past it (an UNBUILT
-// continuation never gets a real exit -- see registerOneCastle's `fwd`
-// filter -- so a room whose only further move is still undecided reads as
-// empty too, same as one with no further move at all; either way there's
-// nothing to walk into). Computed live like DECORATED, not stored, so a
-// locked door unlocks itself automatically the moment that continuation
-// gets built. Ordinary (ROOMS-registered) rooms only -- an unregistered
-// foreign-castle target (single-castle preview) is never treated as empty,
-// since we can't know its real structure this session.
+// A room is "empty" when it has no forward (non-back) exits AND no wall
+// content of its own -- a genuine dead end, nothing further has been built
+// past it (an UNBUILT continuation never gets a real exit -- see
+// registerOneCastle's `fwd` filter -- so a room whose only further move is
+// still undecided reads as empty too, same as one with no further move at
+// all; either way there's nothing to walk into). The exits check alone
+// isn't enough: a corridor/two-track room (registerOneCastle's box merging)
+// can hold a whole chain of real moves as wall-pair billboards
+// (DEMO_MNEMONICS[roomKey].pairs, NOT room.exits -- those pairs never leave
+// the room) and still legitimately have zero forward doors if its own chain
+// simply hasn't been continued yet -- that room is not "nothing to walk
+// into" the way a truly bare room is (the reported bug: a whole 10-move
+// corridor read as a locked door because it happened to dead-end).
+// Specifically checks for a pair with side !== 'center': EVERY room, even a
+// genuine single-move leaf, gets its own 'center' anchor pair (order 1) --
+// but that one is never rendered in-room at all, it shows at the PARENT's
+// door instead (see buildSlots' side==='center' skip) -- so a bare leaf room
+// has a pairs array of length 1 that still represents zero in-room content.
+// A corridor's SECOND and later members (its actual continuation) get
+// side:'left'; a two-track's branch members get 'left'/'right' -- either
+// shape means real wall content sits in this room. Computed live like
+// DECORATED, not stored, so a locked door unlocks itself automatically the
+// moment that continuation gets built. Ordinary (ROOMS-registered) rooms
+// only -- an unregistered foreign-castle target (single-castle preview) is
+// never treated as empty, since we can't know its real structure this
+// session.
 function isRoomEmpty(roomKey){
   const room = mergedRoom(roomKey);
   if(!room) return false;
-  return !(room.exits || []).some(ex => !ex.back);
+  if((room.exits || []).some(ex => !ex.back)) return false;
+  const pairs = DEMO_MNEMONICS[roomKey]?.pairs;
+  return !(pairs && pairs.some(p => p.side !== 'center'));
 }
 
 function ensureRoomLayout(roomKey){
