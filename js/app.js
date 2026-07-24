@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-211';
+const BUILD_TAG = '-212';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3335,7 +3335,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     ctxTr.className = 'context-row';
     ctxTr.innerHTML =
       `<td class="resp"></td>
-       <td class="move" style="padding-left:${depth}em">${depth+1}. ${seq.at(-1)}</td>
+       <td class="move" style="padding-left:${depth}em">${depth+1}. ${pvChip(seq.at(-1), fenForSeq(seq))}</td>
        <td class="cnt-col"></td>
        <td class="eval-col"></td>
        <td class="name-col"></td>`;
@@ -3359,9 +3359,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const tr=document.createElement('tr');
     tr.className = 'data-row';
     tr.dataset.opp = opp;
+    // clicking any move in the tree pops up a mini board, same as Compare
+    // Games/PV moves -- the delegated .pv-move click handler (pvChip) is generic.
+    const oppMoveHtml = pvChip(opp, fenForSeq([...seq,opp]));
     const moveHtml = flip
-      ? `${depth+1}. ${opp}<span class="moveQual"></span> <span class="ourReply">...</span>`
-      : `${opp}<span class="moveQual"></span> ${depth+2}. <span class="ourReply">...</span>`;
+      ? `${depth+1}. ${oppMoveHtml}<span class="moveQual"></span> <span class="ourReply">...</span>`
+      : `${oppMoveHtml}<span class="moveQual"></span> ${depth+2}. <span class="ourReply">...</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
@@ -3577,7 +3580,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       setPref(CURRENT_LINE.id,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
       const replySpan = tr.querySelector('.ourReply');
-      if(replySpan) replySpan.textContent = reply;
+      if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...lineSeq,reply]));
       expandWith(reply);
       refreshRowMenuLabels(rowMenu, currentSaved());
       refreshBranchStats(statsSpan, games, childrenSeq);
@@ -3589,7 +3592,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const savedRep = currentSaved()?.reply;
     if(savedRep){
       const replySpan = tr.querySelector('.ourReply');
-      if(replySpan) replySpan.textContent = savedRep;
+      if(replySpan) replySpan.innerHTML = pvChip(savedRep, fenForSeq([...lineSeq,savedRep]));
       expandWith(savedRep, !currentSaved()?.collapsed);
     }
     refreshHidden();
@@ -3804,7 +3807,7 @@ function renderBlackRoot(parent,games,trigger){
      </td>
      <td class="move">
        <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
-       1. ${trigger} <span class="ourReply">...</span>
+       1. ${pvChip(trigger, fenForSeq([trigger]))} <span class="ourReply">...</span>
      </td>
      <td class="cnt-col"><span class="completeBadge" style="display:none"></span></td>
      <td class="eval-col">
@@ -3955,7 +3958,7 @@ function renderBlackRoot(parent,games,trigger){
     setPref(CURRENT_LINE.id,lineSeq,{reply});
     (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
     const replySpan = tr.querySelector('.ourReply');
-    if(replySpan) replySpan.textContent = reply;
+    if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...lineSeq,reply]));
     expandWith(reply);
     refreshRowMenuLabels(rowMenu, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
@@ -3966,7 +3969,7 @@ function renderBlackRoot(parent,games,trigger){
   const savedRep = currentSaved()?.reply;
   if(savedRep){
     const replySpan = tr.querySelector('.ourReply');
-    if(replySpan) replySpan.textContent = savedRep;
+    if(replySpan) replySpan.innerHTML = pvChip(savedRep, fenForSeq([...lineSeq,savedRep]));
     expandWith(savedRep, !currentSaved()?.collapsed);
   }
   refreshHidden();
@@ -4315,7 +4318,14 @@ async function importParsedLine(moves){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
       await savePrefField(lineSeq,'reply',reply);
-      await savePrefField(lineSeq,'collapsed',true);
+      // deliberately NOT touching 'collapsed' here (unlike an earlier version
+      // of this code, which force-collapsed every step) -- this can run over
+      // an EXISTING path the user was already looking at (re-importing, or
+      // "Import this variation" from an analysed position's own PV), and
+      // stomping its expand/collapse state on every import was jarring. A
+      // brand-new node just gets the same default "Set Standard Response"
+      // (setStandardResponse) already uses: no explicit collapsed pref, which
+      // reads as expanded (see expandWith's !currentSaved()?.collapsed).
       count++;
     }
   }

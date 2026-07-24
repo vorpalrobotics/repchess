@@ -232,6 +232,26 @@ try {
     }, { timeout: 10000 });
     ok('import-variation writes standard responses into the tree (engine-import core)');
   } catch(e){ bad('import-variation core', e); }
+
+  // 7b. The move table's own rows (not just Compare Games) are clickable
+  //     mini-board chips too: the opponent move and the standard reply both
+  //     carry .pv-move + data-fen, and clicking either opens the mini board
+  //     at the resulting position -- the delegated .pv-move handler is
+  //     generic, so this is the same mechanism Compare Games already uses.
+  try {
+    const oppFen = await app2.page.evaluate((sel) => document.querySelector(`${sel} .move .pv-move`)?.dataset.fen, rowSel);
+    assert(oppFen && oppFen.includes(' w '), `expected the opponent move's (Nf6, Black's) data-fen to be a White-to-move position, got "${oppFen}"`);
+    await app2.page.evaluate((sel) => document.querySelector(`${sel} .move .pv-move`).click(), rowSel);
+    let floatVisible = await app2.page.evaluate(() => document.getElementById('pvFloat').style.display === 'block');
+    assert(floatVisible, 'expected clicking the opponent move to open the mini board');
+
+    const replyFen = await app2.page.evaluate((sel) => document.querySelector(`${sel} .ourReply .pv-move`)?.dataset.fen, rowSel);
+    assert(replyFen && replyFen.includes(' b '), `expected the reply's (c4, White's) data-fen to be a Black-to-move position, got "${replyFen}"`);
+    await app2.page.evaluate((sel) => document.querySelector(`${sel} .ourReply .pv-move`).click(), rowSel);
+    floatVisible = await app2.page.evaluate(() => document.getElementById('pvFloat').style.display === 'block');
+    assert(floatVisible, 'expected clicking the standard reply to open the mini board');
+    ok('move table: the opponent move and standard reply are both clickable mini-board chips, like Compare Games');
+  } catch(e){ bad('move table: main moves open a mini board on click', e); }
 } finally {
   await app2.close();
 }
@@ -3615,6 +3635,69 @@ try {
   await appAG.close();
 }
 
+}
+// --- Phase AG2: "Import this variation" must not disturb expand/collapse
+//     state on nodes it merely re-touches (unchanged reply, already existed)
+//     -- the reported bug: importing a PV whose early steps duplicate an
+//     already-configured path force-collapsed those steps every time,
+//     dramatically changing the tree's look even though nothing there
+//     actually changed. Only genuinely new nodes should get a fresh
+//     (expanded, matching manual "Set Standard Response") default. ---
+if(shouldRunPhase(['move-table'])){
+const appAG2 = await launchApp();
+try {
+  const midFen = await appAG2.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+  await seedBackup(appAG2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      // the e6 node's own saved PV re-plays its ALREADY-configured standard
+      // reply (Nc3) before adding one genuinely new ply (Bg7) -- importing it
+      // re-touches both the Nf6 and e6 nodes with UNCHANGED reply values.
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3',
+        eval: { type: 'cp', value: 20, depth: 18, pv: '5.Nc3 Bg7', pvFen: midFen, pvUci: ['b1c3','f8g7'] } },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bg7', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appAG2.page.click('.line-row');
+  const nf6Sel = 'tr.data-row[data-seq="d4,Nf6"]';
+  const e6Sel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
+  await appAG2.page.waitForSelector(e6Sel, { timeout: 10000 });
+
+  // 97b. Both rows start expanded (the default absent an explicit collapsed
+  //      pref) -- confirm the test's own starting state before importing.
+  const toggleState = async (sel) => appAG2.page.evaluate(
+    (s) => document.querySelector(s)?.querySelector('.toggle')?.innerHTML.includes('caret-down'), sel);
+  try {
+    assert(await toggleState(nf6Sel), 'test setup issue: expected the Nf6 row to start expanded');
+    assert(await toggleState(e6Sel), 'test setup issue: expected the e6 row to start expanded');
+  } catch(e){ bad('import stability: setup (both rows start expanded)', e); }
+
+  // 97c. Importing the e6 node's own saved PV (which re-touches Nf6 and e6
+  //      with their unchanged existing replies) leaves both still expanded.
+  try {
+    await appAG2.page.evaluate((sel) => document.querySelector(`${sel} .evaltag`).click(), e6Sel);
+    await appAG2.page.waitForSelector(`${e6Sel} + tr.meta-row .meta-pv-menu`, { timeout: 5000 });
+    await appAG2.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelector('.meta-pv-menu[data-pv-idx="-1"]').click(), e6Sel);
+    await appAG2.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    await appAG2.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    // the reply values here are UNCHANGED by this import (that's the point of
+    // the test), so there's no new DOM value to wait on -- wait on the
+    // logged "imported N move(s)..." confirmation instead, which fires right
+    // before importEngineVariation's own (synchronous) renderTreeBody call.
+    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    assert(await toggleState(nf6Sel), 'expected the Nf6 row to STAY expanded after import (it was merely re-touched with the same reply)');
+    assert(await toggleState(e6Sel), 'expected the e6 row to STAY expanded after import (it was merely re-touched with the same reply)');
+    ok('"Import this variation" leaves already-expanded, unchanged nodes expanded instead of force-collapsing them');
+  } catch(e){ bad('import stability: re-touched nodes keep their expand state', e); }
+} finally {
+  await appAG2.close();
+}
 }
 // --- Phase AH: locked doors -- a room with nothing built past it (no forward
 //     moves) gets a doorway that can't be walked through, with a lock icon
