@@ -2246,7 +2246,10 @@ function slotMarkerMaterial(){
 function buildSlotMarker(room, slot){
   let mesh;
   if(slot.kind === 'ceiling'){
-    mesh = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), slotMarkerMaterial());
+    // tripled from a plain 0.5 -- on a low/small room the camera's default
+    // pitch often doesn't bring a marker this size into view at all, so it's
+    // easy to miss there's a ceiling slot (for a chandelier/skylight) to click.
+    mesh = new THREE.Mesh(new THREE.CircleGeometry(1.5, 24), slotMarkerMaterial());
     mesh.rotation.x = Math.PI/2;                  // disc on the ceiling, facing down
     mesh.position.set(slot.x, room.size.h - 0.02, slot.z);
   } else if(slot.kind === 'wall'){

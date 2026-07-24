@@ -2047,6 +2047,40 @@ try {
 }
 
 }
+// --- Phase V0: the empty ceiling slot's marker (the "click here to add a
+//     chandelier/skylight" target) is generously sized so it's visible
+//     without tilting the camera all the way up, especially in a small/low
+//     room -- the reported bug: on a small room it was too small to notice
+//     was there at all. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appV0 = await launchApp();
+try {
+  await seedBackup(appV0.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appV0.page);
+  // roomB is the built-in demo house's smallest room (4x4x3, also the
+  // elevator car for start's north exit) -- exactly the "small room" shape
+  // the reported bug was about.
+  await appV0.page.evaluate(() => window.__threeTestEdit.enter('roomB'));
+  await appV0.page.waitForTimeout(150);
+  await appV0.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appV0.page.waitForTimeout(60);
+
+  // 160. The marker is a CircleGeometry tripled from its original 0.5 radius.
+  try {
+    const marker = await appV0.page.evaluate(() =>
+      window.__threeTestEdit.meshes().find(m => m.kind === 'slot' && m.slotId === 'ceil-c'));
+    assert(marker, 'expected a ceiling slot marker mesh in edit mode (test setup issue if not found)');
+    assert(marker.type === 'CircleGeometry', `expected the ceiling marker to be a CircleGeometry, got ${marker.type}`);
+    assert(marker.params.radius === 1.5, `expected the ceiling marker radius tripled to 1.5, got ${marker.params.radius}`);
+    ok('VR edit mode: the empty ceiling slot marker is tripled in size for visibility');
+  } catch(e){ bad('VR edit mode: ceiling slot marker size', e); }
+} finally {
+  await appV0.close();
+}
+}
 // --- Phase V: Engine.analyze() must sync via isready/readyok after changing
 //     the multi-threaded build's Threads option, before issuing the next
 //     `go` -- changing Threads makes the WASM build respawn its pthread pool
