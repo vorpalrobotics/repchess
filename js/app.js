@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-210';
+const BUILD_TAG = '-211';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -724,18 +724,18 @@ function actualEvalTagHtml(lineId, seq){
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
 
-// "+W =D −L", the same win/loss/draw notation "Browse Games"' own summary line
-// uses -- '' when none of this move's games have a determinable outcome
-// (all legacy bare/unknown-color games), so it doesn't misleadingly print
-// "+0 =0 −0" for a move that actually has games, just none with a known result.
-// Only the win count itself is colour-coded (green/red/neutral, by whether
-// wins outnumber losses) -- colouring the whole record would be noisy given
-// how many of these can be on screen in a busy comparison.
+// A leading colour-coded NET score (wins minus losses, green/red/neutral),
+// then the full "+W =D −L" breakdown uncoloured -- e.g. a 3-1-0 record shows
+// "+2=+3 =1 −0". '' when none of this move's games have a determinable
+// outcome (all legacy bare/unknown-color games), so it doesn't misleadingly
+// print "0=+0 =0 −0" for a move that actually has games, just none with a
+// known result.
 function actualRecordHtml(rec){
   if(!rec.win && !rec.loss && !rec.draw) return '';
-  const cls = rec.win > rec.loss ? 'meta-actual-record-good' : rec.win < rec.loss ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
+  const net = rec.win - rec.loss;
+  const cls = net > 0 ? 'meta-actual-record-good' : net < 0 ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
   return `<span class="meta-actual-record" title="${rec.win}W ${rec.draw}D ${rec.loss}L from games with a determinable result">` +
-    `<span class="${cls}">+${rec.win}</span> =${rec.draw} −${rec.loss}</span>`;
+    `<span class="${cls}">${net > 0 ? '+' : ''}${net}</span>=+${rec.win} =${rec.draw} −${rec.loss}</span>`;
 }
 
 // a mate score isn't linearly comparable to a centipawn one, but the

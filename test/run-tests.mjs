@@ -8405,8 +8405,10 @@ try {
   await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
 
-  // 170. c4 (the standard, 1 win) shows "+1 =0 −0" on the header row; Nf3
-  //      (1 loss, 1 draw) shows "+0 =1 −1"; g3 (1 win) shows "+1 =0 −0".
+  // 170. c4 (the standard, 1 win) shows "+1=+1 =0 −0" on the header row --
+  //      a leading colour-coded NET score (wins minus losses), then the
+  //      full breakdown; Nf3 (1 loss, 1 draw) shows "-1=+0 =1 −1"; g3
+  //      (1 win) shows "+1=+1 =0 −0".
   try {
     await appBC2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appBC2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
@@ -8428,14 +8430,14 @@ try {
           && meta.querySelectorAll('.meta-actual-alt-table tr.meta-actual-alt-row').length === 2,
       };
     }, rowSel);
-    assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
-    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's win count coloured "good" (1 win, 0 losses), got "${state.standardWinClass}"`);
+    assert(state.standard === '+1=+1 =0 −0', `expected the standard's (c4) record "+1=+1 =0 −0", got "${state.standard}"`);
+    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's net score coloured "good" (net +1), got "${state.standardWinClass}"`);
     const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
     assert(nf3?.count === '(2×)', `expected Nf3's count to stay 2x (g5, where tester played Black, must be excluded), got "${nf3?.count}"`);
-    assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
-    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's win count coloured "bad" (0 wins, 1 loss), got "${nf3?.winClass}"`);
-    assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
-    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's win count coloured "good" (1 win, 0 losses), got "${g3?.winClass}"`);
+    assert(nf3?.record === '-1=+0 =1 −1', `expected Nf3's record "-1=+0 =1 −1", got "${JSON.stringify(nf3)}"`);
+    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's net score coloured "bad" (net -1), got "${nf3?.winClass}"`);
+    assert(g3?.record === '+1=+1 =0 −0', `expected g3's record "+1=+1 =0 −0", got "${JSON.stringify(g3)}"`);
+    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's net score coloured "good" (net +1), got "${g3?.winClass}"`);
     assert(state.isRealTable, 'expected the "other move" rows to be a real <table> (Nf3 + g3 as <tr>s), so their columns actually align');
     ok('Compare Games: each row shows its own win/loss/draw record (win count colour-coded), aligned in a real table');
   } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }
