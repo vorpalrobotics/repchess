@@ -157,6 +157,7 @@ export class Engine {
         if (settled) return;
         settled = true;
         cleanup();
+        this._listener = null;
         reject(new Error(`engine worker error while waiting for "${cmd}": ${err?.message || err}`));
       };
       const timer = setTimeout(() => {
