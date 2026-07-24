@@ -3706,11 +3706,17 @@ try {
 if(shouldRunPhase(['vr-castle'])){
 const appAH = await launchApp();
 try {
-  // root Alpha branches three ways: e6 leads to a room with a genuine BRANCH
+  // root Alpha branches four ways: e6 leads to a room with a genuine BRANCH
   // of its own (Bb4/Be7 -- 2 replies, so it gets 2 real forward doors and is
   // NOT empty; a single continuing reply would instead just collapse into
   // the same corridor room with no new door -- see Phase X). g6 and d5 are
-  // both genuine dead ends (EMPTY -- nothing built past either).
+  // both genuine dead ends (EMPTY -- nothing built past either, and each is
+  // only a single-member "room" with no in-room wall content of its own).
+  // e5 is the reported-bug shape: a LINEAR, unbranched chain (Nc3, then e4)
+  // merges into one multi-member corridor room that then dead-ends with no
+  // further reply -- it has zero forward doors, same as g6/d5, but (unlike
+  // them) real wall content of its own (e4, the corridor's 2nd member), so
+  // it must NOT read as empty/locked.
   await seedBackup(appAH.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
@@ -3720,12 +3726,15 @@ try {
       { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','d5'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e5'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e5','Nc3','Nc6'], reply: 'e4' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
       { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 Nf6 c4 e5 Nc3 Nc6 e4', white: 'a', black: 'b', result: '*' },
     ],
     assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
   }, { defaultPlayerColor: 'white' });
@@ -3739,6 +3748,7 @@ try {
   const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);
   const g6Room = await keyFor(['d4','Nf6','c4','g6','Nc3']);
   const d5Room = await keyFor(['d4','Nf6','c4','d5','Nc3']);
+  const e5Room = await keyFor(['d4','Nf6','c4','e5','Nc3']);
   await appAH.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAH.page.waitForTimeout(300);
 
@@ -3754,6 +3764,16 @@ try {
     assert(empty.g6 === true && empty.d5 === true, `expected both dead-end rooms empty, got g6=${empty.g6} d5=${empty.d5}`);
     ok('isRoomEmpty distinguishes a room with further moves from a genuine dead end');
   } catch(e){ bad('locked doors: isRoomEmpty detection', e); }
+
+  // 105b. A multi-member corridor room that dead-ends (no forward exit of
+  //       its own) still reads as NOT empty, because it holds real wall
+  //       content (its 2nd member, e4) -- the reported bug: this exact shape
+  //       was misread as a locked door despite having moves to walk through.
+  try {
+    const empty = await appAH.page.evaluate((k) => window.__threeTestEdit.isRoomEmpty(k), e5Room);
+    assert(empty === false, `expected the multi-member corridor (e5->Nc3->e4, no further reply) NOT empty despite no forward door, got ${empty}`);
+    ok('isRoomEmpty: a dead-ending multi-member corridor is not treated as an empty/locked room');
+  } catch(e){ bad('locked doors: multi-member corridor dead end is not empty', e); }
 
   // 106. A locked door has no teleport trigger (can't be walked through); an
   //      ordinary door to a non-empty room still does.
@@ -3898,6 +3918,55 @@ try {
   await appAH2.close();
 }
 
+}
+// --- Phase AH3: same isRoomEmpty fix, but for a two-track room -- a root
+//     that branches into two even-depth single-child chains (e6/g6, each 2
+//     rooms deep) merges into one two-track room. When BOTH tracks dead-end
+//     with no further reply, the room has zero forward exits of its own,
+//     same shape as the corridor case, but it clearly holds real branching
+//     content (left AND right track pairs) and must not read as empty. ---
+if(shouldRunPhase(['vr-castle'])){
+const appAH3 = await launchApp();
+try {
+  await seedBackup(appAH3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+    ]}],
+    // stop exactly at Qc2/e4 -- no further move on either track, so the
+    // resulting two-track room has no forward door of its own to check.
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAH3.page);
+  const root = await appAH3.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  // 106b. The two-track room (both tracks dead-ending, no forward door)
+  //       still reads as NOT empty, because it holds real left/right wall
+  //       content -- same bug, two-track shape.
+  try {
+    await appAH3.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+    await appAH3.page.waitForTimeout(300);
+    const hasDivider = await appAH3.page.evaluate(() =>
+      window.__threeTestEdit.meshes().some(m => m.kind === 'divider'));
+    assert(hasDivider, 'test setup issue: expected a two-track divider mesh, confirming this really is a two-track room');
+    const empty = await appAH3.page.evaluate((k) => window.__threeTestEdit.isRoomEmpty(k), root);
+    assert(empty === false, `expected the dead-ending two-track room NOT empty despite no forward door, got ${empty}`);
+    ok('isRoomEmpty: a dead-ending two-track room is not treated as an empty/locked room');
+  } catch(e){ bad('locked doors: two-track dead end is not empty', e); }
+} finally {
+  await appAH3.close();
+}
 }
 // --- Phase AI: top VR toolbar icon order -- the edit-only buttons (room
 //     geometry / wall lists / assets) sit immediately right of the Edit
@@ -5853,13 +5922,20 @@ try {
   try {
     const before = await state();
     assert(before.isCached, 'setup: expected a cache to already exist before testing the force gesture');
-    await appBA.page.evaluate(() => {
+    // the spinner label is set synchronously (before openMainVRWorld's first
+    // await), so capturing it in the SAME evaluate() call as the dispatch
+    // catches it reliably -- confirms the cache-clear, not just "Building
+    // world…" (the reported ask: some visible confirmation the cache was
+    // actually cleared, not silently reused).
+    const labelAtDispatch = await appBA.page.evaluate(() => {
       document.getElementById('menuThreeTest')
         .dispatchEvent(new MouseEvent('click', { shiftKey: true, bubbles: true }));
+      return document.getElementById('spinnerLabel').textContent;
     });
+    assert(/Cache cleared/.test(labelAtDispatch), `expected the spinner to say "Cache cleared" during a forced rebuild, got "${labelAtDispatch}"`);
     await appBA.page.waitForFunction((expected) => window.__vrCacheTestHooks.buildCount() === expected,
       before.buildCount + 1, { timeout: 20000 });
-    ok('VR cache: Shift+click on "Run VR" forces a fresh rebuild despite a valid cache');
+    ok('VR cache: Shift+click on "Run VR" forces a fresh rebuild despite a valid cache, with a "Cache cleared" spinner');
     await closeVR();
   } catch(e){ bad('VR cache: Shift+click forces rebuild', e); }
 
