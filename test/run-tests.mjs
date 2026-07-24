@@ -7839,5 +7839,124 @@ try {
 }
 }
 
+// --- Phase BV: three-dot row-menu reorg -- "Set Move Quality" now needs a
+//     click to reveal its glyph strip (previously always visible), and
+//     "Add Note" was folded into "Set Attributes" as a room-level attribute
+//     (like room name/castle name -- notes now live on the room's CANONICAL
+//     seq, shared across any transposing path into that room, unlike
+//     mnemonic/eval which stay per literal lineSeq). Also regression-covers
+//     a bug this reorg fixed in passing: renderBlackRoot's row menu wired a
+//     "Compare Games" click handler with no matching HTML button (a gap from
+//     the original Compare-to-Actual-Games rollout, which only added the
+//     button to renderBranch) -- opening a black-root row's menu and using
+//     that item threw. ---
+if(shouldRunPhase(['move-table'])){
+const appBV = await launchApp();
+try {
+  await seedBackup(appBV.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'White Test', color: 'white', openingMoves: ['d4'], prefs: [] },
+      { id: 'L2', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+        { seq: ['e4'], reply: 'e5' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6' },
+      { id: 'g2', moves: 'e4 e5 Nf3 Nc6' },   // matches the configured Black reply (e5) -- excluded
+      { id: 'g3', moves: 'e4 c5 Nf3 d6' },    // divergent: Black played c5 instead
+    ],
+  });
+
+  await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+  await appBV.page.evaluate((name) => {
+    const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+    if(row) row.click();
+  }, 'White Test');
+  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+
+  // 166. The glyph strip is collapsed until "Set Move Quality" is clicked,
+  //      and clicking it leaves the row menu itself open (unlike every other
+  //      menu item, which closes the menu on click).
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    const collapsedBefore = await appBV.page.evaluate(s =>
+      !document.querySelector(`${s} .row-menu-quality`).classList.contains('expanded'), rowSel);
+    assert(collapsedBefore, 'expected the move-quality strip collapsed by default');
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="qualityToggle"]`).click(), rowSel);
+    const state = await appBV.page.evaluate(s => ({
+      expanded: document.querySelector(`${s} .row-menu-quality`).classList.contains('expanded'),
+      menuStillOpen: document.querySelector(`${s} .row-menu`).classList.contains('show'),
+    }), rowSel);
+    assert(state.expanded, 'expected "Set Move Quality" to reveal the glyph strip');
+    assert(state.menuStillOpen, 'expected clicking "Set Move Quality" to leave the row menu open');
+    ok('Set Move Quality: glyph strip collapsed by default, click-to-reveal without closing the menu');
+  } catch(e){ bad('Set Move Quality click-to-reveal', e); }
+
+  // 167. Picking a glyph through the newly-revealed strip still annotates
+  //      the move and closes the menu (existing behaviour, unaffected).
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rmq[data-q="!"]`).click(), rowSel);
+    const glyph = (await appBV.page.textContent(`${rowSel} .moveQual`)).trim();
+    assert(glyph === '!', `expected '!' on the move, got '${glyph}'`);
+    ok('Set Move Quality: picking a glyph through the new toggle still annotates the move');
+  } catch(e){ bad('Set Move Quality: pick glyph via new toggle', e); }
+
+  // 168. "Add Note" is gone from the row menu; notes are set via "Set
+  //      Attributes" instead and still show as a meta-row badge, same as
+  //      before.
+  try {
+    const noteItemGone = await appBV.page.evaluate(s => !document.querySelector(`${s} [data-act="note"]`), rowSel);
+    assert(noteItemGone, 'expected the standalone "Add Note" menu item to be removed');
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
+    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appBV.page.fill('#attrNote', 'watch the e6 setup');
+    await appBV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appBV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+    await appBV.page.waitForSelector(`${rowSel} + tr.meta-row .meta-note`, { timeout: 5000 });
+    const noteText = (await appBV.page.textContent(`${rowSel} + tr.meta-row .meta-note`)).trim();
+    assert(noteText === 'watch the e6 setup', `expected the note badge to show the saved note, got "${noteText}"`);
+    ok('Notes folded into Set Attributes: saving a note there shows the meta-row badge');
+  } catch(e){ bad('Notes folded into Set Attributes: save + badge', e); }
+
+  // 169. Reopening Set Attributes -- via the meta-row note badge itself --
+  //      shows the previously-saved note pre-filled.
+  try {
+    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note`).click(), rowSel);
+    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    const prefilled = await appBV.page.inputValue('#attrNote');
+    assert(prefilled === 'watch the e6 setup', `expected attrNote pre-filled with the saved note, got "${prefilled}"`);
+    await appBV.page.evaluate(() => document.getElementById('attributesCancelBtn').click());
+    ok('Notes folded into Set Attributes: clicking the meta-row badge reopens Attributes with the note pre-filled');
+  } catch(e){ bad('Notes folded into Set Attributes: badge reopens pre-filled', e); }
+
+  // 170. renderBlackRoot regression: the black-root row's menu now has a
+  //      matching "Compare Games" button for its (previously dangling)
+  //      click handler, and using it works like the white-side version.
+  try {
+    await appBV.page.evaluate(() => document.getElementById('backBtn').click());
+    await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+    await appBV.page.evaluate((name) => {
+      const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+      if(row) row.click();
+    }, 'Black Test');
+    const blackRowSel = 'tr.data-row[data-seq="e4"]';
+    await appBV.page.waitForSelector(blackRowSel, { timeout: 10000 });
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), blackRowSel);
+    const hasCompareBtn = await appBV.page.evaluate(s => !!document.querySelector(`${s} [data-act="compareActual"]`), blackRowSel);
+    assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="compareActual"]`).click(), blackRowSel);
+    await appBV.page.waitForSelector(`${blackRowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
+    const altMove = (await appBV.page.textContent(`${blackRowSel} + tr.meta-row .meta-actual-move`)).trim();
+    assert(altMove.startsWith('c5'), `expected the divergent alternate (c5) shown, got "${altMove}"`);
+    ok('renderBlackRoot regression: "Compare Games" button exists and works (previously missing HTML for a wired handler)');
+  } catch(e){ bad('renderBlackRoot: Compare Games button', e); }
+} finally {
+  await appBV.close();
+}
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

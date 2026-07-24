@@ -123,10 +123,10 @@
   .row-menu button:hover{background:#f0f0f0}
   .row-menu i{width:1.1em;text-align:center;color:#888}
   .row-menu-sep{width:100%;border:none;border-top:1px solid #ddd;margin:.3em 0}
-  /* opponent-move quality picker: a one-click glyph strip inside the row menu */
-  .row-menu-quality{padding:.35em .8em;display:flex;flex-direction:column;gap:.25em}
-  .rmq-label{font-size:.72rem;color:#888;font-weight:500}
-  .rmq-strip{display:flex;gap:.25em}
+  /* opponent-move quality picker: "Set Move Quality" toggles the glyph strip below it */
+  .row-menu-quality{display:flex;flex-direction:column}
+  .row-menu-quality .rmq-strip{display:none;gap:.25em;padding:.3em .8em .5em}
+  .row-menu-quality.expanded .rmq-strip{display:flex}
   .rmq{border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;
        font-weight:700;font-size:.8rem;min-width:2em;padding:.15em .3em;text-align:center;line-height:1.2}
   .rmq:hover{background:#eee}
@@ -261,6 +261,8 @@
   .attr-section .field label{min-width:8em;flex-shrink:0}
   .attr-section .field select,.attr-section .field input[type="text"]{flex:1;padding:.3rem .4rem}
   .checkbox-field label{min-width:0;display:flex;align-items:center;gap:.5em;font-weight:normal}
+  .attr-note-field{display:block;width:100%}
+  .attr-note-field textarea{width:100%;box-sizing:border-box;resize:vertical;font:inherit;line-height:1.3;margin-top:.3rem}
   .asset-field-label{min-width:8em;flex-shrink:0}
   .asset-picker{display:flex;align-items:center;gap:.6em;flex:1}
   .asset-thumb{width:50px;height:50px;object-fit:contain;border:1px solid #ddd;border-radius:4px}
@@ -978,6 +980,10 @@
       <select id="attrCastleOwner"></select>
       <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only needed to resolve a transposition shared by two castles; otherwise leave on Auto.</div>
     </div>
+    <div class="field attr-note-field">
+      <label for="attrNote">Notes</label>
+      <textarea id="attrNote" rows="3" placeholder="Any notes about this move or position"></textarea>
+    </div>
     <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
     <div class="modal-actions">
@@ -1340,6 +1346,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260724-195"></script>
+<script type="module" src="js/app.js?v=20260724-196"></script>
 </body>
 </html>

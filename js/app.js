@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-195';
+const BUILD_TAG = '-196';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2543,6 +2543,7 @@ const escapeHtml = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':
 /* ---------- per-row "more" menu ---------- */
 function closeAllRowMenus(){
   document.querySelectorAll('.row-menu.show').forEach(m=>m.classList.remove('show'));
+  document.querySelectorAll('.row-menu-quality.expanded').forEach(q=>q.classList.remove('expanded'));
 }
 document.addEventListener('click', closeAllRowMenus);
 
@@ -2551,7 +2552,7 @@ document.addEventListener('click', closeAllRowMenus);
    uppercase unconditionally; B is ambiguous with the b-file so left alone. */
 const canonicalizeMoveCase = v => v.replace(/[oqnkr]/gi, c => c.toUpperCase());
 
-/* ---------- add note / mnemonic / response modal ---------- */
+/* ---------- mnemonic / response / rename modal ---------- */
 let fieldModalSave = null, fieldModalValidate = null;
 // `validate(rawInput)` is optional; return {ok:true, value} to accept (value
 // is what gets passed to onSave, letting the caller normalize the input), or
@@ -2559,7 +2560,6 @@ let fieldModalSave = null, fieldModalValidate = null;
 function openFieldModal(field, currentValue, onSave, validate){
   const has = !!currentValue;
   $('fieldModalTitle').textContent =
-    field==='note' ? (has ? 'Edit Note' : 'Add Note') :
     field==='mnemonic' ? (has ? 'Edit Mnemonic' : 'Add Mnemonic') :
     field==='lineName' ? 'Rename Opening System' :
     field==='streetName' ? 'Set Street Name' :
@@ -2605,6 +2605,7 @@ function openAttributesModal(saved, onSave, lineSeq){
   $('attrCastleName').value = saved?.castleName || '';
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
+  $('attrNote').value = saved?.note || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -2811,7 +2812,8 @@ $('attributesSaveBtn').onclick = () => {
     isCastleRoot: isRoot,
     castleName,
     castleOwner: $('attrCastleOwner').value,
-    castleStreetNumber: streetNumber
+    castleStreetNumber: streetNumber,
+    note: $('attrNote').value.trim()
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -3184,21 +3186,16 @@ function renderBranch(parent,games,seq,depth,flip=false){
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
              <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
-             <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+             <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide this Variation</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-             <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
-             <hr class="row-menu-sep">
-             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
-             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
-             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
-             <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare to Actual Games</button>
-             <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+             <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
              <div class="row-menu-quality" title="Annotate this opponent move (chess quality glyphs)">
-               <span class="rmq-label">Move quality</span>
+               <button type="button" class="row-menu-quality-toggle" data-act="qualityToggle"><i class="fa-solid fa-star-half-stroke"></i>Set Move Quality</button>
                <span class="rmq-strip">
                  <button type="button" class="rmq mq-good" data-q="!" title="good move">!</button>
                  <button type="button" class="rmq mq-good" data-q="!!" title="brilliant move">!!</button>
@@ -3210,8 +3207,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
                </span>
              </div>
              <hr class="row-menu-sep">
-             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
-             <button type="button" data-act="removeManual" style="display:none"><i class="fa-solid fa-trash"></i>Remove This Move</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+             <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
+             <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            </div>
          </div>
        </td>
@@ -3271,23 +3273,26 @@ function renderBranch(parent,games,seq,depth,flip=false){
     // 'pending'|evalObj>, thrown away on the next full re-render.
     let showActualGames = false;
     const actualEvalCache = new Map();
+    // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
+    // below) -- they're a room attribute like name/castleName, shared across any
+    // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
     function refreshMeta(){
       const saved = currentSaved();
       const mnem = saved?.mnemonic || '';
-      const note = saved?.note || '';
+      const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
       const pvHtml = continuationHtml();
       const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
       if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+        (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
         pvHtml + actualHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
       const noteEl = metaTd.querySelector('.meta-note');
-      if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      if(noteEl) noteEl.onclick = () => openRoomAttributes();
       const useActualBtn = metaTd.querySelector('.meta-actual-use');
       if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
       // one alternate analyzing at a time (the engine is a single shared
@@ -3335,8 +3340,28 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const isHidden = !!currentSaved()?.hidden;
       getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
       hideBtn.innerHTML = isHidden
-        ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
-        : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
+        ? '<i class="fa-solid fa-eye"></i>Unhide this Variation'
+        : '<i class="fa-solid fa-eye-slash"></i>Hide this Variation';
+    }
+
+    // room-level attributes live on the room's CANONICAL seq (see canonicalRoomSeq)
+    // so a transposing path always reads/writes the same shared data VR itself
+    // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
+    // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
+    function openRoomAttributes(){
+      const roomSeq = canonicalRoomSeq(lineSeq);
+      const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+      openAttributesModal(roomSaved(), v=>{
+        invalidateBuiltCastlesCache();
+        savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+        savePrefField(roomSeq, 'castleName', v.castleName);
+        savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+        savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+        savePrefField(roomSeq, 'name', v.roomName);
+        savePrefField(roomSeq, 'note', v.note);
+        refreshBranchName(nameSpan, roomSaved());
+        refreshMeta();
+      }, lineSeq);
     }
 
     /* expand the branch table under the chosen standard response */
@@ -3419,10 +3444,9 @@ function renderBranch(parent,games,seq,depth,flip=false){
         return {ok:true, value:mv.san};
       });
     };
-    rowMenu.querySelector('[data-act="note"]').onclick = e => {
+    rowMenu.querySelector('[data-act="qualityToggle"]').onclick = e => {
       e.stopPropagation();
-      rowMenu.classList.remove('show');
-      openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+      rowMenu.querySelector('.row-menu-quality').classList.toggle('expanded');
     };
     rowMenu.querySelectorAll('.rmq').forEach(btn => {
       btn.onclick = e => {
@@ -3490,23 +3514,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
-      // room-level attributes live on the room's CANONICAL seq (see
-      // canonicalRoomSeq) so a transposing path always reads/writes the same
-      // shared data VR itself reads -- everything else on this row
-      // (mnemonic, note, eval, hidden, ...) still keys off lineSeq as usual.
-      const roomSeq = canonicalRoomSeq(lineSeq);
-      const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-      openAttributesModal(roomSaved(), v=>{
-        // the room's display name, and whether/where it's a castle root, all
-        // feed VR room labels and street layout
-        invalidateBuiltCastlesCache();
-        savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
-        savePrefField(roomSeq, 'castleName', v.castleName);
-        savePrefField(roomSeq, 'castleOwner', v.castleOwner);
-        savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
-        savePrefField(roomSeq, 'name', v.roomName);
-        refreshBranchName(nameSpan, roomSaved());
-      }, lineSeq);
+      openRoomAttributes();
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
@@ -3591,20 +3599,21 @@ function renderBlackRoot(parent,games,trigger){
          <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
          <div class="row-menu">
            <button type="button" data-act="focus"><i class="fa-solid fa-crosshairs"></i>Focus on this Variation</button>
-           <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide This Branch</button>
+           <button type="button" data-act="hide"><i class="fa-solid fa-eye-slash"></i>Hide this Variation</button>
+           <hr class="row-menu-sep">
+           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
+           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
-           <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Analyze All Children</button>
-           <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Castle</button>
-           <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
-           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
-           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Games with this Position</button>
-           <button type="button" data-act="note"><i class="fa-solid fa-pen"></i>Add Note</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+           <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
+           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Opening Quiz</button>
+           <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
+           <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
          </div>
        </div>
      </td>
@@ -3658,23 +3667,26 @@ function renderBlackRoot(parent,games,trigger){
   // 'pending'|evalObj>, thrown away on the next full re-render.
   let showActualGames = false;
   const actualEvalCache = new Map();
+  // notes live on the room's CANONICAL seq (see canonicalRoomSeq / openRoomAttributes
+  // below) -- they're a room attribute like name/castleName, shared across any
+  // transposing path into the same room, not per literal lineSeq like mnemonic/eval.
   function refreshMeta(){
     const saved = currentSaved();
     const mnem = saved?.mnemonic || '';
-    const note = saved?.note || '';
+    const note = PREFS[prefKey(CURRENT_LINE.id, canonicalRoomSeq(lineSeq))]?.note || '';
     const pvHtml = continuationHtml();
     const actualHtml = showActualGames ? actualMovesHtml(lineSeq, saved?.reply, actualEvalCache) : '';
     if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-      (note ? `<span class="meta-note" title="Edit note"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+      (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
       pvHtml + actualHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     const noteEl = metaTd.querySelector('.meta-note');
-    if(noteEl) noteEl.onclick = () => openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
+    if(noteEl) noteEl.onclick = () => openRoomAttributes();
     const useActualBtn = metaTd.querySelector('.meta-actual-use');
     if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
     const anyPending = [...actualEvalCache.values()].includes('pending');
@@ -3709,8 +3721,28 @@ function renderBlackRoot(parent,games,trigger){
     const isHidden = !!currentSaved()?.hidden;
     getGroupRows().forEach(el=>el.classList.toggle('hidden-branch', isHidden));
     hideBtn.innerHTML = isHidden
-      ? '<i class="fa-solid fa-eye"></i>Unhide This Branch'
-      : '<i class="fa-solid fa-eye-slash"></i>Hide This Branch';
+      ? '<i class="fa-solid fa-eye"></i>Unhide this Variation'
+      : '<i class="fa-solid fa-eye-slash"></i>Hide this Variation';
+  }
+
+  // room-level attributes live on the room's CANONICAL seq (see canonicalRoomSeq)
+  // so a transposing path always reads/writes the same shared data VR itself
+  // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
+  // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
+  function openRoomAttributes(){
+    const roomSeq = canonicalRoomSeq(lineSeq);
+    const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+    openAttributesModal(roomSaved(), v=>{
+      invalidateBuiltCastlesCache();
+      savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
+      savePrefField(roomSeq, 'castleName', v.castleName);
+      savePrefField(roomSeq, 'castleOwner', v.castleOwner);
+      savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+      savePrefField(roomSeq, 'name', v.roomName);
+      savePrefField(roomSeq, 'note', v.note);
+      refreshBranchName(nameSpan, roomSaved());
+      refreshMeta();
+    }, lineSeq);
   }
 
   let childrenSeq = null, branchDiv = null;
@@ -3782,11 +3814,6 @@ function renderBlackRoot(parent,games,trigger){
       return {ok:true, value:mv.san};
     });
   };
-  rowMenu.querySelector('[data-act="note"]').onclick = e => {
-    e.stopPropagation();
-    rowMenu.classList.remove('show');
-    openFieldModal('note', currentSaved()?.note, v=>saveField('note',v));
-  };
   rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
@@ -3844,23 +3871,7 @@ function renderBlackRoot(parent,games,trigger){
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
-    // room-level attributes live on the room's CANONICAL seq (see
-    // canonicalRoomSeq) so a transposing path always reads/writes the same
-    // shared data VR itself reads -- everything else on this row (mnemonic,
-    // note, eval, hidden, ...) still keys off lineSeq as usual.
-    const roomSeq = canonicalRoomSeq(lineSeq);
-    const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-    openAttributesModal(roomSaved(), v=>{
-      // the room's display name, and whether/where it's a castle root, all
-      // feed VR room labels and street layout
-      invalidateBuiltCastlesCache();
-      savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
-      savePrefField(roomSeq, 'castleName', v.castleName);
-      savePrefField(roomSeq, 'castleOwner', v.castleOwner);
-      savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
-      savePrefField(roomSeq, 'name', v.roomName);
-      refreshBranchName(nameSpan, roomSaved());
-    }, lineSeq);
+    openRoomAttributes();
   };
 
   btnEval.onclick = () => {
@@ -6965,8 +6976,6 @@ function refreshBranchStats(statsSpan, games, childrenSeq){
 function refreshRowMenuLabels(rowMenu, saved){
   const responseBtn = rowMenu.querySelector('[data-act="response"]');
   if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
-  const noteBtn = rowMenu.querySelector('[data-act="note"]');
-  if(noteBtn) noteBtn.lastChild.textContent = saved?.note ? 'Edit Note' : 'Add Note';
 }
 
 /* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
