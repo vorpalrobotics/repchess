@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260722-109';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260724-111';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260723-42';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-207';
+const BUILD_TAG = '-212';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -662,7 +662,7 @@ function gamesAlongLine(games, seq){
 }
 
 /* ---------- "Compare Games" (three-dot menu) ----------
-   Shown as commentary rows under a node, not a modal (unlike "Find Games")
+   Shown as commentary rows under a node, not a modal (unlike "Browse Games")
    -- one row per move YOU actually played from this exact position (exact-
    line match only, not any-transposition: this is about what happened down
    THIS specific prep path, not the position in general). The header row
@@ -724,18 +724,18 @@ function actualEvalTagHtml(lineId, seq){
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
 
-// "+W =D −L", the same win/loss/draw notation "Find Games"' own summary line
-// uses -- '' when none of this move's games have a determinable outcome
-// (all legacy bare/unknown-color games), so it doesn't misleadingly print
-// "+0 =0 −0" for a move that actually has games, just none with a known result.
-// Only the win count itself is colour-coded (green/red/neutral, by whether
-// wins outnumber losses) -- colouring the whole record would be noisy given
-// how many of these can be on screen in a busy comparison.
+// A leading colour-coded NET score (wins minus losses, green/red/neutral),
+// then the full "+W =D −L" breakdown uncoloured -- e.g. a 3-1-0 record shows
+// "+2=+3 =1 −0". '' when none of this move's games have a determinable
+// outcome (all legacy bare/unknown-color games), so it doesn't misleadingly
+// print "0=+0 =0 −0" for a move that actually has games, just none with a
+// known result.
 function actualRecordHtml(rec){
   if(!rec.win && !rec.loss && !rec.draw) return '';
-  const cls = rec.win > rec.loss ? 'meta-actual-record-good' : rec.win < rec.loss ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
+  const net = rec.win - rec.loss;
+  const cls = net > 0 ? 'meta-actual-record-good' : net < 0 ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
   return `<span class="meta-actual-record" title="${rec.win}W ${rec.draw}D ${rec.loss}L from games with a determinable result">` +
-    `<span class="${cls}">+${rec.win}</span> =${rec.draw} −${rec.loss}</span>`;
+    `<span class="${cls}">${net > 0 ? '+' : ''}${net}</span>=+${rec.win} =${rec.draw} −${rec.loss}</span>`;
 }
 
 // a mate score isn't linearly comparable to a centipawn one, but the
@@ -895,12 +895,17 @@ let _gamesModalState = null;
 function showGamesAtNode(seq){
   openBrowseGames({ seq, color: CURRENT_LINE ? CURRENT_LINE.color : 'either' });
 }
-// the shared opener: the three-dot "Find Games" row action pre-fills the
+// the shared opener: the three-dot "Browse Games" row action pre-fills the
 // node's own move sequence and defaults the color filter to the opening
 // system's own side (so it keeps its old scoped-to-my-prep behavior); the
 // hamburger's "Browse Games" opens it blank with color 'either' for
-// unscoped browsing.
-function openBrowseGames({ seq = [], color = 'either' } = {}){
+// unscoped browsing. Lazy-loads GAMES itself (like openThreeTestAssets/
+// computeMnemonicCoverage do) rather than just alerting when it's merely not
+// loaded into memory yet -- the hamburger item can be the very first thing a
+// user clicks this page load, before any line's openLine() has had a chance
+// to populate GAMES, even though real imported games already exist in IDB.
+async function openBrowseGames({ seq = [], color = 'either' } = {}){
+  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
   if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
   _gamesModalState = { mode: 'pos', color };
   $('gamesListMovesInput').value = seq.length ? movesToNumberedText(seq) : '';
@@ -3330,7 +3335,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     ctxTr.className = 'context-row';
     ctxTr.innerHTML =
       `<td class="resp"></td>
-       <td class="move" style="padding-left:${depth}em">${depth+1}. ${seq.at(-1)}</td>
+       <td class="move" style="padding-left:${depth}em">${depth+1}. ${pvChip(seq.at(-1), fenForSeq(seq))}</td>
        <td class="cnt-col"></td>
        <td class="eval-col"></td>
        <td class="name-col"></td>`;
@@ -3354,9 +3359,12 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const tr=document.createElement('tr');
     tr.className = 'data-row';
     tr.dataset.opp = opp;
+    // clicking any move in the tree pops up a mini board, same as Compare
+    // Games/PV moves -- the delegated .pv-move click handler (pvChip) is generic.
+    const oppMoveHtml = pvChip(opp, fenForSeq([...seq,opp]));
     const moveHtml = flip
-      ? `${depth+1}. ${opp}<span class="moveQual"></span> <span class="ourReply">...</span>`
-      : `${opp}<span class="moveQual"></span> ${depth+2}. <span class="ourReply">...</span>`;
+      ? `${depth+1}. ${oppMoveHtml}<span class="moveQual"></span> <span class="ourReply">...</span>`
+      : `${oppMoveHtml}<span class="moveQual"></span> ${depth+2}. <span class="ourReply">...</span>`;
     tr.innerHTML=
       `<td class="resp">
          <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
@@ -3385,7 +3393,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
                </span>
              </div>
              <hr class="row-menu-sep">
-             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
              <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
              <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
              <hr class="row-menu-sep">
@@ -3572,7 +3580,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
       setPref(CURRENT_LINE.id,lineSeq,{reply});
       (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
       const replySpan = tr.querySelector('.ourReply');
-      if(replySpan) replySpan.textContent = reply;
+      if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...lineSeq,reply]));
       expandWith(reply);
       refreshRowMenuLabels(rowMenu, currentSaved());
       refreshBranchStats(statsSpan, games, childrenSeq);
@@ -3584,7 +3592,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
     const savedRep = currentSaved()?.reply;
     if(savedRep){
       const replySpan = tr.querySelector('.ourReply');
-      if(replySpan) replySpan.textContent = savedRep;
+      if(replySpan) replySpan.innerHTML = pvChip(savedRep, fenForSeq([...lineSeq,savedRep]));
       expandWith(savedRep, !currentSaved()?.collapsed);
     }
     refreshHidden();
@@ -3787,7 +3795,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
            <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
            <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
            <hr class="row-menu-sep">
@@ -3799,7 +3807,7 @@ function renderBlackRoot(parent,games,trigger){
      </td>
      <td class="move">
        <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
-       1. ${trigger} <span class="ourReply">...</span>
+       1. ${pvChip(trigger, fenForSeq([trigger]))} <span class="ourReply">...</span>
      </td>
      <td class="cnt-col"><span class="completeBadge" style="display:none"></span></td>
      <td class="eval-col">
@@ -3950,7 +3958,7 @@ function renderBlackRoot(parent,games,trigger){
     setPref(CURRENT_LINE.id,lineSeq,{reply});
     (PREFS[prefKey(CURRENT_LINE.id,lineSeq)] ??= {key:prefKey(CURRENT_LINE.id,lineSeq),lineId:CURRENT_LINE.id,seq:lineSeq,reply:'',note:'',mnemonic:'',hidden:false}).reply=reply;
     const replySpan = tr.querySelector('.ourReply');
-    if(replySpan) replySpan.textContent = reply;
+    if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...lineSeq,reply]));
     expandWith(reply);
     refreshRowMenuLabels(rowMenu, currentSaved());
     refreshBranchStats(statsSpan, games, childrenSeq);
@@ -3961,7 +3969,7 @@ function renderBlackRoot(parent,games,trigger){
   const savedRep = currentSaved()?.reply;
   if(savedRep){
     const replySpan = tr.querySelector('.ourReply');
-    if(replySpan) replySpan.textContent = savedRep;
+    if(replySpan) replySpan.innerHTML = pvChip(savedRep, fenForSeq([...lineSeq,savedRep]));
     expandWith(savedRep, !currentSaved()?.collapsed);
   }
   refreshHidden();
@@ -4310,7 +4318,14 @@ async function importParsedLine(moves){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
       await savePrefField(lineSeq,'reply',reply);
-      await savePrefField(lineSeq,'collapsed',true);
+      // deliberately NOT touching 'collapsed' here (unlike an earlier version
+      // of this code, which force-collapsed every step) -- this can run over
+      // an EXISTING path the user was already looking at (re-importing, or
+      // "Import this variation" from an analysed position's own PV), and
+      // stomping its expand/collapse state on every import was jarring. A
+      // brand-new node just gets the same default "Set Standard Response"
+      // (setStandardResponse) already uses: no explicit collapsed pref, which
+      // reads as expanded (see expandWith's !currentSaved()?.collapsed).
       count++;
     }
   }
@@ -4467,10 +4482,10 @@ $('menuSearchLine').onclick = ()=>{
 };
 $('searchLineCancelBtn').onclick = ()=>{ $('searchLineOverlay').style.display='none'; };
 $('searchLineSaveBtn').onclick = ()=> searchForLine($('searchLineInput').value);
-$('menuBrowseGames').onclick = ()=>{
+$('menuBrowseGames').onclick = async ()=>{
   $('menuList').style.display='none';
-  openBrowseGames();
-  $('gamesListMovesInput').focus();
+  await openBrowseGames();
+  if($('gamesListOverlay').style.display === 'flex') $('gamesListMovesInput').focus();
 };
 
 /* ---------- new-line modal ---------- */

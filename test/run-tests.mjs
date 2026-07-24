@@ -19,7 +19,7 @@ const bad = (name, e) => { failed++; console.log(`  ✗ ${name}\n      ${e}`); }
 function assert(cond, msg){ if(!cond) throw new Error(msg); }
 
 // seedBackup `games[].players` shorthand for "tester played White/Black
-// against `opp`" -- Compare Games / Find Games only count a game toward the
+// against `opp`" -- Compare Games / Browse Games only count a game toward the
 // user's own play at all when userColorInGame resolves it to CURRENT_LINE's
 // own color, so most seeds need this now, not just the perspective-specific
 // tests that originally introduced players/winner.
@@ -232,6 +232,26 @@ try {
     }, { timeout: 10000 });
     ok('import-variation writes standard responses into the tree (engine-import core)');
   } catch(e){ bad('import-variation core', e); }
+
+  // 7b. The move table's own rows (not just Compare Games) are clickable
+  //     mini-board chips too: the opponent move and the standard reply both
+  //     carry .pv-move + data-fen, and clicking either opens the mini board
+  //     at the resulting position -- the delegated .pv-move handler is
+  //     generic, so this is the same mechanism Compare Games already uses.
+  try {
+    const oppFen = await app2.page.evaluate((sel) => document.querySelector(`${sel} .move .pv-move`)?.dataset.fen, rowSel);
+    assert(oppFen && oppFen.includes(' w '), `expected the opponent move's (Nf6, Black's) data-fen to be a White-to-move position, got "${oppFen}"`);
+    await app2.page.evaluate((sel) => document.querySelector(`${sel} .move .pv-move`).click(), rowSel);
+    let floatVisible = await app2.page.evaluate(() => document.getElementById('pvFloat').style.display === 'block');
+    assert(floatVisible, 'expected clicking the opponent move to open the mini board');
+
+    const replyFen = await app2.page.evaluate((sel) => document.querySelector(`${sel} .ourReply .pv-move`)?.dataset.fen, rowSel);
+    assert(replyFen && replyFen.includes(' b '), `expected the reply's (c4, White's) data-fen to be a Black-to-move position, got "${replyFen}"`);
+    await app2.page.evaluate((sel) => document.querySelector(`${sel} .ourReply .pv-move`).click(), rowSel);
+    floatVisible = await app2.page.evaluate(() => document.getElementById('pvFloat').style.display === 'block');
+    assert(floatVisible, 'expected clicking the standard reply to open the mini board');
+    ok('move table: the opponent move and standard reply are both clickable mini-board chips, like Compare Games');
+  } catch(e){ bad('move table: main moves open a mini board on click', e); }
 } finally {
   await app2.close();
 }
@@ -2047,6 +2067,40 @@ try {
 }
 
 }
+// --- Phase V0: the empty ceiling slot's marker (the "click here to add a
+//     chandelier/skylight" target) is generously sized so it's visible
+//     without tilting the camera all the way up, especially in a small/low
+//     room -- the reported bug: on a small room it was too small to notice
+//     was there at all. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appV0 = await launchApp();
+try {
+  await seedBackup(appV0.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appV0.page);
+  // roomB is the built-in demo house's smallest room (4x4x3, also the
+  // elevator car for start's north exit) -- exactly the "small room" shape
+  // the reported bug was about.
+  await appV0.page.evaluate(() => window.__threeTestEdit.enter('roomB'));
+  await appV0.page.waitForTimeout(150);
+  await appV0.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appV0.page.waitForTimeout(60);
+
+  // 160. The marker is a CircleGeometry tripled from its original 0.5 radius.
+  try {
+    const marker = await appV0.page.evaluate(() =>
+      window.__threeTestEdit.meshes().find(m => m.kind === 'slot' && m.slotId === 'ceil-c'));
+    assert(marker, 'expected a ceiling slot marker mesh in edit mode (test setup issue if not found)');
+    assert(marker.type === 'CircleGeometry', `expected the ceiling marker to be a CircleGeometry, got ${marker.type}`);
+    assert(marker.params.radius === 1.5, `expected the ceiling marker radius tripled to 1.5, got ${marker.params.radius}`);
+    ok('VR edit mode: the empty ceiling slot marker is tripled in size for visibility');
+  } catch(e){ bad('VR edit mode: ceiling slot marker size', e); }
+} finally {
+  await appV0.close();
+}
+}
 // --- Phase V: Engine.analyze() must sync via isready/readyok after changing
 //     the multi-threaded build's Threads option, before issuing the next
 //     `go` -- changing Threads makes the WASM build respawn its pthread pool
@@ -3582,6 +3636,69 @@ try {
 }
 
 }
+// --- Phase AG2: "Import this variation" must not disturb expand/collapse
+//     state on nodes it merely re-touches (unchanged reply, already existed)
+//     -- the reported bug: importing a PV whose early steps duplicate an
+//     already-configured path force-collapsed those steps every time,
+//     dramatically changing the tree's look even though nothing there
+//     actually changed. Only genuinely new nodes should get a fresh
+//     (expanded, matching manual "Set Standard Response") default. ---
+if(shouldRunPhase(['move-table'])){
+const appAG2 = await launchApp();
+try {
+  const midFen = await appAG2.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+  await seedBackup(appAG2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      // the e6 node's own saved PV re-plays its ALREADY-configured standard
+      // reply (Nc3) before adding one genuinely new ply (Bg7) -- importing it
+      // re-touches both the Nf6 and e6 nodes with UNCHANGED reply values.
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3',
+        eval: { type: 'cp', value: 20, depth: 18, pv: '5.Nc3 Bg7', pvFen: midFen, pvUci: ['b1c3','f8g7'] } },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bg7', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appAG2.page.click('.line-row');
+  const nf6Sel = 'tr.data-row[data-seq="d4,Nf6"]';
+  const e6Sel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
+  await appAG2.page.waitForSelector(e6Sel, { timeout: 10000 });
+
+  // 97b. Both rows start expanded (the default absent an explicit collapsed
+  //      pref) -- confirm the test's own starting state before importing.
+  const toggleState = async (sel) => appAG2.page.evaluate(
+    (s) => document.querySelector(s)?.querySelector('.toggle')?.innerHTML.includes('caret-down'), sel);
+  try {
+    assert(await toggleState(nf6Sel), 'test setup issue: expected the Nf6 row to start expanded');
+    assert(await toggleState(e6Sel), 'test setup issue: expected the e6 row to start expanded');
+  } catch(e){ bad('import stability: setup (both rows start expanded)', e); }
+
+  // 97c. Importing the e6 node's own saved PV (which re-touches Nf6 and e6
+  //      with their unchanged existing replies) leaves both still expanded.
+  try {
+    await appAG2.page.evaluate((sel) => document.querySelector(`${sel} .evaltag`).click(), e6Sel);
+    await appAG2.page.waitForSelector(`${e6Sel} + tr.meta-row .meta-pv-menu`, { timeout: 5000 });
+    await appAG2.page.evaluate((sel) =>
+      document.querySelector(sel).nextElementSibling.querySelector('.meta-pv-menu[data-pv-idx="-1"]').click(), e6Sel);
+    await appAG2.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    await appAG2.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    // the reply values here are UNCHANGED by this import (that's the point of
+    // the test), so there's no new DOM value to wait on -- wait on the
+    // logged "imported N move(s)..." confirmation instead, which fires right
+    // before importEngineVariation's own (synchronous) renderTreeBody call.
+    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    assert(await toggleState(nf6Sel), 'expected the Nf6 row to STAY expanded after import (it was merely re-touched with the same reply)');
+    assert(await toggleState(e6Sel), 'expected the e6 row to STAY expanded after import (it was merely re-touched with the same reply)');
+    ok('"Import this variation" leaves already-expanded, unchanged nodes expanded instead of force-collapsing them');
+  } catch(e){ bad('import stability: re-touched nodes keep their expand state', e); }
+} finally {
+  await appAG2.close();
+}
+}
 // --- Phase AH: locked doors -- a room with nothing built past it (no forward
 //     moves) gets a doorway that can't be walked through, with a lock icon
 //     until it's skinned (per-door or via a castle-wide default), mirroring
@@ -4458,6 +4575,55 @@ try {
   await appAN.close();
 }
 
+}
+// --- Phase AN2: a genuinely simple room -- one door (or none), no side
+//     move-pairs -- doesn't need the generous 11x13 castle-generation floor;
+//     the Room Geometry dialog's minimum now relaxes down to 8x8 for it,
+//     instead of being stuck at whatever size the room happened to be
+//     generated/authored at. A room that actually has more content (side
+//     pairs, 2+ doors on one wall) still keeps its larger real minimum --
+//     covered by Phase AN's own >3m assertion above, unchanged. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appAN2 = await launchApp();
+try {
+  await seedBackup(appAN2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAN2.page);
+  // roomC is a plain hand-authored demo room (10x10x4) with exactly one
+  // door -- a back exit to 'start' -- and no move-object slots at all: the
+  // simplest possible "single door, no side pairs" shape.
+  await appAN2.page.evaluate(() => window.__threeTestEdit.enter('roomC'));
+  await appAN2.page.waitForTimeout(150);
+  await appAN2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAN2.page.waitForTimeout(60);
+
+  // 162. The dialog's width/depth floors relax to 8m (SMALL_ROOM_MIN), well
+  //      below roomC's own original 10x10 hand-authored size, and a resize
+  //      to exactly 8x8 is accepted rather than clamped back up.
+  try {
+    await appAN2.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAN2.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const mins = await appAN2.page.evaluate(() => ({
+      w: Number(document.getElementById('roomGeomW').getAttribute('min')),
+      d: Number(document.getElementById('roomGeomD').getAttribute('min')),
+    }));
+    assert(mins.w === 8 && mins.d === 8, `expected the relaxed 8x8 floor for a single-door room with no side pairs, got ${JSON.stringify(mins)}`);
+
+    await appAN2.page.fill('#roomGeomW', '8');
+    await appAN2.page.fill('#roomGeomD', '8');
+    await appAN2.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN2.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAN2.page.waitForTimeout(200);
+    const applied = await appAN2.page.evaluate(() => window.__threeTestEdit.roomSize('roomC'));
+    assert(Math.abs(applied.w - 8) < 0.01 && Math.abs(applied.d - 8) < 0.01,
+      `expected 8x8 to be accepted as-is (not clamped back up), got ${JSON.stringify(applied)}`);
+    ok('Room Geometry dialog: a simple single-door room can be resized down to 8x8');
+  } catch(e){ bad('Room Geometry dialog: relaxed minimum for a simple single-door room', e); }
+} finally {
+  await appAN2.close();
+}
 }
 // --- Phase AO: two more picker "New Asset" bugs found in real use --
 //     (1) VR turning kept responding to A/D/arrow keys while typing in the
@@ -7734,6 +7900,43 @@ try {
 }
 }
 
+// --- Phase AV3: Browse Games from the hamburger must lazy-load GAMES itself
+//     (the reported bug) -- opened as the very first thing this page load,
+//     before any line's openLine() has had a chance to populate GAMES into
+//     memory, it used to just alert "Import your games first" (easy to
+//     mistake for "there are no games") despite real imported games already
+//     sitting in IndexedDB. A page reload resets in-memory state the same
+//     way a returning user's first click of the session would. ---
+if(shouldRunPhase(['move-table'])){
+const appAV3 = await launchApp();
+try {
+  await seedBackup(appAV3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'wg1', moves: 'd4 Nf6 c4 e6', createdAt: 3000,
+      players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp1' } } } }],
+  });
+  await appAV3.page.reload();
+  await appAV3.page.waitForFunction(() => {
+    const el = document.getElementById('buildStamp');
+    return el && el.textContent && el.textContent.trim().length > 0;
+  }, { timeout: 15000 });
+
+  // 161. Clicking "Browse Games" straight from a fresh reload (no line
+  //      opened yet) still finds the real, already-imported games.
+  try {
+    await appAV3.page.evaluate(() => document.getElementById('menuBrowseGames').click());
+    await appAV3.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV3.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const rows = await appAV3.page.evaluate(() => document.querySelectorAll('#gamesListBody .games-row').length);
+    assert(rows === 1, `expected the one already-imported game to show up, got ${rows} rows`);
+    ok('Browse Games: hamburger entry lazy-loads GAMES when opened before any line');
+  } catch(e){ bad('Browse Games: lazy-load GAMES from a fresh reload', e); }
+} finally {
+  await appAV3.close();
+}
+}
+
 // --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
 //     (yielding to the event loop every POSITION_INDEX_CHUNK games) instead of
 //     running as one long unbroken synchronous loop -- for a large game
@@ -7843,7 +8046,7 @@ try {
 
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
 //     actually played from this exact line in your own games (not a modal,
-//     unlike "Find Games"). The header row carries the node's own configured
+//     unlike "Browse Games"). The header row carries the node's own configured
 //     standard reply, boldfaced, with its eval read straight from that real
 //     child node's own PREFS entry; every OTHER played move gets its own
 //     indented row below, sorted by count. "Analyze Others" (the header's
@@ -8250,7 +8453,7 @@ try {
 }
 
 // --- Phase BC2: Compare Games rows also show each move's win/loss/draw
-//     record ("+W =D −L", the same notation "Find Games"' own summary line
+//     record ("+W =D −L", the same notation "Browse Games"' own summary line
 //     uses), computed from the SAME userColorInGame/gameOutcomeForUser
 //     helpers. Only games where tester actually played CURRENT_LINE's own
 //     color count at all (toward the play count, not just the record) --
@@ -8285,8 +8488,10 @@ try {
   await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
 
-  // 170. c4 (the standard, 1 win) shows "+1 =0 −0" on the header row; Nf3
-  //      (1 loss, 1 draw) shows "+0 =1 −1"; g3 (1 win) shows "+1 =0 −0".
+  // 170. c4 (the standard, 1 win) shows "+1=+1 =0 −0" on the header row --
+  //      a leading colour-coded NET score (wins minus losses), then the
+  //      full breakdown; Nf3 (1 loss, 1 draw) shows "-1=+0 =1 −1"; g3
+  //      (1 win) shows "+1=+1 =0 −0".
   try {
     await appBC2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appBC2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
@@ -8308,14 +8513,14 @@ try {
           && meta.querySelectorAll('.meta-actual-alt-table tr.meta-actual-alt-row').length === 2,
       };
     }, rowSel);
-    assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
-    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's win count coloured "good" (1 win, 0 losses), got "${state.standardWinClass}"`);
+    assert(state.standard === '+1=+1 =0 −0', `expected the standard's (c4) record "+1=+1 =0 −0", got "${state.standard}"`);
+    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's net score coloured "good" (net +1), got "${state.standardWinClass}"`);
     const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
     assert(nf3?.count === '(2×)', `expected Nf3's count to stay 2x (g5, where tester played Black, must be excluded), got "${nf3?.count}"`);
-    assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
-    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's win count coloured "bad" (0 wins, 1 loss), got "${nf3?.winClass}"`);
-    assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
-    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's win count coloured "good" (1 win, 0 losses), got "${g3?.winClass}"`);
+    assert(nf3?.record === '-1=+0 =1 −1', `expected Nf3's record "-1=+0 =1 −1", got "${JSON.stringify(nf3)}"`);
+    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's net score coloured "bad" (net -1), got "${nf3?.winClass}"`);
+    assert(g3?.record === '+1=+1 =0 −0', `expected g3's record "+1=+1 =0 −0", got "${JSON.stringify(g3)}"`);
+    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's net score coloured "good" (net +1), got "${g3?.winClass}"`);
     assert(state.isRealTable, 'expected the "other move" rows to be a real <table> (Nf3 + g3 as <tr>s), so their columns actually align');
     ok('Compare Games: each row shows its own win/loss/draw record (win count colour-coded), aligned in a real table');
   } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }

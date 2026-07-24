@@ -5,21 +5,31 @@
 their own source of insight -- both available from any row's &vellip; menu
 in the move table.</p>
 
-<p>Both only ever count a game where you were actually playing the opening
-system's own color -- a game reached by the same moves where you were on
-the OTHER side (an opponent's choice, not yours) doesn't count as something
-you played, and neither does a game whose color can't be determined at all
-(an old, pre-detail chess.com import).</p>
+<p>By default, both only ever count a game where you were actually playing
+the opening system's own color -- a game reached by the same moves where
+you were on the OTHER side (an opponent's choice, not yours) doesn't count
+as something you played, and neither does a game whose color can't be
+determined at all (an old, pre-detail chess.com import).</p>
 
-<h3>Find Games</h3>
-<p>Lists your own games that reached that row's position, with date,
-opponent, rating, result, and the move you played -- a pawn or knight badge
-marks whether each came from Chess.com or Lichess, and clicking a row opens
-it on the original site. Choose <strong>Any transposition</strong> to match
-the position by any move order, or <strong>This line only</strong> for an
-exact match of your prepared sequence. A summary line reports your overall
-score from these games, plus how often you actually followed your own
-standard response when one's set.</p>
+<h3>Browse Games</h3>
+<p>A general-purpose games browser, available two ways: from any row's
+&vellip; menu (pre-filled with that row's own move sequence, scoped to the
+opening system's own color) or from the hamburger menu, just below
+<strong>Search for a Variation</strong> (opens blank, with no starting
+position and no color restriction, for open-ended browsing).</p>
+<p>The move-sequence field at the top -- editable at any time, e.g.
+<code>1. d4 Nf6 2. c4</code> -- drives which position the list below
+matches, updating live as you type. The <strong>"Show games where I
+play"</strong> row lets you narrow to Black, White, or either (still
+excluding games whose color can't be determined at all, regardless of this
+setting). Choose <strong>Any transposition</strong> to match the position
+by any move order, or <strong>This line only</strong> for an exact match of
+the typed sequence.</p>
+<p>Each match shows date, opponent, rating, result, and the move played --
+a pawn or knight badge marks whether it came from Chess.com or Lichess, and
+clicking a row opens it on the original site. A summary line reports your
+overall score from these games, plus (when opened from a row with a
+standard response configured) how often you actually followed it.</p>
 
 <h3>Compare Games</h3>
 <p>Toggles a small table right under the row: one row per move you've
@@ -28,7 +38,7 @@ often you played each. The header row carries your configured standard
 response boldfaced, with its own eval alongside if you've already analyzed
 that node; every other move you've actually played gets its own indented
 row below it. Each row also shows that move's own win/loss/draw record from
-your games (<em>+2 =1 &minus;0</em>, same notation as Find Games' own
+your games (<em>+2 =1 &minus;0</em>, same notation as Browse Games' own
 summary line), including the standard -- so you can see not just how often
 you've played each move, but how it's actually turned out. Click any move
 to pop up a mini board at the resulting position; click the leading icon to
