@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-208';
+const BUILD_TAG = '-209';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -662,7 +662,7 @@ function gamesAlongLine(games, seq){
 }
 
 /* ---------- "Compare Games" (three-dot menu) ----------
-   Shown as commentary rows under a node, not a modal (unlike "Find Games")
+   Shown as commentary rows under a node, not a modal (unlike "Browse Games")
    -- one row per move YOU actually played from this exact position (exact-
    line match only, not any-transposition: this is about what happened down
    THIS specific prep path, not the position in general). The header row
@@ -724,7 +724,7 @@ function actualEvalTagHtml(lineId, seq){
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
 
-// "+W =D −L", the same win/loss/draw notation "Find Games"' own summary line
+// "+W =D −L", the same win/loss/draw notation "Browse Games"' own summary line
 // uses -- '' when none of this move's games have a determinable outcome
 // (all legacy bare/unknown-color games), so it doesn't misleadingly print
 // "+0 =0 −0" for a move that actually has games, just none with a known result.
@@ -895,12 +895,17 @@ let _gamesModalState = null;
 function showGamesAtNode(seq){
   openBrowseGames({ seq, color: CURRENT_LINE ? CURRENT_LINE.color : 'either' });
 }
-// the shared opener: the three-dot "Find Games" row action pre-fills the
+// the shared opener: the three-dot "Browse Games" row action pre-fills the
 // node's own move sequence and defaults the color filter to the opening
 // system's own side (so it keeps its old scoped-to-my-prep behavior); the
 // hamburger's "Browse Games" opens it blank with color 'either' for
-// unscoped browsing.
-function openBrowseGames({ seq = [], color = 'either' } = {}){
+// unscoped browsing. Lazy-loads GAMES itself (like openThreeTestAssets/
+// computeMnemonicCoverage do) rather than just alerting when it's merely not
+// loaded into memory yet -- the hamburger item can be the very first thing a
+// user clicks this page load, before any line's openLine() has had a chance
+// to populate GAMES, even though real imported games already exist in IDB.
+async function openBrowseGames({ seq = [], color = 'either' } = {}){
+  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
   if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
   _gamesModalState = { mode: 'pos', color };
   $('gamesListMovesInput').value = seq.length ? movesToNumberedText(seq) : '';
@@ -3385,7 +3390,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
                </span>
              </div>
              <hr class="row-menu-sep">
-             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
              <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
              <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
              <hr class="row-menu-sep">
@@ -3787,7 +3792,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
            <hr class="row-menu-sep">
-           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Find Games</button>
+           <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
            <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
            <button type="button" data-act="openingQuiz"><i class="fa-solid fa-graduation-cap"></i>Quiz this Variation</button>
            <hr class="row-menu-sep">
@@ -4467,10 +4472,10 @@ $('menuSearchLine').onclick = ()=>{
 };
 $('searchLineCancelBtn').onclick = ()=>{ $('searchLineOverlay').style.display='none'; };
 $('searchLineSaveBtn').onclick = ()=> searchForLine($('searchLineInput').value);
-$('menuBrowseGames').onclick = ()=>{
+$('menuBrowseGames').onclick = async ()=>{
   $('menuList').style.display='none';
-  openBrowseGames();
-  $('gamesListMovesInput').focus();
+  await openBrowseGames();
+  if($('gamesListOverlay').style.display === 'flex') $('gamesListMovesInput').focus();
 };
 
 /* ---------- new-line modal ---------- */

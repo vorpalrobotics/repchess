@@ -19,7 +19,7 @@ const bad = (name, e) => { failed++; console.log(`  ✗ ${name}\n      ${e}`); }
 function assert(cond, msg){ if(!cond) throw new Error(msg); }
 
 // seedBackup `games[].players` shorthand for "tester played White/Black
-// against `opp`" -- Compare Games / Find Games only count a game toward the
+// against `opp`" -- Compare Games / Browse Games only count a game toward the
 // user's own play at all when userColorInGame resolves it to CURRENT_LINE's
 // own color, so most seeds need this now, not just the perspective-specific
 // tests that originally introduced players/winner.
@@ -7768,6 +7768,43 @@ try {
 }
 }
 
+// --- Phase AV3: Browse Games from the hamburger must lazy-load GAMES itself
+//     (the reported bug) -- opened as the very first thing this page load,
+//     before any line's openLine() has had a chance to populate GAMES into
+//     memory, it used to just alert "Import your games first" (easy to
+//     mistake for "there are no games") despite real imported games already
+//     sitting in IndexedDB. A page reload resets in-memory state the same
+//     way a returning user's first click of the session would. ---
+if(shouldRunPhase(['move-table'])){
+const appAV3 = await launchApp();
+try {
+  await seedBackup(appAV3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'wg1', moves: 'd4 Nf6 c4 e6', createdAt: 3000,
+      players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp1' } } } }],
+  });
+  await appAV3.page.reload();
+  await appAV3.page.waitForFunction(() => {
+    const el = document.getElementById('buildStamp');
+    return el && el.textContent && el.textContent.trim().length > 0;
+  }, { timeout: 15000 });
+
+  // 161. Clicking "Browse Games" straight from a fresh reload (no line
+  //      opened yet) still finds the real, already-imported games.
+  try {
+    await appAV3.page.evaluate(() => document.getElementById('menuBrowseGames').click());
+    await appAV3.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV3.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const rows = await appAV3.page.evaluate(() => document.querySelectorAll('#gamesListBody .games-row').length);
+    assert(rows === 1, `expected the one already-imported game to show up, got ${rows} rows`);
+    ok('Browse Games: hamburger entry lazy-loads GAMES when opened before any line');
+  } catch(e){ bad('Browse Games: lazy-load GAMES from a fresh reload', e); }
+} finally {
+  await appAV3.close();
+}
+}
+
 // --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
 //     (yielding to the event loop every POSITION_INDEX_CHUNK games) instead of
 //     running as one long unbroken synchronous loop -- for a large game
@@ -7877,7 +7914,7 @@ try {
 
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
 //     actually played from this exact line in your own games (not a modal,
-//     unlike "Find Games"). The header row carries the node's own configured
+//     unlike "Browse Games"). The header row carries the node's own configured
 //     standard reply, boldfaced, with its eval read straight from that real
 //     child node's own PREFS entry; every OTHER played move gets its own
 //     indented row below, sorted by count. "Analyze Others" (the header's
@@ -8284,7 +8321,7 @@ try {
 }
 
 // --- Phase BC2: Compare Games rows also show each move's win/loss/draw
-//     record ("+W =D −L", the same notation "Find Games"' own summary line
+//     record ("+W =D −L", the same notation "Browse Games"' own summary line
 //     uses), computed from the SAME userColorInGame/gameOutcomeForUser
 //     helpers. Only games where tester actually played CURRENT_LINE's own
 //     color count at all (toward the play count, not just the record) --
