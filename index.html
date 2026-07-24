@@ -208,9 +208,12 @@
   .room-info-exits{margin-top:.6rem;display:flex;flex-direction:column;gap:.4rem;overflow-y:auto;flex:1 1 auto;min-height:0}
   .room-info-exit{padding:.3rem .5rem;border:1px solid #ddd;border-radius:4px;font-size:.9rem;display:flex;align-items:center;flex-wrap:wrap}
   .room-info-empty{color:#888;font-style:italic;border-style:dashed}
-  /* games-with-this-position modal */
+  /* browse games modal (three-dot menu "Find Games" / hamburger "Browse Games") */
   #gamesListOverlay{z-index:40}
-  .games-list-toggle{display:flex;gap:.4rem;margin:.5rem 0 .3rem}
+  #gamesListMovesInput{width:100%;box-sizing:border-box;font-family:inherit;margin:.4rem 0 .1rem}
+  #gamesListMovesError{color:#c62828;font-size:.82rem;min-height:1.1em}
+  .games-list-toggle{display:flex;align-items:center;gap:.4rem;margin:.5rem 0 .3rem;flex-wrap:wrap}
+  .games-color-label{font-size:.82rem;color:#555;margin-right:.15rem}
   .games-mode-btn{font-size:.82rem;padding:.25rem .7rem}
   .games-mode-btn.active{background:#1565c0;color:#fff;border-color:#1565c0}
   .games-list-summary{font-size:.9rem;margin:.2rem 0 .5rem;color:#333;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem}
@@ -671,6 +674,7 @@
       <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
       <hr class="row-menu-sep">
       <button id="menuSearchLine">Search for a Variation</button>
+      <button id="menuBrowseGames">Browse Games</button>
       <hr class="row-menu-sep">
       <button id="menuHelp">Help</button>
       <button id="menuAbout">About</button>
@@ -957,12 +961,20 @@
   </div>
 </div>
 
-<!-- games-with-this-position modal (three-dot menu → Games with this Position) -->
+<!-- browse games modal (three-dot menu "Find Games" / hamburger "Browse Games") -->
 <div id="gamesListOverlay" class="overlay">
   <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
     <div class="crop-header">
-      <h2>Games with this Position</h2>
+      <h2>Browse Games</h2>
       <button id="gamesListCloseBtn">Close</button>
+    </div>
+    <input type="text" id="gamesListMovesInput" placeholder="Moves from the start, e.g. 1. d4 Nf6 2. c4">
+    <div id="gamesListMovesError"></div>
+    <div class="games-list-toggle">
+      <span class="games-color-label">Show games where I play:</span>
+      <button type="button" class="games-mode-btn games-color-btn" data-color="black">Black</button>
+      <button type="button" class="games-mode-btn games-color-btn" data-color="white">White</button>
+      <button type="button" class="games-mode-btn games-color-btn" data-color="either">Either</button>
     </div>
     <div class="games-list-toggle">
       <button type="button" id="gamesModePos" class="games-mode-btn">Any transposition</button>
@@ -1383,6 +1395,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260724-206"></script>
+<script type="module" src="js/app.js?v=20260724-207"></script>
 </body>
 </html>

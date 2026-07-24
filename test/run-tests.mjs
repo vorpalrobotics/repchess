@@ -7640,6 +7640,100 @@ try {
 }
 }
 
+// --- Phase AV2: "Browse Games" -- the generalized modal (title, moves
+//     input, pre-fill from a three-dot node, live re-filtering, the color
+//     filter radios, and the hamburger entry point). ---
+if(shouldRunPhase(['move-table'])){
+const appAV2 = await launchApp();
+try {
+  await seedBackup(appAV2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [
+      { id: 'wg1', moves: 'd4 Nf6 c4 e6', createdAt: 3000,
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp1' } } } },
+      { id: 'wg2', moves: 'd4 Nf6 c4 g6', createdAt: 2000,
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp2' } } } },
+      { id: 'bg1', moves: 'd4 Nf6 c4 d5', createdAt: 1000,
+        players: { white: { user: { name: 'opp3' } }, black: { user: { name: 'tester' } } } },
+    ],
+  });
+  await appAV2.page.click('.line-row');
+  await appAV2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+
+  // 156. Opening from the three-dot node pre-fills the moves input with that
+  //      node's own move sequence, defaults the color filter to the line's
+  //      own color (White here), and titles the modal "Browse Games".
+  try {
+    await appAV2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
+    await appAV2.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV2.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const state = await appAV2.page.evaluate(() => ({
+      title: document.querySelector('#gamesListOverlay h2').textContent.trim(),
+      moves: document.getElementById('gamesListMovesInput').value,
+      activeColor: document.querySelector('.games-color-btn.active')?.dataset.color,
+      rows: document.querySelectorAll('#gamesListBody .games-row').length,
+    }));
+    assert(state.title === 'Browse Games', `expected the modal title "Browse Games", got "${state.title}"`);
+    assert(state.moves === '1. d4 Nf6', `expected the moves input pre-filled with "1. d4 Nf6", got "${state.moves}"`);
+    assert(state.activeColor === 'white', `expected the color filter to default to White (the line's own color), got "${state.activeColor}"`);
+    assert(state.rows === 2, `expected 2 games (the White-side games only), got ${state.rows}`);
+    ok('Browse Games: opening from a node pre-fills the moves input and defaults to the line\'s own color');
+  } catch(e){ bad('Browse Games: node pre-fill + defaults', e); }
+
+  // 157. Editing the moves input re-filters the list live (after the debounce).
+  try {
+    await appAV2.page.fill('#gamesListMovesInput', '1. d4 Nf6 2. c4 g6');
+    await appAV2.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length === 1, { timeout: 5000 });
+    ok('Browse Games: editing the moves input live-refilters the list');
+  } catch(e){ bad('Browse Games: live re-filter on input', e); }
+
+  // 158. The color filter buttons act as radios; "Either" includes both
+  //      colors, and "Black" narrows down to just the Black-side game.
+  try {
+    await appAV2.page.fill('#gamesListMovesInput', '1. d4 Nf6');
+    await appAV2.page.evaluate(() => document.querySelector('.games-color-btn[data-color="either"]').click());
+    await appAV2.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length === 3, { timeout: 5000 });
+    const eitherActive = await appAV2.page.evaluate(() =>
+      [...document.querySelectorAll('.games-color-btn')].filter(b => b.classList.contains('active')).map(b => b.dataset.color));
+    assert(JSON.stringify(eitherActive) === JSON.stringify(['either']), `expected only "either" active, got ${JSON.stringify(eitherActive)}`);
+
+    await appAV2.page.evaluate(() => document.querySelector('.games-color-btn[data-color="black"]').click());
+    await appAV2.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length === 1, { timeout: 5000 });
+    const summary = await appAV2.page.evaluate(() => document.getElementById('gamesListSummary').textContent);
+    assert(/as Black/.test(summary), `expected the summary to say "as Black", got "${summary}"`);
+    ok('Browse Games: color filter buttons act as radios (Black/White/Either)');
+    await appAV2.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+  } catch(e){ bad('Browse Games: color filter radios', e); }
+
+  // 159. The hamburger's "Browse Games" item, directly below "Search for a
+  //      Variation" in the menu, opens the SAME modal blank (no pre-filled
+  //      moves, "Either" selected).
+  try {
+    const menuOrder = [...await appAV2.page.evaluate(() => [...document.getElementById('menuList').children].map(el => el.id))];
+    const searchIdx = menuOrder.indexOf('menuSearchLine');
+    const browseIdx = menuOrder.indexOf('menuBrowseGames');
+    assert(searchIdx >= 0 && browseIdx === searchIdx + 1,
+      `expected "Browse Games" directly after "Search for a Variation" in the menu, got order ${JSON.stringify(menuOrder)}`);
+
+    await appAV2.page.evaluate(() => document.getElementById('menuBrowseGames').click());
+    await appAV2.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    const state = await appAV2.page.evaluate(() => ({
+      moves: document.getElementById('gamesListMovesInput').value,
+      activeColor: document.querySelector('.games-color-btn.active')?.dataset.color,
+    }));
+    assert(state.moves === '', `expected the moves input blank when opened from the hamburger, got "${state.moves}"`);
+    assert(state.activeColor === 'either', `expected "Either" selected by default from the hamburger, got "${state.activeColor}"`);
+    ok('Browse Games: hamburger menu item opens blank with "Either" selected, placed after "Search for a Variation"');
+  } catch(e){ bad('Browse Games: hamburger entry point', e); }
+} finally {
+  await appAV2.close();
+}
+}
+
 // --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
 //     (yielding to the event loop every POSITION_INDEX_CHUNK games) instead of
 //     running as one long unbroken synchronous loop -- for a large game
