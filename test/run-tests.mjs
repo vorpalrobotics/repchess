@@ -7776,21 +7776,26 @@ try {
       return {
         moveNumber: header.querySelector('.meta-actual-move-number')?.textContent.trim(),
         standardBold: header.querySelector('strong .meta-actual-move')?.textContent.trim(),
+        standardCount: header.querySelector('em')?.textContent.trim(),
         standardEval: header.querySelector('.meta-actual-eval')?.textContent.trim(),
         hasUseBtn: !!header.querySelector('.meta-actual-use'),
+        altMoveNumbers: altRows.map(r => r.querySelector('.meta-actual-move-number')?.textContent.trim()),
         altMoves: altRows.map(r => r.querySelector('.meta-actual-move').textContent.trim()),
-        altCounts: altRows.map(r => r.textContent),
+        altCounts: altRows.map(r => r.querySelector('em')?.textContent.trim()),
       };
     }, rowSel);
     assert(state.moveNumber === '2.', `expected header move-number "2.", got "${state.moveNumber}"`);
     assert(state.standardBold === 'c4', `expected the configured standard (c4) boldfaced in the header, got "${state.standardBold}"`);
+    assert(state.standardCount === '(1×)', `expected the standard's own play count (1x), got "${state.standardCount}"`);
     assert(state.standardEval === '+0.6/20', `expected the standard's own saved eval "+0.6/20", got "${state.standardEval}"`);
     assert(!state.hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
+    assert(state.altMoveNumbers.every(n => n === '2.'),
+      `expected every alt row to also show the move number "2.", got ${JSON.stringify(state.altMoveNumbers)}`);
     assert(JSON.stringify(state.altMoves) === JSON.stringify(['Nf3','g3']),
       `expected alt rows Nf3 then g3 (c4 excluded, it's the header), got ${JSON.stringify(state.altMoves)}`);
-    assert(state.altCounts[0].includes('2') && state.altCounts[1].includes('1'),
-      `expected counts 2x then 1x, got ${JSON.stringify(state.altCounts)}`);
-    ok('Compare Games: header row (standard boldfaced + its own eval) plus one sorted row per other played move');
+    assert(state.altCounts[0] === '(2×)' && state.altCounts[1] === '(1×)',
+      `expected counts (2x) then (1x), got ${JSON.stringify(state.altCounts)}`);
+    ok('Compare Games: header row (standard boldfaced, count + own eval) plus one sorted, move-numbered row per other played move');
   } catch(e){ bad('Compare Games: header + alt rows', e); }
 
   // 162b. Each move is a clickable mini-board chip (reusing the PV float
@@ -7873,10 +7878,14 @@ try {
 
   // 165. "Analyze Others": the depth dialog defaults to (or restores) the
   //      independent compare-depth localStorage setting; saving it queues
-  //      every OTHER played move (not the standard, which already has its
-  //      own real tree node) at that depth, multipv 1, flagged to run on the
-  //      live engine panel's thread count -- and the panel shows a pending
-  //      indicator on each right away, before any result has landed.
+  //      every OTHER played move at that depth, multipv 1, flagged to run on
+  //      the live engine panel's thread count -- and the panel shows a
+  //      pending indicator on each right away, before any result has landed.
+  //      The standard reply (c4) rides along too, but its own real tree node
+  //      already has a depth-20 eval (seeded above) -- deeper than the 18
+  //      asked for here, so addToAnalysisQueue's own "already sufficient"
+  //      check silently skips it (proven NOT skipped in test 165b below,
+  //      once a deeper depth is asked for).
   try {
     // re-toggle d4,Nf6 back on -- test 163b left it closed.
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
@@ -7912,6 +7921,31 @@ try {
     ok('Compare Games: "Analyze Others" queues every other move at the chosen depth, single line, live-thread-flagged, with an immediate pending indicator');
   } catch(e){ bad('Compare Games: Analyze Others queues the alternates', e); }
 
+  // 165b. Asking for a depth DEEPER than the standard's existing eval (20)
+  //       queues it too, right alongside the others -- "Analyze Others"
+  //       isn't limited to moves without their own tree node, only to moves
+  //       that actually need (re-)analysis at the requested depth.
+  try {
+    // clear the queue first -- test 165 left Nf3/g3 sitting there queued
+    // (at depth 18), which would otherwise just get topped up rather than
+    // demonstrating a fresh decision for c4.
+    await appAZ2.page.evaluate(async () => {
+      for(const it of window.__aqTestHooks.getQueue().slice()) await window.__aqTestHooks.cancelAnalysisQueueItem(it.id);
+    });
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
+    await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
+    await appAZ2.page.fill('#compareAnalyzeDepth', '25');
+    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+
+    const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const c4Item = queue.find(it => it.lineId==='L1' && it.seq.join(',') === ['d4','Nf6','c4'].join(','));
+    assert(c4Item, `expected the standard reply (c4) queued once a deeper depth (25 > its saved 20) was asked for, got ${JSON.stringify(queue)}`);
+    assert(c4Item.depth === 25 && c4Item.multipv === 1 && c4Item.useLiveThreads === true,
+      `expected c4 queued the same way as the others (depth 25, multipv 1, live threads), got ${JSON.stringify(c4Item)}`);
+    ok('Compare Games: "Analyze Others" also re-queues the standard reply when its existing eval falls short of the requested depth');
+  } catch(e){ bad('Compare Games: Analyze Others re-queues an insufficiently-analyzed standard', e); }
+
   // 166. The compare-depth setting persists in its OWN localStorage key
   //      (independent of the "Add to/Add Children to Analysis Queue" depth),
   //      restored the next time the dialog opens.
@@ -7919,7 +7953,7 @@ try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     const restoredDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
-    assert(restoredDepth === '18', `expected the just-saved depth (18) restored on reopen, got "${restoredDepth}"`);
+    assert(restoredDepth === '25', `expected the just-saved depth (25, from test 165b) restored on reopen, got "${restoredDepth}"`);
     await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeCancelBtn').click());
     ok('Compare Games: "Analyze Others" depth persists in its own localStorage key across dialog reopens');
   } catch(e){ bad('Compare Games: depth persistence', e); }
@@ -7993,7 +8027,9 @@ try {
 
     await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
     const nowProcessing = await appAZ2.page.evaluate(() => window.__aqTestHooks.getCurrentItem());
-    assert(nowProcessing && (nowProcessing.seq.join(',') === 'd4,Nf6,Nf3' || nowProcessing.seq.join(',') === 'd4,Nf6,g3'),
+    // whichever of Nf3/g3/c4 (the standard rides along too, at depth 25 --
+    // deeper than its saved 20) happens to sort first among the priority batch.
+    assert(nowProcessing && ['d4,Nf6,Nf3','d4,Nf6,g3','d4,Nf6,c4'].includes(nowProcessing.seq.join(',')),
       `expected an "Analyze Others" item to start next (interrupting the pre-existing one), got ${JSON.stringify(nowProcessing)}`);
     const lastOpts = await appAZ2.page.evaluate(() => window.__aqFakeEngine.calls[1]);
     assert(lastOpts.threads === 3, `expected the "Analyze Others" search to run at the LIVE panel's thread count (3), not the queue's own (6), got ${lastOpts.threads}`);

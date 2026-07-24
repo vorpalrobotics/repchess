@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-198';
+const BUILD_TAG = '-199';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -702,17 +702,19 @@ function actualMovesHtml(lineId, seq, reply){
     const fenAfter = fenForSeq([...seq, move]);
     return `<span class="pv-move meta-actual-move" data-fen="${escapeHtml(fenAfter)}">${escapeHtml(move)}</span>`;
   };
+  const moveNumberLabel = compareMoveNumberLabel(seq);
+  const replyCount = alts.find(a => a.move.toLowerCase() === replyLower)?.count || 0;
   const headerReplyHtml = reply
-    ? `<strong>${moveChip(reply)}</strong> ${actualEvalTagHtml(lineId, [...seq, reply])}`
+    ? `<strong>${moveChip(reply)}</strong> <em>(${replyCount}×)</em> ${actualEvalTagHtml(lineId, [...seq, reply])}`
     : `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>`;
   const headerRow =
     `<div class="meta-actual-row meta-actual-header">` +
     ACTUAL_DISMISS_ICON + (others.length ? ACTUAL_ANALYZE_ALL_ICON : '') +
-    `<span class="meta-actual-move-number">${compareMoveNumberLabel(seq)}</span> ` +
+    `<span class="meta-actual-move-number">${moveNumberLabel}</span> ` +
     headerReplyHtml +
     `</div>`;
   const altRows = others.map(({move,count}) =>
-    `<div class="meta-actual-row meta-actual-alt-row">${moveChip(move)} <em>(${count}×)</em> ${actualEvalTagHtml(lineId, [...seq, move])}</div>`
+    `<div class="meta-actual-row meta-actual-alt-row"><span class="meta-actual-move-number">${moveNumberLabel}</span> ${moveChip(move)} <em>(${count}×)</em> ${actualEvalTagHtml(lineId, [...seq, move])}</div>`
   ).join('');
   return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
     headerRow + altRows + `</div>`;
@@ -3311,7 +3313,11 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
         const replyLower = (saved?.reply || '').toLowerCase();
         const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
-        if(others.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, others, refreshMeta);
+        // the standard reply rides along too -- addToAnalysisQueue's own
+        // "already sufficient" check silently skips it if its real tree
+        // node already has an eval at least as deep as what's asked for.
+        const moves = saved?.reply ? [...others, saved.reply] : others;
+        if(moves.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, moves, refreshMeta);
       };
       const useActualBtn = metaTd.querySelector('.meta-actual-use');
       if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
@@ -3703,7 +3709,11 @@ function renderBlackRoot(parent,games,trigger){
     if(analyzeAllBtn) analyzeAllBtn.onclick = () => {
       const replyLower = (saved?.reply || '').toLowerCase();
       const others = actualMoveComparison(lineSeq).filter(a => a.move.toLowerCase() !== replyLower).map(a => a.move);
-      if(others.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, others, refreshMeta);
+      // the standard reply rides along too -- addToAnalysisQueue's own
+      // "already sufficient" check silently skips it if its real tree
+      // node already has an eval at least as deep as what's asked for.
+      const moves = saved?.reply ? [...others, saved.reply] : others;
+      if(moves.length) openCompareAnalyzeModal(CURRENT_LINE.id, lineSeq, moves, refreshMeta);
     };
     const useActualBtn = metaTd.querySelector('.meta-actual-use');
     if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
