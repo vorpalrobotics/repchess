@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-205';
+const BUILD_TAG = '-206';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -782,33 +782,43 @@ function actualMovesHtml(lineId, seq, reply){
   };
   const moveNumberLabel = compareMoveNumberLabel(seq);
   const replyRec = alts.find(a => a.move.toLowerCase() === replyLower);
-  const headerReplyHtml = reply
-    ? `<strong>${moveChip(reply)}</strong> <em>(${replyRec?.count || 0}×)</em> ${replyRec ? actualRecordHtml(replyRec) : ''} ${actualEvalTagHtml(lineId, [...seq, reply])}`
-    : `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>`;
-  const headerRow =
-    `<div class="meta-actual-row meta-actual-header">` +
-    ACTUAL_DISMISS_ICON + (others.length ? ACTUAL_ANALYZE_ALL_ICON : '') +
-    `<span class="meta-actual-move-number">${moveNumberLabel}</span> ` +
-    headerReplyHtml +
-    `</div>`;
-  // a real <table>, not more flex rows, so the move/count/record/eval
-  // columns actually line up down the list instead of drifting with each
-  // move's own text width.
-  const altTable = others.length ? `<table class="meta-actual-alt-table"><tbody>` + others.map(rec =>
+  const icons = ACTUAL_DISMISS_ICON + (others.length ? ACTUAL_ANALYZE_ALL_ICON : '');
+  // the standard's own row lives in the SAME <table> as the "other moves"
+  // rows below, in the same column order (move-number/move/count/record/
+  // eval), so its record and eval line up with every other row's instead of
+  // drifting off on its own (the originally-reported gap: only the "other"
+  // rows were a real table, so the standard's win/loss and eval floated free).
+  const headerRow = reply
+    ? `<tr class="meta-actual-row meta-actual-header">` +
+      `<td class="meta-actual-icons">${icons}</td>` +
+      `<td class="meta-actual-move-number">${moveNumberLabel}</td>` +
+      `<td><strong>${moveChip(reply)}</strong></td>` +
+      `<td><em>(${replyRec?.count || 0}×)</em></td>` +
+      `<td>${replyRec ? actualRecordHtml(replyRec) : ''}</td>` +
+      `<td>${actualEvalTagHtml(lineId, [...seq, reply])}</td>` +
+      `</tr>`
+    : `<tr class="meta-actual-row meta-actual-header">` +
+      `<td class="meta-actual-icons">${icons}</td>` +
+      `<td class="meta-actual-move-number">${moveNumberLabel}</td>` +
+      `<td colspan="4"><button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button></td>` +
+      `</tr>`;
+  const altRows = others.map(rec =>
     `<tr class="meta-actual-alt-row">` +
+    `<td></td>` +
     `<td class="meta-actual-move-number">${moveNumberLabel}</td>` +
     `<td>${moveChip(rec.move)}</td>` +
     `<td><em>(${rec.count}×)</em></td>` +
     `<td>${actualRecordHtml(rec)}</td>` +
     `<td>${actualEvalTagHtml(lineId, [...seq, rec.move])}</td>` +
     `</tr>`
-  ).join('') + `</tbody></table>` : '';
+  ).join('');
+  const table = `<table class="meta-actual-alt-table"><tbody>${headerRow}${altRows}</tbody></table>`;
   const summary = actualStandardSummary(lineId, seq, reply, others);
   const summaryRow = summary === null ? '' :
     `<div class="meta-actual-row meta-actual-summary ${summary > 0.1 ? 'meta-actual-summary-good' : summary < -0.1 ? 'meta-actual-summary-bad' : 'meta-actual-summary-neutral'}">` +
     `Standard vs. other moves: <strong>${summary >= 0 ? '+' : ''}${summary.toFixed(1)}</strong></div>`;
   return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
-    headerRow + altTable + summaryRow + `</div>`;
+    table + summaryRow + `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
