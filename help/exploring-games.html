@@ -33,12 +33,25 @@ been doing rather than typing one in cold.</p>
 
 <h4>Analyze Others</h4>
 <p>The lightning-bolt icon on the header row background-analyzes every
-OTHER move at once -- a quick way to see at a glance whether the moves
-you've drifted into are still objectively sound. It asks for a depth (its
-own setting, independent of the deeper default used for children), always
-runs a single quick line per move at whatever thread count your live
-analysis board is set to, and jumps straight to the front of the analysis
-queue -- interrupting anything already running there, since this is meant
-to be a fast "let me see" rather than something left to churn in the
-background. Evals fill in as each one finishes; a small hourglass marks a
-move that's queued or currently being analyzed.</p>
+OTHER move at once (the standard reply rides along too, if its own eval
+isn't already at least as deep as what you ask for) -- a quick way to see
+at a glance whether the moves you've drifted into are still objectively
+sound. It asks for a depth (its own setting, independent of the deeper
+default used for children), always runs a single quick line per move at
+whatever thread count your live analysis board is set to, and jumps
+straight to the front of the analysis queue -- interrupting anything
+already running there, since this is meant to be a fast "let me see"
+rather than something left to churn in the background. Evals fill in as
+each one finishes; a small hourglass marks a move that's queued or
+currently being analyzed.</p>
+
+<p>Once every other move has its own eval at least as deep as the depth
+you last asked for, a summary line appears: <em>"Standard vs. other moves:
++0.4"</em> -- your standard's own eval compared against the play-count-
+weighted average of everything else you've actually played, from your
+side's perspective (a Black line's numbers are flipped accordingly, so
+positive always means the standard did better). A positive number means
+you're measurably losing eval whenever you drift away from your prep; a
+negative one isn't necessarily bad news -- it can just mean your standard
+is an intentionally speculative choice (a gambit, say) that scores lower
+objectively than the safer moves you've sometimes played instead.</p>

@@ -8048,6 +8048,75 @@ try {
 }
 }
 
+// --- Phase BA2: "Standard vs. other moves" summary -- once every OTHER
+//     played move has its own eval at least as deep as the last-requested
+//     compare depth, a play-count-weighted comparison against the standard
+//     reply's own eval appears below the rows. Always from the LINE's own
+//     perspective, so a positive number means the standard did better --
+//     tested on a BLACK line specifically, where a lower White-relative eval
+//     is the actually-better outcome, to prove the sign flip is real and not
+//     coincidentally right for a White line. ---
+if(shouldRunPhase(['move-table'])){
+const appBA2 = await launchApp();
+try {
+  await seedBackup(appBA2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Black Test', color: 'black', openingMoves: ['e4'], prefs: [
+      { seq: ['e4'], reply: 'e5' },
+      { seq: ['e4','e5'], eval: { type:'cp', value: -20, depth: 20, pv:'' } },   // standard: -0.2 White-relative (good for Black)
+      { seq: ['e4','c5'], eval: { type:'cp', value: 10, depth: 25, pv:'' } },    // other: +0.1 White-relative, played 2x
+      { seq: ['e4','e6'], eval: { type:'cp', value: 50, depth: 30, pv:'' } },    // other: +0.5 White-relative, played 1x
+    ]}],
+    games: [
+      { id: 'g1', moves: 'e4 e5 Nf3 Nc6' },
+      { id: 'g2', moves: 'e4 c5 Nf3 d6' },
+      { id: 'g3', moves: 'e4 c5 Nf3 Nc6' },
+      { id: 'g4', moves: 'e4 e6 d4 d5' },
+    ],
+  });
+  await appBA2.page.click('.line-row');
+  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="e4"]';
+
+  // 168. weighted average: (0.1*2 + 0.5*1)/3 = 0.2333 White-relative;
+  //      standard -0.2 - 0.2333 = -0.4333 White-relative, negated for a
+  //      Black line -> +0.4.
+  try {
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-summary`, { timeout: 5000 });
+    const state = await appBA2.page.evaluate((sel) => {
+      const el = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-summary');
+      return { text: el.textContent.trim(), cls: el.className };
+    }, rowSel);
+    assert(state.text === 'Standard vs. other moves: +0.4', `expected the summary "+0.4", got "${state.text}"`);
+    assert(state.cls.includes('meta-actual-summary-good'), `expected the "good" colour class, got "${state.cls}"`);
+    ok('Compare Games summary: play-count-weighted, sign-correct for a Black line, once every other move is deep enough');
+  } catch(e){ bad('Compare Games summary: weighted average + Black-line sign flip', e); }
+
+  // 169. Not shown at all if even ONE other move falls short of the
+  //      requested depth -- a partial average would be misleading, not just
+  //      incomplete. Raising the requested depth (past e6's saved 30, the
+  //      shallower of the two "other" evals stays fine at 25 for c5) is a
+  //      simpler way to prove the gate than trying to shallow-overwrite an
+  //      existing eval -- saveAnalysisQueueResult itself refuses to ever
+  //      downgrade a saved eval, by design.
+  try {
+    await appBA2.page.evaluate(() => localStorage.setItem('compare_lastDepth', '35'));
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBA2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 5000 });
+    const summaryGone = await appBA2.page.evaluate((sel) =>
+      !document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-summary'), rowSel);
+    assert(summaryGone, 'expected the summary to disappear once the requested depth exceeds what either other move was actually analyzed to');
+    ok('Compare Games summary: hidden again once any other move falls short of the (now raised) requested depth');
+  } catch(e){ bad('Compare Games summary: depth-gating', e); }
+} finally {
+  await appBA2.close();
+}
+}
+
 // --- Phase BV: three-dot row-menu reorg -- "Set Move Quality" now needs a
 //     click to reveal its glyph strip (previously always visible), and
 //     "Add Note" was folded into "Set Attributes" as a room-level attribute

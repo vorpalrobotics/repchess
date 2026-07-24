@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-200';
+const BUILD_TAG = '-201';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -132,6 +132,7 @@ const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_AQ_THREADS='aq_lastThreads';
 const LS_COMPARE_DEPTH='compare_lastDepth';
+const COMPARE_DEFAULT_DEPTH=20;
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
@@ -690,6 +691,36 @@ function actualEvalTagHtml(lineId, seq){
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
 
+// a mate score isn't linearly comparable to a centipawn one, but the
+// weighted-average comparison below needs SOME number -- treat it as a
+// decisively large pawn value (same convention formatEvalTag-adjacent code
+// elsewhere uses when a rough magnitude, not the exact mate distance, is
+// what matters).
+const MATE_PAWNS_PROXY = 30;
+function evalPawns(evalObj){
+  return evalObj.type === 'mate' ? (evalObj.value >= 0 ? MATE_PAWNS_PROXY : -MATE_PAWNS_PROXY) : evalObj.value / 100;
+}
+
+// "Standard vs. other moves: +N.N" -- how much the standard reply's own eval
+// beat (or, negative, lost to) the play-count-weighted average eval of every
+// OTHER move actually played, from the line's own perspective (so a positive
+// number always means the standard did better -- including a Black line
+// where a lower White-relative eval is the good outcome). Only shown once
+// every other move has actually been analyzed to at least the depth the user
+// last asked "Analyze Others" for -- a partial average would be misleading,
+// not just incomplete. null when there's nothing to compute yet.
+function actualStandardSummary(lineId, seq, reply, others){
+  const standardEval = reply && PREFS[prefKey(lineId, [...seq, reply])]?.eval;
+  if(!standardEval || !others.length) return null;
+  const requestedDepth = parseInt(localStorage.getItem(LS_COMPARE_DEPTH), 10) || COMPARE_DEFAULT_DEPTH;
+  const otherEvals = others.map(({move,count}) => ({eval: PREFS[prefKey(lineId, [...seq, move])]?.eval, count}));
+  if(otherEvals.some(({eval:ev}) => !ev || ev.depth < requestedDepth)) return null;
+  const totalCount = otherEvals.reduce((sum,{count}) => sum + count, 0);
+  const weightedAvgOther = otherEvals.reduce((sum,{eval:ev,count}) => sum + evalPawns(ev) * count, 0) / totalCount;
+  const diffWhiteRelative = evalPawns(standardEval) - weightedAvgOther;
+  return CURRENT_LINE.color === 'black' ? -diffWhiteRelative : diffWhiteRelative;
+}
+
 function actualMovesHtml(lineId, seq, reply){
   const alts = actualMoveComparison(seq);
   if(!alts.length){
@@ -716,8 +747,12 @@ function actualMovesHtml(lineId, seq, reply){
   const altRows = others.map(({move,count}) =>
     `<div class="meta-actual-row meta-actual-alt-row"><span class="meta-actual-move-number">${moveNumberLabel}</span> ${moveChip(move)} <em>(${count}×)</em> ${actualEvalTagHtml(lineId, [...seq, move])}</div>`
   ).join('');
+  const summary = actualStandardSummary(lineId, seq, reply, others);
+  const summaryRow = summary === null ? '' :
+    `<div class="meta-actual-row meta-actual-summary ${summary > 0.1 ? 'meta-actual-summary-good' : summary < -0.1 ? 'meta-actual-summary-bad' : 'meta-actual-summary-neutral'}">` +
+    `Standard vs. other moves: <strong>${summary >= 0 ? '+' : ''}${summary.toFixed(1)}</strong></div>`;
   return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
-    headerRow + altRows + `</div>`;
+    headerRow + altRows + summaryRow + `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
@@ -7240,7 +7275,7 @@ async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
 let compareAnalyzeCtx = null;   // {lineId, seq, moves, onQueued} pending in the depth dialog
 function openCompareAnalyzeModal(lineId, seq, moves, onQueued){
   compareAnalyzeCtx = {lineId, seq, moves, onQueued};
-  $('compareAnalyzeDepth').value = localStorage.getItem(LS_COMPARE_DEPTH) || 20;
+  $('compareAnalyzeDepth').value = localStorage.getItem(LS_COMPARE_DEPTH) || COMPARE_DEFAULT_DEPTH;
   $('compareAnalyzeError').textContent = '';
   $('compareAnalyzeOverlay').style.display='flex';
 }
