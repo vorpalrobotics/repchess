@@ -4493,6 +4493,55 @@ try {
 }
 
 }
+// --- Phase AN2: a genuinely simple room -- one door (or none), no side
+//     move-pairs -- doesn't need the generous 11x13 castle-generation floor;
+//     the Room Geometry dialog's minimum now relaxes down to 8x8 for it,
+//     instead of being stuck at whatever size the room happened to be
+//     generated/authored at. A room that actually has more content (side
+//     pairs, 2+ doors on one wall) still keeps its larger real minimum --
+//     covered by Phase AN's own >3m assertion above, unchanged. ---
+if(shouldRunPhase(['vr-decorating'])){
+const appAN2 = await launchApp();
+try {
+  await seedBackup(appAN2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAN2.page);
+  // roomC is a plain hand-authored demo room (10x10x4) with exactly one
+  // door -- a back exit to 'start' -- and no move-object slots at all: the
+  // simplest possible "single door, no side pairs" shape.
+  await appAN2.page.evaluate(() => window.__threeTestEdit.enter('roomC'));
+  await appAN2.page.waitForTimeout(150);
+  await appAN2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appAN2.page.waitForTimeout(60);
+
+  // 162. The dialog's width/depth floors relax to 8m (SMALL_ROOM_MIN), well
+  //      below roomC's own original 10x10 hand-authored size, and a resize
+  //      to exactly 8x8 is accepted rather than clamped back up.
+  try {
+    await appAN2.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appAN2.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const mins = await appAN2.page.evaluate(() => ({
+      w: Number(document.getElementById('roomGeomW').getAttribute('min')),
+      d: Number(document.getElementById('roomGeomD').getAttribute('min')),
+    }));
+    assert(mins.w === 8 && mins.d === 8, `expected the relaxed 8x8 floor for a single-door room with no side pairs, got ${JSON.stringify(mins)}`);
+
+    await appAN2.page.fill('#roomGeomW', '8');
+    await appAN2.page.fill('#roomGeomD', '8');
+    await appAN2.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN2.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
+    await appAN2.page.waitForTimeout(200);
+    const applied = await appAN2.page.evaluate(() => window.__threeTestEdit.roomSize('roomC'));
+    assert(Math.abs(applied.w - 8) < 0.01 && Math.abs(applied.d - 8) < 0.01,
+      `expected 8x8 to be accepted as-is (not clamped back up), got ${JSON.stringify(applied)}`);
+    ok('Room Geometry dialog: a simple single-door room can be resized down to 8x8');
+  } catch(e){ bad('Room Geometry dialog: relaxed minimum for a simple single-door room', e); }
+} finally {
+  await appAN2.close();
+}
+}
 // --- Phase AO: two more picker "New Asset" bugs found in real use --
 //     (1) VR turning kept responding to A/D/arrow keys while typing in the
 //     New Asset modal's text fields, because only move/strafe were gated by

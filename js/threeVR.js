@@ -278,6 +278,19 @@ const CAS_LAYOUT = {
   sideStride:   3.0,   // each subsequent side pair this much farther north
   northMargin:  2.0    // clearance kept between the farthest pair and the north wall
 };
+// door/pair spacing metrics -- module-level (not just local to
+// registerOneCastle) so renderRoomGeomDialog's relaxedContentMin can reuse
+// the exact same formula against a room's LIVE content when computing how
+// far a room can be manually shrunk, without duplicating the numbers.
+const DOOR_SPACING = 5.6;      // center-to-center; DOOR_W is 2.2. Wide enough to
+                               // clear the move-pair + object sitting to the LEFT
+                               // of each door (was 3.6 before they moved there)
+const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
+// the move-pair + object sit to the LEFT of each door -- ~1.7 m off the door
+// centre (doorSideXZ) plus ~0.6 m for half the billboard. The edge door needs
+// this much clear to the side wall so its pair doesn't poke through.
+const PAIR_MARGIN = 2.8;
+const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
 // Stable door ordering (navigation memory): a door's wall is derived from its
 // own target position, not its index among the current doors, so adding/removing
 // a variation never makes an existing door jump walls. `doorCmp` then orders the
@@ -316,15 +329,6 @@ function registerOneCastle(castle, instanceId, opts = {}){
   const entry = genRooms[0];                 // R1 is the entry (numbering is entry-first)
   const entryKey = roomKeyFor(entry);
   CASTLE_ENTRY = entryKey;
-  const DOOR_SPACING = 5.6;      // center-to-center; DOOR_W is 2.2. Wide enough to
-                                 // clear the move-pair + object sitting to the LEFT
-                                 // of each door (was 3.6 before they moved there)
-  const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
-  // the move-pair + object sit to the LEFT of each door -- ~1.7 m off the door
-  // centre (doorSideXZ) plus ~0.6 m for half the billboard. The edge door needs
-  // this much clear to the side wall so its pair doesn't poke through.
-  const PAIR_MARGIN = 2.8;
-  const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
   // the castle these rooms belong to (its entry/root room carries the name).
   // A room whose OWN castle-root name differs from this is a boundary into a
   // different castle -- its door gets the two-line castle plaque.
@@ -6501,6 +6505,42 @@ function wirePresetsBox(ov, roomKey){
     refresh();
   };
 }
+// A room's true structural minimum width/depth -- reusing registerOneCastle's
+// own door/pair-spacing formula, but against the room's CURRENT live doors
+// and move-pairs (not the size it happened to be generated at), and with
+// SMALL_ROOM_MIN as its floor instead of the generous 11x13 castle-generation
+// default. A genuinely simple room -- one door, no side move-pairs -- can
+// shrink well below its original generated size this way; a room that
+// actually needs more (several side pairs, or 2+ doors sharing a wall) still
+// floors out at whatever that content really requires, same as generation
+// does. Elevator cars and outdoor rooms are handled elsewhere (ELEV_MIN_WD,
+// not resizable at all) -- null here means "no relaxed floor, use the room's
+// own generated size as-is".
+const SMALL_ROOM_MIN = 8;
+function relaxedContentMin(room, roomKey){
+  if(room.outdoor || isElevatorCar(roomKey)) return null;
+  const fwd = (room.exits || []).filter(ex => !ex.back);
+  const byWallCount = { north: 0, east: 0, west: 0 };
+  for(const ex of fwd) byWallCount[ex.wall] = (byWallCount[ex.wall] || 0) + 1;
+  const span = c => c > 1 ? (c - 1) * DOOR_SPACING : 0;
+  const slots = moveObjectSlots(roomKey);
+  const sideMax = Math.max(
+    slots.filter(s => s.side === 'left').length,
+    slots.filter(s => s.side === 'right').length);
+  const pairDepth = sideMax >= 1
+    ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
+      + (sideMax - 1) * CAS_LAYOUT.sideStride + CAS_LAYOUT.northMargin
+    : 0;
+  const maxEW = Math.max(byWallCount.east, byWallCount.west);
+  const ewDepth = maxEW >= 1
+    ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + EW_BEHIND_HEAD
+      + (maxEW - 1) * DOOR_SPACING + EDGE_MARGIN
+    : 0;
+  return {
+    w: Math.max(SMALL_ROOM_MIN, span(byWallCount.north) + 2 * PAIR_MARGIN),
+    d: Math.max(SMALL_ROOM_MIN, pairDepth, ewDepth),
+  };
+}
 function renderRoomGeomDialog(ov, roomKey){
   const room = mergedRoom(roomKey);
   const { w, d, h } = room.size;
@@ -6516,6 +6556,9 @@ function renderRoomGeomDialog(ov, roomKey){
   // single elevator door is ever built -- see ELEV_MIN_WD.
   if(isElevatorCar(roomKey)){
     contentMin = { w: Math.min(contentMin.w, ELEV_MIN_WD), d: Math.min(contentMin.d, ELEV_MIN_WD), h: contentMin.h };
+  } else {
+    const relaxed = relaxedContentMin(room, roomKey);
+    if(relaxed) contentMin = { w: Math.min(contentMin.w, relaxed.w), d: Math.min(contentMin.d, relaxed.d), h: contentMin.h };
   }
   // read straight off the static ROOMS config: exits, stairs and (outdoor)
   // building footprints don't move when the room is resized, so the live
