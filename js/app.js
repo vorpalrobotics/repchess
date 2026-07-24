@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-201';
+const BUILD_TAG = '-202';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -653,13 +653,21 @@ function gamesAlongLine(games, seq){
    Every OTHER move actually played gets its own indented row below it,
    sorted by play count, with an "Analyze Others" icon on the header row to
    background-analyze all of them at once (see queueAlternatesForAnalysis). */
+// per-move win/loss/draw tally uses the same userColorInGame/gameOutcomeForUser
+// helpers "Find Games"' own summary line does (defined further down, hoisted) --
+// a game whose color can't be determined (a legacy bare chess.com import,
+// or someone else's game) still counts toward `count`, just not toward
+// win/loss/draw, exactly like that summary's own `known` distinction.
 function actualMoveComparison(seq){
-  const counts = {};
-  for(const { move } of gamesAlongLine(GAMES || [], seq)){
+  const stats = {};
+  for(const { game, move } of gamesAlongLine(GAMES || [], seq)){
     if(!move) continue;
-    counts[move] = (counts[move] || 0) + 1;
+    const rec = stats[move] ??= { move, count:0, win:0, loss:0, draw:0 };
+    rec.count++;
+    const outcome = gameOutcomeForUser(game, userColorInGame(game));
+    if(outcome) rec[outcome]++;
   }
-  return Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([move,count]) => ({move,count}));
+  return Object.values(stats).sort((a,b) => b.count - a.count);
 }
 
 // "3." or "3..." -- the SAN move-number prefix for whichever ply comes right
@@ -690,6 +698,16 @@ function actualEvalTagHtml(lineId, seq){
 
 const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-all" title="Analyze all other replies"></i>';
+
+// "+W =D −L", the same win/loss/draw notation "Find Games"' own summary line
+// uses -- '' when none of this move's games have a determinable outcome
+// (all legacy bare/unknown-color games), so it doesn't misleadingly print
+// "+0 =0 −0" for a move that actually has games, just none with a known result.
+function actualRecordHtml(rec){
+  if(!rec.win && !rec.loss && !rec.draw) return '';
+  return `<span class="meta-actual-record" title="${rec.win}W ${rec.draw}D ${rec.loss}L from games with a determinable result">` +
+    `+${rec.win} =${rec.draw} −${rec.loss}</span>`;
+}
 
 // a mate score isn't linearly comparable to a centipawn one, but the
 // weighted-average comparison below needs SOME number -- treat it as a
@@ -734,9 +752,9 @@ function actualMovesHtml(lineId, seq, reply){
     return `<span class="pv-move meta-actual-move" data-fen="${escapeHtml(fenAfter)}">${escapeHtml(move)}</span>`;
   };
   const moveNumberLabel = compareMoveNumberLabel(seq);
-  const replyCount = alts.find(a => a.move.toLowerCase() === replyLower)?.count || 0;
+  const replyRec = alts.find(a => a.move.toLowerCase() === replyLower);
   const headerReplyHtml = reply
-    ? `<strong>${moveChip(reply)}</strong> <em>(${replyCount}×)</em> ${actualEvalTagHtml(lineId, [...seq, reply])}`
+    ? `<strong>${moveChip(reply)}</strong> <em>(${replyRec?.count || 0}×)</em> ${replyRec ? actualRecordHtml(replyRec) : ''} ${actualEvalTagHtml(lineId, [...seq, reply])}`
     : `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>`;
   const headerRow =
     `<div class="meta-actual-row meta-actual-header">` +
@@ -744,8 +762,8 @@ function actualMovesHtml(lineId, seq, reply){
     `<span class="meta-actual-move-number">${moveNumberLabel}</span> ` +
     headerReplyHtml +
     `</div>`;
-  const altRows = others.map(({move,count}) =>
-    `<div class="meta-actual-row meta-actual-alt-row"><span class="meta-actual-move-number">${moveNumberLabel}</span> ${moveChip(move)} <em>(${count}×)</em> ${actualEvalTagHtml(lineId, [...seq, move])}</div>`
+  const altRows = others.map(rec =>
+    `<div class="meta-actual-row meta-actual-alt-row"><span class="meta-actual-move-number">${moveNumberLabel}</span> ${moveChip(rec.move)} <em>(${rec.count}×)</em> ${actualRecordHtml(rec)} ${actualEvalTagHtml(lineId, [...seq, rec.move])}</div>`
   ).join('');
   const summary = actualStandardSummary(lineId, seq, reply, others);
   const summaryRow = summary === null ? '' :

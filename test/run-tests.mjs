@@ -7897,7 +7897,16 @@ try {
     assert(defaultDepth === '20', `expected the depth dialog to default to 20, got "${defaultDepth}"`);
     await appAZ2.page.fill('#compareAnalyzeDepth', '18');
     await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
-    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+    // the overlay itself closes synchronously, before queueAlternatesForAnalysis's
+    // sequential per-move awaits (each does its own getPref IDB read) actually
+    // finish -- wait on the real completion signal (both items landing in the
+    // queue) instead of the overlay's visibility, which resolves too early and
+    // can catch this mid-population (a real, if narrow, race in an earlier
+    // version of this test, not just theoretical -- it started reproducing
+    // once a third move, the standard, joined the same per-move await chain).
+    await appAZ2.page.waitForFunction(() =>
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,Nf3') &&
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,g3'), { timeout: 5000 });
 
     const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
     const queuedFor = seq => queue.find(it => it.lineId==='L1' && it.seq.join(',')===seq.join(','));
@@ -7936,7 +7945,11 @@ try {
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     await appAZ2.page.fill('#compareAnalyzeDepth', '25');
     await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
-    await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
+    // same race as test 165 above -- c4 is the LAST of the three per-move
+    // awaits (Nf3, g3, then the standard), so it's the most likely of all to
+    // still be mid-flight when the overlay's own (synchronous) close fires.
+    await appAZ2.page.waitForFunction(() =>
+      window.__aqTestHooks.getQueue().some(it => it.seq.join(',') === 'd4,Nf6,c4'), { timeout: 5000 });
 
     const queue = await appAZ2.page.evaluate(() => window.__aqTestHooks.getQueue());
     const c4Item = queue.find(it => it.lineId==='L1' && it.seq.join(',') === ['d4','Nf6','c4'].join(','));
@@ -8114,6 +8127,63 @@ try {
   } catch(e){ bad('Compare Games summary: depth-gating', e); }
 } finally {
   await appBA2.close();
+}
+}
+
+// --- Phase BC2: Compare Games rows also show each move's win/loss/draw
+//     record ("+W =D −L", the same notation "Find Games"' own summary line
+//     uses), computed from the SAME userColorInGame/gameOutcomeForUser
+//     helpers -- a game with a determinable outcome counts toward it, a
+//     legacy bare/unknown-color game still counts toward the play count but
+//     not the record (so it never misleadingly prints "+0 =0 −0"). ---
+if(shouldRunPhase(['move-table'])){
+const appBC2 = await launchApp();
+try {
+  await seedBackup(appBC2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', winner: 'white',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp1' } } } },   // c4: a win
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6', winner: 'black',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp2' } } } },   // Nf3: a loss
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp3' } } } },   // Nf3: a draw (no winner)
+      { id: 'g4', moves: 'd4 Nf6 g3 g6', winner: 'white',
+        players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp4' } } } },   // g3: a win
+    ],
+  });
+  await appBC2.page.click('.line-row');
+  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+
+  // 170. c4 (the standard, 1 win) shows "+1 =0 −0" on the header row; Nf3
+  //      (1 loss, 1 draw) shows "+0 =1 −1"; g3 (1 win) shows "+1 =0 −0".
+  try {
+    await appBC2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appBC2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appBC2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header .meta-actual-record`, { timeout: 5000 });
+    const state = await appBC2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      const rowRecord = row => row.querySelector('.meta-actual-record')?.textContent.trim();
+      return {
+        standard: rowRecord(meta.querySelector('.meta-actual-header')),
+        alts: [...meta.querySelectorAll('.meta-actual-alt-row')].map(r => ({
+          move: r.querySelector('.meta-actual-move').textContent.trim(),
+          record: rowRecord(r),
+        })),
+      };
+    }, rowSel);
+    assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
+    const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
+    assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
+    assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
+    ok('Compare Games: each row shows its own win/loss/draw record, including the standard');
+  } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }
+} finally {
+  await appBC2.close();
 }
 }
 
