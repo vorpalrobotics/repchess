@@ -6172,7 +6172,7 @@ try {
     await appBI.page.evaluate(() => document.getElementById('menuHelp').click());
     await appBI.page.waitForSelector('#helpOverlay', { state: 'visible', timeout: 5000 });
     const topicCount = await appBI.page.evaluate(() => document.querySelectorAll('#helpTopics .help-topic-btn').length);
-    assert(topicCount >= 11, `expected at least 11 help topics (Intro + 10 new ones), got ${topicCount}`);
+    assert(topicCount >= 12, `expected at least 12 help topics (Intro + 11 others), got ${topicCount}`);
     for(let i = 0; i < topicCount; i++){
       const { title } = await appBI.page.evaluate((idx) => {
         const btns = [...document.querySelectorAll('#helpTopics .help-topic-btn')];
