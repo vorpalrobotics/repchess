@@ -7726,12 +7726,13 @@ try {
 }
 }
 
-// --- Phase AZ2: "Compare to Actual Games" (three-dot menu) -- commentary
-//     lines under a node (not a modal, unlike "Games with this Position")
-//     listing the moves you've actually played from this exact line in your
-//     own games, grouped with a play count, excluding whatever matches the
-//     row's own configured standard reply. When no reply is configured yet,
-//     nothing is excluded and a "Use as Standard" quick action appears on
+// --- Phase AZ2: "Compare Games" (three-dot menu) -- commentary lines under
+//     a node (not a modal, unlike "Find Games") listing every move you've
+//     actually played from this exact line in your own games, grouped with
+//     a play count and sorted by frequency. The row's own configured
+//     standard reply is boldfaced among them (not excluded), so the list
+//     doubles as "how often did I actually follow my own prep." When no
+//     reply is configured yet, a "Use as Standard" quick action appears on
 //     the most-played alternate. ---
 if(shouldRunPhase(['move-table'])){
 const appAZ2 = await launchApp();
@@ -7743,10 +7744,10 @@ try {
       // ['d4','g6'] has NO configured reply at all -- test 164
     ]}],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6' },    // played the configured standard (c4) -- must be excluded
-      { id: 'g2', moves: 'd4 Nf6 Nf3 g6' },   // divergent: Nf3 x1
-      { id: 'g3', moves: 'd4 Nf6 Nf3 d5' },   // divergent: Nf3 x2 total
-      { id: 'g4', moves: 'd4 Nf6 g3 g6' },    // divergent: g3 x1
+      { id: 'g1', moves: 'd4 Nf6 c4 e6' },    // played the configured standard (c4) x1 -- included, boldfaced
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6' },   // alternate: Nf3 x1
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5' },   // alternate: Nf3 x2 total
+      { id: 'g4', moves: 'd4 Nf6 g3 g6' },    // alternate: g3 x1
       { id: 'g5', moves: 'd4 g6 c4 Bg7' },    // no reply configured here: c4 x1
       { id: 'g6', moves: 'd4 g6 Nf3 Bg7' },   // Nf3 x2 total
       { id: 'g7', moves: 'd4 g6 Nf3 d6' },
@@ -7756,24 +7757,50 @@ try {
   await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
 
-  // 162. Toggling "Compare to Actual Games" shows divergent moves sorted by
-  //      count, excluding the row's own configured standard reply.
+  // 162. Toggling "Compare Games" shows every played move sorted by count
+  //      (Nf3 x2, c4 x1, g3 x1 -- ties keep game order), with the row's
+  //      configured standard reply (c4) boldfaced among them, not excluded.
   try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
     await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
     const moves = await appAZ2.page.evaluate((sel) =>
       [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), rowSel);
-    assert(moves.length === 2, `expected 2 divergent alternate moves, got ${JSON.stringify(moves)}`);
+    assert(moves.length === 3, `expected all 3 played moves (Nf3, c4, g3), got ${JSON.stringify(moves)}`);
     assert(moves[0].startsWith('Nf3'), `expected Nf3 (2x, most-played) listed first, got ${JSON.stringify(moves)}`);
-    assert(moves[0].includes('2') && moves[1].includes('1'), `expected counts 2 then 1, got ${JSON.stringify(moves)}`);
-    assert(!moves.some(m => m.startsWith('c4')), `expected the configured standard (c4) excluded, got ${JSON.stringify(moves)}`);
+    assert(moves[0].includes('2'), `expected Nf3 shown with its count of 2, got ${JSON.stringify(moves)}`);
+    assert(moves.some(m => m.startsWith('c4')), `expected the configured standard (c4) included, not excluded, got ${JSON.stringify(moves)}`);
+    const standardBold = await appAZ2.page.evaluate((sel) => {
+      const el = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-standard strong');
+      return el ? el.textContent.trim() : null;
+    }, rowSel);
+    assert(standardBold === 'c4', `expected the configured standard (c4) boldfaced via .meta-actual-standard strong, got "${standardBold}"`);
     const hasUseBtn = await appAZ2.page.evaluate((sel) => !!document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use'), rowSel);
     assert(!hasUseBtn, 'expected no "Use as Standard" button when a reply is already configured');
-    ok('Compare to Actual Games: shows divergent moves with counts, excludes the configured standard, sorted by frequency');
-  } catch(e){ bad('Compare to Actual Games: divergence + counts', e); }
+    ok('Compare Games: shows every played move sorted by count, with the configured standard boldfaced (not excluded)');
+  } catch(e){ bad('Compare Games: full list with standard boldfaced', e); }
 
-  // 163. Toggling again hides the commentary line (ephemeral, not persisted).
+  // 162b. Each move is a clickable mini-board chip (reusing the PV float
+  //       mechanism -- .pv-move + data-fen): clicking one opens the float
+  //       positioned at that move's resulting FEN.
+  try {
+    const fenCheck = await appAZ2.page.evaluate((sel) => {
+      const chip = document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-move .pv-move');
+      return chip ? chip.dataset.fen : null;
+    }, rowSel);
+    assert(fenCheck && fenCheck.includes(' b '), `expected the first move chip's data-fen to be a Black-to-move position, got "${fenCheck}"`);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-move .pv-move').click(), rowSel);
+    const floatState = await appAZ2.page.evaluate(() => ({
+      visible: document.getElementById('pvFloat').style.display === 'block',
+      activeChip: !!document.querySelector('.meta-actual-move .pv-move.pv-move-active'),
+    }));
+    assert(floatState.visible, 'expected clicking a compare-line move to open the mini-board float');
+    assert(floatState.activeChip, 'expected the clicked move chip to be marked active');
+    ok('Compare Games: clicking a move opens a mini board at that move\'s position');
+  } catch(e){ bad('Compare Games: click-to-miniboard', e); }
+
+  // 163. Toggling again (via the row menu) hides the commentary line
+  //      (ephemeral, not persisted).
   try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
@@ -7782,8 +7809,23 @@ try {
       return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-move');
     }, rowSel);
     assert(!stillThere, 'expected toggling again to hide the actual-games commentary');
-    ok('Compare to Actual Games: toggling again hides the commentary line');
-  } catch(e){ bad('Compare to Actual Games: toggle off', e); }
+    ok('Compare Games: toggling again via the row menu hides the commentary line');
+  } catch(e){ bad('Compare Games: toggle off via row menu', e); }
+
+  // 163b. The leading icon is itself a dismiss control -- clicking it hides
+  //       the comparison line too, without going back through the row menu.
+  try {
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-dismiss`, { timeout: 5000 });
+    await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-dismiss').click(), rowSel);
+    const stillThere = await appAZ2.page.evaluate((sel) => {
+      const meta = document.querySelector(sel).nextElementSibling;
+      return meta.style.display !== 'none' && !!meta.querySelector('.meta-actual-move');
+    }, rowSel);
+    assert(!stillThere, 'expected clicking the leading icon to dismiss the comparison line');
+    ok('Compare Games: clicking the leading icon dismisses the comparison line');
+  } catch(e){ bad('Compare Games: dismiss via leading icon', e); }
 
   // 164. With no reply configured yet (a DIFFERENT row, seq d4,g6, seeded
   //      with no pref at all), nothing is excluded and "Use as Standard" on
@@ -7800,11 +7842,11 @@ try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-use').click(), rowSel2);
     const newReply = await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .ourReply').textContent, rowSel2);
     assert(newReply === 'Nf3', `expected "Use as Standard" to set the top (most-played) alternate Nf3 as the reply, got "${newReply}"`);
-    ok('Compare to Actual Games: with no reply configured, nothing is excluded and "Use as Standard" sets the top alternate');
-  } catch(e){ bad('Compare to Actual Games: no-reply-yet + Use as Standard', e); }
+    ok('Compare Games: with no reply configured, nothing is excluded and "Use as Standard" sets the top alternate');
+  } catch(e){ bad('Compare Games: no-reply-yet + Use as Standard', e); }
 
-  // 165. Phase 2: each alternate gets an "Analyze" affordance; clicking one
-  //      transitions it to a pending/live state and disables the other
+  // 165. Phase 2: each played move gets an "Analyze" affordance; clicking
+  //      one transitions it to a pending/live state and disables the other
   //      alternates' Analyze buttons (single-flight -- the engine is one
   //      shared worker, same constraint as the row's own Analyse button).
   //      The live engine itself isn't available in this offline harness
@@ -7813,13 +7855,13 @@ try {
   //      verification instead), so this only verifies the wiring up to
   //      the point showPosition's own no-Chessboard no-op kicks in.
   try {
-    // re-toggle d4,Nf6 back on -- test 163 left it closed.
+    // re-toggle d4,Nf6 back on -- test 163b left it closed.
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' .rowMenuBtn').click(), rowSel);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel + ' [data-act="compareActual"]').click(), rowSel);
     await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-analyze`, { timeout: 5000 });
     const beforeCount = await appAZ2.page.evaluate((sel) =>
       document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-actual-analyze').length, rowSel);
-    assert(beforeCount === 2, `expected an Analyze button for each of the 2 alternates (Nf3, g3), got ${beforeCount}`);
+    assert(beforeCount === 3, `expected an Analyze button for each of the 3 played moves (Nf3, c4, g3), got ${beforeCount}`);
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze').click(), rowSel);
     const afterClick = await appAZ2.page.evaluate((sel) => {
       const meta = document.querySelector(sel).nextElementSibling;
@@ -7829,11 +7871,11 @@ try {
         allDisabled: [...meta.querySelectorAll('.meta-actual-analyze')].every(b => b.disabled),
       };
     }, rowSel);
-    assert(afterClick.liveCount === 1, `expected 1 alternate showing a pending "…" indicator, got ${afterClick.liveCount}`);
-    assert(afterClick.remainingAnalyzeButtons === 1, `expected 1 Analyze button remaining (the other alternate), got ${afterClick.remainingAnalyzeButtons}`);
-    assert(afterClick.allDisabled, 'expected the remaining Analyze button disabled while one is pending (single shared engine)');
-    ok('Compare to Actual Games: clicking Analyze shows a pending state and disables other alternates (Phase 2 wiring)');
-  } catch(e){ bad('Compare to Actual Games: Phase 2 analyze wiring', e); }
+    assert(afterClick.liveCount === 1, `expected 1 move showing a pending "…" indicator, got ${afterClick.liveCount}`);
+    assert(afterClick.remainingAnalyzeButtons === 2, `expected 2 Analyze buttons remaining (the other 2 moves), got ${afterClick.remainingAnalyzeButtons}`);
+    assert(afterClick.allDisabled, 'expected the remaining Analyze buttons disabled while one is pending (single shared engine)');
+    ok('Compare Games: clicking Analyze shows a pending state and disables other alternates (Phase 2 wiring)');
+  } catch(e){ bad('Compare Games: Phase 2 analyze wiring', e); }
 } finally {
   await appAZ2.close();
 }
@@ -7949,8 +7991,10 @@ try {
     assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
     await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="compareActual"]`).click(), blackRowSel);
     await appBV.page.waitForSelector(`${blackRowSel} + tr.meta-row .meta-actual-move`, { timeout: 5000 });
-    const altMove = (await appBV.page.textContent(`${blackRowSel} + tr.meta-row .meta-actual-move`)).trim();
-    assert(altMove.startsWith('c5'), `expected the divergent alternate (c5) shown, got "${altMove}"`);
+    const altMoves = await appBV.page.evaluate(s =>
+      [...document.querySelector(s).nextElementSibling.querySelectorAll('.meta-actual-move')].map(el => el.textContent.trim()), blackRowSel);
+    assert(altMoves.length === 2, `expected both played moves (e5, c5) shown, got ${JSON.stringify(altMoves)}`);
+    assert(altMoves.some(m => m.startsWith('c5')), `expected the divergent alternate (c5) shown, got ${JSON.stringify(altMoves)}`);
     ok('renderBlackRoot regression: "Compare Games" button exists and works (previously missing HTML for a wired handler)');
   } catch(e){ bad('renderBlackRoot: Compare Games button', e); }
 } finally {

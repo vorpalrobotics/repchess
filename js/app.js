@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-196';
+const BUILD_TAG = '-197';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -642,27 +642,29 @@ function gamesAlongLine(games, seq){
 
 /* ---------- "Compare to Actual Games" (three-dot menu) ----------
    Shown as commentary lines under a node, not a modal (unlike "Games with
-   this Position") -- lists the moves YOU actually played from this exact
+   this Position") -- lists every move YOU actually played from this exact
    position (exact-line match only, not any-transposition: this is about
    what happened down THIS specific prep path, not the position in general),
-   grouped by move with a play count, excluding whichever move matches the
-   row's own configured standard reply -- the point is to surface
-   divergence, not restate the standard. When there's no reply configured
-   yet, nothing is excluded, so this doubles as "what have you actually
-   played here" to help pick one. */
-function actualMoveComparison(seq, reply){
-  const replyLower = (reply || '').toLowerCase();
+   grouped by move with a play count, sorted by frequency. The row's own
+   configured standard reply is boldfaced among them (not excluded) so you
+   can see at a glance how often you actually followed your own prep versus
+   drifting to some alternate. */
+function actualMoveComparison(seq){
   const counts = {};
   for(const { move } of gamesAlongLine(GAMES || [], seq)){
-    if(!move || move.toLowerCase() === replyLower) continue;
+    if(!move) continue;
     counts[move] = (counts[move] || 0) + 1;
   }
   return Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([move,count]) => ({move,count}));
 }
-// HTML for the meta-row commentary line, or '' when there's nothing to show
-// (no games reached this exact line, or every game that did just played the
-// configured standard). data-move on the "Use as Standard" button is always
-// the TOP (most-played) alternate -- only rendered when no reply is set yet.
+// HTML for the meta-row commentary line -- always non-empty while the toggle
+// is on, even when there's nothing to show (no games reach this exact line
+// at all), so toggling the menu item never silently does nothing: it renders
+// a "no games to compare" placeholder instead. The leading icon is itself a
+// dismiss control (click it to toggle the line back off, same as re-picking
+// "Compare Games" from the row menu). data-move on the "Use as Standard"
+// button is always the TOP (most-played) alternate -- only rendered when no
+// reply is set yet.
 //
 // evalCache (Phase 2, optional) is a per-row Map<move, 'pending'|evalObj>,
 // owned and refreshed by the caller (renderBranch/renderBlackRoot's own
@@ -675,12 +677,24 @@ function actualMoveEvalHtml(move, evalCache){
   if(ev) return `<span class="meta-actual-eval meta-pv-score ${evalClass(ev, CURRENT_LINE.color)}">${escapeHtml(formatEvalTag(ev))}</span>`;
   return `<button type="button" class="meta-actual-analyze" data-move="${escapeHtml(move)}" title="Analyze this move on the live board"><i class="fa-solid fa-chess-board"></i></button>`;
 }
+const ACTUAL_DISMISS_ICON = '<i class="fa-solid fa-code-compare meta-actual-dismiss" title="Hide this comparison"></i>';
 function actualMovesHtml(seq, reply, evalCache){
-  const alts = actualMoveComparison(seq, reply);
-  if(!alts.length) return '';
-  return `<div class="meta-actual" title="Moves you've actually played here, from your own games">` +
-    `<i class="fa-solid fa-code-compare"></i>` +
-    alts.map(({move,count}) => `<span class="meta-actual-move">${escapeHtml(move)} <em>(${count}×)</em> ${actualMoveEvalHtml(move, evalCache)}</span>`).join('') +
+  const alts = actualMoveComparison(seq);
+  if(!alts.length){
+    return `<div class="meta-actual meta-actual-none" title="No games in your own history reach this position">` +
+      `${ACTUAL_DISMISS_ICON} No games to compare</div>`;
+  }
+  const replyLower = (reply || '').toLowerCase();
+  return `<div class="meta-actual" title="Moves you've actually played here, from your own games -- your standard response (if any) is boldfaced. Click a move for a mini board.">` +
+    ACTUAL_DISMISS_ICON +
+    alts.map(({move,count}) => {
+      const isStandard = move.toLowerCase() === replyLower;
+      const fenAfter = fenForSeq([...seq, move]);
+      const moveLabel = isStandard ? `<strong>${escapeHtml(move)}</strong>` : escapeHtml(move);
+      return `<span class="meta-actual-move${isStandard ? ' meta-actual-standard' : ''}">` +
+        `<span class="pv-move" data-fen="${escapeHtml(fenAfter)}">${moveLabel}</span> ` +
+        `<em>(${count}×)</em> ${actualMoveEvalHtml(move, evalCache)}</span>`;
+    }).join('') +
     (!reply ? `<button type="button" class="meta-actual-use" data-move="${escapeHtml(alts[0].move)}">Use as Standard</button>` : '') +
     `</div>`;
 }
@@ -3293,6 +3307,8 @@ function renderBranch(parent,games,seq,depth,flip=false){
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
       const noteEl = metaTd.querySelector('.meta-note');
       if(noteEl) noteEl.onclick = () => openRoomAttributes();
+      const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
+      if(dismissActualBtn) dismissActualBtn.onclick = () => { showActualGames = false; refreshMeta(); };
       const useActualBtn = metaTd.querySelector('.meta-actual-use');
       if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
       // one alternate analyzing at a time (the engine is a single shared
@@ -3687,6 +3703,8 @@ function renderBlackRoot(parent,games,trigger){
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
     const noteEl = metaTd.querySelector('.meta-note');
     if(noteEl) noteEl.onclick = () => openRoomAttributes();
+    const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
+    if(dismissActualBtn) dismissActualBtn.onclick = () => { showActualGames = false; refreshMeta(); };
     const useActualBtn = metaTd.querySelector('.meta-actual-use');
     if(useActualBtn) useActualBtn.onclick = () => { setStandardResponse(useActualBtn.dataset.move); refreshMeta(); };
     const anyPending = [...actualEvalCache.values()].includes('pending');
