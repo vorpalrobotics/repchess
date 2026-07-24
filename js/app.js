@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-206';
+const BUILD_TAG = '-207';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -876,17 +876,50 @@ const GAME_SOURCE_BADGE = {
   lichess:  '<i class="fa-solid fa-chess-knight games-col-src lichess" title="Lichess"></i>',
 };
 
-let _gamesModalState = null;   // { seq, fen } for the currently open modal, so the toggle can re-render
-function showGamesAtNode(seq){
-  if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
-  _gamesModalState = { seq: seq.slice(), fen: fenForSeq(seq) };
-  $('gamesListOverlay').style.display = 'flex';
-  renderGamesList('pos');
+// numbered SAN text for a move sequence, e.g. ['d4','Nf6','c4'] -> "1. d4 Nf6 2. c4"
+// -- the format Browse Games' moves input is pre-filled with and re-parses
+// via parseAlgebraicMoveList.
+function movesToNumberedText(seq){
+  const out = [];
+  seq.forEach((mv, i) => { if(i % 2 === 0) out.push(`${i/2 + 1}.`); out.push(mv); });
+  return out.join(' ');
 }
-async function renderGamesList(mode){
-  const { seq, fen } = _gamesModalState;
-  $('gamesModePos').classList.toggle('active', mode === 'pos');
-  $('gamesModeLine').classList.toggle('active', mode === 'line');
+
+// { mode, color } for the currently open Browse Games modal -- 'mode':
+// 'pos'|'line'; 'color': 'white'|'black'|'either'. The move sequence itself
+// is NOT stored here: it's always read live from #gamesListMovesInput, so
+// editing it re-filters in place (this is what makes the modal usable both
+// as a generic browser and as the three-dot menu's node-scoped view, which
+// just pre-fills the input rather than fixing it).
+let _gamesModalState = null;
+function showGamesAtNode(seq){
+  openBrowseGames({ seq, color: CURRENT_LINE ? CURRENT_LINE.color : 'either' });
+}
+// the shared opener: the three-dot "Find Games" row action pre-fills the
+// node's own move sequence and defaults the color filter to the opening
+// system's own side (so it keeps its old scoped-to-my-prep behavior); the
+// hamburger's "Browse Games" opens it blank with color 'either' for
+// unscoped browsing.
+function openBrowseGames({ seq = [], color = 'either' } = {}){
+  if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
+  _gamesModalState = { mode: 'pos', color };
+  $('gamesListMovesInput').value = seq.length ? movesToNumberedText(seq) : '';
+  $('gamesListMovesError').textContent = '';
+  $('gamesModePos').classList.add('active');
+  $('gamesModeLine').classList.remove('active');
+  document.querySelectorAll('.games-color-btn').forEach(b => b.classList.toggle('active', b.dataset.color === color));
+  $('gamesListOverlay').style.display = 'flex';
+  renderGamesList();
+}
+async function renderGamesList(){
+  if(!_gamesModalState) return;
+  const { mode, color } = _gamesModalState;
+  const text = $('gamesListMovesInput').value;
+  let seq;
+  try { seq = text.trim() ? parseAlgebraicMoveList(text) : []; }
+  catch(err){ $('gamesListMovesError').textContent = err.message; return; }   // keep showing the last valid results
+  $('gamesListMovesError').textContent = '';
+  const fen = fenForSeq(seq);
 
   const body = $('gamesListBody');
   // the position index build can take a moment on a big DB — show a spinner the
@@ -898,27 +931,32 @@ async function renderGamesList(mode){
   };
   if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
 
-  // only games where the user was actually playing CURRENT_LINE's own color
-  // count as "my games" here -- gamesAtPosition/gamesAlongLine match purely on
+  // only games where the user was actually playing the selected color count
+  // as "my games" here -- gamesAtPosition/gamesAlongLine match purely on
   // position/move-text, so without this a game the user reached via the same
   // moves while playing the OTHER side (their opponent's choice, not theirs)
   // would get shown and counted as if it were their own practice. A game
   // whose color can't be determined at all (a legacy bare chess.com import)
-  // is excluded for the same reason -- it can't be confirmed either way.
+  // is excluded even for "Either" -- it can't be confirmed to be the user's
+  // own game at all, regardless of which side.
   const rawMatches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
-  const matches = rawMatches.filter(({game}) => userColorInGame(game) === CURRENT_LINE.color);
+  const matches = rawMatches.filter(({game}) => {
+    const gc = userColorInGame(game);
+    return color === 'either' ? gc != null : gc === color;
+  });
   const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
 
   // summary: count + result tally (from the user's perspective, where known) +
-  // "played your repertoire move in X of Y" when a reply is configured here.
+  // "played your repertoire move in X of Y" when a reply is configured here
+  // (only meaningful when this position is a node in the currently open line).
   let win=0, loss=0, draw=0, known=0;
-  const reply = PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply;
+  const reply = CURRENT_LINE ? PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply : null;
   let yourTurnGames=0, followedReply=0;
   for(const { game, move } of matches){
-    const color = userColorInGame(game);
-    const oc = gameOutcomeForUser(game, color);
+    const gc = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, gc);
     if(oc){ known++; if(oc==='win') win++; else if(oc==='loss') loss++; else draw++; }
-    if(color && color[0] === sideToMove){   // it was the user's move from here
+    if(gc && gc[0] === sideToMove){   // it was the user's move from here
       yourTurnGames++;
       if(reply && move && move.toLowerCase() === reply.toLowerCase()) followedReply++;
     }
@@ -926,8 +964,9 @@ async function renderGamesList(mode){
   const pct = known ? Math.round((win + draw*0.5) / known * 100) : null;
   const bar = known ? `<span class="games-score-bar" title="${win}W ${draw}D ${loss}L">`+
       `<i class="gw" style="width:${win/known*100}%"></i><i class="gd" style="width:${draw/known*100}%"></i><i class="gl" style="width:${loss/known*100}%"></i></span>` : '';
+  const colorLabel = color === 'black' ? 'Black' : color === 'white' ? 'White' : null;
   $('gamesListSummary').innerHTML =
-    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'} as ${CURRENT_LINE.color==='black'?'Black':'White'}</span>` +
+    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'}${colorLabel?` as ${colorLabel}`:''}</span>` +
     (known ? `<span>+${win} =${draw} −${loss}${pct!=null?` (${pct}%)`:''}</span>${bar}` : '') +
     (reply && yourTurnGames ? `<span>played your move <strong>${escapeHtml(reply)}</strong> in ${followedReply}/${yourTurnGames}</span>` : '');
 
@@ -944,12 +983,12 @@ async function renderGamesList(mode){
   const shown = matches.slice(0, CAP);
 
   body.innerHTML = shown.map(({ game, move }) => {
-    const color = userColorInGame(game);
-    const oc = gameOutcomeForUser(game, color);
+    const gc = userColorInGame(game);
+    const oc = gameOutcomeForUser(game, gc);
     const date = game.createdAt ? new Date(game.createdAt).toLocaleDateString() : '—';
-    const sideChip = color === 'white' ? '<span class="games-col-side w" title="you played White">W</span>'
-      : color === 'black' ? '<span class="games-col-side b" title="you played Black">B</span>' : '<span class="games-col-side">·</span>';
-    const oppColor = color === 'white' ? 'black' : color === 'black' ? 'white' : null;
+    const sideChip = gc === 'white' ? '<span class="games-col-side w" title="you played White">W</span>'
+      : gc === 'black' ? '<span class="games-col-side b" title="you played Black">B</span>' : '<span class="games-col-side">·</span>';
+    const oppColor = gc === 'white' ? 'black' : gc === 'black' ? 'white' : null;
     const opp = oppColor ? game.players?.[oppColor]?.user?.name : null;
     const oppRating = oppColor ? game.players?.[oppColor]?.rating : null;
     const oppHtml = opp ? `${escapeHtml(opp)}${oppRating?` <span class="grating">${oppRating}</span>`:''}`
@@ -957,7 +996,7 @@ async function renderGamesList(mode){
     const resTxt = oc==='win'?'1':oc==='loss'?'0':oc==='draw'?'½':'?';
     const resCls = oc || 'unk';
     const how = oc && game.status && GAME_STATUS_LABEL[game.status] ? `<span class="games-how">${GAME_STATUS_LABEL[game.status]}</span>` : '';
-    const moveIsUsers = color && color[0] === sideToMove;
+    const moveIsUsers = gc && gc[0] === sideToMove;
     const moveHtml = move
       ? `<span class="games-col-move">${moveIsUsers?'<span class="gyou">':''}${escapeHtml(move)}${moveIsUsers?'</span>':''}</span>`
       : '<span class="games-col-move">·</span>';
@@ -2587,11 +2626,25 @@ async function showRoomInfoPanel(roomEl){
 }
 $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
 
-// games-with-this-position modal wiring
+// browse games modal wiring
 $('gamesListCloseBtn').onclick = () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; };
 $('gamesListOverlay').addEventListener('click', e => { if(e.target === $('gamesListOverlay')){ $('gamesListOverlay').style.display='none'; _gamesModalState=null; } });
-$('gamesModePos').onclick = () => renderGamesList('pos');
-$('gamesModeLine').onclick = () => renderGamesList('line');
+$('gamesModePos').onclick = () => { _gamesModalState.mode = 'pos'; $('gamesModePos').classList.add('active'); $('gamesModeLine').classList.remove('active'); renderGamesList(); };
+$('gamesModeLine').onclick = () => { _gamesModalState.mode = 'line'; $('gamesModeLine').classList.add('active'); $('gamesModePos').classList.remove('active'); renderGamesList(); };
+document.querySelectorAll('.games-color-btn').forEach(btn => {
+  btn.onclick = () => {
+    _gamesModalState.color = btn.dataset.color;
+    document.querySelectorAll('.games-color-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderGamesList();
+  };
+});
+// live-filters as you type; a mid-token parse error (e.g. "1. d4 N") just
+// leaves the last valid results showing rather than clearing the list.
+let _gamesMovesDebounce = null;
+$('gamesListMovesInput').addEventListener('input', () => {
+  clearTimeout(_gamesMovesDebounce);
+  _gamesMovesDebounce = setTimeout(() => renderGamesList(), 250);
+});
 // "Jump to VR" (Part B): try the fast path first -- VR already open and this
 // room already registered in that session (jumpToRoom) -- and only fall back
 // to (re)building the whole main world when that's not possible (VR closed,
@@ -4414,6 +4467,11 @@ $('menuSearchLine').onclick = ()=>{
 };
 $('searchLineCancelBtn').onclick = ()=>{ $('searchLineOverlay').style.display='none'; };
 $('searchLineSaveBtn').onclick = ()=> searchForLine($('searchLineInput').value);
+$('menuBrowseGames').onclick = ()=>{
+  $('menuList').style.display='none';
+  openBrowseGames();
+  $('gamesListMovesInput').focus();
+};
 
 /* ---------- new-line modal ---------- */
 /* every legal White first move: 16 pawn pushes + 4 knight moves */
