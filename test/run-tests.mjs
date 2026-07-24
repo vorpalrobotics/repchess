@@ -18,6 +18,14 @@ const ok  = (name) => { passed++; console.log(`  ✓ ${name}`); };
 const bad = (name, e) => { failed++; console.log(`  ✗ ${name}\n      ${e}`); };
 function assert(cond, msg){ if(!cond) throw new Error(msg); }
 
+// seedBackup `games[].players` shorthand for "tester played White/Black
+// against `opp`" -- Compare Games / Find Games only count a game toward the
+// user's own play at all when userColorInGame resolves it to CURRENT_LINE's
+// own color, so most seeds need this now, not just the perspective-specific
+// tests that originally introduced players/winner.
+const pWhite = (opp='opp') => ({ white: { user: { name: 'tester' } }, black: { user: { name: opp } } });
+const pBlack = (opp='opp') => ({ white: { user: { name: opp } }, black: { user: { name: 'tester' } } });
+
 // console errors we expect and ignore. The un-mocked CDNs (cm-chessboard, web
 // fonts, Chart.js, Stockfish) are intentionally aborted and the app degrades
 // gracefully; blocking the COOP/COEP service worker makes its index.html
@@ -7431,6 +7439,10 @@ try {
         players: { white: { user: { name: 'tester' }, rating: 1600 }, black: { user: { name: 'opp3' }, rating: 1590 } } },
       // a legacy bare game (no players / no id): reaches "d4 Nf6" but has no details.
       { moves: 'd4 Nf6 Bf4' },
+      // tester played BLACK in this one -- still reaches "d4 Nf6" by move text,
+      // but it's an opponent's choice (their 1.d4), not tester's own White prep.
+      { id: 'lg4', moves: 'd4 Nf6 Nf3 g6', createdAt: 500,
+        players: { white: { user: { name: 'opp4' } }, black: { user: { name: 'tester' } } } },
     ],
   });
   await appAV.page.click('.line-row');
@@ -7524,8 +7536,10 @@ try {
   } catch(e){ bad('games-list: provider badge classification', e); }
 
   // 154. The modal opens from the three-dot menu and lists the games reaching
-  //      the shallow "d4 Nf6" position (lg1, lg2, and the bare game), with a
-  //      clickable lichess link on a Lichess row.
+  //      the shallow "d4 Nf6" position where tester actually played White
+  //      (lg1, lg2) -- NOT the bare game (color undeterminable) or lg4
+  //      (tester was Black in that one, an opponent's 1.d4, not tester's own
+  //      White prep), even though both also reach this position by move text.
   try {
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
@@ -7538,14 +7552,15 @@ try {
       lichessBadges: document.querySelectorAll('#gamesListBody .games-col-src.lichess').length,
       chesscomBadges: document.querySelectorAll('#gamesListBody .games-col-src.cc').length,
     }));
-    assert(info.rows === 3, `expected 3 games reaching d4 Nf6 (lg1, lg2, bare), got ${info.rows}`);
-    assert(/\b3\b/.test(info.summary), `expected the summary to report 3 games, got "${info.summary}"`);
+    assert(info.rows === 2, `expected only the 2 games where tester played White (lg1, lg2) -- not the bare game or Black-side lg4, got ${info.rows}`);
+    assert(/\b2\b/.test(info.summary), `expected the summary to report 2 games, got "${info.summary}"`);
+    assert(/as White/.test(info.summary), `expected the summary to say "as White", got "${info.summary}"`);
     assert(info.hasLichessLink, 'expected at least one clickable lichess-linked row');
     assert(info.lichessBadges === 2, `expected 2 lichess (knight) badges (lg1, lg2), got ${info.lichessBadges}`);
-    assert(info.chesscomBadges === 1, `expected 1 chess.com (pawn) badge (the legacy bare game), got ${info.chesscomBadges}`);
-    ok('games-list: modal opens from the menu and lists the games reaching this position');
+    assert(info.chesscomBadges === 0, `expected 0 chess.com badges -- the only chess.com-shaped games here (bare, lg4) are both filtered out, got ${info.chesscomBadges}`);
+    ok('games-list: modal opens from the menu and lists only the games where the user played the line\'s own color');
     await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
-  } catch(e){ bad('games-list: modal open + render', e); }
+  } catch(e){ bad('games-list: modal open + render, filtered to the line\'s own color', e); }
 
   // 154b. The position index (already built once by test 151/154's 'pos'-mode
   //       queries above) is persisted to IndexedDB, so a reload doesn't
@@ -7747,13 +7762,15 @@ try {
       // ['d4','g6'] has NO configured reply at all -- test 164
     ]}],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6' },    // played the configured standard (c4) x1 -- included, boldfaced
-      { id: 'g2', moves: 'd4 Nf6 Nf3 g6' },   // alternate: Nf3 x1
-      { id: 'g3', moves: 'd4 Nf6 Nf3 d5' },   // alternate: Nf3 x2 total
-      { id: 'g4', moves: 'd4 Nf6 g3 g6' },    // alternate: g3 x1
-      { id: 'g5', moves: 'd4 g6 c4 Bg7' },    // no reply configured here: c4 x1
-      { id: 'g6', moves: 'd4 g6 Nf3 Bg7' },   // Nf3 x2 total
-      { id: 'g7', moves: 'd4 g6 Nf3 d6' },
+      // all White (tester's own White-line moves) -- Compare Games now only
+      // counts games where the user actually played the line's own color.
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', players: pWhite('opp1') },    // played the configured standard (c4) x1 -- included, boldfaced
+      { id: 'g2', moves: 'd4 Nf6 Nf3 g6', players: pWhite('opp2') },   // alternate: Nf3 x1
+      { id: 'g3', moves: 'd4 Nf6 Nf3 d5', players: pWhite('opp3') },   // alternate: Nf3 x2 total
+      { id: 'g4', moves: 'd4 Nf6 g3 g6', players: pWhite('opp4') },    // alternate: g3 x1
+      { id: 'g5', moves: 'd4 g6 c4 Bg7', players: pWhite('opp5') },    // no reply configured here: c4 x1
+      { id: 'g6', moves: 'd4 g6 Nf3 Bg7', players: pWhite('opp6') },   // Nf3 x2 total
+      { id: 'g7', moves: 'd4 g6 Nf3 d6', players: pWhite('opp7') },
     ],
   });
   await appAZ2.page.click('.line-row');
@@ -8081,10 +8098,12 @@ try {
       { seq: ['e4','e6'], eval: { type:'cp', value: 50, depth: 30, pv:'' } },    // other: +0.5 White-relative, played 1x
     ]}],
     games: [
-      { id: 'g1', moves: 'e4 e5 Nf3 Nc6' },
-      { id: 'g2', moves: 'e4 c5 Nf3 d6' },
-      { id: 'g3', moves: 'e4 c5 Nf3 Nc6' },
-      { id: 'g4', moves: 'e4 e6 d4 d5' },
+      // tester played Black in all of these -- a Black line's Compare Games
+      // only counts games where tester was actually Black.
+      { id: 'g1', moves: 'e4 e5 Nf3 Nc6', players: pBlack('opp1') },
+      { id: 'g2', moves: 'e4 c5 Nf3 d6', players: pBlack('opp2') },
+      { id: 'g3', moves: 'e4 c5 Nf3 Nc6', players: pBlack('opp3') },
+      { id: 'g4', moves: 'e4 e6 d4 d5', players: pBlack('opp4') },
     ],
   });
   await appBA2.page.click('.line-row');
@@ -8133,9 +8152,11 @@ try {
 // --- Phase BC2: Compare Games rows also show each move's win/loss/draw
 //     record ("+W =D −L", the same notation "Find Games"' own summary line
 //     uses), computed from the SAME userColorInGame/gameOutcomeForUser
-//     helpers -- a game with a determinable outcome counts toward it, a
-//     legacy bare/unknown-color game still counts toward the play count but
-//     not the record (so it never misleadingly prints "+0 =0 −0"). ---
+//     helpers. Only games where tester actually played CURRENT_LINE's own
+//     color count at all (toward the play count, not just the record) --
+//     a legacy bare/unknown-color game, or one where tester played the
+//     OTHER side (an opponent's choice, not tester's own repertoire move),
+//     is excluded outright, not just missing a record. ---
 if(shouldRunPhase(['move-table'])){
 const appBC2 = await launchApp();
 try {
@@ -8153,6 +8174,11 @@ try {
         players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp3' } } } },   // Nf3: a draw (no winner)
       { id: 'g4', moves: 'd4 Nf6 g3 g6', winner: 'white',
         players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp4' } } } },   // g3: a win
+      // tester played BLACK here (an opponent's 1.d4, not tester's own White
+      // prep) -- reaches "d4 Nf6" by move text but must be excluded entirely,
+      // not just missing a record. If it leaked in, it'd inflate Nf3 to 3x.
+      { id: 'g5', moves: 'd4 Nf6 Nf3 e5',
+        players: { white: { user: { name: 'opp5' } }, black: { user: { name: 'tester' } } } },
     ],
   });
   await appBC2.page.click('.line-row');
@@ -8174,6 +8200,7 @@ try {
         standardWinClass: winClass(meta.querySelector('.meta-actual-header')),
         alts: [...meta.querySelectorAll('.meta-actual-alt-row')].map(r => ({
           move: r.querySelector('.meta-actual-move').textContent.trim(),
+          count: r.querySelector('em').textContent.trim(),
           record: rowRecord(r),
           winClass: winClass(r),
         })),
@@ -8184,6 +8211,7 @@ try {
     assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
     assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's win count coloured "good" (1 win, 0 losses), got "${state.standardWinClass}"`);
     const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
+    assert(nf3?.count === '(2×)', `expected Nf3's count to stay 2x (g5, where tester played Black, must be excluded), got "${nf3?.count}"`);
     assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
     assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's win count coloured "bad" (0 wins, 1 loss), got "${nf3?.winClass}"`);
     assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
@@ -8220,8 +8248,10 @@ try {
     ],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6' },
-      { id: 'g2', moves: 'e4 e5 Nf3 Nc6' },   // matches the configured Black reply (e5) -- excluded
-      { id: 'g3', moves: 'e4 c5 Nf3 d6' },    // divergent: Black played c5 instead
+      // tester played Black in both -- the Black line's Compare Games only
+      // counts games where tester actually played Black.
+      { id: 'g2', moves: 'e4 e5 Nf3 Nc6', players: pBlack('opp2') },   // matches the configured Black reply (e5) -- boldfaced in the header, not excluded
+      { id: 'g3', moves: 'e4 c5 Nf3 d6', players: pBlack('opp3') },    // divergent: Black played c5 instead
     ],
   });
 

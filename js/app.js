@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-203';
+const BUILD_TAG = '-204';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -653,18 +653,24 @@ function gamesAlongLine(games, seq){
    Every OTHER move actually played gets its own indented row below it,
    sorted by play count, with an "Analyze Others" icon on the header row to
    background-analyze all of them at once (see queueAlternatesForAnalysis). */
-// per-move win/loss/draw tally uses the same userColorInGame/gameOutcomeForUser
-// helpers "Find Games"' own summary line does (defined further down, hoisted) --
-// a game whose color can't be determined (a legacy bare chess.com import,
-// or someone else's game) still counts toward `count`, just not toward
-// win/loss/draw, exactly like that summary's own `known` distinction.
+// Only games where the signed-in user was actually playing CURRENT_LINE's
+// own color count here -- gamesAlongLine matches purely on the move text, so
+// without this a game reached via the SAME move order but where the user was
+// on the other side (an opponent's choice, not the user's own) would get
+// counted as something the user "played." A game whose color can't be
+// determined at all (a legacy bare chess.com import) is excluded the same
+// way, for the same reason: it can't be confirmed to be the user's own move
+// either. Uses userColorInGame/gameOutcomeForUser, the same helpers "Find
+// Games"' own summary line does (defined further down, hoisted).
 function actualMoveComparison(seq){
   const stats = {};
   for(const { game, move } of gamesAlongLine(GAMES || [], seq)){
     if(!move) continue;
+    const userColor = userColorInGame(game);
+    if(userColor !== CURRENT_LINE.color) continue;
     const rec = stats[move] ??= { move, count:0, win:0, loss:0, draw:0 };
     rec.count++;
-    const outcome = gameOutcomeForUser(game, userColorInGame(game));
+    const outcome = gameOutcomeForUser(game, userColor);
     if(outcome) rec[outcome]++;
   }
   return Object.values(stats).sort((a,b) => b.count - a.count);
@@ -863,7 +869,15 @@ async function renderGamesList(mode){
   };
   if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
 
-  const matches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  // only games where the user was actually playing CURRENT_LINE's own color
+  // count as "my games" here -- gamesAtPosition/gamesAlongLine match purely on
+  // position/move-text, so without this a game the user reached via the same
+  // moves while playing the OTHER side (their opponent's choice, not theirs)
+  // would get shown and counted as if it were their own practice. A game
+  // whose color can't be determined at all (a legacy bare chess.com import)
+  // is excluded for the same reason -- it can't be confirmed either way.
+  const rawMatches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  const matches = rawMatches.filter(({game}) => userColorInGame(game) === CURRENT_LINE.color);
   const sideToMove = fen.split(' ')[1];   // 'w' | 'b' — whose move it is at this position
 
   // summary: count + result tally (from the user's perspective, where known) +
@@ -884,7 +898,7 @@ async function renderGamesList(mode){
   const bar = known ? `<span class="games-score-bar" title="${win}W ${draw}D ${loss}L">`+
       `<i class="gw" style="width:${win/known*100}%"></i><i class="gd" style="width:${draw/known*100}%"></i><i class="gl" style="width:${loss/known*100}%"></i></span>` : '';
   $('gamesListSummary').innerHTML =
-    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'}</span>` +
+    `<span><strong>${matches.length}</strong> of your game${matches.length===1?'':'s'} as ${CURRENT_LINE.color==='black'?'Black':'White'}</span>` +
     (known ? `<span>+${win} =${draw} −${loss}${pct!=null?` (${pct}%)`:''}</span>${bar}` : '') +
     (reply && yourTurnGames ? `<span>played your move <strong>${escapeHtml(reply)}</strong> in ${followedReply}/${yourTurnGames}</span>` : '');
 
