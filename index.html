@@ -109,7 +109,9 @@
   tr.meta-row .meta-pv-score.eval-winning  {color:#2e7d32}
   tr.meta-row .meta-actual{display:block;margin-top:.25em;font-style:italic;color:#999}
   tr.meta-row .meta-actual-row{display:flex;align-items:center;gap:.35em;padding-left:2em}
-  tr.meta-row .meta-actual-alt-row{padding-left:4em;margin-top:.1em}
+  tr.meta-row .meta-actual-alt-table{border-collapse:collapse;margin:.1em 0 0 4em;font-size:inherit}
+  tr.meta-row .meta-actual-alt-table td{padding:0 .6em 0 0;white-space:nowrap;vertical-align:middle}
+  tr.meta-row .meta-actual-alt-table td:last-child{padding-right:0}
   tr.meta-row .meta-actual-dismiss,
   tr.meta-row .meta-actual-analyze-all{cursor:pointer;padding:.1em .2em;border-radius:3px}
   tr.meta-row .meta-actual-dismiss:hover,
@@ -120,6 +122,9 @@
   tr.meta-row .meta-actual-eval{font-style:normal;font-size:.78rem}
   tr.meta-row .meta-actual-pending{font-style:normal;font-size:.7rem;color:#999;margin-left:.1em}
   tr.meta-row .meta-actual-record{font-style:normal;font-size:.72rem;color:#888}
+  tr.meta-row .meta-actual-record-good{color:#2e7d32;font-weight:600}
+  tr.meta-row .meta-actual-record-bad{color:#c62828;font-weight:600}
+  tr.meta-row .meta-actual-record-neutral{color:#888}
   tr.meta-row .meta-actual-summary{font-style:normal;font-size:.78rem;margin-top:.2em}
   tr.meta-row .meta-actual-summary-good{color:#2e7d32}
   tr.meta-row .meta-actual-summary-bad{color:#c62828}
@@ -1373,6 +1378,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260724-202"></script>
+<script type="module" src="js/app.js?v=20260724-203"></script>
 </body>
 </html>

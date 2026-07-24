@@ -8168,19 +8168,28 @@ try {
     const state = await appBC2.page.evaluate((sel) => {
       const meta = document.querySelector(sel).nextElementSibling;
       const rowRecord = row => row.querySelector('.meta-actual-record')?.textContent.trim();
+      const winClass = row => row.querySelector('.meta-actual-record span')?.className;
       return {
         standard: rowRecord(meta.querySelector('.meta-actual-header')),
+        standardWinClass: winClass(meta.querySelector('.meta-actual-header')),
         alts: [...meta.querySelectorAll('.meta-actual-alt-row')].map(r => ({
           move: r.querySelector('.meta-actual-move').textContent.trim(),
           record: rowRecord(r),
+          winClass: winClass(r),
         })),
+        isRealTable: meta.querySelector('.meta-actual-alt-table')?.tagName === 'TABLE'
+          && meta.querySelectorAll('.meta-actual-alt-table tr.meta-actual-alt-row').length === 2,
       };
     }, rowSel);
     assert(state.standard === '+1 =0 −0', `expected the standard's (c4) record "+1 =0 −0", got "${state.standard}"`);
+    assert(state.standardWinClass === 'meta-actual-record-good', `expected the standard's win count coloured "good" (1 win, 0 losses), got "${state.standardWinClass}"`);
     const nf3 = state.alts.find(a => a.move === 'Nf3'), g3 = state.alts.find(a => a.move === 'g3');
     assert(nf3?.record === '+0 =1 −1', `expected Nf3's record "+0 =1 −1", got "${JSON.stringify(nf3)}"`);
+    assert(nf3?.winClass === 'meta-actual-record-bad', `expected Nf3's win count coloured "bad" (0 wins, 1 loss), got "${nf3?.winClass}"`);
     assert(g3?.record === '+1 =0 −0', `expected g3's record "+1 =0 −0", got "${JSON.stringify(g3)}"`);
-    ok('Compare Games: each row shows its own win/loss/draw record, including the standard');
+    assert(g3?.winClass === 'meta-actual-record-good', `expected g3's win count coloured "good" (1 win, 0 losses), got "${g3?.winClass}"`);
+    assert(state.isRealTable, 'expected the "other move" rows to be a real <table> (Nf3 + g3 as <tr>s), so their columns actually align');
+    ok('Compare Games: each row shows its own win/loss/draw record (win count colour-coded), aligned in a real table');
   } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }
 } finally {
   await appBC2.close();

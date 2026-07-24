@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-202';
+const BUILD_TAG = '-203';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -703,10 +703,14 @@ const ACTUAL_ANALYZE_ALL_ICON = '<i class="fa-solid fa-bolt meta-actual-analyze-
 // uses -- '' when none of this move's games have a determinable outcome
 // (all legacy bare/unknown-color games), so it doesn't misleadingly print
 // "+0 =0 −0" for a move that actually has games, just none with a known result.
+// Only the win count itself is colour-coded (green/red/neutral, by whether
+// wins outnumber losses) -- colouring the whole record would be noisy given
+// how many of these can be on screen in a busy comparison.
 function actualRecordHtml(rec){
   if(!rec.win && !rec.loss && !rec.draw) return '';
+  const cls = rec.win > rec.loss ? 'meta-actual-record-good' : rec.win < rec.loss ? 'meta-actual-record-bad' : 'meta-actual-record-neutral';
   return `<span class="meta-actual-record" title="${rec.win}W ${rec.draw}D ${rec.loss}L from games with a determinable result">` +
-    `+${rec.win} =${rec.draw} −${rec.loss}</span>`;
+    `<span class="${cls}">+${rec.win}</span> =${rec.draw} −${rec.loss}</span>`;
 }
 
 // a mate score isn't linearly comparable to a centipawn one, but the
@@ -762,15 +766,24 @@ function actualMovesHtml(lineId, seq, reply){
     `<span class="meta-actual-move-number">${moveNumberLabel}</span> ` +
     headerReplyHtml +
     `</div>`;
-  const altRows = others.map(rec =>
-    `<div class="meta-actual-row meta-actual-alt-row"><span class="meta-actual-move-number">${moveNumberLabel}</span> ${moveChip(rec.move)} <em>(${rec.count}×)</em> ${actualRecordHtml(rec)} ${actualEvalTagHtml(lineId, [...seq, rec.move])}</div>`
-  ).join('');
+  // a real <table>, not more flex rows, so the move/count/record/eval
+  // columns actually line up down the list instead of drifting with each
+  // move's own text width.
+  const altTable = others.length ? `<table class="meta-actual-alt-table"><tbody>` + others.map(rec =>
+    `<tr class="meta-actual-alt-row">` +
+    `<td class="meta-actual-move-number">${moveNumberLabel}</td>` +
+    `<td>${moveChip(rec.move)}</td>` +
+    `<td><em>(${rec.count}×)</em></td>` +
+    `<td>${actualRecordHtml(rec)}</td>` +
+    `<td>${actualEvalTagHtml(lineId, [...seq, rec.move])}</td>` +
+    `</tr>`
+  ).join('') + `</tbody></table>` : '';
   const summary = actualStandardSummary(lineId, seq, reply, others);
   const summaryRow = summary === null ? '' :
     `<div class="meta-actual-row meta-actual-summary ${summary > 0.1 ? 'meta-actual-summary-good' : summary < -0.1 ? 'meta-actual-summary-bad' : 'meta-actual-summary-neutral'}">` +
     `Standard vs. other moves: <strong>${summary >= 0 ? '+' : ''}${summary.toFixed(1)}</strong></div>`;
   return `<div class="meta-actual" title="Moves you've actually played here, from your own games. Click a move for a mini board.">` +
-    headerRow + altRows + summaryRow + `</div>`;
+    headerRow + altTable + summaryRow + `</div>`;
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
