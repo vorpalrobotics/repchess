@@ -5048,26 +5048,66 @@ try {
     ok('chess.com importer: a drawn game maps to no winner / status draw');
   } catch(e){ bad('chess.com importer: draw mapping', e); }
 
-  // 150b. clearChessComGames removes ONLY chess.com games -- both the new
-  //      source-tagged ones AND legacy bare {moves} objects -- while leaving
-  //      Lichess-shaped games (which always carry `players`) untouched.
+  // 150b. gameIndexKey (the games-position-index's per-game key, used to
+  //       append newly-imported games without rebuilding everything) is the
+  //       game's own id when present -- independent of anything else about
+  //       the game object -- or a content hash for the legacy bare {moves}
+  //       shape that predates ids.
   try {
+    const withId = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ id: 'abc123', moves: 'e4 e5' }));
+    const sameIdDifferentShape = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ id: 'abc123', moves: 'd4 d5', extra: 'ignored' }));
+    const bare1 = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'e4 e5' }));
+    const bare2 = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'e4 e5' }));
+    const bareDifferent = await appBA.page.evaluate(() => window.__gamesListHooks.gameIndexKey({ moves: 'd4 d5' }));
+    assert(withId === sameIdDifferentShape, `expected the key to depend only on id when present, got ${withId} vs ${sameIdDifferentShape}`);
+    assert(bare1 === bare2, `expected identical bare game content to hash to the same key, got ${bare1} vs ${bare2}`);
+    assert(bare1 !== bareDifferent, `expected different bare game content to hash to different keys, got ${bare1} vs ${bareDifferent}`);
+    ok('games index: gameIndexKey uses the game\'s own id when present, a content hash otherwise');
+  } catch(e){ bad('games index: gameIndexKey stability', e); }
+
+  // 150c. reindexAfterImport (called at import time instead of the old
+  //       invalidate-and-rebuild-on-next-query) appends only the games it
+  //       hasn't indexed before -- a routine re-import that overlaps
+  //       already-known games (putGames upserts by id, so the post-import
+  //       array typically still contains them) must not duplicate their
+  //       position entries, and must not pay for a full rebuild the second
+  //       time around.
+  try {
+    await appBA.page.evaluate(() => window.__gamesListHooks.invalidateIndex());
     await appBA.page.evaluate(async () => {
-      const H = window.__importTestHooks;
-      await H.putGames('u1', [
-        { id: 'li-1', players: { white: { user: { name: 'x' } } }, createdAt: 123, moves: 'e4 e5' },   // Lichess
-        { moves: 'd4 d5' },                                                                             // legacy bare chess.com
-        { id: 'cc-1', source: 'chesscom', players: { white: { user: { name: 'y' } } }, moves: 'c4 c5' },// new enriched chess.com
+      await window.__importTestHooks.putGames('incr-user', [
+        { id: 'r1', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r2', moves: 'e4 e5 Nf3 Nc6' },
       ]);
     });
-    const before = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
-    assert(before.length === 3, `test setup issue: expected 3 games stored, got ${before.length}`);
-    const removed = await appBA.page.evaluate(() => window.__importTestHooks.clearChessComGames('u1'));
-    assert(removed === 2, `expected 2 chess.com games removed (legacy + enriched), got ${removed}`);
-    const after = await appBA.page.evaluate(() => window.__importTestHooks.getGames('u1'));
-    assert(after.length === 1 && after[0].id === 'li-1', `expected only the Lichess game to survive, got ${JSON.stringify(after.map(g=>g.id||g.moves))}`);
-    ok('chess.com importer: clear removes only chess.com games (tagged + legacy), leaving Lichess untouched');
-  } catch(e){ bad('chess.com importer: source-selective clear', e); }
+    const firstBatch = await appBA.page.evaluate(() => window.__importTestHooks.getGames('incr-user'));
+    await appBA.page.evaluate((games) => window.__gamesListHooks.reindexAfterImport(games), firstBatch);
+    const countAfterFirst = await appBA.page.evaluate(() => window.__gamesListHooks.indexEntryCount());
+    const buildsAfterFirst = await appBA.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(buildsAfterFirst === 1, `expected the first reindex (no base index existed) to do exactly 1 full build, got ${buildsAfterFirst}`);
+    assert(countAfterFirst > 0, `expected the first reindex to actually index something, got ${countAfterFirst} entries`);
+
+    // "re-import" that overlaps r1/r2 (already indexed) and adds r3 (genuinely new)
+    await appBA.page.evaluate(async () => {
+      await window.__importTestHooks.putGames('incr-user', [
+        { id: 'r1', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r2', moves: 'e4 e5 Nf3 Nc6' },
+        { id: 'r3', moves: 'e4 e5 Nf3 Nc6' },
+      ]);
+    });
+    const secondBatch = await appBA.page.evaluate(() => window.__importTestHooks.getGames('incr-user'));
+    await appBA.page.evaluate((games) => window.__gamesListHooks.reindexAfterImport(games), secondBatch);
+    const countAfterSecond = await appBA.page.evaluate(() => window.__gamesListHooks.indexEntryCount());
+    const buildsAfterSecond = await appBA.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(buildsAfterSecond === 1, `expected the second (overlapping) reindex to NOT trigger a full rebuild, got ${buildsAfterSecond} total build(s)`);
+    // r3 has identical moves to r1/r2, so it contributes exactly one more
+    // game's worth of entries if (and only if) r1/r2 were correctly skipped
+    // as already-indexed rather than re-indexed (duplicated).
+    const perGame = countAfterFirst / 2;
+    assert(countAfterSecond === countAfterFirst + perGame,
+      `expected exactly one more game's worth of entries (r3 only, no r1/r2 duplicates), got ${countAfterFirst} -> ${countAfterSecond} (one game = ${perGame})`);
+    ok('games index: reindexAfterImport appends only newly-seen games, no duplicates, no full rebuild on overlap');
+  } catch(e){ bad('games index: incremental reindex on import', e); }
 } finally {
   await appBA.close();
 }

@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-191';
+const BUILD_TAG = '-192';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -448,37 +448,61 @@ function refreshSystemStats(){
    sequence). Rich columns show for Lichess and (post-enrichment) chess.com
    games; legacy bare {moves} games still count but show moves only. */
 
-// positionKey -> [{ g:gameIndex, move:SAN|null }] for EVERY position in every
-// game (`move` is the one played FROM that position; null at game's end).
+// positionKey -> [{ key:gameIndexKey, move:SAN|null }] for EVERY position in
+// every game (`move` is the one played FROM that position; null at game's
+// end). Entries are keyed by a STABLE, CONTENT-based per-game key (see
+// gameIndexKey below) rather than the game's position in any particular
+// GAMES array, specifically so reindexAfterImport (below) can APPEND newly
+// imported games onto an existing index without caring what order getGames()
+// happens to return things in.
+//
 // Cached in memory against the GAMES array identity (so repeat queries within
 // the same page load are instant, same pattern as the reply trie) AND
 // persisted to IndexedDB (meta key POSITION_INDEX_CACHE_KEY, same pattern as
 // BUILT_CASTLES_CACHE_KEY/gatherBuiltCastles) -- for a large game database
 // (thousands of games) the chess.js replay is expensive enough to be worth
 // surviving a browser refresh instead of paying that cost every session.
-// invalidatePositionIndexCache() clears both layers and is called at the
-// three places GAMES' actual CONTENT changes: the chess.com/Lichess download
-// handler, local file import, and importBackup's full restore. It's
-// deliberately NOT invalidated by every GAMES reassignment -- GAMES is also
+//
+// Two ways the index gets updated:
+//  - invalidatePositionIndexCache() drops it entirely -- used only by
+//    importBackup's full restore, which can swap in a completely different
+//    user's data, so there's nothing to sensibly diff/append against.
+//  - reindexAfterImport() updates it AT IMPORT TIME for the two routine
+//    import paths (chess.com/Lichess download, local file import): appends
+//    just the games it hasn't seen before rather than rebuilding everything,
+//    so a "check for new games" import stays fast even against a large
+//    existing database, and the index is already current by the time the
+//    import finishes (not deferred to the next "Games with this Position"
+//    open).
+// Neither is triggered by every GAMES reassignment -- GAMES is also
 // reassigned on every ordinary page load via the lazy
 // `if(!GAMES) GAMES = await getGames()` reads, which don't change content.
 const POSITION_INDEX_CACHE_KEY = 'gamesPositionIndexCache';
 let _posIndex = { games: null, map: null };
 let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
-let _posIndexBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
+let _posIndexBuildCount = 0;       // real (non-cache-hit) FULL builds this page load -- test-only signal
 function invalidatePositionIndexCache(){
   _posIndex = { games: null, map: null };
   _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache
 }
-function indexOneGame(add, game, gi){
+// A stable key for one game, independent of its position in any array --
+// same scheme putGames (db.js) already uses to dedupe by id at the storage
+// layer: the game's own id when present (every chess.com/Lichess game has
+// one), falling back to a content hash for the legacy bare {moves}-only
+// shape (pre-metadata-enrichment chess.com imports) that predates ids.
+function gameIndexKey(game){
+  return game.id || hashStr(JSON.stringify(game));
+}
+function indexOneGame(add, game){
+  const key = gameIndexKey(game);
   const chess = new Chess();
   const sans = (game.moves || '').split(' ').filter(Boolean);
   for(let i=0;i<sans.length;i++){
-    add(positionKey(chess.fen()), { g: gi, move: sans[i] });
+    add(positionKey(chess.fen()), { key, move: sans[i] });
     if(!chess.move(sans[i], { sloppy:true })) return;   // corrupt game — stop indexing it
   }
-  add(positionKey(chess.fen()), { g: gi, move: null });   // final position, no move after
+  add(positionKey(chess.fen()), { key, move: null });   // final position, no move after
 }
 // Replays every game move-by-move through chess.js -- for a large game
 // database (e.g. months of chess.com history) that's slow enough as one
@@ -490,7 +514,7 @@ async function buildPositionIndex(games, onProgress){
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
   for(let gi=0; gi<games.length; gi++){
-    indexOneGame(add, games[gi], gi);
+    indexOneGame(add, games[gi]);
     if(gi % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
       onProgress?.(gi + 1, games.length);
       await nextPaint();
@@ -498,21 +522,29 @@ async function buildPositionIndex(games, onProgress){
   }
   return map;
 }
+// loads the persisted copy into _posIndex.map (at most once per page load,
+// leaving _posIndex.games null -- the caller decides what games array the
+// resulting map should be considered current for). Shared by positionIndex
+// (the lazy, query-time path) and reindexAfterImport (the eager, import-time
+// path) so both agree on when a persisted copy has already been checked.
+async function loadPersistedIndexOnce(){
+  if(_posIndex.map || _posIndexIdbChecked) return;
+  _posIndexIdbChecked = true;
+  try {
+    const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
+    if(raw) _posIndex = { games: null, map: new Map(JSON.parse(raw)) };
+  } catch(e){ console.warn('[games index] failed to read the persisted index, will rebuild', e); }
+}
 async function positionIndex(games, onProgress){
   if(_posIndex.games === games) return _posIndex.map;
-  // the persisted copy is checked at most once per page load -- once we know
-  // one way or the other, _posIndex itself (games:null or populated) is
-  // authoritative and this branch is skipped from then on.
-  if(!_posIndexIdbChecked){
-    _posIndexIdbChecked = true;
-    try {
-      const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
-      if(raw){
-        const map = new Map(JSON.parse(raw));
-        _posIndex = { games, map };
-        return map;
-      }
-    } catch(e){ console.warn('[games index] failed to read the persisted index, rebuilding', e); }
+  await loadPersistedIndexOnce();
+  if(_posIndex.map){
+    // a persisted (or already in-memory) copy exists -- there's no path in
+    // this codebase that changes GAMES' content without going through
+    // reindexAfterImport/invalidatePositionIndexCache, so it's safe to treat
+    // it as current for `games` too.
+    _posIndex.games = games;
+    return _posIndex.map;
   }
   const map = await buildPositionIndex(games, onProgress);
   _posIndex = { games, map };
@@ -520,11 +552,60 @@ async function positionIndex(games, onProgress){
   setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
   return map;
 }
+// Called right after a ROUTINE import (chess.com/Lichess download, local file
+// import) writes new/changed games. putGames upserts by a stable id, so
+// `freshGames` (the full post-import array) typically still contains plenty
+// of ALREADY-indexed games -- e.g. a chess.com re-import covering overlapping
+// months -- diffed out here by the same content-based key gamesAtPosition
+// uses, so a routine "check for new games" import only pays to index games it
+// hasn't seen before, not the whole database. Falls back to a full build if
+// there's no existing index anywhere yet (first import ever, or first import
+// this page load with nothing persisted) -- there's no cheaper way to produce
+// a first-ever index.
+async function reindexAfterImport(freshGames, onProgress){
+  await loadPersistedIndexOnce();
+  if(!_posIndex.map){
+    _posIndex = { games: freshGames, map: await buildPositionIndex(freshGames, onProgress) };
+    _posIndexBuildCount++;
+  } else {
+    const already = new Set();
+    for(const entries of _posIndex.map.values()) for(const e of entries) already.add(e.key);
+    const toAdd = freshGames.filter(g => !already.has(gameIndexKey(g)));
+    if(toAdd.length){
+      const add = (key, entry) => { let a = _posIndex.map.get(key); if(!a){ a=[]; _posIndex.map.set(key,a); } a.push(entry); };
+      for(let i=0;i<toAdd.length;i++){
+        indexOneGame(add, toAdd[i]);
+        if(i % POSITION_INDEX_CHUNK === POSITION_INDEX_CHUNK - 1){
+          onProgress?.(i + 1, toAdd.length);
+          await nextPaint();
+        }
+      }
+    }
+    _posIndex.games = freshGames;
+  }
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([..._posIndex.map]));   // fire-and-forget: persist across reloads
+}
+// key -> game lookup for the CURRENT games array, memoized against its
+// identity (rebuilding it is cheap -- no chess.js involved -- but still O(n),
+// no reason to redo it for every query against the same array).
+let _posIndexByKey = { games: null, byKey: null };
+function gamesByIndexKey(games){
+  if(_posIndexByKey.games === games) return _posIndexByKey.byKey;
+  const byKey = new Map();
+  for(const g of games) byKey.set(gameIndexKey(g), g);
+  _posIndexByKey = { games, byKey };
+  return byKey;
+}
 // games (+ the move played from here) that reached `fen`'s position by ANY move order.
 async function gamesAtPosition(games, fen, onProgress){
   const map = await positionIndex(games, onProgress);
   const hits = map.get(positionKey(fen)) || [];
-  return hits.map(h => ({ game: games[h.g], move: h.move }));
+  const byKey = gamesByIndexKey(games);
+  // .filter(): a hit whose game no longer exists in `games` (deleted since
+  // it was indexed -- not a path any current import/reindex code takes, but
+  // cheap to guard against a stale entry silently) is dropped rather than
+  // shown as a broken row.
+  return hits.map(h => ({ game: byKey.get(h.key), move: h.move })).filter(x => x.game);
 }
 // games that followed EXACTLY `seq` (a prefix match on the SAN move list), with
 // the move each played immediately after — the strict "this line only" view.
@@ -583,9 +664,9 @@ const GAME_STATUS_LABEL = { mate:'checkmate', resign:'resignation', outoftime:'t
 // which provider a game came from, for the games-list badge. Lichess games
 // always carry `players`; chess.com games are either tagged source:'chesscom'
 // (post-enrichment) or -- for legacy pre-enrichment imports -- bare {moves}
-// objects with no players/id/createdAt at all (same shape clearChessComGames
-// uses to recognize them). Nothing else produces that bare shape (manual file
-// imports are always Lichess-shaped ndjson), so it's an unambiguous chess.com signal.
+// objects with no players/id/createdAt at all. Nothing else produces that
+// bare shape (manual file imports are always Lichess-shaped ndjson), so it's
+// an unambiguous chess.com signal.
 function gameSource(game){
   if(game.source === 'chesscom') return 'chesscom';
   if(game.players) return 'lichess';
@@ -3675,7 +3756,7 @@ $('fileImport').addEventListener('change', async e=>{
     .filter(Boolean);
   if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-  invalidatePositionIndexCache();
+  await reindexAfterImport(GAMES);
   clr();
   // renderTreeBody (not openLine) -- this re-renders the ALREADY-open line
   // from the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -4149,14 +4230,6 @@ $('dlBtn').onclick = async ()=>{
       logDl('fetching…');
       fetched = await fetchChessCom(fetchUser,months,
         (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
-      // chess.com re-import REPLACES (not merges) this user's chess.com games:
-      // the metadata enrichment changed their id scheme, so a merge would leave
-      // the old, sparser copies behind as duplicates. Only runs after a
-      // successful fetch, and only touches chess.com games -- Lichess untouched.
-      console.log(`[chess.com import] clearing old chess.com games for "${CURRENT_USER}"…`);
-      const wiped = await clearChessComGames(CURRENT_USER);
-      console.log(`[chess.com import] cleared ${wiped} old chess.com game(s) for "${CURRENT_USER}"`);
-      if(wiped) logDl(`replaced ${wiped} existing chess.com game(s)…`);
     } else {
       const max=+$('maxGames').value||300;
       localStorage.setItem(LS_MAX,max);
@@ -4167,7 +4240,8 @@ $('dlBtn').onclick = async ()=>{
     await putGames(CURRENT_USER,fetched);
     GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-    invalidatePositionIndexCache();
+    logDl(`imported ${fetched.length}, indexing…`);
+    await reindexAfterImport(GAMES, (done,total) => logDl(`indexing… ${done} of ${total}`));
     logDl(`imported ${fetched.length} (${GAMES.length} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -7689,6 +7763,21 @@ if(localStorage.getItem('threeTestDebug')){
       await positionIndex(GAMES, (done, total) => calls.push([done, total]));
       return calls;
     },
+    // import-time incremental reindexing -- so a test can drive it directly
+    // against a controlled games array without needing a real chess.com/
+    // Lichess fetch (not mocked in this harness).
+    reindexAfterImport: async (freshGames) => {
+      const calls = [];
+      await reindexAfterImport(freshGames, (done, total) => calls.push([done, total]));
+      return calls;
+    },
+    gameIndexKey: (game) => gameIndexKey(game),
+    indexEntryCount: () => {
+      if(!_posIndex.map) return 0;
+      let n = 0;
+      for(const entries of _posIndex.map.values()) n += entries.length;
+      return n;
+    },
   };
 }
 
@@ -7698,7 +7787,6 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__importTestHooks = {
     normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
-    clearChessComGames: (user) => clearChessComGames(user),
     putGames: (user, games) => putGames(user, games),
     getGames: (user) => getGames(user),
   };
