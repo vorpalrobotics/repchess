@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-204';
+const BUILD_TAG = '-205';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -305,6 +305,25 @@ async function fetchChessCom(user,months,onProgress){
    The trie is cached against the GAMES array identity. Every place that loads or
    replaces the game set assigns a brand-new array, so a changed identity rebuilds
    the index automatically; nothing mutates a game's moves in place. */
+// games where the user actually played `color` -- the SAME filter Find
+// Games/Compare Games already apply (userColorInGame, defined further down,
+// hoisted), but feeding the CORE move-frequency trie here, so a game
+// reached by the same moves where the user was on the OTHER side (an
+// opponent's choice, not theirs) doesn't shape the tree's own rows/
+// percentages, node stats, or castle/VR generation either -- not just Find
+// Games/Compare Games. Memoized per color (there are only ever two) against
+// the `games` array's own identity, so gatherBuiltCastles -- which builds
+// every opening system's castles, White and Black alike, in one pass --
+// doesn't thrash a single-slot cache alternating between them.
+let _gamesForColor = { games: null, byColor: new Map() };
+function gamesForLineColor(games, color){
+  if(_gamesForColor.games !== games) _gamesForColor = { games, byColor: new Map() };
+  if(!_gamesForColor.byColor.has(color)){
+    _gamesForColor.byColor.set(color, (games || []).filter(g => userColorInGame(g) === color));
+  }
+  return _gamesForColor.byColor.get(color);
+}
+
 let _gamesTrie = { games: null, root: null };
 function buildGamesTrie(games){
   const root = { pass: 0, label: null, kids: new Map() };
@@ -439,7 +458,7 @@ function refreshSystemStats(){
   if(!span) return;
   if(!ENABLE_NODE_STATS){ span.textContent = ''; return; }
   if(!CURRENT_LINE || !GAMES){ span.textContent = ''; return; }
-  span.textContent = formatNodeStats(computeSystemStats(GAMES, CURRENT_LINE));
+  span.textContent = formatNodeStats(computeSystemStats(gamesForLineColor(GAMES, CURRENT_LINE.color), CURRENT_LINE));
 }
 
 /* ---------- games with this position (three-dot menu → Games with this Position) ----------
@@ -1821,7 +1840,7 @@ async function showTranspositionGraph(){
     await loadMemorizedRooms();
     await loadDecoratedRooms();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
-    const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq);
+    const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount }
       = analyzeCastleStructure(graph);
@@ -1858,7 +1877,7 @@ async function showTranspositionGraph(){
     for(const name of castleNames){
       const castleRootSeq = castleRootRoomSeq(name);
       if(!castleRootSeq) continue;
-      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, GAMES, castleRootSeq, name);
+      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), castleRootSeq, name);
       totalCastleRooms += genRooms.length;
       const instanceId = castleInstanceId(CURRENT_LINE.id, name);
       for(const gr of genRooms){
@@ -2805,7 +2824,7 @@ function gatherLinkedCastles(startCastleName, startGenRooms){
     const name = queue.shift();
     const rootSeq = castleRootRoomSeq(name);
     if(!rootSeq) continue;   // named but not built yet -- nothing to link to
-    const genRooms = buildGeneratedCastle(CURRENT_LINE, GAMES, rootSeq, name).genRooms;
+    const genRooms = buildGeneratedCastle(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq, name).genRooms;
     out.push({ name, instanceId: castleInstanceId(CURRENT_LINE.id, name), genRooms });
     collectForeign(genRooms);
   }
@@ -2842,7 +2861,7 @@ function canonicalRoomSeq(seq){
   if(!castle) return seq;
   const rootSeq = castleRootRoomSeq(castle);
   if(!rootSeq) return seq;
-  const graph = buildCastleGraph(CURRENT_LINE, GAMES, rootSeq, false, castle);
+  const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq, false, castle);
   const key = positionKey(fenForSeq(roomSeq));
   const room = graph.rooms.find(r => positionKey(r.fen) === key);
   return room ? room.seq.slice(0, -1) : seq;
@@ -4144,13 +4163,14 @@ function renderTreeBody(line){
     $('tree').innerHTML = '<p>This opening system has no opening move configured yet.</p>';
     return;
   }
+  const lineGames = gamesForLineColor(GAMES, line.color);
   triggers.forEach(mv=>{
     const wrap = document.createElement('div');
     $('tree').appendChild(wrap);
     if(line.color==='black'){
-      renderBlackRoot(wrap,GAMES,mv);
+      renderBlackRoot(wrap,lineGames,mv);
     } else {
-      renderBranch(wrap,GAMES,[mv],0);
+      renderBranch(wrap,lineGames,[mv],0);
     }
   });
   refreshSystemStats();
@@ -4333,7 +4353,7 @@ async function searchForLine(text){
     const seq = moves.slice(0,k);
     const opp = moves[k];
     if(!(color==='black' && k===0)){
-      const {counts} = replies(GAMES,seq);
+      const {counts} = replies(gamesForLineColor(GAMES, color),seq);
       const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
       if(!(opp in counts) && !manual.includes(opp)){
         reportVariationNotFound(`after ${seq.join(' ')||'the start'}, "${opp}" isn't a known reply in this opening system`);
@@ -5129,7 +5149,17 @@ function openThreeTestAssets(){
    the "Run VR" menu item itself: Shift+click or right-click it to force a
    fresh rebuild (see menuThreeTest's own wiring), which also re-persists
    the fresh result so subsequent opens/reloads pick it up too. */
-const BUILT_CASTLES_CACHE_KEY = 'builtCastlesCache';
+const BUILT_CASTLES_CACHE_KEY = 'builtCastlesCacheV2';
+// v1 (plain 'builtCastlesCache') predates filtering castle/room generation
+// down to only the games the user actually played THIS line's own color in
+// (see gamesForLineColor) -- a v1 blob would otherwise silently keep serving
+// stale door/room counts computed under the old (unfiltered) rule forever,
+// since nothing about a code-level rule change trips this cache's own
+// write-path invalidation triggers, only a data write does. Renaming the key
+// forces a fresh rebuild under the new rule on every user's first VR open
+// this build; this one-time, fire-and-forget sweep just tidies up the now-
+// abandoned v1 row rather than leaving it to sit in IDB forever unread.
+deleteMeta('builtCastlesCache');
 let _builtCastlesCache = null;
 let _builtCastlesIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
 let _builtCastlesBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
@@ -5166,8 +5196,9 @@ async function gatherBuiltCastles(lines){
   // always completes atomically once its getAllPrefs() resolves — no other
   // line's continuation can interleave in between, so running every line's
   // getAllPrefs() IDB read in parallel instead of serially is safe.
-  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () =>
-    definedCastles().map(name => {
+  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
+    const lineGames = gamesForLineColor(GAMES, line.color);
+    return definedCastles().map(name => {
       const rootSeq = castleRootRoomSeq(name);
       if(!rootSeq) return null;   // named but not built yet — skip
       let streetNumber = null;
@@ -5185,11 +5216,11 @@ async function gatherBuiltCastles(lines){
       // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
       // move (the room convention everywhere else); the position right
       // before it is what a game "chose to enter this castle" out of.
-      const { counts: entryCounts, tot: entryTot } = replies(GAMES, rootSeq.slice(0, -1));
+      const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
       const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
-      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, GAMES, rootSeq, name).genRooms };
-    }).filter(Boolean)
-  )));
+      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
+    }).filter(Boolean);
+  })));
   const out = [];
   lines.forEach((line, i) => {
     for(const c of perLine[i]){
@@ -5392,7 +5423,7 @@ const findCastleRootSeq = (line, castleName) => withLinePrefs(line, () => castle
    matching the generator's own scoping — see buildGeneratedCastle). */
 async function computeMnemonicCoverage(line, rootSeq=null){
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
-  const graph = await withLinePrefs(line, () => buildCastleGraph(line, GAMES, rootSeq, false));
+  const graph = await withLinePrefs(line, () => buildCastleGraph(line, gamesForLineColor(GAMES, line.color), rootSeq, false));
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
   for(const seq of seqs){
@@ -6108,7 +6139,7 @@ let OQ = null;     // {line, color, seq, expected, hits, misses, oppChoices, rep
 let oqBoard = null;
 
 function oqVisibleOpps(seq){
-  const {counts} = replies(GAMES || [], seq);
+  const {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
   const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
   return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);

@@ -413,6 +413,19 @@ async function setMeta(key, value){
   });
 }
 
+// true removal (not just blanking the value with setMeta(key,'')) -- for
+// cleaning up a row under a since-abandoned key entirely, e.g. a cache key
+// renamed across a breaking format/logic change.
+async function deleteMeta(key){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('meta','readwrite');
+    txn.objectStore('meta').delete(key);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* wipes just the assets store -- used by the "import assets (replace)" flow,
    which swaps the whole asset set without touching games/lines/mnemonics. */
 async function clearAssets(){

@@ -184,7 +184,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app2.page.click('.line-row');                                   // open the move table
   await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
@@ -256,7 +256,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app3.page.click('.line-row');
   await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -322,7 +322,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
     threeLayout: JSON.stringify({ [keys.alphaEntry]: { exits: { [keys.betaEntry]: { type: 'stair' } } } }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await appC2.page.click('.line-row');
   await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -394,7 +394,7 @@ try {
       { id:'g5', moves:'d4 Nf6 c4 e5 dxe5 Ng4',white:'a', black:'b', result:'*' },
     ],
     threeLayout: JSON.stringify({ [keys.alpha]: { exits: { [keys.r2]: { type: 'stair' } } } }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await app4.page.click('.line-row');
   await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -459,7 +459,7 @@ try {
       { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' },
       { id:'g2', moves:'d4 Nf6 c4 g6 Nc3 Bg7', white:'a', black:'b', result:'*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app5.page.click('.line-row');
   await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -546,7 +546,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app6.page.click('.line-row');
   await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -606,7 +606,7 @@ try {
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
     mnemonics: [{ square: 'd4', pawn: 'Deer' }],
-  });
+  }, { defaultPlayerColor: 'white' });
 
   // wrapped separately (it guards *setup* used by tests 12-14): a failure
   // here is recorded as its own test instead of throwing past this phase's
@@ -716,7 +716,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app8.page.click('.line-row');
   await app8.page.waitForSelector('.data-row', { timeout: 10000 });
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -777,7 +777,7 @@ try {
       { seq: ['d4','Nf6','c4'], reply: 'e6' },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app9.page.click('.line-row');
   await app9.page.waitForSelector('.data-row', { timeout: 10000 });
   await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -1055,7 +1055,7 @@ try {
       lines: [{ id: 'L1', name: 'WhiteSys', color: 'white', openingMoves: ['d4'], prefs: [
         { seq: ['d4', 'Nf6'], reply: 'c4' },
       ]}],
-    });
+    }, { defaultPlayerColor: 'white' });
     // no .line-row click here -- CURRENT_LINE stays null, exactly the "went
     // straight from the hamburger menu" path that triggered the bug.
     await app11.page.evaluate(() => window.__oqTestHooks.setPrefs({ sentinel: 'before' }));
@@ -1127,7 +1127,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app12.page.click('.line-row');
   await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -1844,7 +1844,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app19.page.click('.line-row');
   await app19.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -2005,7 +2005,7 @@ try {
   await seedBackup(app21.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(app21.page);
 
   // 59. White's move (moveNumber set) gets the badge in ITS quadrant; Black's
@@ -2523,7 +2523,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
     mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appW1.page.click('.line-row');
   await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
   await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2565,7 +2565,7 @@ try {
     ]}],
     games,
     mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'black' });
   await appW2.page.click('.line-row');
   await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
   await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2645,7 +2645,7 @@ try {
       { id: 'door-plain', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
       { id: 'door-columns', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=', oversizePct: 20 },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appX.page.click('.line-row');
   await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -2781,7 +2781,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appY.page);
 
   // 68. mainStreet has no chess position -- the memorized icon is hidden there
@@ -2853,7 +2853,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appZ.page.click('.line-row');
   await appZ.page.waitForSelector('.data-row', { timeout: 10000 });
   await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -2934,7 +2934,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   // mark the castle's own root AND the e6 branch's room memorized (not g6) --
   // via the same IDB key the VR toolbar toggle writes (setMeta is a bare
   // global, same as getMeta elsewhere).
@@ -3223,7 +3223,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAC.page);
   const roomKey = await appAC.page.evaluate(() => {
     const c = new Chess();
@@ -3314,7 +3314,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAD.page);
   const keyFor = (moves) => appAD.page.evaluate((mv) => {
     const c = new Chess();
@@ -3389,7 +3389,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAE.page.click('.line-row');
   await appAE.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -3435,7 +3435,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAF.page.click('.line-row');
   await appAF.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAF.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -3545,7 +3545,7 @@ try {
       { seq: ['d4','Nf6'], eval: evalLines[0], evalLines },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAG.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
   await appAG.page.waitForSelector(rowSel, { timeout: 10000 });
@@ -3611,7 +3611,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
     ],
     assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAH.page);
   const keyFor = (moves) => appAH.page.evaluate((mv) => {
     const c = new Chess();
@@ -3727,7 +3727,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 d5 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
     ],
     assets: [{ id: 'vaultDoor', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAH2.page);
   const root = await appAH2.page.evaluate(() => {
     const c = new Chess();
@@ -3888,7 +3888,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAJ.page);
   const root = await appAJ.page.evaluate(() => {
     const c = new Chess();
@@ -4331,7 +4331,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAM.page);
   const roomKey = await appAM.page.evaluate(() => {
     const c = new Chess();
@@ -4390,7 +4390,7 @@ try {
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
     assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAN.page);
   const roomKey = await appAN.page.evaluate(() => {
     const c = new Chess();
@@ -4557,7 +4557,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAP.page.click('.line-row');
   await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -4634,7 +4634,7 @@ try {
         wallLists: { all: { listId: 'nonexistent-list' } },
       },
     }),
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appAQ.page);
   await appAQ.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.root);
   await appAQ.page.waitForTimeout(300);
@@ -4868,7 +4868,7 @@ try {
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
   await appAS.page.waitForSelector('.data-row', { timeout: 10000 });
   await appAS.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -4927,7 +4927,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAT.page.click('.line-row');
   await appAT.page.waitForSelector('.data-row', { timeout: 10000 });
   const stat = (seq) => appAT.page.evaluate((s) => window.__statsTestHooks.computeNodeStats(s).completeToMove, seq);
@@ -4973,7 +4973,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
-  });
+  }, { defaultPlayerColor: 'white' });
   const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
     await appAU.page.evaluate(() => {
@@ -5137,7 +5137,7 @@ try {
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAV.page.click('.line-row');
   await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -5252,7 +5252,7 @@ try {
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAW.page.click('.line-row');
   await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
 
@@ -5356,7 +5356,7 @@ try {
       { seq: ['d4','Nf6'], eval: { type: 'cp', value: 35, depth: 20, pv: '2.c4 e6', pvFen: midFen, pvUci: ['c2c4','e7e6'] } },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAX.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
   await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
@@ -5411,7 +5411,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAY.page.click('.line-row');
   await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
   const badge = (seq) => appAY.page.evaluate((s) => {
@@ -5473,7 +5473,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAY.page.click('.line-row');
     await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
     const parentBadge = await badge(['d4','Nf6']);
@@ -5525,7 +5525,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
@@ -5555,7 +5555,7 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
@@ -5584,15 +5584,21 @@ try {
         { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
         { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
       ],
-    });
+    }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
     await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
     await focusOnNf6();
 
+    // the local-file import REPLACES GAMES wholesale, so (now that the move
+    // table only counts games where the signed-in user played the line's own
+    // color) these need real players matching this sub-test's CURRENT_USER
+    // ('tester3') or every row -- including the ones asserted on below --
+    // would vanish under the color filter.
+    const p3 = { white: { user: { name: 'tester3' } }, black: { user: { name: 'opp' } } };
     const ndjson = [
-      { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },
-      { id: 'g3', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6', players: p3, result: '*' },
+      { id: 'g2', moves: 'd4 d5', players: p3, result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4', players: p3, result: '*' },
     ].map(g => JSON.stringify(g)).join('\n');
     await appAZ.page.setInputFiles('#fileImport', {
       name: 'games.ndjson', mimeType: 'application/x-ndjson', buffer: Buffer.from(ndjson),
@@ -5624,7 +5630,7 @@ try {
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
-  });
+  }, { defaultPlayerColor: 'white' });
   const state = () => appBA.page.evaluate(async () => ({
     isCached: window.__vrCacheTestHooks.isCached(),
     isPersisted: await window.__vrCacheTestHooks.isPersisted(),
@@ -5736,7 +5742,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBB.page.click('.line-row');
   await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -5806,7 +5812,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 Nf3 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBC.page.click('.line-row');
   await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
 
@@ -5862,7 +5868,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBD.page.click('.line-row');
   await appBD.page.waitForSelector('.data-row', { timeout: 10000 });
   // repeatedly expand every collapsed branch until none remain, to reach
@@ -6299,7 +6305,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBL.page.click('.line-row');
   await appBL.page.waitForSelector('.data-row', { timeout: 10000 });
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -6483,7 +6489,7 @@ try {
       { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 d5 c4 c6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBM.page.click('.line-row');
   await appBM.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -6538,7 +6544,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appBN.page.click('.line-row');
   await appBN.page.waitForSelector('.data-row', { timeout: 10000 });
   await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -6653,7 +6659,7 @@ try {
       { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
       { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBO.page);
   const keyFor = (moves) => appBO.page.evaluate((mv) => {
     const c = new Chess();
@@ -6725,7 +6731,7 @@ try {
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 d5 c4 e6 Nc3 Nf6 Bg5 Be7', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBP.page);
   const alphaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
@@ -6789,7 +6795,7 @@ try {
       { id: 'frying-pan', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.4, h: 0.2, d: 0.4 }, keywords: 'kitchen housewares' },
       { id: 'toaster', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBQ.page);
   const keyFor = (moves) => appBQ.page.evaluate((mv) => {
     const c = new Chess();
@@ -7113,7 +7119,7 @@ try {
       { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
       { id: 'doorSkin2', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBR.page);
   const keyFor = (moves) => appBR.page.evaluate((mv) => {
     const c = new Chess();
@@ -7231,7 +7237,7 @@ try {
       { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       ...REPLIES_10.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBS.page);
   const keyFor = (moves) => appBS.page.evaluate((mv) => {
     const c = new Chess();
@@ -7314,7 +7320,7 @@ try {
       { id: 'g00', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       ...REPLIES_15.map((m, i) => ({ id: 'g'+(i+1), moves: `d4 Nf6 c4 e6 Nc3 ${m}`, white: 'a', black: 'b', result: '*' })),
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBT.page);
   const keyFor = (moves) => appBT.page.evaluate((mv) => {
     const c = new Chess();
@@ -7360,7 +7366,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await openVR(appBU.page);
   const roomKey = await appBU.page.evaluate(() => {
     const c = new Chess();
@@ -8247,7 +8253,9 @@ try {
       ]},
     ],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6' },
+      // tester played White here -- the White line's move table only
+      // counts games where tester actually played White.
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', players: pWhite('opp1') },
       // tester played Black in both -- the Black line's Compare Games only
       // counts games where tester actually played Black.
       { id: 'g2', moves: 'e4 e5 Nf3 Nc6', players: pBlack('opp2') },   // matches the configured Black reply (e5) -- boldfaced in the header, not excluded

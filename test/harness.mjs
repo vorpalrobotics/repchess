@@ -118,7 +118,36 @@ export async function launchApp({ headless = true, threeTestDebug = true } = {})
 
 // Restore a minimal backup through the real import path, seeding a user + lines
 // so the generated world has systems to render. Returns when restore settles.
-export async function seedBackup(page, backup){
+//
+// `opts.defaultPlayerColor` ('white'|'black'), when given, fills in a
+// `players` field for every game in `backup.games` that doesn't already have
+// one -- `backup.user` (the seed's own signed-in user, so it matches
+// CURRENT_USER) on that color, a synthetic opponent on the other. The app
+// now only counts a game toward move-frequency/node-stats/castle generation
+// (and Find Games/Compare Games) when it can determine the signed-in user
+// actually played the CURRENT line's own color, so most seeds need this to
+// produce any visible rows/rooms at all.
+// A game that already specifies `players` is left untouched (so a test can
+// still seed a deliberately WRONG-side or genuinely undeterminable-color
+// game by giving it explicit players, or none, and omitting this option /
+// not relying on it for that one game). Single-color only -- a seed mixing
+// a White and a Black line in one call needs per-game `players` instead,
+// since there's no one right default for both.
+export async function seedBackup(page, backup, opts = {}){
+  const { defaultPlayerColor } = opts;
+  let data = backup;
+  if(defaultPlayerColor && Array.isArray(backup.games)){
+    const testerSide = defaultPlayerColor === 'black' ? 'black' : 'white';
+    const oppSide = testerSide === 'white' ? 'black' : 'white';
+    const testerName = backup.user || 'tester';   // must match CURRENT_USER (backup.user), not a hardcoded name
+    data = {
+      ...backup,
+      games: backup.games.map((g, i) => g.players ? g : {
+        ...g,
+        players: { [testerSide]: { user: { name: testerName } }, [oppSide]: { user: { name: `opp${i}` } } },
+      }),
+    };
+  }
   // importBackup sets CURRENT_USER/userId.value near the very START, well
   // before games/lines/mnemonics are actually written -- polling that (as
   // this used to) can resolve while the restore is still mid-flight, racing
@@ -128,7 +157,7 @@ export async function seedBackup(page, backup){
   const before = await page.evaluate(() => window.__importBackupGen ? window.__importBackupGen() : 0);
   await page.setInputFiles('#backupImport', {
     name: 'seed.json', mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify(backup)),
+    buffer: Buffer.from(JSON.stringify(data)),
   });
   await page.waitForFunction(
     n => window.__importBackupGen && window.__importBackupGen() > n,
