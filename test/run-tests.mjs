@@ -2065,7 +2065,11 @@ const app21 = await launchApp();
 try {
   await seedBackup(app21.page, {
     version: 6, user: 'tester',
-    lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    lines: [
+      { id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [] },
+      { id: 'B1', name: 'Sicilian', color: 'black', openingMoves: ['e4'], prefs: [{ seq: ['e4'], reply: 'c5' }] },
+      { id: 'B2', name: 'Undecided', color: 'black', openingMoves: ['d4'], prefs: [] },
+    ],
   }, { defaultPlayerColor: 'white' });
   await openVR(app21.page);
 
@@ -2103,6 +2107,33 @@ try {
     assert(hasInk === true, `expected the opening-move tile to show a "1." badge, got ${hasInk}`);
     ok('the street-sign opening-move tile also shows the "1." move-number badge');
   } catch(e){ bad('VR billboard: opening-move tile shows move number', e); }
+
+  // 61. A Black system's street tile shows the door-style opponent/response
+  //     PAIR composite (White's trigger + our prepared reply diagonally
+  //     below it), not the plain single-move tile -- proven by the canvas
+  //     itself: a plain tile is always a 512x512 square (buildOpeningMoveSprite's
+  //     fixed px), while the pair composite is 768x768 (MNEM_PAIR_SIZE, no
+  //     occurrence strip on a street tile) -- and the "1." badge still lands
+  //     in the opponent (White) quadrant's corner, same as a door pair's own.
+  try {
+    const size = await app21.page.evaluate(() => window.__threeTestEdit.spriteCanvasSize('open-B1'));
+    assert(size && size.width === 768 && size.height === 768,
+      `expected the 768x768 pair-composite canvas, got ${JSON.stringify(size)}`);
+    const oppBadge = await app21.page.evaluate(() => window.__threeTestEdit.spriteHasWhiteInk('open-B1', 14, 300, 110, 70, 'dark'));
+    assert(oppBadge === true, `expected the "1." badge in the opponent (White) quadrant, got ${oppBadge}`);
+    ok('Black system street tile: shows the opponent/response pair composite when a reply is prepared');
+  } catch(e){ bad('VR billboard: Black system street tile shows the reply pair', e); }
+
+  // 62. A Black system with NO reply configured yet falls back to the same
+  //     plain single-move tile a White system uses (just the opponent's
+  //     trigger move) -- the pair composite only replaces it once there's
+  //     something real to pair it with.
+  try {
+    const size = await app21.page.evaluate(() => window.__threeTestEdit.spriteCanvasSize('open-B2'));
+    assert(size && size.width === 512 && size.height === 512,
+      `expected the plain 512x512 single tile with no reply configured, got ${JSON.stringify(size)}`);
+    ok('Black system street tile: stays a plain single tile until a reply is configured');
+  } catch(e){ bad('VR billboard: Black system street tile without a reply', e); }
 } finally {
   await app21.close();
 }
