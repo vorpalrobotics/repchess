@@ -3,7 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260724-112';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260723-42';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260724-43';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-213';
+const BUILD_TAG = '-214';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5137,8 +5137,12 @@ $('backupImport').addEventListener('change', async e=>{
   if(isObjectListFile(data)){
     try{
       const res = await importObjectListsData(data);
-      if(!res.total){ log('no object lists found in that file', true); return; }
-      log(`imported object lists: ${res.added} added, ${res.updated} updated (image bindings preserved)`);
+      if(!res.total){
+        log(res.skipped ? `no object lists imported -- ${res.skipped} entr${res.skipped===1?'y':'ies'} had no id and were skipped` : 'no object lists found in that file', true);
+        return;
+      }
+      log(`imported object lists: ${res.added} added, ${res.updated} updated` +
+        (res.skipped ? `, ${res.skipped} skipped (no id)` : '') + ` (image bindings preserved)`);
       // if the Manage Object Lists modal is open, refresh it in place
       if($('objectListsOverlay').style.display === 'flex') openObjectListManager($('objectListsBodyWrap'));
     }catch(err){

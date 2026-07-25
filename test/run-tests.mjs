@@ -8120,6 +8120,148 @@ try {
 }
 }
 
+// --- Phase AY3: Object List Manager -- four more code-review fixes:
+//     (1) re-importing a list preserves an existing item's asset binding
+//     even when the item's name only changed case; (2) an asset's `image`
+//     data is HTML-escaped before landing in an <img src="..."> attribute,
+//     so a crafted/corrupted value can't break out and inject markup;
+//     (3) a list record written straight to IDB with roomName/category/
+//     orderingRule missing or null (the shape a raw backup restore can
+//     produce, bypassing this module's own import normalization) opens and
+//     saves cleanly instead of showing "null"/"undefined" or throwing;
+//     (4) an id-less entry dropped during import is now counted and
+//     surfaced, not silently discarded. ---
+if(shouldRunPhase(['object-lists'])){
+const appAY3 = await launchApp();
+try {
+  await seedBackup(appAY3.page, {
+    version: 6, user: 'tester',
+    lines: [],
+    assets: [{ id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } }],
+    // a malformed record (finding 3): written verbatim by the raw
+    // backup-restore path (js/app.js's `for(const list of data.objectLists)
+    // await setObjectList(...)`), never touched by this module's own
+    // normalizeImport -- exactly how a real, non-editor-authored backup
+    // could reach the editor.
+    objectLists: [{ id: 'bare_test', name: 'Broken List', roomName: null, category: null,
+      orderingType: 'generated_mnemonic', orderingRule: null,
+      items: [{ name: 'Thing', assetId: null }],
+      mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } }],
+  });
+  await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+
+  const openCard = async (matchText) => {
+    await appAY3.page.evaluate((t) => {
+      const card = [...document.querySelectorAll('#objlistGrid .objlist-card')].find(c => c.textContent.includes(t));
+      card.click();
+    }, matchText);
+    await appAY3.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+  };
+
+  // 162. A record with roomName/category/orderingRule null (never normalized
+  //      by this module -- seeded via the raw backup path) opens with an
+  //      EMPTY room-name field (not the literal text "null"), and Save
+  //      completes without throwing (back to the index grid, not stuck on
+  //      the editor with a silent JS error).
+  try {
+    await openCard('Broken List');
+    const roomVal = await appAY3.page.evaluate(() => document.getElementById('ol_room').value);
+    assert(roomVal === '', `expected an empty Room Name field for a null roomName, got ${JSON.stringify(roomVal)}`);
+    await appAY3.page.evaluate(() => document.getElementById('ol_save').click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    ok('object lists: a record with null roomName/category/orderingRule opens and saves without crashing');
+  } catch(e){ bad('object lists: defensive handling of a malformed (raw-restored) record', e); }
+
+  // 163. Re-importing the same list with an item's name differing only in
+  //      case (Oven -> OVEN) preserves its existing asset binding instead of
+  //      silently dropping it.
+  try {
+    await appAY3.page.setInputFiles('#objlistImportFile', {
+      name: 'r1.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ rooms: [{ name: 'Kitchen', lists: [
+        { id: 'kit_fix', name: 'Fixtures', items: [{ name: 'Oven', assetId: 'ovenAsset' }, 'Sink'] },
+      ]}]})),
+    });
+    await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await appAY3.page.setInputFiles('#objlistImportFile', {
+      name: 'r2.json', mimeType: 'application/json',
+      // same list id, re-imported with NO assetId on the (differently-cased)
+      // item -- the fix should recover 'ovenAsset' from the previous save.
+      buffer: Buffer.from(JSON.stringify({ rooms: [{ name: 'Kitchen', lists: [
+        { id: 'kit_fix', name: 'Fixtures', items: ['OVEN', 'Sink'] },
+      ]}]})),
+    });
+    await appAY3.page.waitForTimeout(300);
+    await openCard('Fixtures');
+    const boundId = await appAY3.page.evaluate(() =>
+      [...document.querySelectorAll('#ol_items tr')].find(tr => /oven/i.test(tr.textContent))
+        ?.querySelector('.objlist-asset-id')?.textContent);
+    assert(boundId === 'ovenAsset', `expected the case-differing re-import to keep the "ovenAsset" binding, got ${JSON.stringify(boundId)}`);
+    await appAY3.page.evaluate(() => document.getElementById('ol_cancel').click());
+    ok('object lists: re-import preserves an asset binding across an item-name case change');
+  } catch(e){ bad('object lists: case-insensitive asset-binding preservation on re-import', e); }
+
+  // 164. The asset's `image` is escaped before landing in the thumbnail's
+  //      <img src="...">: a crafted value that would otherwise break out of
+  //      the attribute and add a real onerror handler must NOT actually
+  //      execute when the (deliberately broken) image fails to load.
+  try {
+    await appAY3.page.evaluate(async () => {
+      await setAsset('evilAsset', { id: 'evilAsset', type: 'extruded',
+        image: 'not-a-real-image.png" onerror="window.__objlistXssFired=true' });
+    });
+    await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await openCard('Fixtures');
+    await appAY3.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#ol_items [data-pick]')][0];
+      btn.click();
+    });
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#objlistPickFilter', 'evilAsset');
+    await appAY3.page.waitForFunction(() => document.querySelectorAll('#objlistPickGrid .asset-card').length === 1, { timeout: 5000 });
+    await appAY3.page.evaluate(() => document.querySelector('#objlistPickGrid .asset-card').click());
+    await appAY3.page.waitForTimeout(400);   // let the (broken) <img> attempt to load and fire onerror if unescaped
+    const fired = await appAY3.page.evaluate(() => window.__objlistXssFired === true);
+    assert(!fired, 'expected the crafted image string NOT to execute as markup (src must be escaped)');
+    // structural proof alongside the behavioral one above: the whole crafted
+    // string landed in ONE src attribute -- no separate onerror attribute was
+    // parsed out of it (getAttribute('src') itself decodes &quot; back to "
+    // on read, same as any other attribute, so it's not the right thing to
+    // check here; a stray onerror attribute is).
+    const hasOnerrorAttr = await appAY3.page.evaluate(() =>
+      [...document.querySelectorAll('#ol_items img')][0]?.hasAttribute('onerror'));
+    assert(hasOnerrorAttr === false, `expected no separate onerror attribute on the <img> (src must be escaped as one value), got hasAttribute=${hasOnerrorAttr}`);
+    ok('object lists: asset image data is escaped in <img src>, not injectable as markup');
+  } catch(e){ bad('object lists: <img src> escaping', e); }
+
+  // 165. Importing a bare array with one id-less entry imports the valid one
+  //      and reports the skip (not just added/updated), both in the
+  //      returned counts and the alert shown to the user.
+  try {
+    let alertMsg = null;
+    const onDialog = d => { alertMsg = d.message(); };   // read-only -- harness's own listener still accepts it
+    appAY3.page.once('dialog', onDialog);
+    await appAY3.page.evaluate(() => document.getElementById('ol_cancel')?.click());
+    await appAY3.page.setInputFiles('#objlistImportFile', {
+      name: 'bare.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify([
+        { id: 'valid_one', name: 'Valid List', items: [{ name: 'A', assetId: null }] },
+        { name: 'No Id List', items: [{ name: 'B', assetId: null }] },   // dropped: no id
+      ])),
+    });
+    await appAY3.page.waitForFunction(() =>
+      [...document.querySelectorAll('#objlistGrid .objlist-card')].some(c => c.textContent.includes('Valid List')),
+      { timeout: 5000 });
+    assert(alertMsg && /1 skipped/.test(alertMsg), `expected the import-complete alert to mention the 1 skipped entry, got ${JSON.stringify(alertMsg)}`);
+    ok('object lists: an id-less entry is counted and reported as skipped, not silently dropped');
+  } catch(e){ bad('object lists: skipped-entry count surfaced on import', e); }
+} finally {
+  await appAY3.close();
+}
+}
+
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
 //     actually played from this exact line in your own games (not a modal,
 //     unlike "Browse Games"). The header row carries the node's own configured
