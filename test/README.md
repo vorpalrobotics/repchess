@@ -38,7 +38,7 @@ npm install     # playwright (browser is preinstalled at /opt/pw-browsers)
 npm test
 ```
 
-This is the **system test**: every phase in `run-tests.mjs` (200+ individual
+This is the **system test**: every phase in `run-tests.mjs` (280+ individual
 checks), which takes roughly an hour. Only run it for large/structural
 changes, or when you actually need the full-suite guarantee — see "Targeted
 (unit) runs" below for everyday work.
@@ -82,10 +82,19 @@ Keep the versions in `build-vendor.mjs` in sync with the CDN URLs in
 
 ## Adding a test
 
-`harness.mjs` exports `launchApp()`, `seedBackup(page, backup)`, and
+`harness.mjs` exports `launchApp()`, `seedBackup(page, backup, opts)`, and
 `openVR(page)`. A typical VR test: `launchApp()` → `seedBackup(...)` →
 `openVR(page)` → assert against `window.__threeTestEdit.scan()` (scene userData)
 or `window.__threeTestState` (player/room state).
+
+`seedBackup`'s `opts.defaultPlayerColor` (`'white'`|`'black'`) fills in a
+`players` field ("tester" on that color vs. a synthetic opponent) for every
+game in `backup.games` that doesn't already have one — most seeds need this,
+since the app only counts a game toward move-frequency/node-stats/castle
+generation (and Browse Games) when it can tell the signed-in user actually
+played the line's own color. Omit it (or give individual games their own
+`players`) for a seed mixing more than one color, or one that deliberately
+tests an undeterminable/wrong-side game.
 
 Adding a **new phase**: wrap it the same way every existing phase is —
 `if(shouldRunPhase(['your-subsystem'])){ const appN = await launchApp(); try

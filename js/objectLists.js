@@ -152,6 +152,13 @@ function openEditor(id){
   };
   if(!EDIT.mnemonic) EDIT.mnemonic = { type:'generated_phrase', initialism:'', phrase:'', source:'' };
   if(!Array.isArray(EDIT.items)) EDIT.items = [];
+  // defensive string coercion: a record written straight to IDB outside this
+  // editor (e.g. js/app.js's backup-restore path, which upserts a backup's
+  // objectLists entries with no shaping) can have any of these fields
+  // missing or explicitly null. Left unguarded, that shows as the literal
+  // text "undefined"/"null" in the field here, and throws an uncaught
+  // TypeError from .trim() the moment Save is clicked.
+  for(const f of ['id','name','roomName','category','orderingRule']) EDIT[f] = EDIT[f] || '';
   $('objlistGrid').style.display = 'none';
   $('objlistEditor').style.display = '';
   renderEditor();
@@ -265,7 +272,7 @@ function renderItems(){
       <td class="objlist-name">${esc(it.name)}</td>
       <td class="objlist-asset">
         <div class="objlist-asset-cell">
-          <span class="objlist-thumb">${a && a.image ? `<img src="${a.image}" alt="">` : '<span class="objlist-noimg">word only</span>'}</span>
+          <span class="objlist-thumb">${a && a.image ? `<img src="${esc(a.image)}" alt="">` : '<span class="objlist-noimg">word only</span>'}</span>
           <span class="objlist-asset-id">${a ? esc(a.id) : (it.assetId ? `<em>missing: ${esc(it.assetId)}</em>` : '')}</span>
           <button class="objlist-mini" data-pick="${i}">${it.assetId ? 'Change' : 'Pick image'}</button>
           ${it.assetId ? `<button class="objlist-mini" data-clear="${i}">Clear</button>` : ''}
@@ -337,7 +344,7 @@ function renderPickGrid(filter){
     const card = document.createElement('div');
     card.className = 'asset-card';
     card.innerHTML = `
-      <div class="asset-thumb">${a.image ? `<img src="${a.image}" alt="">` : ''}</div>
+      <div class="asset-thumb">${a.image ? `<img src="${esc(a.image)}" alt="">` : ''}</div>
       <div class="asset-id">${esc(a.id)}</div>
     `;
     card.onclick = () => closePicker(a.id);
@@ -416,10 +423,10 @@ export function isObjectListFile(data){
 // Upserts the file's lists into the objectLists store, preserving existing
 // per-item asset bindings by immutable item name. Reads the store directly (not
 // the module cache) so it works whether or not the manager UI is open — the
-// menu-level importer in app.js reuses this. Returns {added, updated, total}.
+// menu-level importer in app.js reuses this. Returns {added, updated, total, skipped}.
 export async function importObjectListsData(data){
-  const incoming = normalizeImport(data);
-  if(!incoming.length) return { added: 0, updated: 0, total: 0 };
+  const { lists: incoming, skipped } = normalizeImport(data);
+  if(!incoming.length) return { added: 0, updated: 0, total: 0, skipped };
   const existingById = {};
   for(const l of await getAllObjectLists()) existingById[l.id] = l;
 
@@ -428,10 +435,15 @@ export async function importObjectListsData(data){
     const prev = existingById[inc.id];
     if(prev) updated++; else added++;
     const prevAssetByName = {};
-    if(prev) for(const it of (prev.items || [])) if(it.assetId) prevAssetByName[it.name] = it.assetId;
+    // keyed lower-case: item-name identity is case-insensitive everywhere
+    // else in this file (addItem's dup check, saveEditor's dup check,
+    // normalizeImport's own pushList dedup below) -- an exact-case lookup
+    // here would silently drop an existing binding whenever a re-imported
+    // item's name differs only in case from what was previously saved.
+    if(prev) for(const it of (prev.items || [])) if(it.assetId) prevAssetByName[it.name.toLowerCase()] = it.assetId;
     const items = inc.items.map(it => ({
       name: it.name,
-      assetId: (it.assetId || prevAssetByName[it.name] || null)
+      assetId: (it.assetId || prevAssetByName[it.name.toLowerCase()] || null)
     }));
     await setObjectList(inc.id, {
       name: inc.name, roomName: inc.roomName, category: inc.category,
@@ -439,7 +451,7 @@ export async function importObjectListsData(data){
       items, mnemonic: inc.mnemonic
     });
   }
-  return { added, updated, total: incoming.length };
+  return { added, updated, total: incoming.length, skipped };
 }
 
 async function onImportFile(e){
@@ -451,9 +463,16 @@ async function onImportFile(e){
   catch(err){ alert('Could not parse JSON: ' + err.message); return; }
 
   const res = await importObjectListsData(data);
-  if(!res.total){ alert('No lists found in that file.'); return; }
+  if(!res.total){
+    alert(res.skipped
+      ? `No lists imported -- ${res.skipped} entr${res.skipped===1?'y':'ies'} had no id and were skipped.`
+      : 'No lists found in that file.');
+    return;
+  }
   await refresh();
-  alert(`Import complete: ${res.added} added, ${res.updated} updated.\nExisting image bindings were preserved by item name.`);
+  alert(`Import complete: ${res.added} added, ${res.updated} updated` +
+    (res.skipped ? `, ${res.skipped} skipped (no id)` : '') +
+    `.\nExisting image bindings were preserved by item name.`);
 }
 
 function normalizeImport(data){
@@ -503,9 +522,14 @@ function normalizeImport(data){
     });
   };
 
+  // entries with no id (the only two branches where one isn't auto-generated)
+  // are unusable -- setObjectList needs a key -- but dropping them with zero
+  // indication looked like a clean import even when part of the file didn't
+  // make it in, so the caller surfaces this count too.
+  let skipped = 0;
   if(Array.isArray(data)){
     // bare array of already-shaped objectLists records
-    for(const l of data){ if(l && l.id) pushList(l.id, l.name, l.roomName, l.category, l); }
+    for(const l of data){ if(l && l.id) pushList(l.id, l.name, l.roomName, l.category, l); else skipped++; }
   } else if(data && Array.isArray(data.rooms)){
     for(const room of data.rooms){
       const lists = room.lists || [];
@@ -515,7 +539,7 @@ function normalizeImport(data){
       }
     }
   } else if(data && Array.isArray(data.objectLists)){
-    for(const l of data.objectLists){ if(l && l.id) pushList(l.id, l.name, l.roomName, l.category, l); }
+    for(const l of data.objectLists){ if(l && l.id) pushList(l.id, l.name, l.roomName, l.category, l); else skipped++; }
   }
-  return out;
+  return { lists: out, skipped };
 }
