@@ -9296,6 +9296,45 @@ try {
     assert(r.editModeAfter === true, 'expected edit mode to stay ON across the transition');
     ok('VR edit mode: a selected prop is cleared on any room transition (enterRoom)');
   } catch(e){ bad('VR edit mode: selection cleared on room transition', e); }
+
+  // 181. B instantly takes the room's own back door -- no walking required.
+  try {
+    const r = await appBX.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      // start back at the root (dbg.enter from the previous check landed here)
+      const root = dbg.room();
+      const fwd = dbg.exitInfo();
+      if(!fwd.length) return { err: `no forward exit from root, got ${JSON.stringify(fwd)}` };
+      dbg.enter(fwd[0].target);   // jump into the child room, as if just walked in
+      const child = dbg.room();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'b' }));
+      return { root, child, roomAfterB: dbg.room() };
+    });
+    assert(!r.err, r.err);
+    assert(r.child !== r.root, `test setup issue: entering the forward exit should land in a different room, stayed at ${r.root}`);
+    assert(r.roomAfterB === r.root, `expected B to take the room's own back door to ${r.root}, got ${r.roomAfterB}`);
+    ok('VR: B instantly takes the current room\'s own back door');
+  } catch(e){ bad('VR: B key (instant back door)', e); }
+
+  // 182. B is a harmless no-op where there's no back exit at all -- the
+  //      castle's own root/entry room, in this ephemeral preview session
+  //      (no backToStreet door here; see the earlier "always present...
+  //      unlike mainStreet" comment -- this session never registers a real
+  //      street either, so the root is the one guaranteed backless room).
+  try {
+    const r = await appBX.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const before = dbg.room();   // test 181 left us back at the root
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+      await new Promise(res => setTimeout(res, 400));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'b' }));
+      return { before, after: dbg.room() };
+    });
+    assert(r.after === r.before, `expected B with no back exit to be a no-op, went from ${r.before} to ${r.after}`);
+    ok('VR: B is a no-op in a room with no back exit');
+  } catch(e){ bad('VR: B key no-op without a back exit', e); }
 } finally {
   await appBX.close();
 }

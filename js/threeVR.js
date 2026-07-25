@@ -6184,7 +6184,7 @@ function buildHelpOverlay(){
     <div style="background:#fff;color:#222;max-width:32em;width:88%;max-height:84%;overflow:auto;
                 border-radius:8px;padding:1rem 1.2rem;font:400 .9rem/1.45 sans-serif">
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
-      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street.</p>
+      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street, B to instantly take the room's own back door.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode. Ctrl+Z (or <i class="fa-solid fa-rotate-left"></i>) undoes the last edit, Ctrl+Shift+Z (or <i class="fa-solid fa-rotate-right"></i>) redoes it.</p>
@@ -7203,6 +7203,16 @@ function onKeyDown(e){
     return;
   }
   if(e.key === 'h' || e.key === 'H'){ enterRoom(START_ROOM, START_SPAWN); return; }
+  // B instantly takes the room's own back door -- same target/spawn the
+  // physical walk-through would use (reuses exitMeta, which already has it),
+  // just without needing to actually walk there first. No-op where there's
+  // no back exit at all (Main Street).
+  if(e.key === 'b' || e.key === 'B'){
+    const backEx = (mergedRoom(currentRoomKey)?.exits || []).find(ex => ex.back);
+    const m = backEx && exitMeta.find(m => m.target === backEx.target);
+    if(m) enterRoom(m.target, m.spawn, false);
+    return;
+  }
   keys[e.key] = true;
 }
 function onKeyUp(e){ keys[e.key] = false; }
