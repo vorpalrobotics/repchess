@@ -5225,9 +5225,21 @@ function enterRoom(roomKey, spawn, preserveYaw){
   // that's NOT an entry (selectElevatorFloor's own buildRoom call, or any
   // other live-edit refresh) goes straight to buildRoom and skips this.
   delete elevatorSelectedFloor[roomKey];
+  // a selected prop belongs to the room being LEFT -- since doors/elevators
+  // now teleport in edit mode too (not just on foot to a fresh "Run VR"),
+  // carrying it over would silently hijack arrow-key input into nudging an
+  // object back in the old room instead of walking (nudgeSelected writes via
+  // selectedProp.roomKey with no check it matches where you are), and leave
+  // the gear-icon visuals pointing at now-disposed geometry.
+  deselectProp();
   buildRoom(roomKey);
   pos.x = spawn.x; pos.z = spawn.z; yaw = keepYaw;
   teleportLockUntil = clock.getElapsedTime() + 0.6;
+  // refresh the edit HUD/toolbar for the new room (indoor/outdoor wording,
+  // room-geometry/wall-lists/memorize/decorated buttons) -- buildRoom itself
+  // doesn't call this, and deselectProp only does when there was actually a
+  // selection to clear.
+  updateEditHud();
 }
 
 function tick(){
@@ -5313,14 +5325,18 @@ function tick(){
     );
   }
 
-  // door teleports are suppressed in edit mode so you can stand in a doorway
-  // and edit the wall beside it without being yanked into the next room.
-  // Only trigger when actually heading OUT through the door: forward movement
-  // (move > 0) whose facing has a positive component along the door's through
-  // direction. Without the facing check, backing up to a wall (which leaves you
-  // parked inside the trigger box) and then nudging forward into the room would
-  // fire the exit even though you're walking away from the door.
-  if(!editMode && move > 0 && clock.getElapsedTime() > teleportLockUntil){
+  // Doors (and elevators, below) teleport in edit mode too -- staying blocked
+  // there just confused users with no way to reach the next room short of
+  // exiting edit mode first. Standing in a doorway to edit the wall beside it
+  // is still safe: the trigger only fires on actually heading OUT through the
+  // door, forward movement (move > 0) whose facing has a positive component
+  // along the door's through direction -- not just standing in the box.
+  // Without the facing check, backing up to a wall (which leaves you parked
+  // inside the trigger box) and then nudging forward into the room would fire
+  // the exit even though you're walking away from the door. enterRoom clears
+  // any selected prop and refreshes the edit HUD, so edit mode carries over
+  // cleanly into the new room instead of leaving stale state behind.
+  if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
     const fwd = cameraForwardVec();
     for(const m of exitMeta){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
@@ -5340,12 +5356,10 @@ function tick(){
   // one-shot toast explains why, so it doesn't just look broken. Reset the
   // latch the moment the player isn't in a forward door's box at all, so
   // backing off and re-approaching prompts again.
-  if(!editMode){
-    const inFwdBox = elevatorMeta.some(m => m.kind === 'forward'
-      && pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ);
-    if(!inFwdBox) elevatorBlockedToastShown = false;
-  }
-  if(!editMode && move > 0 && clock.getElapsedTime() > teleportLockUntil){
+  const inFwdBox = elevatorMeta.some(m => m.kind === 'forward'
+    && pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ);
+  if(!inFwdBox) elevatorBlockedToastShown = false;
+  if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
     const fwd = cameraForwardVec();
     for(const m of elevatorMeta){
       if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
@@ -7223,6 +7237,9 @@ export async function openThreeTest(containerEl, opts){
       toggle: () => setEditMode(!editMode),
       editMode: () => editMode,
       target: (ud) => handleEditTarget(ud),
+      // the currently selected prop (null if none) -- for testing that a
+      // room transition clears it instead of carrying it over (see enterRoom).
+      selected: () => selectedProp,
       room: () => currentRoomKey,
       // occurrence stats ("N (M%)") on the current (or a given) room's
       // exits -- how often that exact opponent reply has actually occurred
@@ -7335,6 +7352,12 @@ export async function openThreeTest(containerEl, opts){
         };
       },
       canWalkTo: (targetKey) => exitMeta.some(m => m.target === targetKey),
+      // the live forward-exit trigger boxes for the CURRENT room (same data
+      // tick() checks pos/facing against) -- lets a test drive a real walk
+      // through a specific door deterministically (teleport to the box
+      // center, face along `thru`) instead of guessing which wall a door
+      // landed on.
+      exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, thru: m.thru })),
       // a room's exits (wall/offset/target/back), each with its doorKey()
       // pre-computed -- for driving target({kind:'door', roomKey, doorKey})
       // against a specific exit by target without reaching into internals.

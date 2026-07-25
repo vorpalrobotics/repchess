@@ -9190,5 +9190,117 @@ try {
 } catch(e){ bad('Phase BW: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase BX: doors (and elevators) now teleport in VR edit mode too --
+//     previously blocked outright, leaving no way to reach the next room
+//     short of exiting edit mode first. enterRoom clears any selected prop
+//     and refreshes the edit HUD on every transition so edit mode carries
+//     over cleanly instead of leaving stale state (a dangling selection
+//     that would hijack arrow-key input into nudging an object back in the
+//     room you just left). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appBX = await launchApp();
+try {
+  await seedBackup(appBX.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      // the root needs a SECOND branch (g6) or the whole e6/Nc3/Bb4/e3 chain
+      // merges into one corridor room WITH the root itself (a single-branch
+      // root is just the first member of the run, not its own separate
+      // room) -- confirmed via the Castle Preview report while building this
+      // test ("1 rooms (1 corridor)"). With two branches the root stays its
+      // own 'branch' room with two real doors.
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      // e6's own room also needs further built content (a second reply below
+      // it) so it isn't a genuine dead end -- isRoomEmpty would otherwise
+      // make the root's e6 door a LOCKED one (correctly, by design: nothing
+      // built past it), leaving nothing for this test to walk through.
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },   // g6 stays a locked leaf; unused by this test
+    ]}],
+    games: [
+      { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' },
+      { id:'g2', moves:'d4 Nf6 c4 g6 Nc3 Bg7', white:'a', black:'b', result:'*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appBX.page.click('.line-row');
+  await appBX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appBX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appBX.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBX.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appBX.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appBX.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appBX.page.waitForTimeout(400);
+
+  // 179. Walking forward through a door in edit mode reaches the next room
+  //      (previously blocked entirely) and edit mode stays ON. No prop is
+  //      selected here -- selecting one swallows ALL non-nudge keys,
+  //      including w/ArrowUp (see onKeyDown's "no walking/turning while
+  //      selected" early return), so walking with something selected isn't
+  //      a real scenario reachable from the keyboard at all.
+  try {
+    const r = await appBX.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      dbg.toggle();   // edit mode ON
+      const before = dbg.exitInfo();
+      if(!before.length) return { err: `no forward exit found, got ${JSON.stringify(before)}` };
+      const m = before[0];
+      const cx = (m.box.minX + m.box.maxX) / 2, cz = (m.box.minZ + m.box.maxZ) / 2;
+      const yawTo = Math.atan2(-m.thru.x, -m.thru.z);
+      const roomBefore = window.__threeTestState.room;
+      dbg.teleport(cx, cz, yawTo);
+      await new Promise(r => setTimeout(r, 700));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && window.__threeTestState.room === roomBefore){
+        await new Promise(r => setTimeout(r, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return { roomBefore, roomAfter: window.__threeTestState.room, editModeAfter: dbg.editMode() };
+    });
+    assert(!r.err, r.err);
+    assert(r.roomAfter && r.roomAfter !== r.roomBefore,
+      `blocked at the door in edit mode -- room did not change (before/after ${r.roomBefore} / ${r.roomAfter})`);
+    assert(r.editModeAfter === true, 'expected edit mode to stay ON after walking through the door');
+    ok('VR edit mode: walking forward through a door reaches the next room and stays in edit mode');
+  } catch(e){ bad('VR edit mode: door teleport unblocked', e); }
+
+  // 180. A prop selected in one room doesn't carry over once ANY room
+  //      transition fires (enterRoom is the single funnel point -- doors,
+  //      elevators, and also the touch joystick, which unlike keyboard
+  //      input isn't blocked by a selection at all, so this IS a reachable
+  //      real-world path even though walking-by-keyboard isn't). Drives the
+  //      transition directly via dbg.enter rather than fighting the
+  //      selected-prop key-swallowing above, since what's under test is
+  //      enterRoom's own cleanup, not any particular trigger mechanism.
+  try {
+    const r = await appBX.page.evaluate(() => {
+      const dbg = window.__threeTestEdit;
+      // this room's OWN center pair (mnem-C1) renders at its PARENT's door,
+      // not in-room (see isRoomEmpty's doc comment) -- mnem-L1 (this
+      // corridor's 2nd member) is what's actually placed here to select.
+      dbg.target({ kind: 'accessory', slotId: 'mnem-L1' });
+      const selectedBefore = dbg.selected();
+      // the back exit (the door we walked in through) is always present and
+      // guaranteed valid within this ephemeral castle-preview session --
+      // unlike 'mainStreet', which this session never registers at all.
+      const back = dbg.exits().find(e => e.back);
+      dbg.enter(back.target);
+      return { selectedBefore, selectedAfter: dbg.selected(), editModeAfter: dbg.editMode() };
+    });
+    assert(r.selectedBefore, `test setup issue: selecting the anchor pair didn't stick, got ${JSON.stringify(r.selectedBefore)}`);
+    assert(r.selectedAfter === null, `expected the prior room's selection to be cleared, got ${JSON.stringify(r.selectedAfter)}`);
+    assert(r.editModeAfter === true, 'expected edit mode to stay ON across the transition');
+    ok('VR edit mode: a selected prop is cleared on any room transition (enterRoom)');
+  } catch(e){ bad('VR edit mode: selection cleared on room transition', e); }
+} finally {
+  await appBX.close();
+}
+} catch(e){ bad('Phase BX: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
