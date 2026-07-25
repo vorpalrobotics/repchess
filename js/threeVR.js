@@ -519,6 +519,56 @@ let editMode = false;
 let inputLocked = false;       // true while a picker is open (suppresses movement)
 let foreignModalOpen = false;  // true while a modal outside threeTest (e.g. the asset manager) covers the canvas
 let LAYOUT = {};
+// Edit-mode undo/redo: whole-LAYOUT snapshots (JSON strings, cheap enough --
+// LAYOUT is small hand-authored override data, not scene geometry), taken
+// BEFORE a change is applied. This covers every kind of edit for free since
+// they all funnel through either applyEdit (structural: skins, assets, room
+// geometry, wall lists) or the two *Live setters (continuous transform drags:
+// nudge/scale/rotate/height) -- see snapshotLayoutForUndo/snapshotForXformEdit.
+const EDIT_UNDO_MAX = 50;
+let editUndoStack = [], editRedoStack = [];
+// A continuous drag (holding an arrow key) fires setSlotXformLive/
+// setSignPosLive many times a second -- coalesce those into ONE undo step
+// per "session" (same slot, no >XFORM_UNDO_COALESCE_MS gap) rather than one
+// per frame, which would make undo useless (dozens of presses to unwind a
+// single drag).
+const XFORM_UNDO_COALESCE_MS = 800;
+let lastXformUndoKey = null, lastXformUndoTime = 0;
+function snapshotLayoutForUndo(){
+  editUndoStack.push(JSON.stringify(LAYOUT));
+  if(editUndoStack.length > EDIT_UNDO_MAX) editUndoStack.shift();
+  editRedoStack = [];   // a fresh edit invalidates whatever redo history existed
+}
+function snapshotForXformEdit(sessionKey){
+  const now = performance.now();
+  if(sessionKey === lastXformUndoKey && now - lastXformUndoTime < XFORM_UNDO_COALESCE_MS){
+    lastXformUndoTime = now;   // still the same drag -- extend the window, no new snapshot
+    return;
+  }
+  snapshotLayoutForUndo();
+  lastXformUndoKey = sessionKey;
+  lastXformUndoTime = now;
+}
+function undoEdit(){
+  if(!editUndoStack.length) return;
+  editRedoStack.push(JSON.stringify(LAYOUT));
+  LAYOUT = JSON.parse(editUndoStack.pop());
+  lastXformUndoKey = null;
+  persistLayout();
+  refreshAssetMap().then(() => buildRoom(currentRoomKey));
+  updateToolbar();
+  showToast('Undid last edit');
+}
+function redoEdit(){
+  if(!editRedoStack.length) return;
+  editUndoStack.push(JSON.stringify(LAYOUT));
+  LAYOUT = JSON.parse(editRedoStack.pop());
+  lastXformUndoKey = null;
+  persistLayout();
+  refreshAssetMap().then(() => buildRoom(currentRoomKey));
+  updateToolbar();
+  showToast('Redid edit');
+}
 let ASSET_BY_ID = {};
 // "memorized" room tracking (progress, not decoration): { [roomKey]: msEpochWhenMarked }.
 // Persisted the same way as LAYOUT -- a flat 'meta' key, room keys are the
@@ -558,6 +608,7 @@ let joyVec = { x: 0, y: 0 };
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
 let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, editGroup = null;
+let undoBtn = null, redoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
 // beyond, and the in-room move-pair billboard is shown. Off hides all of those
@@ -1191,6 +1242,7 @@ function ensureRoomLayout(roomKey){
 /* apply an edit (mutate LAYOUT), persist, refresh assets, and rebuild the
    current room in place (keeps the player's position/orientation). */
 async function applyEdit(mutator){
+  snapshotLayoutForUndo();
   mutator();
   persistLayout();
   await refreshAssetMap();
@@ -1258,6 +1310,7 @@ function slotXformFor(roomKey, slotId){
 // the edit-time flashing). Geometry/assets are unchanged, so re-placing the one
 // object is enough.
 function setSlotXformLive(roomKey, slotId, xform){
+  snapshotForXformEdit(roomKey + ':' + slotId);
   const r = ensureRoomLayout(roomKey);
   r.slotXform[slotId] = xform;
   persistLayout();
@@ -1332,6 +1385,7 @@ function setSignOverride(roomKey, buildingKey, assetId){
 // persist a sign's lawn offset and slide the existing sign group in place, no
 // room rebuild (same anti-flash idea as setSlotXformLive).
 function setSignPosLive(roomKey, buildingKey, pos){
+  snapshotForXformEdit(roomKey + ':sign:' + buildingKey);
   const r = ensureRoomLayout(roomKey);
   if(pos && (pos.dx || pos.dz)) r.signPos[buildingKey] = pos; else delete r.signPos[buildingKey];
   persistLayout();
@@ -6041,6 +6095,8 @@ function buildTopToolbar(){
   right.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
+  undoBtn     = makeIconBtn('fa-rotate-left',    'Undo (Ctrl+Z)', () => undoEdit());
+  redoBtn     = makeIconBtn('fa-rotate-right',   'Redo (Ctrl+Shift+Z)', () => redoEdit());
   boardBtn    = makeIconBtn('fa-chess-board',    'Show this room’s board position', () => toggleMiniBoard());
   roomGeomBtn = makeIconBtn('fa-ruler-combined', 'Room geometry', () => openRoomGeomDialog(currentRoomKey));
   wallListsBtn = makeIconBtn('fa-list-ol',        'Wall object lists', () => openWallListsDialog(currentRoomKey));
@@ -6058,7 +6114,7 @@ function buildTopToolbar(){
   editGroup = document.createElement('div');
   editGroup.style.cssText = 'display:flex;gap:6px;padding:4px;border-radius:10px;'
     + 'border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.06);pointer-events:none;';
-  editGroup.append(editBtn, roomGeomBtn, wallListsBtn, assetsBtn);
+  editGroup.append(editBtn, undoBtn, redoBtn, roomGeomBtn, wallListsBtn, assetsBtn);
   left.append(hintsBtn, editGroup, boardBtn, infoBtn);
   // memorize is the rightmost status badge (right next to Close); decorated,
   // when shown, sits immediately to its left.
@@ -6077,6 +6133,16 @@ function updateToolbar(){
     editBtn.title = editMode ? 'Exit edit mode (Esc)' : 'Edit mode';
   }
   if(roomGeomBtn) roomGeomBtn.style.display = editMode ? '' : 'none';
+  // dimmed (not hidden) rather than disabled outright, so their availability
+  // is visible at a glance without the icon jumping around as it comes and goes
+  if(undoBtn){
+    undoBtn.style.display = editMode ? '' : 'none';
+    undoBtn.style.opacity = editUndoStack.length ? '1' : '.35';
+  }
+  if(redoBtn){
+    redoBtn.style.display = editMode ? '' : 'none';
+    redoBtn.style.opacity = editRedoStack.length ? '1' : '.35';
+  }
   // wall-lists button only when this room actually has move-object slots to fill
   if(wallListsBtn){
     const hasPairs = moveObjectSlots(currentRoomKey).length > 0;
@@ -6121,7 +6187,7 @@ function buildHelpOverlay(){
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
-      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode. Ctrl+Z (or <i class="fa-solid fa-rotate-left"></i>) undoes the last edit, Ctrl+Shift+Z (or <i class="fa-solid fa-rotate-right"></i>) redoes it.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
     </div>`;
@@ -7089,6 +7155,14 @@ export function setForeignModalOpen(open){
 
 function onKeyDown(e){
   if(foreignModalOpen) return;
+  // Undo/redo -- ahead of the selectedProp branch below so it works whether
+  // or not something is currently selected. Ctrl+Z / Cmd+Z undoes; adding
+  // Shift, or Ctrl+Y, redoes (Ctrl+Y is the common Windows-only alt binding).
+  if(editMode && !inputLocked && (e.ctrlKey || e.metaKey)){
+    const k = e.key.toLowerCase();
+    if(k === 'z'){ e.preventDefault(); if(e.shiftKey) redoEdit(); else undoEdit(); return; }
+    if(k === 'y'){ e.preventDefault(); redoEdit(); return; }
+  }
   if(selectedProp && !inputLocked){
     if(e.key === 'Escape'){ deselectProp(); return; }
     // mnemonic billboards aren't asset-based -- there's nothing for the
@@ -7161,6 +7235,7 @@ export async function openThreeTest(containerEl, opts){
 
   editMode = false;
   inputLocked = false;
+  editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
   // five independent IDB reads, each populating its own module global with no
@@ -7250,6 +7325,15 @@ export async function openThreeTest(containerEl, opts){
       // the currently selected prop (null if none) -- for testing that a
       // room transition clears it instead of carrying it over (see enterRoom).
       selected: () => selectedProp,
+      // edit-mode undo/redo (see snapshotLayoutForUndo/snapshotForXformEdit):
+      // stack depths for asserting availability, plus direct triggers so a
+      // test can invoke them without needing real key focus, and a snapshot
+      // of LAYOUT for asserting exactly what got reverted/restored.
+      undoDepth: () => editUndoStack.length,
+      redoDepth: () => editRedoStack.length,
+      undo: () => undoEdit(),
+      redo: () => redoEdit(),
+      layoutSnapshot: () => JSON.parse(JSON.stringify(LAYOUT)),
       room: () => currentRoomKey,
       // occurrence stats ("N (M%)") on the current (or a given) room's
       // exits -- how often that exact opponent reply has actually occurred
@@ -7646,6 +7730,7 @@ export function closeThreeTest(){
   clearGeneratedCastle();   // drop synthesized cas:* rooms so a later normal walk is clean
   editMode = false;
   inputLocked = false;
+  editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   billboards = [];
   floorLabels = [];
   selectedProp = null;
@@ -7659,7 +7744,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = editGroup = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = editGroup = undoBtn = redoBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
