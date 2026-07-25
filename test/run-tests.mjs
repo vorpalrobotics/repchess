@@ -9296,6 +9296,45 @@ try {
     assert(r.editModeAfter === true, 'expected edit mode to stay ON across the transition');
     ok('VR edit mode: a selected prop is cleared on any room transition (enterRoom)');
   } catch(e){ bad('VR edit mode: selection cleared on room transition', e); }
+
+  // 181. B instantly takes the room's own back door -- no walking required.
+  try {
+    const r = await appBX.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      // start back at the root (dbg.enter from the previous check landed here)
+      const root = dbg.room();
+      const fwd = dbg.exitInfo();
+      if(!fwd.length) return { err: `no forward exit from root, got ${JSON.stringify(fwd)}` };
+      dbg.enter(fwd[0].target);   // jump into the child room, as if just walked in
+      const child = dbg.room();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'b' }));
+      return { root, child, roomAfterB: dbg.room() };
+    });
+    assert(!r.err, r.err);
+    assert(r.child !== r.root, `test setup issue: entering the forward exit should land in a different room, stayed at ${r.root}`);
+    assert(r.roomAfterB === r.root, `expected B to take the room's own back door to ${r.root}, got ${r.roomAfterB}`);
+    ok('VR: B instantly takes the current room\'s own back door');
+  } catch(e){ bad('VR: B key (instant back door)', e); }
+
+  // 182. B is a harmless no-op where there's no back exit at all -- the
+  //      castle's own root/entry room, in this ephemeral preview session
+  //      (no backToStreet door here; see the earlier "always present...
+  //      unlike mainStreet" comment -- this session never registers a real
+  //      street either, so the root is the one guaranteed backless room).
+  try {
+    const r = await appBX.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const before = dbg.room();   // test 181 left us back at the root
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+      await new Promise(res => setTimeout(res, 400));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'b' }));
+      return { before, after: dbg.room() };
+    });
+    assert(r.after === r.before, `expected B with no back exit to be a no-op, went from ${r.before} to ${r.after}`);
+    ok('VR: B is a no-op in a room with no back exit');
+  } catch(e){ bad('VR: B key no-op without a back exit', e); }
 } finally {
   await appBX.close();
 }
@@ -9388,6 +9427,111 @@ try {
   await appBY.close();
 }
 } catch(e){ bad('Phase BY: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase BZ: edit-mode undo/redo. Every edit funnels through either
+//     applyEdit (structural: skins, geometry) or the two *Live setters
+//     (continuous drags: nudge/scale/rotate), so a single generic
+//     snapshot-before-mutation hook (snapshotLayoutForUndo/
+//     snapshotForXformEdit) covers all of it. A held-key drag coalesces into
+//     ONE undo step regardless of how many individual nudges fired. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appBZ = await launchApp();
+try {
+  await seedBackup(appBZ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
+  }, { defaultPlayerColor: 'white' });
+  await appBZ.page.click('.line-row');
+  await appBZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appBZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appBZ.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBZ.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appBZ.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appBZ.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appBZ.page.waitForTimeout(400);
+  await appBZ.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode ON
+
+  // 184. Undoing with nothing on the stack is a harmless no-op.
+  try {
+    const depth = await appBZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
+    assert(depth === 0, `expected an empty undo stack on a fresh room, got ${depth}`);
+    await appBZ.page.evaluate(() => window.__threeTestEdit.undo());
+    const stillZero = await appBZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
+    assert(stillZero === 0, `undo with nothing to undo should stay a no-op, got depth ${stillZero}`);
+    ok('undo/redo: undoing with an empty stack is a harmless no-op');
+  } catch(e){ bad('undo/redo: empty-stack no-op', e); }
+
+  // 185. A structural edit (room resize, via applyEdit) is undoable/redoable.
+  try {
+    const roomKey = await appBZ.page.evaluate(() => window.__threeTestEdit.room());
+    const before = await appBZ.page.evaluate(k => window.__threeTestEdit.layoutSnapshot()[k]?.geom || null, roomKey);
+    await appBZ.page.evaluate(k => window.__threeTestEdit.resize(k, { w: 20, d: 20, h: 6 }), roomKey);
+    const afterResize = await appBZ.page.evaluate(k => window.__threeTestEdit.layoutSnapshot()[k]?.geom, roomKey);
+    assert(afterResize && afterResize.w === 20, `expected the resize to land in LAYOUT, got ${JSON.stringify(afterResize)}`);
+    const depthAfter = await appBZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
+    assert(depthAfter === 1, `expected exactly one undo step for one resize call, got ${depthAfter}`);
+
+    await appBZ.page.evaluate(() => window.__threeTestEdit.undo());
+    const afterUndo = await appBZ.page.evaluate(k => window.__threeTestEdit.layoutSnapshot()[k]?.geom || null, roomKey);
+    assert(JSON.stringify(afterUndo) === JSON.stringify(before), `expected the resize undone, got ${JSON.stringify(afterUndo)} (wanted ${JSON.stringify(before)})`);
+    const redoDepth = await appBZ.page.evaluate(() => window.__threeTestEdit.redoDepth());
+    assert(redoDepth === 1, `expected the undone edit to land on the redo stack, got depth ${redoDepth}`);
+
+    await appBZ.page.evaluate(() => window.__threeTestEdit.redo());
+    const afterRedo = await appBZ.page.evaluate(k => window.__threeTestEdit.layoutSnapshot()[k]?.geom, roomKey);
+    assert(afterRedo && afterRedo.w === 20, `expected redo to bring the resize back, got ${JSON.stringify(afterRedo)}`);
+    ok('undo/redo: a structural edit (room resize) is undoable and redoable');
+  } catch(e){ bad('undo/redo: structural edit (resize)', e); }
+
+  // 186-187. A held-key drag (many rapid nudges on the same prop) coalesces
+  //          into ONE undo step, not one per keypress; undoing it restores
+  //          the prop's original position; the real Ctrl+Z / Ctrl+Shift+Z key
+  //          bindings drive the same undo/redo (not just the test hooks).
+  try {
+    const r = await appBZ.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      dbg.target({ kind: 'accessory', slotId: 'mnem-C1' });
+      const before = dbg.posOf('mnem-C1');
+      const depthBefore = dbg.undoDepth();
+      for(let i = 0; i < 15; i++){
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+        await new Promise(res => setTimeout(res, 20));
+      }
+      await new Promise(res => setTimeout(res, 100));
+      const nudged = dbg.posOf('mnem-C1');
+      const depthAfterDrag = dbg.undoDepth();
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }));
+      await new Promise(res => setTimeout(res, 200));
+      const afterCtrlZ = dbg.posOf('mnem-C1');
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true }));
+      await new Promise(res => setTimeout(res, 200));
+      const afterCtrlShiftZ = dbg.posOf('mnem-C1');
+
+      return { before, nudged, depthBefore, depthAfterDrag, afterCtrlZ, afterCtrlShiftZ };
+    });
+    assert(r.nudged.x > r.before.x + 1, `test setup issue: 15 nudges didn't move the prop far enough, before=${r.before.x} after=${r.nudged.x}`);
+    assert(r.depthAfterDrag === r.depthBefore + 1,
+      `expected 15 rapid nudges to coalesce into exactly 1 undo step, went from ${r.depthBefore} to ${r.depthAfterDrag}`);
+    assert(Math.abs(r.afterCtrlZ.x - r.before.x) < 0.01,
+      `expected Ctrl+Z to restore the pre-drag position ${r.before.x}, got ${r.afterCtrlZ.x}`);
+    ok('undo/redo: a held-key drag coalesces into one undo step, and Ctrl+Z restores the pre-drag position');
+    assert(Math.abs(r.afterCtrlShiftZ.x - r.nudged.x) < 0.01,
+      `expected Ctrl+Shift+Z (redo) to restore the post-drag position ${r.nudged.x}, got ${r.afterCtrlShiftZ.x}`);
+    ok('undo/redo: Ctrl+Shift+Z (real key binding) redoes the drag');
+  } catch(e){ bad('undo/redo: coalesced drag + real Ctrl+Z/Ctrl+Shift+Z key bindings', e); }
+} finally {
+  await appBZ.close();
+}
+} catch(e){ bad('Phase BZ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
