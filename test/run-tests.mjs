@@ -77,6 +77,7 @@ function shouldRunPhase(tags){
 if(REQUESTED.length) console.log(`Targeted run: ${REQUESTED.join(', ')} (+ core)\n`);
 
 if(shouldRunPhase(['core'])){
+try {
 const app = await launchApp();
 try {
   // 1. The app boots — proving cytoscape/cytoscape-dagre/chess.js resolved
@@ -174,9 +175,11 @@ try {
   }
 } catch(e){ bad('real-user boot (no threeTestDebug) has no console errors', e); }
 
+} catch(e){ bad("phase @ line 79 (tags: ['core'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase B: opponent move-quality annotation (move table) ---
 if(shouldRunPhase(['move-table'])){
+try {
 const app2 = await launchApp();
 try {
   // seed a white 1.d4 line plus a game so the opponent reply (Nf6) appears as a row
@@ -256,9 +259,11 @@ try {
   await app2.close();
 }
 
+} catch(e){ bad('Phase B: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase C: cross-castle door plaque (two-line: castle name over room) ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const app3 = await launchApp();
 try {
   // seed a line whose "Alpha" castle contains a nested "Beta" castle root, so
@@ -311,11 +316,13 @@ try {
   await app3.close();
 }
 
+} catch(e){ bad('Phase C: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase C2: a nested castle's door redirects to the OTHER castle's own
 // canonical room, so decorations configured there (e.g. a staircase) show up
 // from the nested door too, instead of a duplicate/undecorated inline copy. ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const appC2 = await launchApp();
 try {
   const keys = await appC2.page.evaluate(() => {
@@ -382,11 +389,13 @@ try {
   await appC2.close();
 }
 
+} catch(e){ bad('Phase C2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase D: walk UP a staircase that shares its wall with other doors ---
 // (regression: a variation import added a door to a stair's wall, and the clamp
 // only allowed ONE door per wall as walkable, blocking the stair at its base.)
 if(shouldRunPhase(['vr-castle'])){
+try {
 const app4 = await launchApp();
 try {
   const keys = await app4.page.evaluate(() => {
@@ -463,9 +472,11 @@ try {
   await app4.close();
 }
 
+} catch(e){ bad('Phase D: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase E: room-bounds auto-fix (a nudged item survives a later downsize) ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const app5 = await launchApp();
 try {
   await seedBackup(app5.page, {
@@ -608,9 +619,11 @@ try {
   await app6.close();
 }
 
+} catch(e){ bad('Phase E: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase G: mnemonic quiz "Restrict to Opening Coverage" scoped to a castle ---
 if(shouldRunPhase(['quiz'])){
+try {
 const app7 = await launchApp();
 try {
   // Alpha's castle root sits at ['d4','Nf6','c4'] (the room after 1.d4 Nf6 2.c4).
@@ -694,10 +707,12 @@ try {
   await app7.close();
 }
 
+} catch(e){ bad('Phase G: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase H: the VR mini board and the room-info mini board render identical,
 //     real piece artwork (same cm-chessboard sprite as the main analysis boards) ---
 if(shouldRunPhase(['digraph', 'vr-ui'])){
+try {
 const app8 = await launchApp();
 try {
   const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -785,9 +800,11 @@ try {
   await app8.close();
 }
 
+} catch(e){ bad('Phase H: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase I: graph node layout (manual de-overlap dragging) persists ---
 if(shouldRunPhase(['digraph'])){
+try {
 const app9 = await launchApp();
 try {
   await seedBackup(app9.page, {
@@ -879,9 +896,11 @@ try {
   await app9.close();
 }
 
+} catch(e){ bad('Phase I: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase J: surface color picker (flat color as an alternative to an image asset) ---
 if(shouldRunPhase(['assets'])){
+try {
 const app10 = await launchApp();
 try {
   await seedBackup(app10.page, {
@@ -973,6 +992,7 @@ try {
   await app10.close();
 }
 
+} catch(e){ bad('Phase J: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase K: Chessboard test (Test > Chessboard) -- coverage/depth logic ---
 // cm-chessboard is intentionally un-mocked in this harness (Chessboard is
@@ -983,6 +1003,7 @@ try {
 // same-choices replay picker, and the move-number/depth math), exercised
 // directly through the real production functions via __oqTestHooks.
 if(shouldRunPhase(['quiz'])){
+try {
 const app11 = await launchApp();
 try {
   // 23. Menu wiring: clicking Test > Chessboard reaches the real feature (not
@@ -1135,10 +1156,12 @@ try {
   await app11.close();
 }
 
+} catch(e){ bad("phase @ line 1005 (tags: ['quiz'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase L: outdoor world (Main Street) sizing never strands a castle
 //     outside the grass ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const app12 = await launchApp();
 try {
   await seedBackup(app12.page, {
@@ -1199,10 +1222,12 @@ try {
   await app12.close();
 }
 
+} catch(e){ bad('Phase L: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase M: tint-at-assign-time (per-placement recolor of an assigned
 //     asset, distinct from the flat "Color…" replace) ---
 if(shouldRunPhase(['assets'])){
+try {
 const app13 = await launchApp();
 try {
   await seedBackup(app13.page, {
@@ -1300,6 +1325,7 @@ try {
   await app13.close();
 }
 
+} catch(e){ bad('Phase M: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase N: multi-line ("MultiPV") engine eval saved per node ---
 // Stockfish has no vendored mock in this harness (same class of gap as
@@ -1308,6 +1334,7 @@ try {
 // independent of the engine, and fully testable via __evalTestHooks against
 // a throwaway pref bag instead of real PREFS/IDB.
 if(shouldRunPhase(['engine'])){
+try {
 const app14 = await launchApp();
 try {
   await seedBackup(app14.page, {
@@ -1435,10 +1462,12 @@ try {
   await app14.close();
 }
 
+} catch(e){ bad("phase @ line 1336 (tags: ['engine'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase O: Chessboard test setup fields (Number of Questions / Max Depth /
 //     Opening Coverage) persist to localStorage and restore next time ---
 if(shouldRunPhase(['quiz'])){
+try {
 const app15 = await launchApp();
 try {
   await seedBackup(app15.page, {
@@ -1550,6 +1579,7 @@ try {
   await app15.close();
 }
 
+} catch(e){ bad('Phase O: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase P: background analysis queue ("Add to Analysis List" / "Analysis
 //     Queue") -- add/dedup, cancel, and the depth-gated direct-IDB-write save
@@ -1559,6 +1589,7 @@ try {
 //     inside processAnalysisQueueLoop needs real Stockfish and stays outside
 //     this harness's reach -- covered by manual verification instead. ---
 if(shouldRunPhase(['analysis-queue'])){
+try {
 const app16 = await launchApp();
 try {
   await seedBackup(app16.page, {
@@ -1713,12 +1744,14 @@ try {
   await app16.close();
 }
 
+} catch(e){ bad("phase @ line 1591 (tags: ['analysis-queue'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase Q: Manage Mnemonics with no system selected treats every
 //     square+piece as "needed" (as if a hypothetical system used every move
 //     mnemonic), so the missing counts and red/green coloring show up
 //     globally instead of only when a real coverage scope is picked. ---
 if(shouldRunPhase(['mnemonics'])){
+try {
 const app17 = await launchApp();
 try {
   await seedBackup(app17.page, {
@@ -1767,11 +1800,13 @@ try {
   await app17.close();
 }
 
+} catch(e){ bad('Phase Q: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase R: "Analyze All Children" now queues every child for background
 //     analysis (same Depth/Lines modal as "Add to Analysis Queue") instead of
 //     running an instant in-page search. ---
 if(shouldRunPhase(['analysis-queue'])){
+try {
 const app18 = await launchApp();
 try {
   await seedBackup(app18.page, {
@@ -1850,12 +1885,14 @@ try {
   await app18.close();
 }
 
+} catch(e){ bad('Phase R: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase S: "Search for a Variation" -- a not-found result pops up a
 //     clear "Variation not found" alert (in addition to the existing inline
 //     modal text) instead of silently doing nothing, and never touches the
 //     tree/focus state. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const app19 = await launchApp();
 try {
   await seedBackup(app19.page, {
@@ -1903,6 +1940,7 @@ try {
   await app19.close();
 }
 
+} catch(e){ bad('Phase S: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase T: cancelling the CURRENTLY PROCESSING analysis-queue item must
 //     stop its in-flight search immediately and move straight on to the next
@@ -1912,6 +1950,7 @@ try {
 //     controllable fake (via __aqTestHooks.engine) that only resolves when
 //     stop() is called, driving the real scheduler/cancel logic against it. ---
 if(shouldRunPhase(['analysis-queue'])){
+try {
 const app20 = await launchApp();
 try {
   await seedBackup(app20.page, {
@@ -2014,12 +2053,14 @@ try {
   await app20.close();
 }
 
+} catch(e){ bad("phase @ line 1952 (tags: ['analysis-queue'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase U: move-pair VR billboards show the move number ("N."), flush
 //     left and a third of the way up from the bottom of whichever quadrant
 //     is White's move; the street-sign opening-move tile (always White's
 //     move 1) gets the same badge. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const app21 = await launchApp();
 try {
   await seedBackup(app21.page, {
@@ -2066,6 +2107,7 @@ try {
   await app21.close();
 }
 
+} catch(e){ bad('Phase U: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase V0: the empty ceiling slot's marker (the "click here to add a
 //     chandelier/skylight" target) is generously sized so it's visible
@@ -2073,6 +2115,7 @@ try {
 //     room -- the reported bug: on a small room it was too small to notice
 //     was there at all. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appV0 = await launchApp();
 try {
   await seedBackup(appV0.page, {
@@ -2100,6 +2143,7 @@ try {
 } finally {
   await appV0.close();
 }
+} catch(e){ bad('Phase V0: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase V: Engine.analyze() must sync via isready/readyok after changing
 //     the multi-threaded build's Threads option, before issuing the next
@@ -2113,6 +2157,7 @@ try {
 //     engine._send/_listener are faked to simulate the UCI handshake and
 //     drive the real analyze() logic against it. ---
 if(shouldRunPhase(['engine'])){
+try {
 const app22 = await launchApp();
 try {
   await seedBackup(app22.page, {
@@ -2192,6 +2237,7 @@ try {
   await app22.close();
 }
 
+} catch(e){ bad("phase @ line 2159 (tags: ['engine'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase VA: analysis queue up/down reordering -- index 0 (the item
 //     currently being, or about to be, searched) can never be touched by
@@ -2200,6 +2246,7 @@ try {
 //     needed -- this is plain array/IDB manipulation, same as Phase T's
 //     cancel/resume tests. ---
 if(shouldRunPhase(['analysis-queue'])){
+try {
 const app23 = await launchApp();
 try {
   await seedBackup(app23.page, {
@@ -2329,6 +2376,7 @@ try {
   await app23.close();
 }
 
+} catch(e){ bad("phase @ line 2248 (tags: ['analysis-queue'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase VB: the live engine panel's thread-count selector
 //     (populateEngineThreadsSelect) -- hidden on a single-threaded engine
@@ -2338,6 +2386,7 @@ try {
 //     live Stockfish needed -- engine.multithreaded/.maxThreads/.threads are
 //     monkey-patched directly, same pattern as Phase V/VA. ---
 if(shouldRunPhase(['engine'])){
+try {
 const app24 = await launchApp();
 try {
   await seedBackup(app24.page, {
@@ -2444,6 +2493,7 @@ try {
   await app24.close();
 }
 
+} catch(e){ bad("phase @ line 2388 (tags: ['engine'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase VD: the Analysis Queue modal's OWN thread-count selector --
 //     independent of the live engine panel's, hidden/populated the same way
@@ -2451,6 +2501,7 @@ try {
 //     processAnalysisQueueLoop's engine.analyze() call without ever
 //     restarting whatever item is currently mid-search. ---
 if(shouldRunPhase(['analysis-queue'])){
+try {
 const app25 = await launchApp();
 try {
   await seedBackup(app25.page, {
@@ -2565,11 +2616,13 @@ try {
   await app25.close();
 }
 
+} catch(e){ bad('Phase VD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase W: room-info modal (click a graph node) -- move-number badge on
 //     the exit rows' thumbnails, and the exits list scrolls independently so
 //     a long list of replies can never push the Close button off-screen. ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appW1 = await launchApp();
 try {
   await seedBackup(appW1.page, {
@@ -2673,12 +2726,14 @@ try {
   await appW2.close();
 }
 
+} catch(e){ bad('Phase W: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase X: door skin oversizing -- every door renders slightly larger
 //     than its opening (hides a non-rectangular asset's transparent margin
 //     from showing the wall behind it), and a per-asset "extra oversize %"
 //     adds on top of that baseline. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appX = await launchApp();
 try {
   // the entry branches (e6 / g6) so it's a real junction with a rendered door --
@@ -2818,10 +2873,12 @@ try {
   await appX.close();
 }
 
+} catch(e){ bad('Phase X: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase Y: "memorized" room toggle (VR toolbar icon) -- hidden outside
 //     real castle rooms, persisted to IDB per room, survives a full reload. ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const appY = await launchApp();
 try {
   const keys = await appY.page.evaluate(() => {
@@ -2892,12 +2949,14 @@ try {
   await appY.close();
 }
 
+} catch(e){ bad('Phase Y: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase Z: "memorized" rooms (Phase 2) get a 🧠 label glyph in the
 //     network digraph (mirroring the VR toolbar's fa-brain icon), and the
 //     thick green border is reserved for "all done" -- memorized AND fully
 //     decorated -- so it reads at a glance even too zoomed out for glyphs. ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appZ = await launchApp();
 try {
   await seedBackup(appZ.page, {
@@ -2965,11 +3024,13 @@ try {
   await appZ.close();
 }
 
+} catch(e){ bad('Phase Z: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AA: "only test memorized rooms" (Phase 3) -- a castle-scoped quiz
 //     session filters candidates down to only replies whose resulting room is
 //     marked memorized; off, it's a pure passthrough. ---
 if(shouldRunPhase(['quiz'])){
+try {
 const appAA = await launchApp();
 try {
   const keys = await appAA.page.evaluate(() => {
@@ -3113,10 +3174,12 @@ try {
   await appAA.close();
 }
 
+} catch(e){ bad('Phase AA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AB: crop/erase image editor -- brush erase (freehand round
 //     eraser, size slider) for cleaning up artifacts flood-fill can't reach. ---
 if(shouldRunPhase(['assets'])){
+try {
 const appAB = await launchApp();
 try {
   // a synthetic, fully-opaque 100x100 red square -- no file upload needed,
@@ -3257,11 +3320,13 @@ try {
   await appAB.close();
 }
 
+} catch(e){ bad('Phase AB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AC: "fully decorated" room flag -- computed on the edit-mode-on ->
 //     off transition (E key / Esc / toolbar pencil): every move-object slot
 //     has a real asset AND every forward door's target room is named. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAC = await launchApp();
 try {
   // a single (non-branching) reply chain collapses into ONE corridor room
@@ -3342,11 +3407,13 @@ try {
   await appAC.close();
 }
 
+} catch(e){ bad('Phase AC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AD: "fully decorated" -- the door-naming half of the check
 //     (only for a door whose target is NOT empty/locked -- see isRoomEmpty
 //     and the locked-doors feature), and the vacuous-true case. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAD = await launchApp();
 try {
   // root has two forward doors: 'e6' leads to a room with its OWN branch
@@ -3431,10 +3498,12 @@ try {
   await appAD.close();
 }
 
+} catch(e){ bad('Phase AD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AE: "fully decorated" rooms get a 🎨 glyph on their digraph node
 //     label, mirroring the memorized-room border (Phase Z). ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appAE = await launchApp();
 try {
   await seedBackup(appAE.page, {
@@ -3477,10 +3546,12 @@ try {
   await appAE.close();
 }
 
+} catch(e){ bad('Phase AE: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AF: "Jump to VR" from the room-info modal (click a digraph node,
 //     then jump straight into that room in the VR walk). ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appAF = await launchApp();
 try {
   await seedBackup(appAF.page, {
@@ -3575,6 +3646,7 @@ try {
   await appAF.close();
 }
 
+} catch(e){ bad('Phase AF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AG: "Import this variation" from a saved eval's expanded PV in
 //     the move table -- mirrors the live engine panel's own pvMenu ->
@@ -3582,6 +3654,7 @@ try {
 //     reusing the exact same import core, just triggered from a saved
 //     (not live) line. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAG = await launchApp();
 try {
   const midFen = await appAG.page.evaluate(() => {
@@ -3635,6 +3708,7 @@ try {
   await appAG.close();
 }
 
+} catch(e){ bad('Phase AG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AG2: "Import this variation" must not disturb expand/collapse
 //     state on nodes it merely re-touches (unchanged reply, already existed)
@@ -3644,6 +3718,7 @@ try {
 //     actually changed. Only genuinely new nodes should get a fresh
 //     (expanded, matching manual "Set Standard Response") default. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAG2 = await launchApp();
 try {
   const midFen = await appAG2.page.evaluate(() => {
@@ -3698,12 +3773,14 @@ try {
 } finally {
   await appAG2.close();
 }
+} catch(e){ bad("phase @ line 3720 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AH: locked doors -- a room with nothing built past it (no forward
 //     moves) gets a doorway that can't be walked through, with a lock icon
 //     until it's skinned (per-door or via a castle-wide default), mirroring
 //     the ordinary/exit-door "building defaults" mechanism. ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const appAH = await launchApp();
 try {
   // root Alpha branches four ways: e6 leads to a room with a genuine BRANCH
@@ -3839,12 +3916,14 @@ try {
   await appAH.close();
 }
 
+} catch(e){ bad('Phase AH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AH2: skinning a locked door through the real in-world picker
 //     offers to make it this castle's locked-door default right away (a
 //     confirm prompt), instead of requiring the separate Room Geometry
 //     "make default" step every other door category needs. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAH2 = await launchApp();
 try {
   await seedBackup(appAH2.page, {
@@ -3918,6 +3997,7 @@ try {
   await appAH2.close();
 }
 
+} catch(e){ bad('Phase AH2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AH3: same isRoomEmpty fix, but for a two-track room -- a root
 //     that branches into two even-depth single-child chains (e6/g6, each 2
@@ -3926,6 +4006,7 @@ try {
 //     same shape as the corridor case, but it clearly holds real branching
 //     content (left AND right track pairs) and must not read as empty. ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const appAH3 = await launchApp();
 try {
   await seedBackup(appAH3.page, {
@@ -3967,12 +4048,14 @@ try {
 } finally {
   await appAH3.close();
 }
+} catch(e){ bad("phase @ line 4008 (tags: ['vr-castle'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AI: top VR toolbar icon order -- the edit-only buttons (room
 //     geometry / wall lists / assets) sit immediately right of the Edit
 //     button, with no buttons that also show outside edit mode (board
 //     position, memorize) wedged between them. ---
 if(shouldRunPhase(['vr-ui'])){
+try {
 const appAI = await launchApp();
 try {
   await seedBackup(appAI.page, {
@@ -4061,11 +4144,13 @@ try {
   await appAI.close();
 }
 
+} catch(e){ bad('Phase AI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAJ = await launchApp();
 try {
   await seedBackup(appAJ.page, {
@@ -4164,12 +4249,14 @@ try {
   await appAJ.close();
 }
 
+} catch(e){ bad('Phase AJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AK: crop/erase image editor -- fuzz/brush-size sliders persist to
 //     localStorage across modal reopens, and an undo/redo history stack
 //     (standard rotate-left/rotate-right icons) walks back/forward through
 //     each committed crop/erase/brush mutation. ---
 if(shouldRunPhase(['assets'])){
+try {
 const appAK = await launchApp();
 try {
   const srcUrl = await appAK.page.evaluate(() => {
@@ -4363,6 +4450,7 @@ try {
   await appAK.close();
 }
 
+} catch(e){ bad('Phase AK: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AL: the asset picker's "New Asset" button (replacing the old
 //     bare "Upload new…" quick-upload) opens the full asset editor -- id/
@@ -4370,6 +4458,7 @@ try {
 //     layered above the picker, with the Crop/Generate modals it can launch
 //     layered above THAT in turn. ---
 if(shouldRunPhase(['assets'])){
+try {
 const appAL = await launchApp();
 try {
   await seedBackup(appAL.page, {
@@ -4489,6 +4578,7 @@ try {
   await appAL.close();
 }
 
+} catch(e){ bad('Phase AL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AM: a resize that leaves a room too small for its OWN move-pairs
 //     (not just a manually-nudged item) used to strand the later pair(s)
@@ -4502,6 +4592,7 @@ try {
 //     Geometry dialog won't let a resize go below the room's own
 //     content-driven minimum in the first place. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAM = await launchApp();
 try {
   // same corridor shape as Phase AC: a forced (non-branching) reply chain
@@ -4560,11 +4651,13 @@ try {
   await appAM.close();
 }
 
+} catch(e){ bad("phase @ line 4594 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AN: the Room Geometry dialog itself now refuses to shrink a room
 //     below the size its OWN move-pairs/doors need, instead of relying
 //     entirely on after-the-fact reconciliation. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAN = await launchApp();
 try {
   await seedBackup(appAN.page, {
@@ -4644,6 +4737,7 @@ try {
   await appAN.close();
 }
 
+} catch(e){ bad('Phase AN: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AN2: a genuinely simple room -- one door (or none), no side
 //     move-pairs -- doesn't need the generous 11x13 castle-generation floor;
@@ -4653,6 +4747,7 @@ try {
 //     pairs, 2+ doors on one wall) still keeps its larger real minimum --
 //     covered by Phase AN's own >3m assertion above, unchanged. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAN2 = await launchApp();
 try {
   await seedBackup(appAN2.page, {
@@ -4693,6 +4788,7 @@ try {
 } finally {
   await appAN2.close();
 }
+} catch(e){ bad("phase @ line 4749 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AO: two more picker "New Asset" bugs found in real use --
 //     (1) VR turning kept responding to A/D/arrow keys while typing in the
@@ -4703,6 +4799,7 @@ try {
 //     saved fine but then silently never showed up back in the picker's
 //     grid (which filters by that same allow list), with no indication why. ---
 if(shouldRunPhase(['assets'])){
+try {
 const appAO = await launchApp();
 try {
   await seedBackup(appAO.page, {
@@ -4775,6 +4872,7 @@ try {
   await appAO.close();
 }
 
+} catch(e){ bad("phase @ line 4801 (tags: ['assets'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AP: setting a standard response for the first time (the row's
 //     "Set Standard Response" action) now queues its newly-visible children
@@ -4783,6 +4881,7 @@ try {
 //     engine instead, via a since-removed separate "Analyze Child Nodes"
 //     modal. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAP = await launchApp();
 try {
   await seedBackup(appAP.page, {
@@ -4829,6 +4928,7 @@ try {
   await appAP.close();
 }
 
+} catch(e){ bad("phase @ line 4883 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AQ: Room Geometry's "Reset Room…" (formerly "Clear styles…") now
 //     wipes a room's ENTIRE LAYOUT entry -- including size, door positions/
@@ -4836,6 +4936,7 @@ try {
 //     narrower wipe touched -- back to exactly what a never-customized room
 //     would have (still inheriting building defaults). ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appAQ = await launchApp();
 try {
   const keys = await appAQ.page.evaluate(() => {
@@ -4919,6 +5020,7 @@ try {
   await appAQ.close();
 }
 
+} catch(e){ bad('Phase AQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AR: the "Choose Asset" picker gets (1) a search box filtering by
 //     name/keyword, and (2) -- for move-object slots only -- a text field to
@@ -4926,6 +5028,7 @@ try {
 //     counts as filled for "fully decorated" and gets cleared the moment a
 //     real image is assigned instead. ---
 if(shouldRunPhase(['assets'])){
+try {
 const appAR = await launchApp();
 try {
   await seedBackup(appAR.page, {
@@ -5083,6 +5186,7 @@ try {
   await appAR.close();
 }
 
+} catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
@@ -5091,6 +5195,7 @@ try {
 //     there (but stays shown for the castle root, which is also "empty" until
 //     built out yet is reached from the street, not a locked door). ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appAS = await launchApp();
 try {
   await seedBackup(appAS.page, {
@@ -5143,11 +5248,13 @@ try {
   await appAS.close();
 }
 
+} catch(e){ bad("phase @ line 5197 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AT: node statistics "complete to move N" -- the shallowest branch's
 //     move number, measured by OUR last move (reaching our move N counts even
 //     if the opponent has no reply to it). ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAT = await launchApp();
 try {
   await seedBackup(appAT.page, {
@@ -5195,12 +5302,14 @@ try {
   await appAT.close();
 }
 
+} catch(e){ bad('Phase AT: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AU: gatherBuiltCastles' in-memory cache -- a second "Run VR" in
 //     the same page load reuses the first one's result instead of rebuilding
 //     every castle from scratch, and a full backup restore drops the cache
 //     (it can swap in a different user's repertoire entirely). ---
 if(shouldRunPhase(['castle-generation'])){
+try {
 const appAU = await launchApp();
 try {
   await seedBackup(appAU.page, {
@@ -5245,11 +5354,13 @@ try {
 } finally {
   await appAU.close();
 }
+} catch(e){ bad('Phase AU: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BA: chess.com importer keeps full metadata (normalized to the same
 //     shape Lichess games use), and a re-import clears ONLY chess.com games,
 //     leaving Lichess untouched. ---
 if(shouldRunPhase(['import-export'])){
+try {
 const appBA = await launchApp();
 try {
   // 148b. normalizeChessComGame maps an archive object to the Lichess-shaped
@@ -5354,6 +5465,7 @@ try {
 } finally {
   await appBA.close();
 }
+} catch(e){ bad('Phase BA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AV: the specific in-session repertoire edits called out as
 //     "obvious cases" also invalidate the gatherBuiltCastles cache: setting
@@ -5364,6 +5476,7 @@ try {
 //     specifically "this action dropped it," not "it just happened to
 //     already be empty." ---
 if(shouldRunPhase(['castle-generation'])){
+try {
 const appAV = await launchApp();
 try {
   await seedBackup(appAV.page, {
@@ -5467,6 +5580,7 @@ try {
   await appAV.close();
 }
 
+} catch(e){ bad("phase @ line 5478 (tags: ['castle-generation'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AW: two more "obvious cases" found by auditing every PREFS/GAMES
 //     write path against what buildGeneratedCastle actually reads: the
@@ -5477,6 +5591,7 @@ try {
 //     via the local file import (their move-frequency counts decide which
 //     opponent replies are visible/built, same as a manual reply). ---
 if(shouldRunPhase(['castle-generation'])){
+try {
 const appAW = await launchApp();
 try {
   await seedBackup(appAW.page, {
@@ -5571,6 +5686,7 @@ try {
   await appAW.close();
 }
 
+} catch(e){ bad("phase @ line 5593 (tags: ['castle-generation'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AX: "Import this variation" from a saved eval's PV (the
 //     three-dot menu on the main move table, see Phase AG) invalidates the
@@ -5578,6 +5694,7 @@ try {
 //     uses, but through a different entry point (importEngineVariation) that
 //     needed its own invalidate call. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAX = await launchApp();
 try {
   const midFen = await appAX.page.evaluate(() => {
@@ -5624,6 +5741,7 @@ try {
   await appAX.close();
 }
 
+} catch(e){ bad('Phase AX: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AY: "complete to move N" is now shown as an always-on [N] badge
 //     on every move-table row with a reply set (next to the frequency-stats
@@ -5632,6 +5750,7 @@ try {
 //     straight off the rendered DOM instead of the test hook, and with an
 //     unanswered row confirmed to show no badge at all. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAY = await launchApp();
 try {
   await seedBackup(appAY.page, {
@@ -5720,6 +5839,7 @@ try {
   await appAY.close();
 }
 
+} catch(e){ bad("phase @ line 5752 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AZ: importing a variation (paste-import, engine-variation import,
 //     and a local game-file import) no longer discards a focused variation --
@@ -5730,6 +5850,7 @@ try {
 //     first (hiding the OTHER top-level reply), imports, then confirms the
 //     other reply is still hidden and the Unfocus button is still shown. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAZ = await launchApp();
 try {
   const isFocused = () => appAZ.page.evaluate(() => ({
@@ -5852,12 +5973,14 @@ try {
   await appAZ.close();
 }
 
+} catch(e){ bad("phase @ line 5852 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BA: the gatherBuiltCastles cache now persists to IndexedDB (not
 //     just an in-memory, refresh-loses-it cache), and "Run VR" gained a
 //     Shift+click/right-click gesture to force a fresh rebuild even when a
 //     valid cached copy (memory or persisted) already exists. ---
 if(shouldRunPhase(['castle-generation'])){
+try {
 const appBA = await launchApp();
 try {
   await seedBackup(appBA.page, {
@@ -5954,6 +6077,7 @@ try {
   await appBA.close();
 }
 
+} catch(e){ bad('Phase BA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BB: VR door plaques and the digraph's edge labels both show how
 //     often an opponent's reply has actually occurred in the user's own
@@ -5961,6 +6085,7 @@ try {
 //     own .cnt span shows (js/app.js), just rounded to a whole percent since
 //     these two spots have far less room to work with. ---
 if(shouldRunPhase(['vr-decorating', 'digraph'])){
+try {
 const appBB = await launchApp();
 try {
   await seedBackup(appBB.page, {
@@ -6030,6 +6155,7 @@ try {
   await appBB.close();
 }
 
+} catch(e){ bad('Phase BB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BC: the street-level entry pair billboard (outside a castle's
 //     front door) also carries an occurrence stat -- "which castle should I
@@ -6039,6 +6165,7 @@ try {
 //     buildGeneratedCastle's own genRooms never captures an edge INTO its
 //     own root (it starts fresh there with no incoming edge). ---
 if(shouldRunPhase(['vr-castle'])){
+try {
 const appBC = await launchApp();
 try {
   await seedBackup(appBC.page, {
@@ -6081,6 +6208,7 @@ try {
   await appBC.close();
 }
 
+} catch(e){ bad("phase @ line 6167 (tags: ['vr-castle'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BD: "Set Attributes" always edits the room's CANONICAL seq, even
 //     when opened from a transposing path that isn't it -- so both doors
@@ -6091,6 +6219,7 @@ try {
 //     h6-first one, so buildCastleGraph's walk discovers a6-first first and
 //     that becomes canonical. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appBD = await launchApp();
 try {
   await seedBackup(appBD.page, {
@@ -6165,11 +6294,13 @@ try {
   await appBD.close();
 }
 
+} catch(e){ bad("phase @ line 6221 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BE: mnemonics export downscales images to fit
 //     MNEM_EXPORT_IMG_MAX_DIM (so a full 384-image pack clears GitHub's
 //     25MB web-upload limit) without touching the locally-stored originals. ---
 if(shouldRunPhase(['mnemonics'])){
+try {
 const appBE = await launchApp();
 try {
   const bigImg = await appBE.page.evaluate(() => {
@@ -6210,6 +6341,7 @@ try {
   await appBE.close();
 }
 
+} catch(e){ bad('Phase BE: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BF: engine.js's Threads-change handshake falls back to the last
 //     known-good thread count (instead of silently searching on a possibly
@@ -6219,6 +6351,7 @@ try {
 //     overridden to simulate the UCI protocol) since the vendored WASM build
 //     isn't exercised by this offline harness. ---
 if(shouldRunPhase(['engine'])){
+try {
 const appBF = await launchApp();
 try {
   // 81. A Threads change that never acks falls back to the last count known
@@ -6273,12 +6406,14 @@ try {
   await appBF.close();
 }
 
+} catch(e){ bad("phase @ line 6353 (tags: ['engine'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BG: exportMnemonics() shows a spinner (with a running "N images
 //     converted" progress label) while it re-encodes every image for export
 //     -- converting a full 384-image set is slow enough that, with no visual
 //     feedback, clicking Export looked like it did nothing (the reported bug). ---
 if(shouldRunPhase(['mnemonics'])){
+try {
 const appBG = await launchApp();
 try {
   const bigImg = await appBG.page.evaluate(() => {
@@ -6320,6 +6455,7 @@ try {
   await appBG.close();
 }
 
+} catch(e){ bad('Phase BG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BH: importBackup() shows a spinner (with a running "N mnemonic
 //     squares imported" progress label) during a full restore -- with zero
@@ -6327,6 +6463,7 @@ try {
 //     mid-restore and seeing incomplete data, which is what looked like a
 //     silent failure to import mnemonics after a full backup restore. ---
 if(shouldRunPhase(['import-export'])){
+try {
 const appBH = await launchApp();
 try {
   const backup = {
@@ -6387,12 +6524,14 @@ try {
   await appBH.close();
 }
 
+} catch(e){ bad('Phase BH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BI: the Help modal (hamburger menu -> Help) loads its topic
 //     list from help/topics.json and injects each topic's HTML fragment
 //     from help/<file>.html into the content pane -- real files served by
 //     the test harness's static server, not mocked. ---
 if(shouldRunPhase(['help'])){
+try {
 const appBI = await launchApp();
 try {
   // 85. Opening Help auto-selects the first (Intro) topic and loads its real
@@ -6454,6 +6593,7 @@ try {
   await appBI.close();
 }
 
+} catch(e){ bad('Phase BI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BJ: boot-time "install default mnemonics?" offer
 //     (json/repchess-mnemonics-DEFAULT.json.gz), driven via
@@ -6463,6 +6603,7 @@ try {
 //     for a real fetch+decompress+import -- only this dedicated test drives
 //     it, end to end, against the real committed file. ---
 if(shouldRunPhase(['mnemonics'])){
+try {
 const appBJ = await launchApp();
 try {
   // 87. A fresh browser has no mnemonics and hasn't been offered yet;
@@ -6493,10 +6634,12 @@ try {
   await appBJ.close();
 }
 
+} catch(e){ bad("phase @ line 6605 (tags: ['mnemonics'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BK: declining the default-mnemonics offer leaves the store empty
 //     but still remembers the decision, so it doesn't nag on every boot. ---
 if(shouldRunPhase(['mnemonics'])){
+try {
 const appBK = await launchApp();
 try {
   // 89. Decline -> nothing installed, but the offer is still marked made.
@@ -6513,6 +6656,7 @@ try {
   await appBK.close();
 }
 
+} catch(e){ bad('Phase BK: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BL: the digraph modal's status line leads with the real VR
 //     "castle room(s)" count (a corridor/two-track room collapses several
@@ -6526,6 +6670,7 @@ try {
 //     (genRoom.moveCount), including steps along a linear-run corridor that
 //     never cross a room boundary -- not just the doors that do. ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appBL = await launchApp();
 try {
   // root (after d4 Nf6 c4) branches into a short reply (e6, a single dead-end
@@ -6703,6 +6848,7 @@ try {
   await appBL.close();
 }
 
+} catch(e){ bad("phase @ line 6672 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BM: opening the digraph while the MOVE TABLE (not the digraph's
 //     own right-click focus) is focused on a castle root already scoped the
@@ -6712,6 +6858,7 @@ try {
 //     focusedCastleName() now shares the same GRAPH_FOCUS_SEQ || FOCUSED_SEQ
 //     precedence, fixing both at once. ---
 if(shouldRunPhase(['digraph'])){
+try {
 const appBM = await launchApp();
 try {
   // Alpha: just its root room (one opponent reply, e6, with no pref -- a
@@ -6759,9 +6906,11 @@ try {
 } finally {
   await appBM.close();
 }
+} catch(e){ bad("phase @ line 6860 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 if(shouldRunPhase(['digraph'])){
+try {
 // --- Phase BN: right-clicking a run/two-track box in the digraph offers
 //     "Arrange" -- recomputes a clean internal layout for just that box's
 //     members (straight column, or two parallel columns from a shared head,
@@ -6865,9 +7014,11 @@ try {
 } finally {
   await appBN.close();
 }
+} catch(e){ bad("phase @ line 6912 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 if(shouldRunPhase(['vr-decorating'])){
+try {
 // --- Phase BO: an elevator car collapses ALL of its forward exits behind ONE
 //     door (each a floor button) + one back door, regardless of how many
 //     walls the exits were spread across for the room's non-elevator form.
@@ -6945,9 +7096,11 @@ try {
 } finally {
   await appBO.close();
 }
+} catch(e){ bad("phase @ line 7020 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 if(shouldRunPhase(['vr-decorating'])){
+try {
 // --- Phase BP: making a corridor or two-track room an elevator is rejected
 //     with a message -- elevators are only for a room that branches into
 //     several separate rooms, not a linear sequence of moves. ---
@@ -7002,9 +7155,11 @@ try {
 } finally {
   await appBP.close();
 }
+} catch(e){ bad("phase @ line 7102 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 if(shouldRunPhase(['vr-decorating'])){
+try {
 // --- Phase BQ: the elevator floor panel carries the same "in front of a
 //     door" info a normal door does -- destination room name, move pair, and
 //     the room's head object -- and the Room Geometry editor lets you set
@@ -7330,6 +7485,7 @@ try {
 } finally {
   await appBQ.close();
 }
+} catch(e){ bad("phase @ line 7161 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BR: an entrance door's skin also becomes its destination room's
 //     own exit/back door skin (setDoorOverride), so walking out looks like
@@ -7337,6 +7493,7 @@ try {
 //     different rooms leading to the same target) last-write-wins: whichever
 //     entrance door was styled most recently sets the target's exit door. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appBR = await launchApp();
 try {
   // a6-then-e4-then-h6 and h6-then-e4-then-a6 transpose to the same room
@@ -7452,12 +7609,14 @@ try {
 } finally {
   await appBR.close();
 }
+} catch(e){ bad('Phase BR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BS: past ELEV_PANEL_MAX_ROWS (7) floors, an elevator car's
 //     button panel splits into a SECOND panel to the right of the door
 //     (buildElevatorPanels), hard-capped at ELEV_MAX_FLOORS (14) -- past
 //     that, the Room Geometry editor's "Elevator" choice is rejected. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appBS = await launchApp();
 try {
   // root needs a SECOND initial branch (g6) so it doesn't collapse the
@@ -7541,11 +7700,13 @@ try {
 } finally {
   await appBS.close();
 }
+} catch(e){ bad('Phase BS: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BT: an elevator car is capped at ELEV_MAX_FLOORS (14) -- past
 //     that, the Room Geometry editor's "Elevator" choice is rejected with
 //     an explanatory message (mirrors the existing "too few floors" reject). ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appBT = await launchApp();
 try {
   const REPLIES_15 = ['Nc6','Na6','Qe7','Ke7','Be7','Bd6','Bc5','Bb4','Ba3','a6','a5','b6','b5','c6','c5'];
@@ -7585,6 +7746,7 @@ try {
 } finally {
   await appBT.close();
 }
+} catch(e){ bad('Phase BT: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BU: buildRoom disposes the PREVIOUS scene's GPU resources
 //     (geometries/textures) before replacing them -- scene.clear() alone
@@ -7595,6 +7757,7 @@ try {
 //     must survive repeated rebuilds untouched, since they're reused by
 //     every room, not rebuilt per room. ---
 if(shouldRunPhase(['vr-decorating'])){
+try {
 const appBU = await launchApp();
 try {
   await seedBackup(appBU.page, {
@@ -7664,12 +7827,14 @@ try {
 } finally {
   await appBU.close();
 }
+} catch(e){ bad("phase @ line 7759 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AV: "Browse Games" (née "Games with this Position") -- matching
 //     (transposition vs exact line), result-from-your-perspective, and the
 //     modal itself. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAV = await launchApp();
 try {
   await seedBackup(appAV.page, {
@@ -7881,12 +8046,14 @@ try {
 } finally {
   await appAV.close();
 }
+} catch(e){ bad('Phase AV: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AV2: "Browse Games" -- the generalized modal (title, moves
 //     input, pre-fill from a three-dot node, live re-filtering, the color
 //     filter radios, and the hamburger entry point). ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAV2 = await launchApp();
 try {
   await seedBackup(appAV2.page, {
@@ -7975,6 +8142,7 @@ try {
 } finally {
   await appAV2.close();
 }
+} catch(e){ bad('Phase AV2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AV3: Browse Games from the hamburger must lazy-load GAMES itself
@@ -7985,6 +8153,7 @@ try {
 //     sitting in IndexedDB. A page reload resets in-memory state the same
 //     way a returning user's first click of the session would. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAV3 = await launchApp();
 try {
   await seedBackup(appAV3.page, {
@@ -8012,6 +8181,7 @@ try {
 } finally {
   await appAV3.close();
 }
+} catch(e){ bad("phase @ line 8155 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AW2: buildPositionIndex must chunk its per-game chess.js replay
@@ -8023,6 +8193,7 @@ try {
 //     one chunk boundary, checks the chunking didn't drop or miscount any
 //     game in the process. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAW2 = await launchApp();
 try {
   const BIG_N = 230;   // > POSITION_INDEX_CHUNK (100), spans two chunk boundaries
@@ -8066,6 +8237,7 @@ try {
 } finally {
   await appAW2.close();
 }
+} catch(e){ bad("phase @ line 8195 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AY2: Object List Manager's room-database JSON import -- two code
@@ -8076,6 +8248,7 @@ try {
 //     list's items array is deduped (first occurrence wins), matching what
 //     the editor's own "Add item" already enforces by hand. ---
 if(shouldRunPhase(['object-lists'])){
+try {
 const appAY2 = await launchApp();
 try {
   await appAY2.page.evaluate(() => document.getElementById('menuObjectLists').click());
@@ -8119,6 +8292,7 @@ try {
 } finally {
   await appAY2.close();
 }
+} catch(e){ bad("phase @ line 8250 (tags: ['object-lists'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AY3: Object List Manager -- four more code-review fixes:
@@ -8133,6 +8307,7 @@ try {
 //     (4) an id-less entry dropped during import is now counted and
 //     surfaced, not silently discarded. ---
 if(shouldRunPhase(['object-lists'])){
+try {
 const appAY3 = await launchApp();
 try {
   await seedBackup(appAY3.page, {
@@ -8261,6 +8436,7 @@ try {
 } finally {
   await appAY3.close();
 }
+} catch(e){ bad("phase @ line 8309 (tags: ['object-lists'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
@@ -8274,6 +8450,7 @@ try {
 //     analysis queue (interrupting whatever's running) and run at the live
 //     engine panel's own thread count. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appAZ2 = await launchApp();
 try {
   await seedBackup(appAZ2.page, {
@@ -8598,6 +8775,7 @@ try {
 } finally {
   await appAZ2.close();
 }
+} catch(e){ bad("phase @ line 8452 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase BA2: "Standard vs. other moves" summary -- once every OTHER
@@ -8609,6 +8787,7 @@ try {
 //     is the actually-better outcome, to prove the sign flip is real and not
 //     coincidentally right for a White line. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appBA2 = await launchApp();
 try {
   await seedBackup(appBA2.page, {
@@ -8669,6 +8848,7 @@ try {
 } finally {
   await appBA2.close();
 }
+} catch(e){ bad("phase @ line 8789 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase BC2: Compare Games rows also show each move's win/loss/draw
@@ -8680,6 +8860,7 @@ try {
 //     OTHER side (an opponent's choice, not tester's own repertoire move),
 //     is excluded outright, not just missing a record. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appBC2 = await launchApp();
 try {
   await seedBackup(appBC2.page, {
@@ -8746,6 +8927,7 @@ try {
 } finally {
   await appBC2.close();
 }
+} catch(e){ bad("phase @ line 8862 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase BV: three-dot row-menu reorg -- "Set Move Quality" now needs a
@@ -8760,6 +8942,7 @@ try {
 //     button to renderBranch) -- opening a black-root row's menu and using
 //     that item threw. ---
 if(shouldRunPhase(['move-table'])){
+try {
 const appBV = await launchApp();
 try {
   await seedBackup(appBV.page, {
@@ -8876,6 +9059,104 @@ try {
 } finally {
   await appBV.close();
 }
+} catch(e){ bad("phase @ line 8944 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase BW: five row-menu actions that no test ever clicked before now --
+//     Add to Analysis Queue, Node Statistics, Quiz this Variation, Add
+//     Opponent Move, and Remove This Move (the manual-reply counterpart). ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appBW = await launchApp();
+try {
+  await seedBackup(appBW.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [ { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' } ],
+  }, { defaultPlayerColor: 'white' });
+  await appBW.page.click('.line-row');
+  const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
+  await appBW.page.waitForSelector(rowSel, { timeout: 10000 });
+
+  // 176. "Add to Analysis Queue" opens the single-seq Add modal (untitled
+  //      with a child count, unlike the multi-child "Add Children" action)
+  //      and queues exactly that one seq.
+  try {
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="addToAnalysisQueue"]`).click(), rowSel);
+    await appBW.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    const title = await appBW.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+    assert(title === 'Add to Analysis Queue', `expected the single-seq modal title, got "${title}"`);
+    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
+    const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q[0].seq.join(',') === 'd4,Nf6', `expected the row's own seq queued, got ${JSON.stringify(q[0].seq)}`);
+    ok('row menu: "Add to Analysis Queue" queues this row\'s own seq');
+  } catch(e){ bad('row menu: Add to Analysis Queue', e); }
+
+  // 177. "Node Statistics" shows an alert with the node count / branch factor
+  //      for this row's children (childrenSeq, i.e. past the standard reply).
+  try {
+    let alertMsg = null;
+    appBW.page.once('dialog', d => { alertMsg = d.message(); });
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="nodeStats"]`).click(), rowSel);
+    await appBW.page.waitForTimeout(400);
+    assert(alertMsg && /Nodes below this point/.test(alertMsg), `expected the node-stats alert, got: ${alertMsg}`);
+    ok('row menu: "Node Statistics" shows the node-count/branch-factor alert');
+  } catch(e){ bad('row menu: Node Statistics', e); }
+
+  // 178. "Quiz this Variation" calls openOpeningQuiz -- in this harness the
+  //      cm-chessboard widget is deliberately unmocked (see test/README.md),
+  //      so the reachable, real behavior is the same "could not be loaded"
+  //      degradation the Test > Chessboard menu item already falls back to;
+  //      this proves the row button is actually wired to the real function
+  //      (it wasn't clicked by any prior test) rather than confirming the
+  //      full quiz flow, which needs a real board library to observe.
+  try {
+    let alertMsg = null;
+    appBW.page.once('dialog', d => { alertMsg = d.message(); });
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="openingQuiz"]`).click(), rowSel);
+    await appBW.page.waitForTimeout(300);
+    assert(alertMsg && /could not be loaded/i.test(alertMsg), `expected the chessboard-unavailable alert, got: ${alertMsg}`);
+    ok('row menu: "Quiz this Variation" reaches openOpeningQuiz (degrades gracefully without cm-chessboard)');
+  } catch(e){ bad('row menu: Quiz this Variation', e); }
+
+  // 179-180. "Add Opponent Move" records a manual try under this row's
+  //          children (a new data-row appears with a 0 count); the new
+  //          row's own menu then offers "Remove This Move" (only shown for
+  //          manual replies), which removes it again.
+  try {
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="addMove"]`).click(), rowSel);
+    await appBW.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    await appBW.page.fill('#fieldModalInput', 'g6');
+    await appBW.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    const manualSel = 'tr.data-row[data-seq="d4,Nf6,c4,g6"]';
+    await appBW.page.waitForSelector(manualSel, { timeout: 5000 });
+    ok('row menu: "Add Opponent Move" records a manual try as a new child row');
+  } catch(e){ bad('row menu: Add Opponent Move', e); }
+
+  try {
+    const manualSel = 'tr.data-row[data-seq="d4,Nf6,c4,g6"]';
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), manualSel);
+    const removeVisible = await appBW.page.evaluate(s =>
+      getComputedStyle(document.querySelector(`${s} [data-act="removeManual"]`)).display !== 'none', manualSel);
+    assert(removeVisible, 'expected "Remove This Move" to be visible on a manually-added row');
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="removeManual"]`).click(), manualSel);
+    await appBW.page.waitForSelector(manualSel, { state: 'detached', timeout: 5000 });
+    ok('row menu: "Remove This Move" removes the manual try again');
+  } catch(e){ bad('row menu: Remove This Move', e); }
+
+  assert(realErrors(appBW.consoleErrors).length === 0,
+    'unexpected console errors:\n' + realErrors(appBW.consoleErrors).join('\n'));
+} finally {
+  await appBW.close();
+}
+} catch(e){ bad('Phase BW: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
