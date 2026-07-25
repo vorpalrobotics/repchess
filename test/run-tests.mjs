@@ -9302,5 +9302,93 @@ try {
 } catch(e){ bad('Phase BX: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase BY: R and H were swapped -- R now resets to the CURRENT room's
+//     own entrance (previously it always jumped all the way to Main Street);
+//     H is the new "go all the way back to Main Street" shortcut (what R
+//     used to do). On Main Street itself, R matches H (no separate
+//     "entrance" to distinguish there). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appBY = await launchApp();
+try {
+  await seedBackup(appBY.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
+  }, { defaultPlayerColor: 'white' });
+  await appBY.page.click('.line-row');
+  await appBY.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appBY.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appBY.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBY.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appBY.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appBY.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appBY.page.waitForTimeout(400);
+
+  // 181. R resets to the current (castle) room's own entrance, not Main
+  //      Street -- and stays in that room.
+  try {
+    const r = await appBY.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const roomBefore = dbg.room();
+      const expected = dbg.entrySpawnFor(roomBefore);
+      dbg.teleport(3, -3, 1.2);   // wander off from the entrance
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }));
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }));
+      return { roomBefore, roomAfter: dbg.room(), pos: dbg.pos(), expected };
+    });
+    assert(r.roomAfter === r.roomBefore, `R should stay in the same room, went from ${r.roomBefore} to ${r.roomAfter}`);
+    assert(Math.abs(r.pos.x - r.expected.x) < 0.05 && Math.abs(r.pos.z - r.expected.z) < 0.05,
+      `expected R to land at this room's entrySpawnFor ${JSON.stringify(r.expected)}, got ${JSON.stringify(r.pos)}`);
+    ok('R resets to the current room\'s own entrance (not Main Street)');
+  } catch(e){ bad('VR keys: R resets to this room\'s own entrance', e); }
+
+  // 182. H is the new "return all the way to Main Street" shortcut (R's old job).
+  try {
+    const r = await appBY.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const start = dbg.startSpawn();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'h' }));
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && dbg.room() !== start.room){
+        await new Promise(res => setTimeout(res, 150));
+      }
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'h' }));
+      return { room: dbg.room(), pos: dbg.pos(), start };
+    });
+    assert(r.room === r.start.room, `expected H to land on Main Street (${r.start.room}), got ${r.room}`);
+    assert(Math.abs(r.pos.x - r.start.x) < 0.05 && Math.abs(r.pos.z - r.start.z) < 0.05,
+      `expected H to land at the true start spawn ${JSON.stringify(r.start)}, got ${JSON.stringify(r.pos)}`);
+    ok('H resets all the way back to Main Street (the old R behavior)');
+  } catch(e){ bad('VR keys: H resets to Main Street', e); }
+
+  // 183. On Main Street itself, R matches H -- there's no separate
+  //      "entrance" distinct from the street's own start there.
+  try {
+    const r = await appBY.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      const start = dbg.startSpawn();
+      dbg.teleport(start.x + 20, start.z + 20, 0.5);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }));
+      await new Promise(res => setTimeout(res, 700));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }));
+      return { room: dbg.room(), pos: dbg.pos(), start };
+    });
+    assert(r.room === r.start.room, `expected R on Main Street to stay on Main Street, got ${r.room}`);
+    assert(Math.abs(r.pos.x - r.start.x) < 0.05 && Math.abs(r.pos.z - r.start.z) < 0.05,
+      `expected R on Main Street to match the true start spawn ${JSON.stringify(r.start)}, got ${JSON.stringify(r.pos)}`);
+    ok('R on Main Street itself matches H (no separate entrance to distinguish)');
+  } catch(e){ bad('VR keys: R on Main Street matches H', e); }
+} finally {
+  await appBY.close();
+}
+} catch(e){ bad('Phase BY: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

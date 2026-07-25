@@ -6118,7 +6118,7 @@ function buildHelpOverlay(){
     <div style="background:#fff;color:#222;max-width:32em;width:88%;max-height:84%;overflow:auto;
                 border-radius:8px;padding:1rem 1.2rem;font:400 .9rem/1.45 sans-serif">
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
-      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to return to the start.</p>
+      <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode.</p>
@@ -7118,7 +7118,17 @@ function onKeyDown(e){
   // deliberately NOT an edit-mode shortcut; use the pencil toolbar button. Esc
   // still exits edit mode.
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
-  if(e.key === 'r' || e.key === 'R'){ enterRoom(START_ROOM, START_SPAWN); return; }
+  // R resets to THIS room's own entrance (handy after wandering off while
+  // decorating); H is the "go all the way back" shortcut, to Main Street.
+  // On Main Street itself there's no separate "entrance" to distinguish --
+  // entrySpawnFor's generic room fallback isn't sized for the street's own
+  // (much larger, differently-computed) footprint, so R just matches H there.
+  if(e.key === 'r' || e.key === 'R'){
+    if(currentRoomKey === START_ROOM) enterRoom(START_ROOM, START_SPAWN);
+    else respawnAtEntry(currentRoomKey);
+    return;
+  }
+  if(e.key === 'h' || e.key === 'H'){ enterRoom(START_ROOM, START_SPAWN); return; }
   keys[e.key] = true;
 }
 function onKeyUp(e){ keys[e.key] = false; }
@@ -7480,6 +7490,9 @@ export async function openThreeTest(containerEl, opts){
       // back at the entrance rather than wherever you happened to be
       // standing, without duplicating the doorSpawn math in the test itself.
       entrySpawnFor: (roomKey) => entrySpawnFor(roomKey),
+      // the VR's true starting point (Main Street) -- for testing that the H
+      // key lands exactly there, distinct from R's per-room entrySpawnFor.
+      startSpawn: () => ({ room: START_ROOM, ...START_SPAWN }),
       // world position of whichever scene object carries this slotId, regardless
       // of whether it's a Mesh or a Sprite (meshes() only sees the former) --
       // needed to check e.g. a placeholder billboard's position after a resize.
