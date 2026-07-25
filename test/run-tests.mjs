@@ -7666,8 +7666,9 @@ try {
 }
 }
 
-// --- Phase AV: "Games with this Position" -- matching (transposition vs exact
-//     line), result-from-your-perspective, and the modal itself. ---
+// --- Phase AV: "Browse Games" (née "Games with this Position") -- matching
+//     (transposition vs exact line), result-from-your-perspective, and the
+//     modal itself. ---
 if(shouldRunPhase(['move-table'])){
 const appAV = await launchApp();
 try {
@@ -8740,7 +8741,7 @@ try {
     assert(g3?.record === '+1=+1 =0 −0', `expected g3's record "+1=+1 =0 −0", got "${JSON.stringify(g3)}"`);
     assert(g3?.winClass === 'meta-actual-record-good', `expected g3's net score coloured "good" (net +1), got "${g3?.winClass}"`);
     assert(state.isRealTable, 'expected the "other move" rows to be a real <table> (Nf3 + g3 as <tr>s), so their columns actually align');
-    ok('Compare Games: each row shows its own win/loss/draw record (win count colour-coded), aligned in a real table');
+    ok('Compare Games: each row shows its own win/loss/draw record (net score colour-coded), aligned in a real table');
   } catch(e){ bad('Compare Games: win/loss/draw record per row', e); }
 } finally {
   await appBC2.close();
