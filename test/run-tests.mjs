@@ -890,7 +890,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app10.page.click('.line-row');
   await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -1214,7 +1214,7 @@ try {
     assets: [{ id: 'wallpaper-1', type: 'surface',
       image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       repeatPerMeter: 0.5 }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app13.page.click('.line-row');
   await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
@@ -1314,7 +1314,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app14.page.click('.line-row');   // sets CURRENT_LINE, needed by refreshEvalSpan's color-coding
   await app14.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -1567,7 +1567,7 @@ try {
       { seq: ['d4','Nf6','c4'], eval: { type:'cp', value:60, depth:20, pv:'1.d4 Nf6 2.c4' } },
     ]}],
     games: [{ id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app16.page.click('.line-row');
   await app16.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -1784,7 +1784,7 @@ try {
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
     ],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app18.page.click('.line-row');
   await app18.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -1918,7 +1918,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app20.page.click('.line-row');
   await app20.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -2119,7 +2119,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app22.page.click('.line-row');
   await app22.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -2206,7 +2206,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app23.page.click('.line-row');
   await app23.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -2344,7 +2344,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app24.page.click('.line-row');
   await app24.page.waitForSelector('.data-row', { timeout: 10000 });
 
@@ -2457,7 +2457,7 @@ try {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await app25.page.click('.line-row');
   await app25.page.waitForSelector('.data-row', { timeout: 10000 });
   // the select lives inside the modal overlay -- open it once so Playwright's
@@ -4378,7 +4378,7 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
     ]}],
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
-  });
+  }, { defaultPlayerColor: 'white' });
   await appAL.page.click('.line-row');
   await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
