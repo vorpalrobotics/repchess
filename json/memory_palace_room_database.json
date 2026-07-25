@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.2",
+  "schemaVersion": "1.3",
   "rooms": [
     {
       "id": "kitchen",
@@ -438,6 +438,284 @@
           }
         }
       ]
+    },
+    {
+      "id": "primates_house",
+      "name": "Primates House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Primates",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Mouse Lemur",
+            "Marmoset",
+            "Capuchin",
+            "Macaque",
+            "Baboon",
+            "Chimpanzee",
+            "Gorilla"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MMCMBCG",
+            "phrase": "Mini Mover, More Munching, Curious Climber, Mighty Muncher, Bold Barker, Chest Thumper, Gentle Giant.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Mini Mover → Mouse Lemur (smallest, quickest); More Munching → Marmoset; Curious Climber → Capuchin; Mighty Muncher → Macaque; Bold Barker → Baboon; Chest Thumper → Chimpanzee; Gentle Giant → Gorilla (largest primate, despite the gentle nickname)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "raptor_aviary",
+      "name": "Raptor Aviary",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Birds of Prey",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Kestrel",
+            "Falcon",
+            "Hawk",
+            "Owl",
+            "Eagle",
+            "Condor"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "KFHOEC",
+            "phrase": "Keen Kestrel, Fast Falcon, Hovering Hawk, Old Owl, Elegant Eagle, Circling Condor.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Keen Kestrel → Kestrel (smallest, keenest hunter); Fast Falcon → Falcon (fastest diver); Hovering Hawk → Hawk; Old Owl → Owl; Elegant Eagle → Eagle; Circling Condor → Condor (largest, soars on thermals)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "reptile_house",
+      "name": "Reptile House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Snakes",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body length, shortest to longest",
+          "items": [
+            "Garter Snake",
+            "Corn Snake",
+            "Rattlesnake",
+            "Cobra",
+            "Boa Constrictor",
+            "Python",
+            "Anaconda"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "GCRCBPA",
+            "phrase": "Garden Slither, Cornfield Crawl, Rattling Warning, Cobra Rises, Boa Squeezes, Python Coils, Anaconda Swallows.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Garden Slither → Garter Snake; Cornfield Crawl → Corn Snake; Rattling Warning → Rattlesnake; Cobra Rises → Cobra; Boa Squeezes → Boa Constrictor; Python Coils → Python; Anaconda Swallows → Anaconda (longest/heaviest, ends the list)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "big_cats",
+      "name": "Big Cats",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Big Cats",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Ocelot",
+            "Cheetah",
+            "Leopard",
+            "Jaguar",
+            "Cougar",
+            "Lion",
+            "Tiger"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "OCLJCLT",
+            "phrase": "Ocelot Prowls, Cheetah Sprints, Leopard Climbs, Jaguar Swims, Cougar Leaps, Lion Roars, Tiger Rules.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Ocelot Prowls → Ocelot (smallest); Cheetah Sprints → Cheetah (fastest); Leopard Climbs → Leopard; Jaguar Swims → Jaguar; Cougar Leaps → Cougar; Lion Roars → Lion; Tiger Rules → Tiger (largest big cat)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "african_savanna",
+      "name": "African Savanna",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Savanna Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Overall size, smallest to largest",
+          "items": [
+            "Meerkat",
+            "Warthog",
+            "Zebra",
+            "Wildebeest",
+            "Rhino",
+            "Giraffe",
+            "Elephant"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MWZWRGE",
+            "phrase": "Meerkats Watch, Warthogs Wallow, Zebras Wander, Wildebeest Migrate, Rhinos Graze, Giraffes Reach, Elephants Rule.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Meerkats Watch → Meerkat (smallest, always alert); Warthogs Wallow → Warthog; Zebras Wander → Zebra; Wildebeest Migrate → Wildebeest; Rhinos Graze → Rhino; Giraffes Reach → Giraffe (tallest); Elephants Rule → Elephant (largest land animal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "aquarium",
+      "name": "Aquarium",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Marine Life",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Habitat depth, shallow reef to deep sea",
+          "items": [
+            "Clownfish",
+            "Sea Turtle",
+            "Octopus",
+            "Stingray",
+            "Shark",
+            "Jellyfish",
+            "Anglerfish"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CSOSSJA",
+            "phrase": "Clownfish Dart, Sea Turtles Glide, Octopus Hides, Stingrays Skim, Sharks Patrol, Jellyfish Drift, Anglerfish Lurk.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Clownfish Dart → Clownfish (shallow reef); Sea Turtles Glide → Sea Turtle; Octopus Hides → Octopus; Stingrays Skim → Stingray; Sharks Patrol → Shark; Jellyfish Drift → Jellyfish; Anglerfish Lurk → Anglerfish (deep sea, ends the descent)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "arctic_zone",
+      "name": "Arctic Zone",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Polar Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Arctic Fox",
+            "Snowy Owl",
+            "Penguin",
+            "Seal",
+            "Walrus",
+            "Polar Bear",
+            "Beluga Whale"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "ASPSWPB",
+            "phrase": "Arctic Fox Trots, Snowy Owl Watches, Penguins Waddle, Seals Slide, Walruses Wallow, Polar Bears Prowl, Belugas Sing.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Arctic Fox Trots → Arctic Fox; Snowy Owl Watches → Snowy Owl; Penguins Waddle → Penguin; Seals Slide → Seal; Walruses Wallow → Walrus; Polar Bears Prowl → Polar Bear; Belugas Sing → Beluga Whale (largest, famous for its song)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "insect_house",
+      "name": "Insect House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Insects & Arachnids",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Ant",
+            "Bee",
+            "Butterfly",
+            "Beetle",
+            "Praying Mantis",
+            "Tarantula",
+            "Scorpion"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "ABBBPTS",
+            "phrase": "Ants March, Bees Buzz, Butterflies Flutter, Beetles Crawl, Praying Mantis Waits, Tarantulas Creep, Scorpions Sting.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Ants March → Ant (smallest); Bees Buzz → Bee; Butterflies Flutter → Butterfly; Beetles Crawl → Beetle; Praying Mantis Waits → Praying Mantis; Tarantulas Creep → Tarantula; Scorpions Sting → Scorpion (largest/most feared, ends the list)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "petting_zoo",
+      "name": "Petting Zoo",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Farm Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Chick",
+            "Duck",
+            "Rabbit",
+            "Goat",
+            "Sheep",
+            "Pig",
+            "Cow"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CDRGSPC",
+            "phrase": "Chicks Peep, Ducks Waddle, Rabbits Hop, Goats Butt, Sheep Baa, Pigs Oink, Cows Moo.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Chicks Peep → Chick (smallest); Ducks Waddle → Duck; Rabbits Hop → Rabbit; Goats Butt → Goat; Sheep Baa → Sheep; Pigs Oink → Pig; Cows Moo → Cow (largest common farm animal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bear_den",
+      "name": "Bear Den",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Bears",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Sun Bear",
+            "Sloth Bear",
+            "Black Bear",
+            "Giant Panda",
+            "Brown Bear",
+            "Polar Bear"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "SSBGBP",
+            "phrase": "Sun Bears Bask, Sloth Bears Shuffle, Black Bears Forage, Giant Pandas Munch, Brown Bears Fish, Polar Bears Swim.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Sun Bears Bask → Sun Bear (smallest bear species); Sloth Bears Shuffle → Sloth Bear; Black Bears Forage → Black Bear; Giant Pandas Munch → Giant Panda; Brown Bears Fish → Brown Bear; Polar Bears Swim → Polar Bear (largest, ends the list)."
+          }
+        }
+      ]
     }
   ],
   "designNotes": {
@@ -451,6 +729,9 @@
       ],
       "1.2": [
         "Added 10 more Home-category rooms (Bathroom, Laundry Room, Entryway, Bedroom, Home Office, Living Room, Dining Room, Home Gym, Nursery, Garage), each with a procedural or natural_ordering furniture/fixture list and a generated_phrase mnemonic, matching Kitchen's existing style."
+      ],
+      "1.3": [
+        "Added a new \"Zoo\" building category with 10 exhibits (Primates House, Raptor Aviary, Reptile House, Big Cats, African Savanna, Aquarium, Arctic Zone, Insect House, Petting Zoo, Bear Den), each ordered by natural_ordering (body size or habitat depth, smallest/shallowest to largest/deepest) with a generated_phrase mnemonic in the established house style."
       ]
     },
     "mnemonicTypes": [
