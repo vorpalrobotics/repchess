@@ -212,7 +212,11 @@ function generateMainStreet(systems, streetCastles){
       lineId: sys.id,
       openingMove: sys.openingMove || '',
       openingImg: sys.openingImg || '',
-      openingWord: sys.openingWord || ''
+      openingWord: sys.openingWord || '',
+      // Black systems only: our prepared reply to the opening move, shown as
+      // a door-style opponent/response pair composite instead of the plain
+      // single-move tile (see systemsForWalk in app.js for why).
+      replyPair: sys.replyPair || null
     });
     // this system's built castles: one building each on the north side of its
     // street, door facing south onto it; lower street number = closer to Main St.
@@ -348,8 +352,15 @@ function registerOneCastle(castle, instanceId, opts = {}){
     // `to`/toKey but still needs a real door -- ex.foreignKey is its target.
     const fwd = r.exits.filter(ex => ex.to || ex.foreignKey);
     const span = c => (c > 1 ? (c - 1) * DOOR_SPACING : 0);
+    // base.d is just a comfortable minimum floor -- the real depth for a
+    // corridor comes from pairDepth above (it already scales with member
+    // count via sideMax, using the same CAS_LAYOUT spacing the pairs are
+    // actually placed with). A member-count-scaled floor here used to
+    // override pairDepth with a cruder estimate, leaving the room several
+    // meters longer than its last item needed (worst around 7 members: a
+    // 35m floor vs. an actual ~25m pairDepth).
     const base = r.type === 'corridor'
-      ? { w: 8, d: Math.max(12, Math.min(44, (r.memberCount || 1) * 5)), h: 6 }
+      ? { w: 8, d: 12, h: 6 }
       : { w: 11, d: 13, h: 6 };
     const isTwoTrack = r.type === 'two-track';
     let sz;
@@ -5012,7 +5023,10 @@ function buildRoom(roomKey){
           const bbId = 'open-' + (s.lineId || i);
           const xf = slotXformFor(roomKey, bbId) || {};
           const base = { x: s.x + (s.side || 1) * 0.9, y: OPEN_TILE_HALF, z: s.z };
-          const tile = buildOpeningMoveSprite(s, xf.scale || 1);
+          // Black system with a prepared reply: the door-style opponent/response
+          // pair composite (same billboard doors use) instead of the plain
+          // single-move tile -- see systemsForWalk (app.js) for the asymmetry.
+          const tile = s.replyPair ? buildMnemPairSprite(s.replyPair, xf.scale || 1) : buildOpeningMoveSprite(s, xf.scale || 1);
           tile.userData = { kind: 'accessory', slotId: bbId, doorBill: true, roomKey, base };
           tile.position.set(base.x + (xf.dx || 0), base.y + (xf.dy || 0), base.z + (xf.dz || 0));
           scene.add(tile);

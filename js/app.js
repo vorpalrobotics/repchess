@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260724-112';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260725-113';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260724-43';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-214';
+const BUILD_TAG = '-215';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4156,17 +4156,51 @@ function streetNameForLine(line){
    our own first move (e.g. d4); for a black system it's the first opponent move
    in the list we defend against. Image → word → SAN is the display fallback,
    resolved here (in threeVR the raw SAN is drawn until/unless an image loads). */
+// raw move descriptor for one ply of `seq` -- same shape CONV (buildGeneratedCastle)
+// produces for a door pair's opponent/response, so a street tile that needs
+// the pair-billboard treatment (see systemsForWalk below) can hand it
+// straight to buildMnemPairSprite without a separate resolution path.
+function moveDescForSeq(seq, moveNumber){
+  const mv = lastMoveInfo(seq);
+  if(!mv) return null;
+  const out = { to: mv.to, piece: MNEM_WORD_FOR_PIECE[mv.piece] || 'pawn', san: mv.san };
+  if(moveNumber != null) out.moveNumber = moveNumber;
+  const beards = moveDisambiguatorCount(seq);
+  if(beards) out.disambig = beards;
+  return out;
+}
 async function systemsForWalk(lines){
   const mnem = await getAllMnemonics();
-  return lines.map(l => {
+  return Promise.all(lines.map(async l => {
     const move = (l.openingMoves && l.openingMoves[0]) || '';
+    // A Black system's trigger (openingMoves[0]) is the OPPONENT's move, so
+    // its street tile also needs OUR prepared reply shown diagonally below
+    // it -- the same opponent/response pair composite a door uses -- since
+    // otherwise the sign alone can't convey what we actually play. A White
+    // system's tile stays single-move: its own reply is what the door to
+    // its first mansion already shows, so showing it twice would be
+    // redundant. This is a deliberate asymmetry, not an oversight.
+    // Read straight from IDB via getPref, NOT the shared PREFS global --
+    // PREFS is scoped to whichever single line is currently open in the
+    // tree view (or empty, e.g. "Run VR" straight from the home screen),
+    // not to every line systemsForWalk is asked to lay out at once.
+    let replyPair = null;
+    if(l.color === 'black' && move){
+      const reply = (await getPref(l.id, [move]))?.reply;
+      if(reply){
+        const opponent = moveDescForSeq([move], 1);
+        const response = moveDescForSeq([move, reply]);
+        if(opponent && response) replyPair = { opponent, response };
+      }
+    }
     return {
       id: l.id, name: l.name, streetName: streetNameForLine(l), color: l.color,
       openingMove: move,
       openingImg: move ? mnemonicImgForSeq([move], mnem) : '',
-      openingWord: move ? mnemonicWordForSeq([move], mnem) : ''
+      openingWord: move ? mnemonicWordForSeq([move], mnem) : '',
+      replyPair
     };
-  });
+  }));
 }
 function refreshLineStreetName(){
   $('lineStreetName').textContent = CURRENT_LINE ? streetNameForLine(CURRENT_LINE) : '';
