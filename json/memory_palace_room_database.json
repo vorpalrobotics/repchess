@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.3",
+  "schemaVersion": "1.4",
   "rooms": [
     {
       "id": "kitchen",
@@ -716,6 +716,285 @@
           }
         }
       ]
+    },
+    {
+      "id": "renaissance_gallery",
+      "name": "Renaissance Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Renaissance Masters",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Giotto",
+            "Donatello",
+            "Botticelli",
+            "Leonardo da Vinci",
+            "Michelangelo",
+            "Raphael",
+            "Titian"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "GDBLMRT",
+            "phrase": "Golden Frescoes, Draped Bronze, Blooming Venus, Lively Genius, Marble Might, Radiant Madonnas, Tinted Glory.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Golden Frescoes → Giotto (early frescoes); Draped Bronze → Donatello (bronze sculpture); Blooming Venus → Botticelli (Birth of Venus); Lively Genius → Leonardo da Vinci; Marble Might → Michelangelo; Radiant Madonnas → Raphael; Tinted Glory → Titian (master of color)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "baroque_gallery",
+      "name": "Baroque Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Baroque Masters",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Caravaggio",
+            "Rubens",
+            "Artemisia Gentileschi",
+            "Bernini",
+            "Velázquez",
+            "Rembrandt",
+            "Vermeer"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CRABVRV",
+            "phrase": "Candlelit Drama, Rich Flesh, Avenging Heroine, Baroque Marble, Velvet Court, Rembrandt's Shadows, Velvety Light.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Candlelit Drama → Caravaggio (dramatic chiaroscuro); Rich Flesh → Rubens; Avenging Heroine → Artemisia Gentileschi (Judith Slaying Holofernes); Baroque Marble → Bernini; Velvet Court → Velázquez; Rembrandt's Shadows → Rembrandt; Velvety Light → Vermeer (luminous interiors)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "impressionist_gallery",
+      "name": "Impressionist Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Impressionists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Manet",
+            "Degas",
+            "Cézanne",
+            "Monet",
+            "Renoir",
+            "Morisot",
+            "Cassatt"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MDCMRMC",
+            "phrase": "Modern Scandal, Dancers Twirl, Colorful Apples, Misty Waterlilies, Radiant Dancers, Mothers Watch, Charming Teatime.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Modern Scandal → Manet (Olympia caused scandal); Dancers Twirl → Degas; Colorful Apples → Cézanne (still lifes); Misty Waterlilies → Monet; Radiant Dancers → Renoir; Mothers Watch → Morisot (mother-and-child scenes); Charming Teatime → Cassatt (domestic scenes)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "post_impressionist_gallery",
+      "name": "Post-Impressionist Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Post-Impressionists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Redon",
+            "Rousseau",
+            "Gauguin",
+            "Van Gogh",
+            "Seurat",
+            "Signac",
+            "Toulouse-Lautrec"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RRGVSST",
+            "phrase": "Reveries Bloom, Rousing Jungles, Golden Tahiti, Vivid Swirls, Sparkling Dots, Sister Dots, Theater Posters.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Reveries Bloom → Odilon Redon (dreamlike imagery); Rousing Jungles → Henri Rousseau (jungle scenes); Golden Tahiti → Paul Gauguin; Vivid Swirls → Van Gogh; Sparkling Dots → Seurat (pointillism); Sister Dots → Paul Signac (also pointillist); Theater Posters → Toulouse-Lautrec (Moulin Rouge posters)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "modern_art_gallery",
+      "name": "Modern Art Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Early Modernists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Kandinsky",
+            "Matisse",
+            "Mondrian",
+            "Klee",
+            "Picasso",
+            "Braque",
+            "O'Keeffe"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "KMMKPBO",
+            "phrase": "Kaleidoscope Colors, Musical Cutouts, Mondrian's Grid, Kid-like Symbols, Picasso's Fractures, Braided Facets, Oversized Flowers.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Kaleidoscope Colors → Kandinsky (abstract color); Musical Cutouts → Matisse; Mondrian's Grid → Mondrian; Kid-like Symbols → Klee (whimsical, childlike forms); Picasso's Fractures → Picasso (cubist fracturing); Braided Facets → Braque (co-founder of cubism); Oversized Flowers → Georgia O'Keeffe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "surrealism_gallery",
+      "name": "Surrealism Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Surrealists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Chirico",
+            "Ernst",
+            "Miró",
+            "Magritte",
+            "Dalí",
+            "Kahlo",
+            "Carrington"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CEMMDKC",
+            "phrase": "Cryptic Plazas, Eerie Forests, Miró's Symbols, Mysterious Pipe, Dripping Clocks, Kahlo's Pain, Cryptic Beasts.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Cryptic Plazas → Giorgio de Chirico (empty piazzas); Eerie Forests → Max Ernst; Miró's Symbols → Joan Miró; Mysterious Pipe → René Magritte (This Is Not a Pipe); Dripping Clocks → Salvador Dalí (The Persistence of Memory); Kahlo's Pain → Frida Kahlo; Cryptic Beasts → Leonora Carrington (fantastical creatures)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "pop_art_gallery",
+      "name": "Pop Art Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Pop & Contemporary Artists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Lichtenstein",
+            "Warhol",
+            "Kusama",
+            "Hockney",
+            "Sherman",
+            "Haring",
+            "Basquiat"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "LWKHSHB",
+            "phrase": "Loud Comic-Panels, Warhol's Soup Cans, Kusama's Dots, Hockney's Pools, Sherman's Selfies, Haring's Figures, Basquiat's Crown.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Loud Comic-Panels → Roy Lichtenstein; Warhol's Soup Cans → Andy Warhol; Kusama's Dots → Yayoi Kusama; Hockney's Pools → David Hockney; Sherman's Selfies → Cindy Sherman (self-portraits); Haring's Figures → Keith Haring; Basquiat's Crown → Jean-Michel Basquiat (his crown motif)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "sculpture_garden",
+      "name": "Sculpture Garden",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Sculptors",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Rodin",
+            "Brancusi",
+            "Moore",
+            "Calder",
+            "Giacometti",
+            "Bourgeois",
+            "Serra"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RBMCGBS",
+            "phrase": "Rodin's Thinker, Bronze Simplicity, Monumental Curves, Colorful Mobiles, Gaunt Figures, Boundless Spiders, Steel Curves.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Rodin's Thinker → Auguste Rodin; Bronze Simplicity → Constantin Brancusi (abstracted bronze forms); Monumental Curves → Henry Moore; Colorful Mobiles → Alexander Calder; Gaunt Figures → Alberto Giacometti (elongated bronze figures); Boundless Spiders → Louise Bourgeois (giant spider sculptures); Steel Curves → Richard Serra (monumental steel plates)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "antiquities_gallery",
+      "name": "Antiquities Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Ancient Civilizations",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Civilizational chronology (roughly earliest to latest)",
+          "items": [
+            "Mesopotamian",
+            "Egyptian",
+            "Greek",
+            "Etruscan",
+            "Roman",
+            "Byzantine"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MEGERB",
+            "phrase": "Mud-brick Ziggurats, Eternal Pyramids, Graceful Marble, Etruscan Tombs, Roman Arches, Byzantine Mosaics.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Mud-brick Ziggurats → Mesopotamian art (ziggurats, cuneiform); Eternal Pyramids → Egyptian art; Graceful Marble → Greek art (classical sculpture); Etruscan Tombs → Etruscan art (painted tomb chambers); Roman Arches → Roman art/architecture; Byzantine Mosaics → Byzantine art (gold mosaics)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "photography_gallery",
+      "name": "Photography Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Photographers",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Daguerre",
+            "Talbot",
+            "Stieglitz",
+            "Adams",
+            "Bourke-White",
+            "Cartier-Bresson",
+            "Arbus"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "DTSABCA",
+            "phrase": "Daguerre's Silver Plate, Talbot's Paper Prints, Stieglitz's Clouds, Adams' Mountains, Bourke-White's Factories, Cartier-Bresson's Moment, Arbus' Outsiders.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Daguerre's Silver Plate → Louis Daguerre (daguerreotype); Talbot's Paper Prints → William Henry Fox Talbot; Stieglitz's Clouds → Alfred Stieglitz; Adams' Mountains → Ansel Adams; Bourke-White's Factories → Margaret Bourke-White (industrial photography); Cartier-Bresson's Moment → Henri Cartier-Bresson ('decisive moment'); Arbus' Outsiders → Diane Arbus."
+          }
+        }
+      ]
     }
   ],
   "designNotes": {
@@ -732,6 +1011,9 @@
       ],
       "1.3": [
         "Added a new \"Zoo\" building category with 10 exhibits (Primates House, Raptor Aviary, Reptile House, Big Cats, African Savanna, Aquarium, Arctic Zone, Insect House, Petting Zoo, Bear Den), each ordered by natural_ordering (body size or habitat depth, smallest/shallowest to largest/deepest) with a generated_phrase mnemonic in the established house style."
+      ],
+      "1.4": [
+        "Added an \"Art Museum\" building category with 10 galleries (Renaissance, Baroque, Impressionist, Post-Impressionist, Modern Art, Surrealism, Pop Art, Sculpture Garden, Antiquities, Photography), each a natural_ordering list (chronological by artist birth year, or civilizational era for Antiquities) with a generated_phrase mnemonic in the established house style."
       ]
     },
     "mnemonicTypes": [
