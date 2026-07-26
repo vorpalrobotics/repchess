@@ -199,6 +199,121 @@ and flagged by the user as needing more thought before going further:
   either yet — is exactly the kind of decision the user wants to defer
   until there's been more time to think it through.
 
+## Trimmed-down variant: single-run-only, no branching inside
+
+Everything above is the original, general concept (a box with an internal
+branch point plus multiple loci-rows) and remains unimplemented/unscheduled
+as a whole. This section documents a much smaller, separately-evaluated
+slice that was sized specifically to be buildable: a micro-environment with
+**no internal branching at all** — it only ever holds a single already-linear
+run of loci, one after another. This directly sidesteps open question #1
+(move-to-locus mapping) because there is no branch-vs-sequence ambiguity to
+resolve: a single run is unambiguously sequential, exactly like a corridor
+room today.
+
+### Terminal-only starting point
+
+- Restrict eligibility to exactly the case already characterized in the
+  linear-sequence-configuration enumeration: the exit's target room's shape
+  is a single run (`kind: 'run'` from `analyzeCastleStructure`) with no
+  forward exit at its tail (a "single linear terminal room").
+- New option in the Room Geometry modal's per-exit door-type menu, alongside
+  `door | stairsUp | stairsDown | elevator`: **micro-environment**, offered
+  only when the exit's target qualifies as above.
+- When selected, the exit no longer renders as a door/wall-gap at all.
+  Instead an assignable object image target appears — reusing the existing
+  `L1`/`R1`/`C1`-style slot-tagging convention, tagged e.g. `M1` — that the
+  user assigns exactly like any other move-object slot.
+- The assigned object gets a small distinguishing visual cue marking it as a
+  micro-environment entry rather than an ordinary decoration — a glowing
+  sphere hovering near/on it, meaning "walk into me to shrink down." Running
+  into the sphere transitions the user into the micro-environment the same
+  way running through a door transitions into a new room.
+- Inside, the destination is a compact "top surface" rendering of the target
+  room's linear run: each move-pair in that run becomes one locus laid out
+  left-to-right on the shrunk surface, reusing the existing per-slot
+  object/asset rendering used in ordinary rooms today — just at a smaller
+  physical scale and without needing the room's own walls/floor/doorway
+  geometry at all, since the run being terminal means there's nothing past
+  the last locus to connect back out to.
+- This resolves open question #3 (exit-from-micro-environment) trivially for
+  the terminal case: there is no exit to model, because the underlying room
+  had none either. It does not need a wall gap, hallway feature-chain
+  reuse, or any new per-locus exit schema.
+
+### Extension: any single-run room, not just terminal ones
+
+The terminal-only restriction was the main limitation of the first cut — it
+excludes the common non-terminal single-run and two-track-with-one-open-tail
+configurations identified in the linear-sequence enumeration. Extending to
+those only requires handling "there's a door at the far end":
+
+- If the target run's tail *does* have a forward exit (or exits, for the
+  two-track case where one or both tracks continue), place a **de-shrinker**
+  teleporter billboard at the far end of the shrunk top-surface sequence —
+  one per forward branch that existed at the tail. Running into it expands
+  the user back out through that original exit, exactly where the door would
+  otherwise have taken them.
+- Symmetrically, place a de-shrinker at the *start* of the shrunk sequence
+  that always leads back into the parent room the micro-environment object
+  sits in — mirroring the existing `buildExitSign` "EXIT" placard convention
+  used for return trips elsewhere in the app.
+- Both the entry sphere and the de-shrinker billboards are skinnable (a
+  choice of visual treatment), not fixed to one asset.
+- With this extension, the eligibility rule simplifies: **the target room's
+  `kind` is a single run** (plain corridor or a two-track box), full stop.
+  "Terminal" no longer needs to be a separate qualifier — a terminal run is
+  just the special case with zero de-shrinkers at the far end.
+
+### Why the extension also helps the stale-memorized/room-split problem
+
+The Study-room investigation earlier in this session showed that adding a
+branch mid-way through a linear room causes the room to split into two
+pieces, with only one half keeping the original identity/name/decorations —
+the other half becomes a fresh, undecorated room. A terminal-only
+micro-environment would inherit that exact same fragility: shrinking a
+7-locus run down, then later adding a branch at locus 3, would split the
+underlying run and leave the micro-environment's shrunk rendering stale or
+partially orphaned in the same way. The extended (de-shrinker) version
+doesn't eliminate this — the underlying room-splitting mechanics are
+unchanged — but because a micro-environment is now valid for *any*
+single-run shape (not just terminal ones), a post-split remainder that is
+still a qualifying single run (which, per the earlier enumeration, is the
+common outcome — the peeled-off two-track piece is usually what's new, while
+the original corridor's surviving prefix stays a run) keeps being a valid
+micro-environment target and simply gains a de-shrinker at its new, shorter
+tail. This narrows the staleness gap to the same content-drift case that
+already exists for ordinary decorated rooms today (the stale-memorized
+question raised separately, and explicitly deferred), rather than adding an
+extra, micro-environment-specific failure mode on top of it.
+
+### Remaining open items for this slice specifically
+
+- **Multi-de-shrinker wall layout.** When a tail has more than one forward
+  branch, the far end of the shrunk surface needs the same kind of
+  multi-door spacing logic the app already uses for rooms with several
+  doors on one wall — this is reuse, not new design, but still a concrete
+  implementation dependency to account for when sizing the work.
+- **Stairs/elevator-typed tail exits.** Recommend excluding these from
+  eligibility for v1 — a de-shrinker that dumps the user into a stairwell
+  transition feels like a worse fit than a plain door target, and it's a
+  small enough case to defer rather than design for up front.
+- **Pre-existing identity-loss edge case.** When a run gets absorbed into a
+  *new* two-track at its own head's parent (an existing, already-accepted
+  system characteristic, not something this feature introduces), it loses
+  its own identity entirely. A micro-environment anchored to that run would
+  be subject to the same loss. Not a new problem, just worth flagging as
+  inherited risk.
+- **New eligibility predicate needed at build time.** The Room Geometry
+  modal needs a small helper — mirroring the existing style of
+  `isStairType`/`isRoomEmpty` — that checks "is this exit's target room a
+  single run" to decide whether to offer the micro-environment option at
+  all. Not yet written; sized here only.
+
+This slice is still unimplemented and unscheduled, same as the general
+concept above — it's recorded here because it was fully evaluated and judged
+buildable, not because it's next in line.
+
 ## Explicitly deferred
 
 - Resolving the template-catalog vs. on-the-fly-collapsing question above,
