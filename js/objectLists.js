@@ -54,6 +54,7 @@ export async function openObjectListManager(container){
     containerEl.dataset.built = '1';
   }
   EDIT = null;
+  SELECTED_CATEGORY = null;
   await refresh();
 }
 
@@ -73,6 +74,7 @@ function buildShell(){
       <input type="file" id="objlistImportFile" accept="application/json,.json" style="display:none">
     </div>
     <div class="assets-body">
+      <div id="objlistBreadcrumb" style="display:none;margin-bottom:.5rem"></div>
       <div class="assets-grid" id="objlistGrid"></div>
       <div class="assets-editor" id="objlistEditor" style="display:none"></div>
     </div>
@@ -108,21 +110,95 @@ function showIndex(){
   renderGrid();
 }
 
-/* ---------- index ---------- */
+/* ---------- index ----------
+   Two-level browse: a category grid (Home, Zoo, Art Museum, ...) at the top,
+   drilling into one category's own list-cards on click -- the room database
+   is large enough now (40+ lists across 8 categories) that one flat
+   alphabetical grid buried everything together. SELECTED_CATEGORY (null =
+   top-level) is module state so it survives a round-trip through the editor
+   (Save/Cancel both funnel back through showIndex -> renderGrid). Typing in
+   the filter box always searches ALL lists regardless of the current
+   category -- search deliberately escapes browsing rather than being scoped
+   to whatever category happens to be open. */
+let SELECTED_CATEGORY = null;
+function categoryOf(l){ return l.category || '(Uncategorized)'; }
+
 function renderGrid(){
   const grid = $('objlistGrid');
-  let visible = LISTS.slice();
+  const crumb = $('objlistBreadcrumb');
   if(FILTER_TEXT){
-    visible = visible.filter(l =>
+    crumb.style.display = 'none';
+    const visible = LISTS.filter(l =>
       `${l.name} ${l.roomName} ${l.category}`.toLowerCase().includes(FILTER_TEXT));
+    renderListCards(grid, visible);
+    return;
   }
-  $('objlistCount').textContent = `${visible.length} list${visible.length===1?'':'s'}`;
+  const categoryCount = new Set(LISTS.map(categoryOf)).size;
+  // 0 or 1 category total: nothing meaningful to choose between, so skip
+  // straight to the list grid rather than showing a category picker with a
+  // single (or no) option -- also keeps a single-category collection (a
+  // fresh install with just Kitchen, say) exactly as simple as before.
+  if(categoryCount <= 1){
+    crumb.style.display = 'none';
+    renderListCards(grid, LISTS);
+    return;
+  }
+  if(SELECTED_CATEGORY === null){
+    crumb.style.display = 'none';
+    renderCategoryGrid(grid);
+    return;
+  }
+  crumb.style.display = '';
+  crumb.innerHTML = '';
+  const back = document.createElement('button');
+  back.innerHTML = '&larr; All Categories';
+  back.onclick = () => { SELECTED_CATEGORY = null; renderGrid(); };
+  crumb.appendChild(back);
+  const label = document.createElement('strong');
+  label.style.marginLeft = '.6rem';
+  label.textContent = SELECTED_CATEGORY;
+  crumb.appendChild(label);
+  renderListCards(grid, LISTS.filter(l => categoryOf(l) === SELECTED_CATEGORY));
+}
+
+// one card per distinct category, alphabetical ((Uncategorized) last) --
+// only ever called with 2+ categories (renderGrid skips straight to the
+// list grid otherwise), so there's always at least one card to show.
+function renderCategoryGrid(grid){
+  const counts = new Map();
+  for(const l of LISTS) counts.set(categoryOf(l), (counts.get(categoryOf(l)) || 0) + 1);
+  const categories = [...counts.keys()].sort((a, b) => {
+    if(a === '(Uncategorized)') return 1;
+    if(b === '(Uncategorized)') return -1;
+    return a.localeCompare(b);
+  });
+  $('objlistCount').textContent = `${categories.length} categories`;
+  grid.innerHTML = '';
+  for(const cat of categories){
+    const n = counts.get(cat);
+    const card = document.createElement('div');
+    card.className = 'asset-card objlist-category-card';
+    card.innerHTML = `
+      <div class="objlist-category-name">${esc(cat)}</div>
+      <div class="objlist-card-count">${n} list${n === 1 ? '' : 's'}</div>
+    `;
+    card.onclick = () => { SELECTED_CATEGORY = cat; renderGrid(); };
+    grid.appendChild(card);
+  }
+}
+
+// the list-card grid itself -- shared by the filtered (flat, cross-category)
+// view and a single category's drilled-in view.
+function renderListCards(grid, visible){
+  $('objlistCount').textContent = `${visible.length} list${visible.length === 1 ? '' : 's'}`;
   if(!visible.length){
-    grid.innerHTML = '<p class="assets-empty">No object lists yet. Click "New List", or "Import JSON" to load a room database.</p>';
+    grid.innerHTML = LISTS.length
+      ? '<p class="assets-empty">No object lists match.</p>'
+      : '<p class="assets-empty">No object lists yet. Click "New List", or "Import JSON" to load a room database.</p>';
     return;
   }
   grid.innerHTML = '';
-  for(const l of visible.sort((a,b)=>(a.name||'').localeCompare(b.name||''))){
+  for(const l of visible.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))){
     const items = l.items || [];
     const bound = items.filter(it => it.assetId).length;
     const card = document.createElement('div');
