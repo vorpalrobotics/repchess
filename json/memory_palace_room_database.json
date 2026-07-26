@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.4",
+  "schemaVersion": "1.5",
   "rooms": [
     {
       "id": "kitchen",
@@ -995,6 +995,285 @@
           }
         }
       ]
+    },
+    {
+      "id": "dinosaur_hall",
+      "name": "Dinosaur Hall",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Dinosaurs",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by first fossil appearance (Triassic to end-Cretaceous)",
+          "items": [
+            "Coelophysis",
+            "Stegosaurus",
+            "Allosaurus",
+            "Velociraptor",
+            "Triceratops",
+            "Ankylosaurus",
+            "Tyrannosaurus Rex"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CSAVTAT",
+            "phrase": "Crafty Stalker, Spiky Slowpoke, Aggressive Ambusher, Vicious Velociraptor, Tri-horned Tank, Armored Ankylosaurus, Terrifying Tyrant.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Crafty Stalker → Coelophysis (early, agile predator); Spiky Slowpoke → Stegosaurus; Aggressive Ambusher → Allosaurus; Vicious Velociraptor → Velociraptor; Tri-horned Tank → Triceratops; Armored Ankylosaurus → Ankylosaurus; Terrifying Tyrant → Tyrannosaurus Rex (last dinosaur before the extinction event)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "human_origins_hall",
+      "name": "Hall of Human Origins",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Human Ancestors",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by evolutionary emergence",
+          "items": [
+            "Sahelanthropus",
+            "Australopithecus",
+            "Homo habilis",
+            "Homo erectus",
+            "Homo heidelbergensis",
+            "Neanderthal",
+            "Homo sapiens"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "SAHHHNH",
+            "phrase": "Startled Ape, Ancient Walker, Handy Toolmaker, Hardy Wanderer, Husky Survivor, Neanderthal Cousin, Homo Sapiens Rises.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Startled Ape → Sahelanthropus (earliest known hominin); Ancient Walker → Australopithecus (e.g. 'Lucy', early bipedalism); Handy Toolmaker → Homo habilis ('handy man', early tools); Hardy Wanderer → Homo erectus (first to leave Africa); Husky Survivor → Homo heidelbergensis (robust build); Neanderthal Cousin → Neanderthal; Homo Sapiens Rises → Homo sapiens (modern humans, most recent)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "gems_minerals_hall",
+      "name": "Hall of Gems and Minerals",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Gems",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Mohs hardness scale, softest to hardest",
+          "items": [
+            "Opal",
+            "Peridot",
+            "Amethyst",
+            "Emerald",
+            "Topaz",
+            "Sapphire",
+            "Diamond"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "OPAETSD",
+            "phrase": "Opalescent Glow, Peridot Green, Amethyst Purple, Emerald Deep, Topaz Golden, Sapphire Blue, Diamond Brilliant.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Opalescent Glow → Opal (softest of these, ~5.5-6.5); Peridot Green → Peridot (~6.5-7); Amethyst Purple → Amethyst/Quartz (7); Emerald Deep → Emerald (~7.5-8); Topaz Golden → Topaz (8); Sapphire Blue → Sapphire (9); Diamond Brilliant → Diamond (10, hardest natural substance)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ocean_life_hall",
+      "name": "Hall of Ocean Life",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Ocean Life by Depth",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Ocean depth zone, sunlit surface to the deep-sea floor",
+          "items": [
+            "Manta Ray",
+            "Sea Turtle",
+            "Giant Squid",
+            "Anglerfish",
+            "Vampire Squid",
+            "Gulper Eel",
+            "Giant Tube Worm"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MSGAVGG",
+            "phrase": "Manta Glides, Sea Turtle Swims, Giant Squid Lurks, Anglerfish Glows, Vampire Squid Hides, Gulper Eel Gapes, Giant Worm Thrives.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Manta Glides → Manta Ray (sunlit surface waters); Sea Turtle Swims → Sea Turtle; Giant Squid Lurks → Giant Squid (twilight zone); Anglerfish Glows → Anglerfish (midnight zone, bioluminescent lure); Vampire Squid Hides → Vampire Squid; Gulper Eel Gapes → Gulper Eel (abyssal zone); Giant Worm Thrives → Giant Tube Worm (hadal zone, hydrothermal vents, deepest)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "na_mammals_hall",
+      "name": "Hall of North American Mammals",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "North American Mammals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Chipmunk",
+            "Raccoon",
+            "Coyote",
+            "White-tailed Deer",
+            "Black Bear",
+            "Moose",
+            "Bison"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CRCWBMB",
+            "phrase": "Chattering Chipmunk, Raiding Raccoon, Calling Coyote, Wary Whitetail, Burly Black Bear, Mighty Moose, Bulky Bison.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Chattering Chipmunk → Chipmunk (smallest); Raiding Raccoon → Raccoon; Calling Coyote → Coyote; Wary Whitetail → White-tailed Deer; Burly Black Bear → Black Bear; Mighty Moose → Moose; Bulky Bison → Bison (largest North American land mammal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bird_hall",
+      "name": "Hall of Birds",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Birds",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Hummingbird",
+            "Sparrow",
+            "Robin",
+            "Blue Jay",
+            "Crow",
+            "Wild Turkey",
+            "Ostrich"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "HSRBCWO",
+            "phrase": "Hovering Hummingbird, Small Sparrow, Red-breasted Robin, Blue-feathered Jay, Cawing Crow, Wild Turkey Struts, Ostrich Towers.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Hovering Hummingbird → Hummingbird (smallest); Small Sparrow → Sparrow; Red-breasted Robin → Robin; Blue-feathered Jay → Blue Jay; Cawing Crow → Crow; Wild Turkey Struts → Wild Turkey; Ostrich Towers → Ostrich (largest living bird)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "rock_cycle_hall",
+      "name": "Hall of the Rock Cycle",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "The Rock Cycle",
+          "orderingType": "procedural",
+          "orderingRule": "Rock cycle process: melt → cool → weather → deposit → compact → transform (and back to melt)",
+          "items": [
+            "Magma",
+            "Cooling",
+            "Igneous Rock",
+            "Weathering",
+            "Sediment",
+            "Sedimentary Rock",
+            "Metamorphic Rock"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MCIWSSM",
+            "phrase": "Molten Magma, Cooling Slowly, Igneous Forms, Weathering Wears, Sediment Settles, Squeezed Layers, Metamorphic Transforms.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Molten Magma → Magma; Cooling Slowly → Cooling; Igneous Forms → Igneous Rock; Weathering Wears → Weathering; Sediment Settles → Sediment; Squeezed Layers → Sedimentary Rock (compaction); Metamorphic Transforms → Metamorphic Rock (heat & pressure; can melt back into Magma, completing the cycle)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "tree_of_life_hall",
+      "name": "Hall of the Tree of Life",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Kingdoms of Life",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Evolutionary emergence / increasing complexity",
+          "items": [
+            "Archaea",
+            "Bacteria",
+            "Protista",
+            "Fungi",
+            "Plantae",
+            "Animalia"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "ABPFPA",
+            "phrase": "Ancient Microbes, Bacterial Blooms, Protist Pioneers, Fungal Networks, Plant Kingdoms, Animal Kingdoms.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Ancient Microbes → Archaea (earliest life forms); Bacterial Blooms → Bacteria; Protist Pioneers → Protista (first eukaryotes); Fungal Networks → Fungi; Plant Kingdoms → Plantae; Animal Kingdoms → Animalia (most recent major kingdom to diversify)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ice_age_hall",
+      "name": "Hall of Ice Age Mammals",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Ice Age Megafauna",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Dire Wolf",
+            "Saber-toothed Cat",
+            "Cave Bear",
+            "Irish Elk",
+            "Woolly Rhinoceros",
+            "Giant Ground Sloth",
+            "Woolly Mammoth"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "DSCIWGW",
+            "phrase": "Deadly Wolf, Slashing Saber-tooth, Cave-dwelling Bear, Immense Elk, Woolly Rhino, Ground Sloth Towers, Woolly Mammoth Reigns.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Deadly Wolf → Dire Wolf (smallest of this group, still larger than modern wolves); Slashing Saber-tooth → Saber-toothed Cat (Smilodon); Cave-dwelling Bear → Cave Bear; Immense Elk → Irish Elk (largest deer ever, antler span); Woolly Rhino → Woolly Rhinoceros; Ground Sloth Towers → Giant Ground Sloth; Woolly Mammoth Reigns → Woolly Mammoth (largest, most iconic Ice Age animal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "biomes_hall",
+      "name": "Hall of Biomes",
+      "category": "Natural History Museum",
+      "lists": [
+        {
+          "name": "Biomes",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Climate gradient, coldest/sparsest to warmest/most diverse",
+          "items": [
+            "Tundra",
+            "Taiga",
+            "Temperate Forest",
+            "Grassland",
+            "Desert",
+            "Rainforest",
+            "Coral Reef"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "TTTGDRC",
+            "phrase": "Tundra Freezes, Taiga Stretches, Temperate Blooms, Grassland Waves, Desert Bakes, Rainforest Teems, Coral Reef Glows.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Tundra Freezes → Tundra (coldest, sparsest); Taiga Stretches → Taiga (boreal forest); Temperate Blooms → Temperate Forest; Grassland Waves → Grassland; Desert Bakes → Desert; Rainforest Teems → Tropical Rainforest (highest biodiversity); Coral Reef Glows → Coral Reef (the ocean's own 'rainforest', most colorful, ends the tour)."
+          }
+        }
+      ]
     }
   ],
   "designNotes": {
@@ -1014,6 +1293,9 @@
       ],
       "1.4": [
         "Added an \"Art Museum\" building category with 10 galleries (Renaissance, Baroque, Impressionist, Post-Impressionist, Modern Art, Surrealism, Pop Art, Sculpture Garden, Antiquities, Photography), each a natural_ordering list (chronological by artist birth year, or civilizational era for Antiquities) with a generated_phrase mnemonic in the established house style."
+      ],
+      "1.5": [
+        "Added a \"Natural History Museum\" building category with 10 halls (Dinosaur Hall, Hall of Human Origins, Hall of Gems and Minerals, Hall of Ocean Life, Hall of North American Mammals, Hall of Birds, Hall of the Rock Cycle, Hall of the Tree of Life, Hall of Ice Age Mammals, Hall of Biomes), each a natural_ordering list (size, chronology, hardness, or depth) except the Rock Cycle (procedural), with a generated_phrase mnemonic in the established house style."
       ]
     },
     "mnemonicTypes": [

@@ -9534,5 +9534,178 @@ try {
 } catch(e){ bad('Phase BZ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CA: Object List Manager index is now a two-level browse --
+//     a category grid (Home, Zoo, ...) at the top, drilling into one
+//     category's own list-cards on click -- the flat alphabetical grid
+//     buried everything together once the room database grew past a
+//     handful of categories. A single-category collection (or none at all)
+//     skips the picker entirely, straight to the list grid, since there's
+//     nothing meaningful to choose between. Search always spans every
+//     category regardless of the current view. ---
+if(shouldRunPhase(['object-lists'])){
+try {
+const appCA = await launchApp();
+try {
+  await appCA.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appCA.page.waitForSelector('#objectListsOverlay', { state: 'visible', timeout: 5000 });
+
+  // 188. Importing lists across two categories shows the CATEGORY grid, not
+  //      list cards directly -- and with the right per-category counts.
+  try {
+    await appCA.page.setInputFiles('#objlistImportFile', {
+      name: 'rooms.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        rooms: [
+          { name: 'Kitchen', category: 'Home', lists: [
+            { name: 'Fixtures', items: ['Oven', 'Sink'] },
+          ]},
+          { name: 'Bathroom', category: 'Home', lists: [
+            { name: 'Fittings', items: ['Toilet', 'Sink 2'] },
+          ]},
+          { name: 'Reptile House', category: 'Zoo', lists: [
+            { name: 'Snakes', items: ['Cobra', 'Python'] },
+          ]},
+        ],
+      })),
+    });
+    await appCA.page.waitForSelector('#objlistGrid .objlist-category-card', { timeout: 5000 });
+    const cats = await appCA.page.evaluate(() => [...document.querySelectorAll('#objlistGrid .objlist-category-card')].map(c => ({
+      name: c.querySelector('.objlist-category-name').textContent,
+      count: c.querySelector('.objlist-card-count').textContent,
+    })));
+    assert(cats.length === 2, `expected 2 category cards (Home, Zoo), got ${cats.length}: ${JSON.stringify(cats)}`);
+    const home = cats.find(c => c.name === 'Home'), zoo = cats.find(c => c.name === 'Zoo');
+    assert(home && /^2 list/.test(home.count), `expected Home to show 2 lists, got ${JSON.stringify(home)}`);
+    assert(zoo && /^1 list/.test(zoo.count), `expected Zoo to show 1 list, got ${JSON.stringify(zoo)}`);
+    const noListCardsYet = await appCA.page.evaluate(() => document.querySelectorAll('#objlistGrid .objlist-card').length === 0);
+    assert(noListCardsYet, 'expected no list-cards visible before drilling into a category');
+    ok('Object List Manager: multiple categories show a category grid, not list cards');
+  } catch(e){ bad('Object List Manager: category grid on import', e); }
+
+  // 189. Clicking a category drills into just that category's list-cards,
+  //      with a breadcrumb back button.
+  try {
+    await appCA.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#objlistGrid .objlist-category-card')].find(c => c.textContent.includes('Home'));
+      card.click();
+    });
+    await appCA.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    const state = await appCA.page.evaluate(() => ({
+      crumbVisible: getComputedStyle(document.getElementById('objlistBreadcrumb')).display !== 'none',
+      crumbText: document.getElementById('objlistBreadcrumb').textContent,
+      cardNames: [...document.querySelectorAll('#objlistGrid .objlist-card .objlist-card-name')].map(n => n.textContent),
+    }));
+    assert(state.crumbVisible, 'expected the breadcrumb (back button) to be visible once drilled into a category');
+    assert(/Home/.test(state.crumbText), `expected the breadcrumb to name the current category, got "${state.crumbText}"`);
+    assert(state.cardNames.length === 2 && state.cardNames.every(n => /Kitchen|Bathroom/.test(n)),
+      `expected only Home's 2 lists shown, got ${JSON.stringify(state.cardNames)}`);
+    ok('Object List Manager: clicking a category shows only that category\'s lists, with a breadcrumb');
+  } catch(e){ bad('Object List Manager: drilling into a category', e); }
+
+  // 190. The back button returns to the category grid.
+  try {
+    await appCA.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#objlistBreadcrumb button')][0];
+      btn.click();
+    });
+    await appCA.page.waitForSelector('#objlistGrid .objlist-category-card', { timeout: 5000 });
+    const backAtTop = await appCA.page.evaluate(() => document.querySelectorAll('#objlistGrid .objlist-category-card').length === 2);
+    assert(backAtTop, 'expected the back button to return to the 2-category grid');
+    ok('Object List Manager: the breadcrumb back button returns to the category grid');
+  } catch(e){ bad('Object List Manager: back button', e); }
+
+  // 191. Searching spans every category regardless of the current view
+  //      (search escapes browsing), and clearing the search restores
+  //      whatever category view was active before -- drill into Zoo first,
+  //      search for something in Home, clear, and confirm still in Zoo.
+  try {
+    await appCA.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#objlistGrid .objlist-category-card')].find(c => c.textContent.includes('Zoo'));
+      card.click();
+    });
+    await appCA.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await appCA.page.fill('#objlistFilterText', 'Kitchen');
+    await appCA.page.waitForFunction(() => {
+      const names = [...document.querySelectorAll('#objlistGrid .objlist-card .objlist-card-name')].map(n => n.textContent);
+      return names.length === 1 && /Kitchen/.test(names[0]);
+    }, { timeout: 5000 });
+    const crumbHiddenWhileSearching = await appCA.page.evaluate(() =>
+      getComputedStyle(document.getElementById('objlistBreadcrumb')).display === 'none');
+    assert(crumbHiddenWhileSearching, 'expected the breadcrumb hidden while a cross-category search is active');
+    await appCA.page.fill('#objlistFilterText', '');
+    await appCA.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    const backInZoo = await appCA.page.evaluate(() => {
+      const names = [...document.querySelectorAll('#objlistGrid .objlist-card .objlist-card-name')].map(n => n.textContent);
+      return names.length === 1 && /Snakes/.test(names[0]);
+    });
+    assert(backInZoo, 'expected clearing the search to restore the Zoo category view (not reset to the category grid)');
+    ok('Object List Manager: search spans all categories and clearing it restores the prior category view');
+  } catch(e){ bad('Object List Manager: search bypasses/restores category browsing', e); }
+} finally {
+  await appCA.close();
+}
+} catch(e){ bad('Phase CA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CB: the VR Wall Object Lists dialog's <select> now groups its
+//     options into per-category <optgroup>s (Category -> list name), same
+//     two-level structure as the Object List Manager's card browsing, using
+//     the <select> element's own native grouping rather than a custom
+//     picker. Lists within a category still sort best-run-length-match
+//     first; categories sort alphabetically. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB = await launchApp();
+try {
+  await seedBackup(appCB.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
+    objectLists: [
+      { id: 'home_kitchen', name: 'Kitchen: Fixtures', roomName: 'Kitchen', category: 'Home',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Oven', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      { id: 'zoo_reptiles', name: 'Reptile House: Snakes', roomName: 'Reptile House', category: 'Zoo',
+        orderingType: 'natural_ordering', orderingRule: '',
+        items: [{ name: 'Cobra', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appCB.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appCB.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appCB.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appCB.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appCB.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appCB.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appCB.page.waitForTimeout(400);
+
+  // 192. wallListOptionsHtml groups the two seeded lists under their own
+  //      <optgroup> (Home, Zoo), alphabetically, each containing its list.
+  try {
+    const html = await appCB.page.evaluate(() => {
+      const dbg = window.__threeTestEdit;
+      return dbg.wallListOptionsHtml(dbg.room(), 'all');
+    });
+    const groups = [...html.matchAll(/<optgroup label="([^"]+)">(.*?)<\/optgroup>/gs)]
+      .map(m => ({ label: m[1], html: m[2] }));
+    assert(groups.length === 2, `expected 2 optgroups (Home, Zoo), got ${groups.length}: ${JSON.stringify(groups.map(g=>g.label))}`);
+    assert(groups[0].label === 'Home' && groups[1].label === 'Zoo',
+      `expected optgroups alphabetically (Home, Zoo), got ${JSON.stringify(groups.map(g=>g.label))}`);
+    assert(/Kitchen: Fixtures/.test(groups[0].html), `expected the Home optgroup to contain the Kitchen list, got ${groups[0].html}`);
+    assert(/Reptile House: Snakes/.test(groups[1].html), `expected the Zoo optgroup to contain the Reptile House list, got ${groups[1].html}`);
+    ok('VR wall-lists dialog: options are grouped into per-category optgroups');
+  } catch(e){ bad('VR wall-lists dialog: category optgroups', e); }
+} finally {
+  await appCB.close();
+}
+} catch(e){ bad('Phase CB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

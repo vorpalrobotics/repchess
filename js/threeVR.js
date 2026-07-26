@@ -6429,21 +6429,38 @@ function closeWallListsDialog(){
 }
 const WALL_BUCKET_LABEL = { left: 'Left wall', right: 'Right wall', all: 'Room (single sequence)' };
 // list <option>s for a bucket, best run-length match first (exact match flagged).
+// two-level menu -- Category, then list name within it (optgroup is a native
+// <select> feature, so this needs no custom dropdown/picker) -- lists within
+// a category still sort best-run-length-match first; categories themselves
+// sort alphabetically ("(Uncategorized)" last), independent of fit.
 function wallListOptionsHtml(roomKey, bucket){
   const need = bucketSlotCount(roomKey, bucket);
   const cur = wallListId(roomKey, bucket);
-  const lists = Object.values(OBJECT_LISTS).slice().sort((a, b) => {
-    const na = (a.items || []).length, nb = (b.items || []).length;
-    const da = Math.abs(na - need), db = Math.abs(nb - need);
-    return (da - db) || (na - nb) || String(a.name).localeCompare(String(b.name));
+  const byCategory = new Map();
+  for(const l of Object.values(OBJECT_LISTS)){
+    const cat = l.category || '(Uncategorized)';
+    if(!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat).push(l);
+  }
+  const categories = [...byCategory.keys()].sort((a, b) => {
+    if(a === '(Uncategorized)') return 1;
+    if(b === '(Uncategorized)') return -1;
+    return a.localeCompare(b);
   });
-  const opts = [`<option value="">— none —</option>`];
-  for(const l of lists){
+  const optionHtml = l => {
     const n = (l.items || []).length;
     const fit = n === need ? ' ✓ exact' : ` (${n} item${n === 1 ? '' : 's'})`;
-    opts.push(`<option value="${escHtml(l.id)}" ${l.id === cur ? 'selected' : ''}>${escHtml(l.name)}${fit}</option>`);
-  }
-  return opts.join('');
+    return `<option value="${escHtml(l.id)}" ${l.id === cur ? 'selected' : ''}>${escHtml(l.name)}${fit}</option>`;
+  };
+  const groups = categories.map(cat => {
+    const lists = byCategory.get(cat).slice().sort((a, b) => {
+      const na = (a.items || []).length, nb = (b.items || []).length;
+      const da = Math.abs(na - need), db = Math.abs(nb - need);
+      return (da - db) || (na - nb) || String(a.name).localeCompare(String(b.name));
+    });
+    return `<optgroup label="${escHtml(cat)}">${lists.map(optionHtml).join('')}</optgroup>`;
+  });
+  return `<option value="">— none —</option>` + groups.join('');
 }
 // preview of how the chosen list's items land on this bucket's slots, in order.
 function wallListPreviewHtml(roomKey, bucket){
@@ -7462,6 +7479,11 @@ export async function openThreeTest(containerEl, opts){
       // center, face along `thru`) instead of guessing which wall a door
       // landed on.
       exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, thru: m.thru })),
+      // the wall-lists <select>'s option/optgroup HTML for a bucket, exactly
+      // as the real Wall Object Lists dialog builds it -- for testing the
+      // category grouping without needing to open edit mode, click the
+      // toolbar icon, and navigate the real dialog.
+      wallListOptionsHtml: (roomKey, bucket) => wallListOptionsHtml(roomKey, bucket),
       // a room's exits (wall/offset/target/back), each with its doorKey()
       // pre-computed -- for driving target({kind:'door', roomKey, doorKey})
       // against a specific exit by target without reaching into internals.
