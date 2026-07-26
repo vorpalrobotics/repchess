@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.4",
   "rooms": [
     {
       "id": "kitchen",
@@ -160,6 +160,841 @@
           }
         }
       ]
+    },
+    {
+      "id": "bathroom",
+      "name": "Bathroom",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Fixtures",
+          "orderingType": "procedural",
+          "orderingRule": "Morning routine: relieve → wash → check appearance → bathe → dry → medicate/groom",
+          "items": [
+            "Toilet",
+            "Sink",
+            "Mirror",
+            "Shower",
+            "Towel Rack",
+            "Medicine Cabinet"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "TSMSTM",
+            "phrase": "Tinkle, Suds Up, Mirror Check, Steamy Shower, Towel Off, Medicine Time.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Tinkle → Toilet (bathroom use); Suds Up → Sink (washing hands/face); Mirror Check → Mirror; Steamy Shower → Shower; Towel Off → Towel Rack; Medicine Time → Medicine Cabinet (last step before leaving)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "laundry_room",
+      "name": "Laundry Room",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Laundry Stations",
+          "orderingType": "procedural",
+          "orderingRule": "Laundry lifecycle: collect → treat → wash → dry → press → fold → store",
+          "items": [
+            "Hamper",
+            "Detergent Shelf",
+            "Washer",
+            "Dryer",
+            "Ironing Board",
+            "Folding Table",
+            "Linen Closet"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "HDWDIFL",
+            "phrase": "Heap it, Douse it, Wash it, Dry it, Iron it, Fold it, Lock it away.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Each verb names the action performed at that piece, doubling as its first letter: Heap → Hamper; Douse → Detergent Shelf; Wash → Washer; Dry → Dryer; Iron → Ironing Board; Fold → Folding Table; Lock away → Linen Closet."
+          }
+        }
+      ]
+    },
+    {
+      "id": "entryway",
+      "name": "Entryway",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Arrival Stations",
+          "orderingType": "procedural",
+          "orderingRule": "Arrival/departure routine: enter → shed outerwear → sit to remove shoes → store footwear → stow umbrella → drop keys/mail → check appearance",
+          "items": [
+            "Front Door",
+            "Coat Rack",
+            "Bench",
+            "Shoe Rack",
+            "Umbrella Stand",
+            "Console Table",
+            "Mirror"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "FCBSUCM",
+            "phrase": "Fling Open, Coat Off, Bench Down, Shoes Off, Umbrella Up, Console Keys, Mirror Check.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Fling Open → Front Door; Coat Off → Coat Rack; Bench Down → Bench (sit to remove shoes); Shoes Off → Shoe Rack; Umbrella Up → Umbrella Stand; Console Keys → Console Table (drop keys/mail); Mirror Check → Mirror (last look before leaving)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bedroom",
+      "name": "Bedroom",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Bedtime Furniture",
+          "orderingType": "procedural",
+          "orderingRule": "Evening routine: undress → put away/retrieve sleepwear → check appearance → lie down → bedside items → set alarm → lights out",
+          "items": [
+            "Closet",
+            "Dresser",
+            "Mirror",
+            "Bed",
+            "Nightstand",
+            "Alarm Clock",
+            "Lamp"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CDMBNAL",
+            "phrase": "Closet Open, Dresser Drawer, Mirror Glance, Bed Sinks, Nightstand Glasses, Alarm Set, Lamp Off.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Closet Open → Closet; Dresser Drawer → Dresser; Mirror Glance → Mirror; Bed Sinks → Bed; Nightstand Glasses → Nightstand; Alarm Set → Alarm Clock; Lamp Off → Lamp (last thing touched before sleep)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "home_office",
+      "name": "Home Office",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Work Furniture",
+          "orderingType": "procedural",
+          "orderingRule": "Work session: sit → set up → view screen → produce output → consult reference → archive",
+          "items": [
+            "Chair",
+            "Desk",
+            "Monitor",
+            "Printer",
+            "Bookshelf",
+            "Filing Cabinet"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CDMPBF",
+            "phrase": "Chair Pulled, Desk Cleared, Monitor Glows, Printer Hums, Bookshelf Checked, Filed Away.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Chair Pulled → Chair; Desk Cleared → Desk; Monitor Glows → Monitor; Printer Hums → Printer; Bookshelf Checked → Bookshelf (reference); Filed Away → Filing Cabinet (last step, archiving)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "living_room",
+      "name": "Living Room",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Seating & Focal Points",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Spatial center-out: foundation → primary seating → central surface → focal point → secondary seating → ambiance → reference",
+          "items": [
+            "Rug",
+            "Sofa",
+            "Coffee Table",
+            "TV Stand",
+            "Armchair",
+            "Fireplace",
+            "Bookshelf"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RSCTAFB",
+            "phrase": "Rug Underfoot, Sofa Sinks, Coffee Steams, TV Glows, Armchair Creaks, Fireplace Crackles, Bookshelf Waits.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Rug Underfoot → Rug (foundation); Sofa Sinks → Sofa; Coffee Steams → Coffee Table; TV Glows → TV Stand; Armchair Creaks → Armchair; Fireplace Crackles → Fireplace; Bookshelf Waits → Bookshelf."
+          }
+        }
+      ]
+    },
+    {
+      "id": "dining_room",
+      "name": "Dining Room",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Dinner-Party Furniture",
+          "orderingType": "procedural",
+          "orderingRule": "Meal-service flow: set table → seat guests → light table → light room → serve → pour → store fine china",
+          "items": [
+            "Table",
+            "Chairs",
+            "Candles",
+            "Chandelier",
+            "Sideboard",
+            "Wine Rack",
+            "China Cabinet"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "TCCCSWC",
+            "phrase": "Table Set, Chairs Pulled, Candles Lit, Chandelier Glows, Sideboard Serves, Wine Poured, China Stored.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Table Set → Table; Chairs Pulled → Chairs; Candles Lit → Candles; Chandelier Glows → Chandelier; Sideboard Serves → Sideboard; Wine Poured → Wine Rack; China Stored → China Cabinet (put away after)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "home_gym",
+      "name": "Home Gym",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Workout Stations",
+          "orderingType": "procedural",
+          "orderingRule": "Workout structure: warm up → cardio → strength → support → cool down → check form → hydrate",
+          "items": [
+            "Jump Rope",
+            "Treadmill",
+            "Weight Rack",
+            "Bench",
+            "Yoga Mat",
+            "Mirror",
+            "Water Bottle Station"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "JTWBYMW",
+            "phrase": "Jump First, Treadmill Next, Weights Lifted, Bench Pressed, Yoga Stretched, Mirror Checked, Water Last.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Jump First → Jump Rope (warm-up); Treadmill Next → Treadmill (cardio); Weights Lifted → Weight Rack; Bench Pressed → Bench; Yoga Stretched → Yoga Mat (cool-down); Mirror Checked → Mirror (form check); Water Last → Water Bottle Station (hydrate, done)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "nursery",
+      "name": "Nursery",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Baby-Care Furniture",
+          "orderingType": "procedural",
+          "orderingRule": "Baby-care routine: sleep → stimulate → change → dispose → soothe → play → wind down",
+          "items": [
+            "Crib",
+            "Mobile",
+            "Changing Table",
+            "Diaper Pail",
+            "Rocking Chair",
+            "Toy Chest",
+            "Bookshelf"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CMCDRTB",
+            "phrase": "Crib Wakes, Mobile Spins, Changing Time, Diaper Tossed, Rocking Soothes, Toys Out, Books Read.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Crib Wakes → Crib; Mobile Spins → Mobile; Changing Time → Changing Table; Diaper Tossed → Diaper Pail; Rocking Soothes → Rocking Chair; Toys Out → Toy Chest; Books Read → Bookshelf (last, quiet wind-down)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "garage",
+      "name": "Garage",
+      "category": "Home",
+      "lists": [
+        {
+          "name": "Workshop Furniture",
+          "orderingType": "procedural",
+          "orderingRule": "Project workflow: park → build → hang tools → store tools → shelve supplies → store transport → dispose",
+          "items": [
+            "Car",
+            "Workbench",
+            "Pegboard",
+            "Tool Chest",
+            "Shelving",
+            "Bike Rack",
+            "Recycling Bin"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CWPTSBR",
+            "phrase": "Car Parked, Workbench Cleared, Pegboard Hung, Toolbox Opened, Shelving Stacked, Bikes Racked, Recycling Out.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Car Parked → Car; Workbench Cleared → Workbench; Pegboard Hung → Pegboard; Toolbox Opened → Tool Chest; Shelving Stacked → Shelving; Bikes Racked → Bike Rack; Recycling Out → Recycling Bin (last, taken to the curb)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "primates_house",
+      "name": "Primates House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Primates",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Mouse Lemur",
+            "Marmoset",
+            "Capuchin",
+            "Macaque",
+            "Baboon",
+            "Chimpanzee",
+            "Gorilla"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MMCMBCG",
+            "phrase": "Mini Mover, More Munching, Curious Climber, Mighty Muncher, Bold Barker, Chest Thumper, Gentle Giant.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Mini Mover → Mouse Lemur (smallest, quickest); More Munching → Marmoset; Curious Climber → Capuchin; Mighty Muncher → Macaque; Bold Barker → Baboon; Chest Thumper → Chimpanzee; Gentle Giant → Gorilla (largest primate, despite the gentle nickname)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "raptor_aviary",
+      "name": "Raptor Aviary",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Birds of Prey",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Kestrel",
+            "Falcon",
+            "Hawk",
+            "Owl",
+            "Eagle",
+            "Condor"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "KFHOEC",
+            "phrase": "Keen Kestrel, Fast Falcon, Hovering Hawk, Old Owl, Elegant Eagle, Circling Condor.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Keen Kestrel → Kestrel (smallest, keenest hunter); Fast Falcon → Falcon (fastest diver); Hovering Hawk → Hawk; Old Owl → Owl; Elegant Eagle → Eagle; Circling Condor → Condor (largest, soars on thermals)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "reptile_house",
+      "name": "Reptile House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Snakes",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body length, shortest to longest",
+          "items": [
+            "Garter Snake",
+            "Corn Snake",
+            "Rattlesnake",
+            "Cobra",
+            "Boa Constrictor",
+            "Python",
+            "Anaconda"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "GCRCBPA",
+            "phrase": "Garden Slither, Cornfield Crawl, Rattling Warning, Cobra Rises, Boa Squeezes, Python Coils, Anaconda Swallows.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Garden Slither → Garter Snake; Cornfield Crawl → Corn Snake; Rattling Warning → Rattlesnake; Cobra Rises → Cobra; Boa Squeezes → Boa Constrictor; Python Coils → Python; Anaconda Swallows → Anaconda (longest/heaviest, ends the list)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "big_cats",
+      "name": "Big Cats",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Big Cats",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Ocelot",
+            "Cheetah",
+            "Leopard",
+            "Jaguar",
+            "Cougar",
+            "Lion",
+            "Tiger"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "OCLJCLT",
+            "phrase": "Ocelot Prowls, Cheetah Sprints, Leopard Climbs, Jaguar Swims, Cougar Leaps, Lion Roars, Tiger Rules.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Ocelot Prowls → Ocelot (smallest); Cheetah Sprints → Cheetah (fastest); Leopard Climbs → Leopard; Jaguar Swims → Jaguar; Cougar Leaps → Cougar; Lion Roars → Lion; Tiger Rules → Tiger (largest big cat)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "african_savanna",
+      "name": "African Savanna",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Savanna Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Overall size, smallest to largest",
+          "items": [
+            "Meerkat",
+            "Warthog",
+            "Zebra",
+            "Wildebeest",
+            "Rhino",
+            "Giraffe",
+            "Elephant"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MWZWRGE",
+            "phrase": "Meerkats Watch, Warthogs Wallow, Zebras Wander, Wildebeest Migrate, Rhinos Graze, Giraffes Reach, Elephants Rule.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Meerkats Watch → Meerkat (smallest, always alert); Warthogs Wallow → Warthog; Zebras Wander → Zebra; Wildebeest Migrate → Wildebeest; Rhinos Graze → Rhino; Giraffes Reach → Giraffe (tallest); Elephants Rule → Elephant (largest land animal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "aquarium",
+      "name": "Aquarium",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Marine Life",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Habitat depth, shallow reef to deep sea",
+          "items": [
+            "Clownfish",
+            "Sea Turtle",
+            "Octopus",
+            "Stingray",
+            "Shark",
+            "Jellyfish",
+            "Anglerfish"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CSOSSJA",
+            "phrase": "Clownfish Dart, Sea Turtles Glide, Octopus Hides, Stingrays Skim, Sharks Patrol, Jellyfish Drift, Anglerfish Lurk.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Clownfish Dart → Clownfish (shallow reef); Sea Turtles Glide → Sea Turtle; Octopus Hides → Octopus; Stingrays Skim → Stingray; Sharks Patrol → Shark; Jellyfish Drift → Jellyfish; Anglerfish Lurk → Anglerfish (deep sea, ends the descent)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "arctic_zone",
+      "name": "Arctic Zone",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Polar Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Arctic Fox",
+            "Snowy Owl",
+            "Penguin",
+            "Seal",
+            "Walrus",
+            "Polar Bear",
+            "Beluga Whale"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "ASPSWPB",
+            "phrase": "Arctic Fox Trots, Snowy Owl Watches, Penguins Waddle, Seals Slide, Walruses Wallow, Polar Bears Prowl, Belugas Sing.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Arctic Fox Trots → Arctic Fox; Snowy Owl Watches → Snowy Owl; Penguins Waddle → Penguin; Seals Slide → Seal; Walruses Wallow → Walrus; Polar Bears Prowl → Polar Bear; Belugas Sing → Beluga Whale (largest, famous for its song)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "insect_house",
+      "name": "Insect House",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Insects & Arachnids",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Ant",
+            "Bee",
+            "Butterfly",
+            "Beetle",
+            "Praying Mantis",
+            "Tarantula",
+            "Scorpion"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "ABBBPTS",
+            "phrase": "Ants March, Bees Buzz, Butterflies Flutter, Beetles Crawl, Praying Mantis Waits, Tarantulas Creep, Scorpions Sting.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Ants March → Ant (smallest); Bees Buzz → Bee; Butterflies Flutter → Butterfly; Beetles Crawl → Beetle; Praying Mantis Waits → Praying Mantis; Tarantulas Creep → Tarantula; Scorpions Sting → Scorpion (largest/most feared, ends the list)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "petting_zoo",
+      "name": "Petting Zoo",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Farm Animals",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Chick",
+            "Duck",
+            "Rabbit",
+            "Goat",
+            "Sheep",
+            "Pig",
+            "Cow"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CDRGSPC",
+            "phrase": "Chicks Peep, Ducks Waddle, Rabbits Hop, Goats Butt, Sheep Baa, Pigs Oink, Cows Moo.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Chicks Peep → Chick (smallest); Ducks Waddle → Duck; Rabbits Hop → Rabbit; Goats Butt → Goat; Sheep Baa → Sheep; Pigs Oink → Pig; Cows Moo → Cow (largest common farm animal)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bear_den",
+      "name": "Bear Den",
+      "category": "Zoo",
+      "lists": [
+        {
+          "name": "Bears",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Body size, smallest to largest",
+          "items": [
+            "Sun Bear",
+            "Sloth Bear",
+            "Black Bear",
+            "Giant Panda",
+            "Brown Bear",
+            "Polar Bear"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "SSBGBP",
+            "phrase": "Sun Bears Bask, Sloth Bears Shuffle, Black Bears Forage, Giant Pandas Munch, Brown Bears Fish, Polar Bears Swim.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Sun Bears Bask → Sun Bear (smallest bear species); Sloth Bears Shuffle → Sloth Bear; Black Bears Forage → Black Bear; Giant Pandas Munch → Giant Panda; Brown Bears Fish → Brown Bear; Polar Bears Swim → Polar Bear (largest, ends the list)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "renaissance_gallery",
+      "name": "Renaissance Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Renaissance Masters",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Giotto",
+            "Donatello",
+            "Botticelli",
+            "Leonardo da Vinci",
+            "Michelangelo",
+            "Raphael",
+            "Titian"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "GDBLMRT",
+            "phrase": "Golden Frescoes, Draped Bronze, Blooming Venus, Lively Genius, Marble Might, Radiant Madonnas, Tinted Glory.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Golden Frescoes → Giotto (early frescoes); Draped Bronze → Donatello (bronze sculpture); Blooming Venus → Botticelli (Birth of Venus); Lively Genius → Leonardo da Vinci; Marble Might → Michelangelo; Radiant Madonnas → Raphael; Tinted Glory → Titian (master of color)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "baroque_gallery",
+      "name": "Baroque Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Baroque Masters",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Caravaggio",
+            "Rubens",
+            "Artemisia Gentileschi",
+            "Bernini",
+            "Velázquez",
+            "Rembrandt",
+            "Vermeer"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CRABVRV",
+            "phrase": "Candlelit Drama, Rich Flesh, Avenging Heroine, Baroque Marble, Velvet Court, Rembrandt's Shadows, Velvety Light.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Candlelit Drama → Caravaggio (dramatic chiaroscuro); Rich Flesh → Rubens; Avenging Heroine → Artemisia Gentileschi (Judith Slaying Holofernes); Baroque Marble → Bernini; Velvet Court → Velázquez; Rembrandt's Shadows → Rembrandt; Velvety Light → Vermeer (luminous interiors)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "impressionist_gallery",
+      "name": "Impressionist Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Impressionists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Manet",
+            "Degas",
+            "Cézanne",
+            "Monet",
+            "Renoir",
+            "Morisot",
+            "Cassatt"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MDCMRMC",
+            "phrase": "Modern Scandal, Dancers Twirl, Colorful Apples, Misty Waterlilies, Radiant Dancers, Mothers Watch, Charming Teatime.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Modern Scandal → Manet (Olympia caused scandal); Dancers Twirl → Degas; Colorful Apples → Cézanne (still lifes); Misty Waterlilies → Monet; Radiant Dancers → Renoir; Mothers Watch → Morisot (mother-and-child scenes); Charming Teatime → Cassatt (domestic scenes)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "post_impressionist_gallery",
+      "name": "Post-Impressionist Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Post-Impressionists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Redon",
+            "Rousseau",
+            "Gauguin",
+            "Van Gogh",
+            "Seurat",
+            "Signac",
+            "Toulouse-Lautrec"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RRGVSST",
+            "phrase": "Reveries Bloom, Rousing Jungles, Golden Tahiti, Vivid Swirls, Sparkling Dots, Sister Dots, Theater Posters.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Reveries Bloom → Odilon Redon (dreamlike imagery); Rousing Jungles → Henri Rousseau (jungle scenes); Golden Tahiti → Paul Gauguin; Vivid Swirls → Van Gogh; Sparkling Dots → Seurat (pointillism); Sister Dots → Paul Signac (also pointillist); Theater Posters → Toulouse-Lautrec (Moulin Rouge posters)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "modern_art_gallery",
+      "name": "Modern Art Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Early Modernists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Kandinsky",
+            "Matisse",
+            "Mondrian",
+            "Klee",
+            "Picasso",
+            "Braque",
+            "O'Keeffe"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "KMMKPBO",
+            "phrase": "Kaleidoscope Colors, Musical Cutouts, Mondrian's Grid, Kid-like Symbols, Picasso's Fractures, Braided Facets, Oversized Flowers.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Kaleidoscope Colors → Kandinsky (abstract color); Musical Cutouts → Matisse; Mondrian's Grid → Mondrian; Kid-like Symbols → Klee (whimsical, childlike forms); Picasso's Fractures → Picasso (cubist fracturing); Braided Facets → Braque (co-founder of cubism); Oversized Flowers → Georgia O'Keeffe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "surrealism_gallery",
+      "name": "Surrealism Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Surrealists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Chirico",
+            "Ernst",
+            "Miró",
+            "Magritte",
+            "Dalí",
+            "Kahlo",
+            "Carrington"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "CEMMDKC",
+            "phrase": "Cryptic Plazas, Eerie Forests, Miró's Symbols, Mysterious Pipe, Dripping Clocks, Kahlo's Pain, Cryptic Beasts.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Cryptic Plazas → Giorgio de Chirico (empty piazzas); Eerie Forests → Max Ernst; Miró's Symbols → Joan Miró; Mysterious Pipe → René Magritte (This Is Not a Pipe); Dripping Clocks → Salvador Dalí (The Persistence of Memory); Kahlo's Pain → Frida Kahlo; Cryptic Beasts → Leonora Carrington (fantastical creatures)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "pop_art_gallery",
+      "name": "Pop Art Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Pop & Contemporary Artists",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Lichtenstein",
+            "Warhol",
+            "Kusama",
+            "Hockney",
+            "Sherman",
+            "Haring",
+            "Basquiat"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "LWKHSHB",
+            "phrase": "Loud Comic-Panels, Warhol's Soup Cans, Kusama's Dots, Hockney's Pools, Sherman's Selfies, Haring's Figures, Basquiat's Crown.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Loud Comic-Panels → Roy Lichtenstein; Warhol's Soup Cans → Andy Warhol; Kusama's Dots → Yayoi Kusama; Hockney's Pools → David Hockney; Sherman's Selfies → Cindy Sherman (self-portraits); Haring's Figures → Keith Haring; Basquiat's Crown → Jean-Michel Basquiat (his crown motif)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "sculpture_garden",
+      "name": "Sculpture Garden",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Sculptors",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Rodin",
+            "Brancusi",
+            "Moore",
+            "Calder",
+            "Giacometti",
+            "Bourgeois",
+            "Serra"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "RBMCGBS",
+            "phrase": "Rodin's Thinker, Bronze Simplicity, Monumental Curves, Colorful Mobiles, Gaunt Figures, Boundless Spiders, Steel Curves.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Rodin's Thinker → Auguste Rodin; Bronze Simplicity → Constantin Brancusi (abstracted bronze forms); Monumental Curves → Henry Moore; Colorful Mobiles → Alexander Calder; Gaunt Figures → Alberto Giacometti (elongated bronze figures); Boundless Spiders → Louise Bourgeois (giant spider sculptures); Steel Curves → Richard Serra (monumental steel plates)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "antiquities_gallery",
+      "name": "Antiquities Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Ancient Civilizations",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Civilizational chronology (roughly earliest to latest)",
+          "items": [
+            "Mesopotamian",
+            "Egyptian",
+            "Greek",
+            "Etruscan",
+            "Roman",
+            "Byzantine"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "MEGERB",
+            "phrase": "Mud-brick Ziggurats, Eternal Pyramids, Graceful Marble, Etruscan Tombs, Roman Arches, Byzantine Mosaics.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Mud-brick Ziggurats → Mesopotamian art (ziggurats, cuneiform); Eternal Pyramids → Egyptian art; Graceful Marble → Greek art (classical sculpture); Etruscan Tombs → Etruscan art (painted tomb chambers); Roman Arches → Roman art/architecture; Byzantine Mosaics → Byzantine art (gold mosaics)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "photography_gallery",
+      "name": "Photography Gallery",
+      "category": "Art Museum",
+      "lists": [
+        {
+          "name": "Photographers",
+          "orderingType": "natural_ordering",
+          "orderingRule": "Chronological, by birth year",
+          "items": [
+            "Daguerre",
+            "Talbot",
+            "Stieglitz",
+            "Adams",
+            "Bourke-White",
+            "Cartier-Bresson",
+            "Arbus"
+          ],
+          "mnemonic": {
+            "type": "generated_phrase",
+            "initialism": "DTSABCA",
+            "phrase": "Daguerre's Silver Plate, Talbot's Paper Prints, Stieglitz's Clouds, Adams' Mountains, Bourke-White's Factories, Cartier-Bresson's Moment, Arbus' Outsiders.",
+            "source": "Project mnemonic",
+            "phoneticNotes": "Daguerre's Silver Plate → Louis Daguerre (daguerreotype); Talbot's Paper Prints → William Henry Fox Talbot; Stieglitz's Clouds → Alfred Stieglitz; Adams' Mountains → Ansel Adams; Bourke-White's Factories → Margaret Bourke-White (industrial photography); Cartier-Bresson's Moment → Henri Cartier-Bresson ('decisive moment'); Arbus' Outsiders → Diane Arbus."
+          }
+        }
+      ]
     }
   ],
   "designNotes": {
@@ -170,6 +1005,15 @@
         "Added existing_acronym as a valid mnemonic type (used by HOMES).",
         "orderingType values standardised: canonical_sequence | adapted_cultural | procedural | natural_ordering | generated_mnemonic.",
         "orderingRule for Great Lakes clarified that the order is the mnemonic, not a geographic ordering."
+      ],
+      "1.2": [
+        "Added 10 more Home-category rooms (Bathroom, Laundry Room, Entryway, Bedroom, Home Office, Living Room, Dining Room, Home Gym, Nursery, Garage), each with a procedural or natural_ordering furniture/fixture list and a generated_phrase mnemonic, matching Kitchen's existing style."
+      ],
+      "1.3": [
+        "Added a new \"Zoo\" building category with 10 exhibits (Primates House, Raptor Aviary, Reptile House, Big Cats, African Savanna, Aquarium, Arctic Zone, Insect House, Petting Zoo, Bear Den), each ordered by natural_ordering (body size or habitat depth, smallest/shallowest to largest/deepest) with a generated_phrase mnemonic in the established house style."
+      ],
+      "1.4": [
+        "Added an \"Art Museum\" building category with 10 galleries (Renaissance, Baroque, Impressionist, Post-Impressionist, Modern Art, Surrealism, Pop Art, Sculpture Garden, Antiquities, Photography), each a natural_ordering list (chronological by artist birth year, or civilizational era for Antiquities) with a generated_phrase mnemonic in the established house style."
       ]
     },
     "mnemonicTypes": [
