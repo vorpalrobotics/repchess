@@ -9817,6 +9817,23 @@ try {
     ok('memorized-stability Phase 3: a memorized corridor keeps its shape and gains a single side-door');
   } catch(e){ bad('memorized-stability Phase 3: memorized room preserved via side-door', e); }
 
+  // 197. Beta stays memorized (its content is fully preserved, side-door and
+  //      all) but now reads DIRTY -- isRoomDirty was originally scoped to
+  //      non-linear rooms only, deferred until Phase 3 gave a linear room's
+  //      exitPosKeys somewhere stable to diff against; that's exactly what
+  //      just happened, so the toolbar's dirty badge should now light up.
+  try {
+    await appCC.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.beta);
+    await appCC.page.waitForTimeout(200);
+    const stillMemorized = await appCC.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(stillMemorized, 'expected Beta to remain memorized -- its content is preserved, not stale');
+    const dirty = await appCC.page.evaluate(() => window.__threeTestEdit.isRoomDirty());
+    assert(dirty, 'expected Beta to read dirty now that its live exitPosKeys include the new side-door');
+    const badge = await appCC.page.evaluate(() => window.__threeTestEdit.dirtyBadgeStyle());
+    assert(badge && badge.display !== 'none', `expected the dirty toolbar badge visible, got ${JSON.stringify(badge)}`);
+    ok('memorized-stability: a memorized linear room with a new side-door stays memorized AND reads dirty');
+  } catch(e){ bad('memorized-stability: linear-room dirty detection (Phase 3 closes the Phase 2 gap)', e); }
+
   // 196. Alpha (never memorized, the control): the SAME edit splits it --
   //      its original room key shrinks to 2 members and shows 2 forward
   //      doors (one to the new branch, one to what used to be silently
@@ -9833,6 +9850,69 @@ try {
   await appCC.close();
 }
 } catch(e){ bad('Phase CC: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CD: row menu's "Copy Moves" action copies the moves up to and
+//     including that row, formatted for round-tripping straight back through
+//     Import Line ("1. d4 Nf6 2. c4 e6"). ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appCD = await launchApp();
+try {
+  await seedBackup(appCD.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appCD.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 10000 });
+
+  // stub navigator.clipboard.writeText so the test doesn't depend on real
+  // clipboard permissions in headless Chromium -- captures the string instead.
+  await appCD.page.evaluate(() => {
+    window.__copiedText = null;
+    navigator.clipboard.writeText = (t) => { window.__copiedText = t; return Promise.resolve(); };
+  });
+
+  // 198. "Copy Moves" lives right after "Set Move Quality" and carries a
+  //      copy icon.
+  try {
+    await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] .rowMenuBtn').click());
+    // the quality control is a wrapping <div>, not a top-level data-act item --
+    // find its position via the .row-menu-quality div's own class instead.
+    const order = await appCD.page.evaluate(() =>
+      [...document.querySelectorAll('tr.data-row[data-seq="d4,Nf6,c4,e6"] .row-menu > *')]
+        .map(el => el.classList.contains('row-menu-quality') ? 'quality' : (el.dataset?.act || el.tagName)));
+    const qualityPos = order.indexOf('quality');
+    const copyPos = order.indexOf('copyMoves');
+    assert(qualityPos >= 0 && copyPos === qualityPos + 1,
+      `expected copyMoves immediately after the quality control, got order ${JSON.stringify(order)}`);
+    const iconClass = await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] [data-act="copyMoves"] i')?.className);
+    assert(/fa-copy/.test(iconClass || ''), `expected a copy icon, got ${JSON.stringify(iconClass)}`);
+    ok('Copy Moves sits right after Set Move Quality with a copy icon');
+  } catch(e){ bad('Copy Moves: menu placement and icon', e); }
+
+  // 199. Clicking it copies "1. d4 Nf6 2. c4 e6" -- the moves up to and
+  //      including THIS row (which ends in the opponent's e6, not our
+  //      further-down Nc3/Bb4) -- in the exact format Import Line accepts,
+  //      so it round-trips.
+  try {
+    await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] [data-act="copyMoves"]').click());
+    const copied = await appCD.page.evaluate(() => window.__copiedText);
+    assert(copied === '1. d4 Nf6 2. c4 e6',
+      `expected the formatted move list, got ${JSON.stringify(copied)}`);
+    ok('Copy Moves copies a correctly move-numbered, Import-Line-ready string');
+  } catch(e){ bad('Copy Moves: copied text format', e); }
+} finally {
+  await appCD.close();
+}
+} catch(e){ bad('Phase CD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

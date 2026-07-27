@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-120';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-121';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-223';
+const BUILD_TAG = '-224';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1964,16 +1964,24 @@ async function loadMemorizedShapes(){
   try { MEMORIZED_SHAPES = JSON.parse(await getMeta('threeMemorizedShapes') || '{}'); }
   catch { MEMORIZED_SHAPES = {}; }
 }
-// Phase 2 of the memorized-room-stability design: non-linear rooms only for
-// now (see threeVR.js's own isRoomDirty for why linear rooms are deferred to
-// a later phase, once the side-door mechanism exists to actually respond to
-// them). `liveShape` is the room's shape.exitPosKeys as computed by THIS
-// regen (buildGeneratedCastle), passed in by the caller since it already has
-// it in hand from the coverage-stats loop -- no need to recompute here.
+// Mirrors threeVR.js's own isRoomDirty (see its longer comment for the
+// Phase-3-closed-the-gap reasoning behind covering linear rooms too).
+// `liveShape` is the room's shape.exitPosKeys as computed by THIS regen
+// (buildGeneratedCastle), passed in by the caller since it already has it in
+// hand from the coverage-stats loop -- no need to recompute here.
+// CAVEAT specific to this copy: this file's buildGeneratedCastle calls never
+// pass the frozen-adjacency map (a single castle instance's worth doesn't
+// apply cleanly to the network graph, which can span several at once -- see
+// buildFrozenAdjacency's own comment), so a memorized linear room whose
+// interior branch landed exactly on its own anchor can still show a KIND
+// mismatch here (the unprotected view reclassifies it as 'branch') even
+// though the protected VR view correctly keeps it 'corridor' and flags it
+// dirty there. That specific case silently reads as not-dirty in the
+// digraph; every other linear-room case (branch anywhere else in the room)
+// is unaffected, since only an anchor-level branch changes kind.
 function isRoomDirty(roomKey, liveShape){
   const snap = MEMORIZED_SHAPES[roomKey];
   if(!snap || !liveShape || snap.kind !== liveShape.kind) return false;
-  if(liveShape.kind !== 'branch' && liveShape.kind !== 'room') return false;
   const known = new Set(snap.exitPosKeys || []);
   return (liveShape.exitPosKeys || []).some(k => !known.has(k));
 }
@@ -3513,6 +3521,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
                  <button type="button" class="rmq rmq-clear" data-q="" title="clear annotation">✕</button>
                </span>
              </div>
+             <button type="button" data-act="copyMoves"><i class="fa-solid fa-copy"></i>Copy Moves</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
              <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
@@ -3766,6 +3775,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
         rowMenu.classList.remove('show');
       };
     });
+    rowMenu.querySelector('[data-act="copyMoves"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      navigator.clipboard.writeText(formatMoveListPgn(lineSeq)).then(
+        () => log(`copied ${lineSeq.length} move(s) to the clipboard`),
+        () => log('failed to copy to the clipboard', true));
+    };
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -4423,6 +4439,14 @@ $('lineStreetEditBtn').onclick = () => {
     refreshLineStreetName();
   });
 };
+
+// inverse of parseAlgebraicMoveList: a seq (plain SAN array, ply 1 = White's
+// first move) -> a "1. d4 Nf6 2. c4 e6" string, for the row menu's Copy Moves
+// action -- lets the user build an Import Line variation string by pasting
+// this, editing/extending it, and pasting the result back in.
+function formatMoveListPgn(seq){
+  return seq.map((san, i) => (i % 2 === 0 ? `${i / 2 + 1}. ` : '') + san).join(' ');
+}
 
 /* ---------- import variations: bulk-set standard responses from pasted variations ----------
    Parses a full variation of algebraic notation (move numbers, "...", comments,

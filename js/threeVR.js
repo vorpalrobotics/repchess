@@ -1223,20 +1223,24 @@ function evaluateDecorated(roomKey){
 
 // Whether a memorized room has picked up a new forward exit since it was last
 // memorized -- Phase 2 of the memorized-room-stability design (see
-// MEMORIZED_SHAPES). Scoped to non-linear rooms ('branch'/'room') only: a
-// linear room's ('corridor'/'two-track') snapshot doesn't stay meaningfully
-// comparable once a mid-sequence branch actually restructures it (it may
-// even split into a different room entirely) -- flagging that case usefully
-// needs the side-door mechanism (a later phase) to have something to point
-// at, not just a diff. A non-linear room has no such restructuring risk: a
-// new variation there is always just one more door, so a plain "is there an
-// exit now that wasn't in the snapshot" comparison is already the complete,
-// correct answer.
+// MEMORIZED_SHAPES). Originally scoped to non-linear rooms only, because a
+// linear room's ('corridor'/'two-track') snapshot didn't stay meaningfully
+// comparable once a mid-sequence branch restructured it -- Phase 3's
+// side-door mechanism closed exactly that gap: a memorized linear room's
+// `kind` and `members`/`left`/`right` now stay stable across a regen even
+// after an interior branch lands (that's the whole point of the side-door),
+// so its exitPosKeys are just as diffable as a non-linear room's. The
+// `snap.kind !== live.kind` guard below still protects the one remaining
+// case a side-door doesn't cover: a room whose memorized shape didn't
+// survive at all (e.g. the anchor itself vanished, or the room fell outside
+// what the side-door mechanism could preserve) -- that shows as NOT dirty
+// here, on the theory that a room this drastically different from its own
+// memory isn't well-served by a "new door" framing; MEMORIZED simply stays
+// stale until the user notices in VR and either re-memorizes or resets it.
 function isRoomDirty(roomKey){
   const snap = MEMORIZED_SHAPES[roomKey];
   const live = ROOMS[roomKey] && ROOMS[roomKey].shape;
   if(!snap || !live || snap.kind !== live.kind) return false;
-  if(live.kind !== 'branch' && live.kind !== 'room') return false;
   const known = new Set(snap.exitPosKeys || []);
   return (live.exitPosKeys || []).some(k => !known.has(k));
 }
