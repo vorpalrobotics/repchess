@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-121';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-122';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-224';
+const BUILD_TAG = '-225';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1545,10 +1545,31 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     const leftSet = g.kind === 'two-track' ? new Set(g.left) : null;
     const rightSet = g.kind === 'two-track' ? new Set(g.right) : null;
     const trackOf = src => !leftSet ? undefined : (rightSet.has(src) ? 'right' : 'left');
+    // which of THIS room's own wall slots (see the `pairs` loop below, whose
+    // side/order assignment this mirrors) the exit's source member occupies --
+    // 'center' for the anchor/head, otherwise 'left'/'right' with a 1-based
+    // order matching mnemPairLayout's (side, order) lookup in threeVR.js. Lets
+    // an interior side-door (memorized-room-stability Phase 3) get positioned
+    // near its sibling member's own slot instead of the generic door-hash
+    // placement, which only ever made sense when every door in a room
+    // belonged to the same single anchor member. null for a member somehow
+    // missing from this room's own arrays (shouldn't happen).
+    const memberSideOrder = id => {
+      if(g.kind === 'two-track'){
+        if(id === g.head) return { side: 'center', order: 1 };
+        const li = g.left.indexOf(id); if(li >= 0) return { side: 'left', order: li + 1 };
+        const ri = g.right.indexOf(id); if(ri >= 0) return { side: 'right', order: ri + 1 };
+        return null;
+      }
+      const mi = g.members.indexOf(id);
+      if(mi < 0) return null;
+      return mi === 0 ? { side: 'center', order: 1 } : { side: 'left', order: mi };
+    };
     const exits = [];
     for(const e of graph.edges){
       if(!memberSet.has(e.source)) continue;
       const track = trackOf(e.source);
+      const from = memberSideOrder(e.source);
       // "N (M%)" -- how often this exact opponent reply has actually occurred
       // in the user's own games, out of this room's total recorded
       // continuations, so the VR door plaque / digraph edge can show it.
@@ -1558,17 +1579,20 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
         // redirect in buildCastleGraph) -- `to`/`toKey` stay null (nothing of
         // ours to point at); `foreignKey` is the real destination.
         exits.push({ opp: e.label, to: null, foreignCastle: e.foreignCastle, foreignKey: e.foreignKey,
-                     pair: pairFromSeq(e.destSeq), track, occurrence });
+                     pair: pairFromSeq(e.destSeq), track, occurrence, fromSide: from?.side, fromOrder: from?.order });
         continue;
       }
-      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track, occurrence }); continue; }
+      if(leafIds.has(e.target)){
+        exits.push({ opp: e.label, to: null, track, occurrence, fromSide: from?.side, fromOrder: from?.order });
+        continue;
+      }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
       // `to` is the R# label (for the readable report); `toKey` is the stable
       // position identity the VR uses to wire doors + persist decorations.
       exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null,
                    // edge-specific move pair, shown beside this door in the VR walk
-                   pair: pairFromSeq(e.destSeq), track, occurrence });
+                   pair: pairFromSeq(e.destSeq), track, occurrence, fromSide: from?.side, fromOrder: from?.order });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }

@@ -9817,6 +9817,27 @@ try {
     ok('memorized-stability Phase 3: a memorized corridor keeps its shape and gains a single side-door');
   } catch(e){ bad('memorized-stability Phase 3: memorized room preserved via side-door', e); }
 
+  // 200. The side-door isn't just present -- it's positioned near its own
+  //      sibling member's wall slot (L1, the Nc3 reply the branch actually
+  //      occurred at), not clustered by the room's entrance the way a
+  //      hash-placed door would be. West wall (a left-side sequence), offset
+  //      within MEMBER_DOOR_OFFSET (1.5m) of L1's own z, past it (further
+  //      from the entrance, i.e. a MORE negative z, since z decreases going
+  //      north) rather than sitting on top of it.
+  try {
+    const slots = await appCC.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotsFull(k), keys.beta);
+    const l1 = slots.find(s => s.side === 'left' && s.order === 1);
+    assert(l1, `expected an L1 slot on Beta, got ${JSON.stringify(slots)}`);
+    const exits = await appCC.page.evaluate((k) => window.__threeTestEdit.exits(k), keys.beta);
+    const door = exits.find(e => !e.back);
+    assert(door, `expected exactly one forward door on Beta, got ${JSON.stringify(exits)}`);
+    assert(door.wall === 'west', `expected the side-door on the west (left) wall, got ${JSON.stringify(door)}`);
+    const expected = l1.z - 1.5;
+    assert(Math.abs(door.offset - expected) < 0.01,
+      `expected the door ~1.5m past L1 (L1.z=${l1.z}, expected offset=${expected}), got ${JSON.stringify(door)}`);
+    ok('memorized-stability Phase 3: the side-door sits near its sibling member\'s slot, not the entrance');
+  } catch(e){ bad('memorized-stability Phase 3: side-door positioned near its sibling member', e); }
+
   // 197. Beta stays memorized (its content is fully preserved, side-door and
   //      all) but now reads DIRTY -- isRoomDirty was originally scoped to
   //      non-linear rooms only, deferred until Phase 3 gave a linear room's
