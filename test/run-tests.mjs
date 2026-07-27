@@ -58,6 +58,7 @@ const SUBSYSTEMS = {
   'import-export':     'full backup import/export',
   'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
+  'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -9705,6 +9706,127 @@ try {
   await appCB.close();
 }
 } catch(e){ bad('Phase CB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear
+//     (corridor) room keeps its shape when a new variation lands on one of
+//     its interior members, instead of splitting like an unmemorized room
+//     does. Two identically-shaped 4-member corridors (Alpha, Beta) get the
+//     SAME interior branch added after setup; Alpha is left unmemorized (the
+//     control -- proves the edit really would split it) and Beta is marked
+//     memorized first (proves the side-door mechanism actually changes the
+//     outcome, not just "nothing broke"). ---
+if(shouldRunPhase(['memorized-stability'])){
+try {
+const appCC = await launchApp();
+try {
+  const keys = await appCC.page.evaluate(() => {
+    const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      alpha: pk('L1_Alpha', ['d4','Nf6','c4']),
+      beta: pk('L1_Beta', ['d4','d5','c4']),
+    };
+  });
+  await seedBackup(appCC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      // Alpha: 4-member corridor (c4 / Nc3 / e3 / Bd3), left unmemorized -- the control.
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','e3','O-O'], reply: 'Bd3' },
+      // Beta: identically-shaped corridor on a different opening try, gets memorized.
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6'], reply: 'e3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6','e3','Be7'], reply: 'Bd3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6 e3 Be7 Bd3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCC.page);
+
+  const shapeOf = (k) => appCC.page.evaluate((k) => window.__threeTestEdit.roomShape(k), k);
+  const doorsOf = (k) => appCC.page.evaluate((k) =>
+    (window.__threeTestEdit.exits(k) || []).filter(e => !e.back).length, k);
+
+  // 193. Setup sanity: both Alpha and Beta start as 4-member corridors with
+  //      no forward doors (their tails are unreplied game leaves).
+  try {
+    const a = await shapeOf(keys.alpha), b = await shapeOf(keys.beta);
+    assert(a && a.kind === 'corridor' && a.members.length === 4,
+      `expected Alpha to start as a 4-member corridor, got ${JSON.stringify(a)}`);
+    assert(b && b.kind === 'corridor' && b.members.length === 4,
+      `expected Beta to start as a 4-member corridor, got ${JSON.stringify(b)}`);
+    assert((await doorsOf(keys.alpha)) === 0 && (await doorsOf(keys.beta)) === 0,
+      'expected neither corridor to have a forward door yet (both tails are unreplied leaves)');
+    ok('memorized-stability setup: Alpha and Beta both start as identically-shaped 4-member corridors');
+  } catch(e){ bad('memorized-stability setup: both corridors start as 4-member', e); }
+
+  // 194. Marking Beta memorized captures a shape snapshot matching its live shape.
+  try {
+    await appCC.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.beta);
+    await appCC.page.waitForTimeout(200);
+    await appCC.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const live = await shapeOf(keys.beta);
+    const snap = await appCC.page.evaluate((k) => window.__threeTestEdit.memorizedShape(k), keys.beta);
+    assert(snap && JSON.stringify(snap.members) === JSON.stringify(live.members),
+      `expected the memorized snapshot's members to match the live shape, got snap=${JSON.stringify(snap)} live=${JSON.stringify(live)}`);
+    ok('memorized-stability: marking Beta memorized snapshots its live 4-member shape');
+  } catch(e){ bad('memorized-stability: memorize captures matching snapshot', e); }
+
+  // Add the SAME interior branch to both castles: a new opponent try (g6,
+  // replied to with Bg2) alongside the existing 3rd-move opponent reply
+  // (Bb4 / Nf6 respectively) -- i.e. right after each corridor's 2nd member
+  // (the Nc3 reply), squarely interior to both rooms.
+  const closeVR = async () => {
+    await appCC.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appCC.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+  await closeVR();
+  await appCC.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
+  await appCC.page.fill('#importLineInput',
+    '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. Bg2\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. Bg2');
+  await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+  await openVR(appCC.page);
+
+  // 195. Beta (memorized before the edit): stays a 4-member corridor and
+  //      gains exactly one forward door -- to the new branch alone. Its
+  //      original tail content never became a separately-doored room.
+  try {
+    const b = await shapeOf(keys.beta);
+    assert(b && b.kind === 'corridor' && b.members.length === 4,
+      `expected memorized Beta to KEEP its 4-member shape after the interior branch, got ${JSON.stringify(b)}`);
+    const doors = await doorsOf(keys.beta);
+    assert(doors === 1, `expected exactly 1 new forward door (the side-door to the new branch), got ${doors}`);
+    ok('memorized-stability Phase 3: a memorized corridor keeps its shape and gains a single side-door');
+  } catch(e){ bad('memorized-stability Phase 3: memorized room preserved via side-door', e); }
+
+  // 196. Alpha (never memorized, the control): the SAME edit splits it --
+  //      its original room key shrinks to 2 members and shows 2 forward
+  //      doors (one to the new branch, one to what used to be silently
+  //      inside the room but is now a separate, newly-orphaned room).
+  try {
+    const a = await shapeOf(keys.alpha);
+    assert(a && a.kind === 'corridor' && a.members.length === 2,
+      `expected unmemorized Alpha to SPLIT down to its first 2 members, got ${JSON.stringify(a)}`);
+    const doors = await doorsOf(keys.alpha);
+    assert(doors === 2, `expected 2 forward doors (new branch + the split-off back half), got ${doors}`);
+    ok('memorized-stability control: an unmemorized corridor splits on the identical interior branch');
+  } catch(e){ bad('memorized-stability control: unmemorized room still splits (proves the mechanism matters)', e); }
+} finally {
+  await appCC.close();
+}
+} catch(e){ bad('Phase CC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
