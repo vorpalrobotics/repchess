@@ -4887,12 +4887,21 @@ const CHAIN_LINK_SIZE = 0.5, CHAIN_WIDTH = 0.22, CHAIN_Y = 0.02;
 // (a single slot has nothing to connect to). Returns null (nothing to add)
 // when the room has fewer than 2 slots.
 function buildMoveObjectChain(room, roomKey){
+  // resolve each slot's ACTUAL position, not just its default computed one --
+  // a moveObject slot can be individually nudged in edit mode (slotXformFor,
+  // applied the same way applyAccessoryTransform places the real prop: base
+  // x/z + xform.dx/dz), and the chain needs to end up where the props
+  // actually are, not where they'd sit before any nudging.
+  const resolved = s => {
+    const xf = slotXformFor(roomKey, s.id);
+    return { x: s.x + (xf?.dx || 0), z: s.z + (xf?.dz || 0) };
+  };
   const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
     ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
   if(ordered.length < 2) return null;
   const group = new THREE.Group();
   for(let i = 0; i < ordered.length - 1; i++){
-    const a = ordered[i], b = ordered[i + 1];
+    const a = resolved(ordered[i]), b = resolved(ordered[i + 1]);
     const dx = b.x - a.x, dz = b.z - a.z;
     const len = Math.hypot(dx, dz);
     if(len < 0.05) continue;   // slots nudged on top of each other -- nothing to draw
@@ -7878,6 +7887,15 @@ export async function openThreeTest(containerEl, opts){
         const found = [];
         scene && scene.traverse(o => { if(o.userData && o.userData.kind === 'moveObjectChain') found.push(o); });
         return found.map(m => ({ x: m.position.x, z: m.position.z }));
+      },
+      // nudges a moveObject slot's stored xform directly (bypassing the real
+      // arrow-key drag flow) and rebuilds -- for testing that dependents
+      // (the chain) follow a slot's ACTUAL nudged position, not its default.
+      nudgeSlot: (roomKey, slotId, dx, dz) => {
+        const r = ensureRoomLayout(roomKey);
+        r.slotXform[slotId] = { ...(r.slotXform[slotId] || {}), dx, dz };
+        persistLayout();
+        buildRoom(currentRoomKey);
       },
       // assigns (or clears, if assetId is falsy) a manual per-slot asset
       // override -- the same mutation the real prop picker makes

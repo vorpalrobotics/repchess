@@ -10027,6 +10027,29 @@ try {
     assert(segs.length === 0, `expected no chain segments in a two-track room, got ${segs.length}: ${JSON.stringify(segs)}`);
     ok('memorization-aid: a two-track room does not also get a chain (has its own divider)');
   } catch(e){ bad('memorization-aid: two-track room excluded from the chain', e); }
+
+  // 204. Nudging a slot moves the chain's endpoint with it -- the chain
+  //      follows the object's ACTUAL (possibly manually repositioned)
+  //      location, not the default computed slot position it would
+  //      otherwise sit at (the bug reported from a real decorated room: the
+  //      chain ran off toward a stale default position instead of the
+  //      object the user had dragged elsewhere).
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    const l1 = slots.find(s => s.side === 'left' && s.order === 1);
+    assert(l1, `expected an L1 slot on Chain, got ${JSON.stringify(slots)}`);
+    const c1 = slots.find(s => s.side === 'center' && s.order === 1);
+    assert(c1, `expected a C1 slot on Chain, got ${JSON.stringify(slots)}`);
+    await appCE.page.evaluate((args) => window.__threeTestEdit.nudgeSlot(args.k, args.id, 2, -1), { k: keys.chain, id: l1.id });
+    await appCE.page.waitForTimeout(200);
+    const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    const expected = { x: (c1.x + (l1.x + 2)) / 2, z: (c1.z + (l1.z - 1)) / 2 };
+    const hit = segs.some(s => Math.abs(s.x - expected.x) < 0.01 && Math.abs(s.z - expected.z) < 0.01);
+    assert(hit, `expected a chain segment following L1's nudged position (midpoint ${JSON.stringify(expected)}), got ${JSON.stringify(segs)}`);
+    ok('memorization-aid: the chain follows a slot\'s actual nudged position, not its stale default');
+  } catch(e){ bad('memorization-aid: chain endpoint tracks a manually nudged slot', e); }
 } finally {
   await appCE.close();
 }
