@@ -456,6 +456,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // building -- keeps its centre pair in-room (nowhere else to show it).
       entryNoStreet: r === entry && !opts.backToStreet,
       posKey: r.posKey,   // first-4-FEN-fields for this room's position (mini-board icon)
+      // this generation's live shape snapshot (member/exit position keys) --
+      // see MEMORIZED_SHAPES for what captures it and why.
+      shape: r.shape,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -584,6 +587,15 @@ let MEMORIZED = {};
 // gets renamed elsewhere later. { [roomKey]: msEpochWhenLastFlaggedComplete }.
 const DECORATED_KEY = 'threeDecoratedRooms';
 let DECORATED = {};
+// frozen shape snapshot for every currently-memorized room, captured at the
+// moment MEMORIZED is set (and dropped when it's cleared) -- see the room's
+// live `shape` (registerOneCastle) for what gets copied in. This is the data
+// a later regeneration will diff against to detect a new variation landing
+// inside an already-memorized room, and to preserve the room's layout instead
+// of letting it split. Not consulted for anything yet in this phase --
+// capture-only. { [roomKey]: { kind, members?|left?/right?, exitPosKeys } }.
+const MEMORIZED_SHAPE_KEY = 'threeMemorizedShapes';
+let MEMORIZED_SHAPES = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
@@ -1126,15 +1138,35 @@ async function loadMemorized(){
   catch { MEMORIZED = {}; }
 }
 function persistMemorized(){ setMeta(MEMORIZED_KEY, JSON.stringify(MEMORIZED)); }
+
+async function loadMemorizedShapes(){
+  const raw = await getMeta(MEMORIZED_SHAPE_KEY);
+  try { MEMORIZED_SHAPES = raw ? JSON.parse(raw) : {}; }
+  catch { MEMORIZED_SHAPES = {}; }
+}
+function persistMemorizedShapes(){ setMeta(MEMORIZED_SHAPE_KEY, JSON.stringify(MEMORIZED_SHAPES)); }
+
 // Toggles the CURRENT room's memorized flag. No-op outside a real castle room
 // (currentRoomFen() is null on mainStreet/buildings) -- the toolbar icon that
 // calls this is hidden there for the same reason. No scene rebuild needed:
 // nothing in the 3D scene itself depends on this flag, only the toolbar icon.
+// Marking memorized also snapshots the room's current shape (see
+// MEMORIZED_SHAPES) -- captured here rather than kept continuously live, same
+// checkpoint discipline as DECORATED's evaluate-on-exit-edit-mode. Clearing
+// memorized drops the snapshot too: a shape is only meaningful while the room
+// is actually memorized.
 function toggleMemorized(){
   if(!currentRoomFen()) return;
-  if(MEMORIZED[currentRoomKey]) delete MEMORIZED[currentRoomKey];
-  else MEMORIZED[currentRoomKey] = Date.now();
+  if(MEMORIZED[currentRoomKey]){
+    delete MEMORIZED[currentRoomKey];
+    delete MEMORIZED_SHAPES[currentRoomKey];
+  } else {
+    MEMORIZED[currentRoomKey] = Date.now();
+    const shape = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].shape;
+    if(shape) MEMORIZED_SHAPES[currentRoomKey] = shape;
+  }
   persistMemorized();
+  persistMemorizedShapes();
   updateToolbar();
 }
 
@@ -7268,7 +7300,7 @@ export async function openThreeTest(containerEl, opts){
   // five independent IDB reads, each populating its own module global with no
   // cross-dependency on the others' results -- run concurrently rather than
   // one round-trip after another.
-  await Promise.all([loadLayout(), loadMemorized(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
+  await Promise.all([loadLayout(), loadMemorized(), loadMemorizedShapes(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -7377,6 +7409,12 @@ export async function openThreeTest(containerEl, opts){
         persistMemorized();
         updateToolbar();
       },
+      // memorized-room-stability Phase 1: the live shape this generation
+      // computed for a room (independent of whether it's memorized), and the
+      // snapshot actually captured for a memorized room -- for testing that
+      // toggleMemorized snapshots/drops the right thing.
+      roomShape: (roomKeyArg) => (ROOMS[roomKeyArg || currentRoomKey] || {}).shape || null,
+      memorizedShape: (roomKeyArg) => MEMORIZED_SHAPES[roomKeyArg || currentRoomKey] || null,
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
       // the fading toast's current text (null if not currently shown) --

@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260726-118';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-119';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-220';
+const BUILD_TAG = '-221';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1554,8 +1554,20 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     // doors that happen to cross into a different room. A corridor step is
     // still a move you have to know even though it doesn't leave the room.
     const moveCount = g.members.reduce((sum, id) => sum + (a.outDeg.get(id) || 0), 0);
+    // frozen-shape snapshot for the memorized-room-stability feature: NOT used
+    // by regeneration itself -- only captured (by threeVR.js's toggleMemorized,
+    // into MEMORIZED_SHAPES) when the user marks a room memorized, then diffed
+    // on a later regen to detect a new variation landing inside an
+    // already-memorized room. members/left/right are position keys, in walk
+    // order, so identity survives node-id churn across regenerations the same
+    // way posKeyByGid already does.
+    const memberPosKey = id => positionKey(nodeById.get(id).fen);
+    const shape = g.kind === 'two-track'
+      ? { kind: 'two-track', left: g.left.map(memberPosKey), right: g.right.map(memberPosKey) }
+      : { kind: g.kind, members: g.members.map(memberPosKey) };
+    shape.exitPosKeys = exits.filter(e => e.toKey).map(e => e.toKey);
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs };
+             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs, shape };
   });
 
   return { genRooms, stats: a, graph };
