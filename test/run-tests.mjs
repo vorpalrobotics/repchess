@@ -9723,9 +9723,11 @@ try {
   const keys = await appCC.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
       return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    const fenAt = (mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true}); return c.fen(); };
     return {
       alpha: pk('L1_Alpha', ['d4','Nf6','c4']),
       beta: pk('L1_Beta', ['d4','d5','c4']),
+      betaFen: fenAt(['d4','d5','c4']),
     };
   });
   await seedBackup(appCC.page, {
@@ -9817,25 +9819,26 @@ try {
     ok('memorized-stability Phase 3: a memorized corridor keeps its shape and gains a single side-door');
   } catch(e){ bad('memorized-stability Phase 3: memorized room preserved via side-door', e); }
 
-  // 200. The side-door isn't just present -- it's positioned near its own
-  //      sibling member's wall slot (L1, the Nc3 reply the branch actually
-  //      occurred at), not clustered by the room's entrance the way a
-  //      hash-placed door would be. West wall (a left-side sequence), offset
-  //      within MEMBER_DOOR_OFFSET (1.5m) of L1's own z, past it (further
-  //      from the entrance, i.e. a MORE negative z, since z decreases going
-  //      north) rather than sitting on top of it.
+  // 200. The side-door isn't just present -- it's positioned near its SIBLING
+  //      member's own wall slot, not the member the branch actually forked
+  //      FROM. The branch is at M2 (Nc3, L1); its sibling is M3 (the reply
+  //      that already occupied that decision point, L2) -- lining up with L2
+  //      is what makes it read as "an alternate to L2," not "hanging off L1."
+  //      West wall (a left-side sequence). The door itself sits
+  //      MEMBER_DOOR_OFFSET (1.7m) past L2 (further from the entrance, i.e. a
+  //      MORE negative z, since z decreases going north).
   try {
     const slots = await appCC.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotsFull(k), keys.beta);
-    const l1 = slots.find(s => s.side === 'left' && s.order === 1);
-    assert(l1, `expected an L1 slot on Beta, got ${JSON.stringify(slots)}`);
+    const l2 = slots.find(s => s.side === 'left' && s.order === 2);
+    assert(l2, `expected an L2 slot on Beta, got ${JSON.stringify(slots)}`);
     const exits = await appCC.page.evaluate((k) => window.__threeTestEdit.exits(k), keys.beta);
     const door = exits.find(e => !e.back);
     assert(door, `expected exactly one forward door on Beta, got ${JSON.stringify(exits)}`);
     assert(door.wall === 'west', `expected the side-door on the west (left) wall, got ${JSON.stringify(door)}`);
-    const expected = l1.z - 1.5;
+    const expected = l2.z - 1.7;
     assert(Math.abs(door.offset - expected) < 0.01,
-      `expected the door ~1.5m past L1 (L1.z=${l1.z}, expected offset=${expected}), got ${JSON.stringify(door)}`);
-    ok('memorized-stability Phase 3: the side-door sits near its sibling member\'s slot, not the entrance');
+      `expected the door ~1.7m past its sibling L2 (L2.z=${l2.z}, expected offset=${expected}), got ${JSON.stringify(door)}`);
+    ok('memorized-stability Phase 3: the side-door sits near its SIBLING member\'s slot, not the entrance');
   } catch(e){ bad('memorized-stability Phase 3: side-door positioned near its sibling member', e); }
 
   // 197. Beta stays memorized (its content is fully preserved, side-door and
@@ -9867,6 +9870,26 @@ try {
     assert(doors === 2, `expected 2 forward doors (new branch + the split-off back half), got ${doors}`);
     ok('memorized-stability control: an unmemorized corridor splits on the identical interior branch');
   } catch(e){ bad('memorized-stability control: unmemorized room still splits (proves the mechanism matters)', e); }
+
+  // 201. The digraph shows the same dirty (⚠️) signal as VR for Beta, and the
+  //      node carries a native-tooltip explanation (attachGraphHoverTooltip).
+  try {
+    await closeVR();
+    await appCC.page.evaluate(() => document.querySelector('.line-row').click());
+    await appCC.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appCC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const node = await appCC.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? { label: n.data('label'), dirty: n.data('dirty'), tooltip: n.data('tooltip') } : null;
+    }, keys.betaFen);
+    assert(node, `expected to find Beta's own node in the digraph, fen=${keys.betaFen}`);
+    assert(/⚠️/.test(node.label || ''), `expected the dirty glyph in Beta's label, got ${JSON.stringify(node.label)}`);
+    assert(node.dirty === true, `expected data('dirty') true on Beta's node, got ${JSON.stringify(node.dirty)}`);
+    assert(typeof node.tooltip === 'string' && node.tooltip.length > 0,
+      `expected a non-empty tooltip on Beta's node, got ${JSON.stringify(node.tooltip)}`);
+    ok('memorized-stability: the digraph shows the dirty glyph and a tooltip for Beta');
+  } catch(e){ bad('memorized-stability: digraph dirty glyph + tooltip', e); }
 } finally {
   await appCC.close();
 }

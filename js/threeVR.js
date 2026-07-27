@@ -295,10 +295,12 @@ const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
 // this much clear to the side wall so its pair doesn't poke through.
 const PAIR_MARGIN = 2.8;
 const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
-// how far past its own sibling member's wall slot a member-anchored side-door
-// sits (memorized-room-stability's side-doors) -- half a sideStride puts it
-// roughly halfway to where the NEXT member's own slot would be, clear of both.
-const MEMBER_DOOR_OFFSET = CAS_LAYOUT.sideStride / 2;
+// how far past its sibling member's wall slot a member-anchored side-door's
+// DOOR sits (memorized-room-stability's side-doors) -- set to exactly cancel
+// out doorSideXZ's own "pair sits DOOR_W/2+0.6 before the door" shift, so a
+// member-anchored door's pair billboard lands ON its sibling's own z (lines
+// up with it) while the door itself ends up that same distance past it.
+const MEMBER_DOOR_OFFSET = DOOR_W / 2 + 0.6;
 // Stable door ordering (navigation memory): a door's wall is derived from its
 // own target position, not its index among the current doors, so adding/removing
 // a variation never makes an existing door jump walls. `doorCmp` then orders the
@@ -415,13 +417,24 @@ function registerOneCastle(castle, instanceId, opts = {}){
         ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + EW_BEHIND_HEAD
           + (maxEW - 1) * DOOR_SPACING + EDGE_MARGIN
         : 0;
-      // a member-anchored door rides MEMBER_DOOR_OFFSET past its own sibling
-      // slot -- only matters for room depth when that sibling is the DEEPEST
-      // member on its wall (sideMax), since anywhere earlier is already
-      // comfortably inside pairDepth's own margin.
+      // a member-anchored door's pair billboard lands on its SIBLING member's
+      // own z (fromOrder+1 -- the member that already occupies "this branch
+      // point," which the new option is an alternate to), same as the depth
+      // calc below needs. Falls back to fromOrder itself when there's no
+      // such sibling (the branch is past the room's current last member, not
+      // interior to it) -- nothing to align with there, so it just extends
+      // past the tail like an ordinary new door would.
+      const siblingOrderFor = ex => {
+        const has = (r.pairs || []).some(p => (p.side || 'left') === ex.fromSide && p.order === ex.fromOrder + 1);
+        return has ? ex.fromOrder + 1 : ex.fromOrder;
+      };
+      // a member-anchored door rides MEMBER_DOOR_OFFSET past its sibling's
+      // own slot -- only matters for room depth when that sibling is the
+      // DEEPEST member on its wall (sideMax), since anywhere earlier is
+      // already comfortably inside pairDepth's own margin.
       const memberDoorDepth = memberAnchored.length
         ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
-          + (Math.max(...memberAnchored.map(m => m.ex.fromOrder)) - 1) * CAS_LAYOUT.sideStride
+          + (Math.max(...memberAnchored.map(m => siblingOrderFor(m.ex))) - 1) * CAS_LAYOUT.sideStride
           + MEMBER_DOOR_OFFSET + CAS_LAYOUT.northMargin
         : 0;
       sz = {
@@ -439,14 +452,16 @@ function registerOneCastle(castle, instanceId, opts = {}){
         doorPlacements.push({ wall: 'north', offset: (j - (byWall.north.length - 1) / 2) * DOOR_SPACING, ex }));
       for(const wall of ['east', 'west'])
         byWall[wall].forEach((ex, j) => doorPlacements.push({ wall, offset: ewSouth - j * DOOR_SPACING, ex }));
-      // member-anchored doors: same z formula mnemPairLayout uses for that
-      // member's own slot, minus a bit more (further from the entrance) so
-      // the door reads as "just past" its sibling rather than on top of it.
+      // member-anchored doors: MEMBER_DOOR_OFFSET (= doorSideXZ's own
+      // DOOR_W/2+0.6 "pair sits before the door" shift) exactly cancels out,
+      // so the pair billboard lands ON the sibling's own z (lines up with
+      // it, as requested) while the door itself sits MEMBER_DOOR_OFFSET
+      // beyond it -- past the sibling, farther from the entrance.
       // v1 known gap: two side-doors landing on the same sibling member would
       // currently collide here -- not handled yet, no case has needed it.
       for(const { wall, ex } of memberAnchored){
-        const memberZ = centerZ - CAS_LAYOUT.sideFirst - (ex.fromOrder - 1) * CAS_LAYOUT.sideStride;
-        doorPlacements.push({ wall, offset: memberZ - MEMBER_DOOR_OFFSET, ex });
+        const siblingZ = centerZ - CAS_LAYOUT.sideFirst - (siblingOrderFor(ex) - 1) * CAS_LAYOUT.sideStride;
+        doorPlacements.push({ wall, offset: siblingZ - MEMBER_DOOR_OFFSET, ex });
       }
     }
     const exits = [];

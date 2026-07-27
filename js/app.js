@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-122';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-123';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-225';
+const BUILD_TAG = '-226';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2212,6 +2212,10 @@ async function showTranspositionGraph(){
         Object.assign(data, boxMemberInfo(r));   // track/chainIdx for "Arrange" (no-op if not boxed)
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
         data.dirty = dirty;      // exposed for the test hook, same reasoning as data.roomKey above
+        // native browser tooltip text (see attachGraphHoverTooltip) -- only
+        // the dirty glyph needs one; everything else on the node already
+        // reads for itself (the move label, the room name).
+        if(dirty) data.tooltip = 'This room changed since it was memorized -- a new door was added.';
         // a VR dead-end reached through a locked door -- empty (no forward
         // continuation) and not its castle's own entry room (that one is
         // reached from the street, not a locked door). "Jump to VR" is hidden
@@ -2336,6 +2340,7 @@ async function showTranspositionGraph(){
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphClickHandler(cy);
     attachGraphContextMenu(cy, scopeKey);
+    attachGraphHoverTooltip(cy);
 
     // Save a manual de-overlap drag: delta from dagre's own placement, keyed
     // by the node's position (stable across a rebuild, unlike its cytoscape id).
@@ -2658,6 +2663,18 @@ function attachGraphClickHandler(cy){
     showRoomInfoPanel(el);
   });
   cy.on('tap', evt => { if(evt.target === cy) hideGraphHoverPreview(); });  // tap empty space dismisses the position preview
+}
+// A native browser tooltip for the dirty (⚠️) glyph explaining what it means
+// -- just the container's own `title` attribute, toggled on node hover, so
+// it's the browser's standard hover-delay tooltip (no custom popup/position
+// tracking needed, unlike showGraphNodePosition's board preview, which was
+// deliberately moved OFF hover because a full interactive preview was too
+// easy to trigger by accident -- plain text on the native tooltip doesn't
+// have that problem). Only nodes carrying data('tooltip') (currently just
+// dirty rooms) get one; every other node clears it back to empty on hover.
+function attachGraphHoverTooltip(cy){
+  cy.on('mouseover', 'node', evt => { cy.container().title = evt.target.data('tooltip') || ''; });
+  cy.on('mouseout', 'node', () => { cy.container().title = ''; });
 }
 // White's ply number ("N."), glued right onto the move's thumbnail image (in
 // the same nowrap wrapper) so it can't end up visually separated from the
