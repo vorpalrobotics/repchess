@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-119';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-120';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-221';
+const BUILD_TAG = '-222';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1880,6 +1880,28 @@ async function loadDecoratedRooms(){
   try { DECORATED_ROOMS = JSON.parse(await getMeta('threeDecoratedRooms') || '{}'); }
   catch { DECORATED_ROOMS = {}; }
 }
+// frozen shape snapshots for memorized rooms (see js/threeVR.js's own
+// MEMORIZED_SHAPES, which this mirrors) -- same independent-read pattern.
+// Used by isRoomDirty below to badge a memorized room whose live shape has
+// picked up a new exit since it was last memorized.
+let MEMORIZED_SHAPES = {};
+async function loadMemorizedShapes(){
+  try { MEMORIZED_SHAPES = JSON.parse(await getMeta('threeMemorizedShapes') || '{}'); }
+  catch { MEMORIZED_SHAPES = {}; }
+}
+// Phase 2 of the memorized-room-stability design: non-linear rooms only for
+// now (see threeVR.js's own isRoomDirty for why linear rooms are deferred to
+// a later phase, once the side-door mechanism exists to actually respond to
+// them). `liveShape` is the room's shape.exitPosKeys as computed by THIS
+// regen (buildGeneratedCastle), passed in by the caller since it already has
+// it in hand from the coverage-stats loop -- no need to recompute here.
+function isRoomDirty(roomKey, liveShape){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  if(!snap || !liveShape || snap.kind !== liveShape.kind) return false;
+  if(liveShape.kind !== 'branch' && liveShape.kind !== 'room') return false;
+  const known = new Set(snap.exitPosKeys || []);
+  return (liveShape.exitPosKeys || []).some(k => !known.has(k));
+}
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -1905,6 +1927,7 @@ async function showTranspositionGraph(){
     await loadGraphLayout();
     await loadMemorizedRooms();
     await loadDecoratedRooms();
+    await loadMemorizedShapes();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
@@ -1940,6 +1963,11 @@ async function showTranspositionGraph(){
     const castleNames = focusedName ? [focusedName] : definedCastles();
     let totalCastleRooms = 0, totalCastleMoves = 0;
     let memorizedRoomCount = 0, decoratedRoomCount = 0, memorizedMoveCount = 0;
+    // roomKey -> this regen's live shape, gathered while we're already
+    // iterating every generated room below -- reused by isRoomDirty in the
+    // node-labeling loop further down instead of a second buildGeneratedCastle
+    // pass per castle.
+    const liveShapeByRoomKey = new Map();
     for(const name of castleNames){
       const castleRootSeq = castleRootRoomSeq(name);
       if(!castleRootSeq) continue;
@@ -1949,6 +1977,7 @@ async function showTranspositionGraph(){
       for(const gr of genRooms){
         totalCastleMoves += gr.moveCount;
         const roomKey = castleRoomKey(instanceId, gr.posKey);
+        liveShapeByRoomKey.set(roomKey, gr.shape);
         if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.moveCount; }
         if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
       }
@@ -2063,14 +2092,19 @@ async function showTranspositionGraph(){
         const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
         const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const decorated = roomKey ? !!DECORATED_ROOMS[roomKey] : false;
-        // 🧠 (memorized) / 🎨 (decorated) glyphs read at normal zoom; the
-        // "all done" border (below) is the zoomed-out signal, so both glyphs
-        // still show even when it's also on.
-        const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '');
+        // dirty (Phase 2 of memorized-room-stability): a memorized non-linear
+        // room that's picked up a new door since it was last memorized -- see
+        // isRoomDirty for why linear rooms aren't covered yet.
+        const dirty = memorized && roomKey && isRoomDirty(roomKey, liveShapeByRoomKey.get(roomKey));
+        // 🧠 (memorized) / 🎨 (decorated) / ⚠️ (dirty) glyphs read at normal
+        // zoom; the "all done" border (below) is the zoomed-out signal, so
+        // all glyphs still show even when it's also on.
+        const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '') + (dirty ? ' ⚠️' : '');
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         Object.assign(data, boxMemberInfo(r));   // track/chainIdx for "Arrange" (no-op if not boxed)
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
+        data.dirty = dirty;      // exposed for the test hook, same reasoning as data.roomKey above
         // a VR dead-end reached through a locked door -- empty (no forward
         // continuation) and not its castle's own entry room (that one is
         // reached from the street, not a locked door). "Jump to VR" is hidden

@@ -619,7 +619,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, editGroup = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, dirtyBadge = null, editGroup = null;
 let undoBtn = null, redoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
@@ -1219,6 +1219,26 @@ function evaluateDecorated(roomKey){
   if(computeFullyDecorated(roomKey)) DECORATED[roomKey] = Date.now();
   else delete DECORATED[roomKey];
   persistDecorated();
+}
+
+// Whether a memorized room has picked up a new forward exit since it was last
+// memorized -- Phase 2 of the memorized-room-stability design (see
+// MEMORIZED_SHAPES). Scoped to non-linear rooms ('branch'/'room') only: a
+// linear room's ('corridor'/'two-track') snapshot doesn't stay meaningfully
+// comparable once a mid-sequence branch actually restructures it (it may
+// even split into a different room entirely) -- flagging that case usefully
+// needs the side-door mechanism (a later phase) to have something to point
+// at, not just a diff. A non-linear room has no such restructuring risk: a
+// new variation there is always just one more door, so a plain "is there an
+// exit now that wasn't in the snapshot" comparison is already the complete,
+// correct answer.
+function isRoomDirty(roomKey){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  const live = ROOMS[roomKey] && ROOMS[roomKey].shape;
+  if(!snap || !live || snap.kind !== live.kind) return false;
+  if(live.kind !== 'branch' && live.kind !== 'room') return false;
+  const known = new Set(snap.exitPosKeys || []);
+  return (live.exitPosKeys || []).some(k => !known.has(k));
 }
 
 // A room is "empty" when it has no forward (non-back) exits AND no wall
@@ -6135,6 +6155,8 @@ function buildTopToolbar(){
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
+  dirtyBadge  = makeIconBtn('fa-triangle-exclamation', 'A new variation added a door here since you memorized this room',
+                             () => showToast('New door since you memorized this room -- give it a look!'));
   memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
@@ -6149,8 +6171,9 @@ function buildTopToolbar(){
   editGroup.append(editBtn, undoBtn, redoBtn, roomGeomBtn, wallListsBtn, assetsBtn);
   left.append(hintsBtn, editGroup, boardBtn, infoBtn);
   // memorize is the rightmost status badge (right next to Close); decorated,
-  // when shown, sits immediately to its left.
-  right.append(decoratedBadge, memBtn, closeBtn);
+  // when shown, sits immediately to its left; dirty (when shown) sits between
+  // decorated and memorize -- it's specifically about the memorized state.
+  right.append(decoratedBadge, dirtyBadge, memBtn, closeBtn);
   bar.append(left, right);
   return bar;
 }
@@ -6197,6 +6220,10 @@ function updateToolbar(){
   // decorated is a computed, read-only badge (see evaluateDecorated) -- shown
   // only when true, so it never competes with memorize's on/off toggle look.
   if(decoratedBadge) decoratedBadge.style.display = DECORATED[currentRoomKey] ? '' : 'none';
+  // dirty (see isRoomDirty) only ever applies to an already-memorized room --
+  // computed live (cheap: a couple of array lookups) rather than cached like
+  // DECORATED, so it can't go stale between updateToolbar() calls.
+  if(dirtyBadge) dirtyBadge.style.display = (MEMORIZED[currentRoomKey] && isRoomDirty(currentRoomKey)) ? '' : 'none';
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
 function setHintsOn(on){
@@ -7417,6 +7444,11 @@ export async function openThreeTest(containerEl, opts){
       memorizedShape: (roomKeyArg) => MEMORIZED_SHAPES[roomKeyArg || currentRoomKey] || null,
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
+      // memorized-room-stability Phase 2: the dirty badge's visibility, and
+      // the underlying computed flag directly (roomKeyArg optional, defaults
+      // to the current room) -- mirrors decoratedBadgeStyle/decorated above.
+      dirtyBadgeStyle: () => dirtyBadge ? { display: dirtyBadge.style.display } : null,
+      isRoomDirty: (roomKeyArg) => isRoomDirty(roomKeyArg || currentRoomKey),
       // the fading toast's current text (null if not currently shown) --
       // showToast() has no DOM id, so this is the only way to check it fired
       // without scraping the whole container for an untagged div.
@@ -7814,7 +7846,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = editGroup = undoBtn = redoBtn = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
