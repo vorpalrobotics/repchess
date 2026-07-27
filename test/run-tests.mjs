@@ -9779,7 +9779,7 @@ try {
   } catch(e){ bad('memorized-stability: memorize captures matching snapshot', e); }
 
   // Add the SAME interior branch to both castles: a new opponent try (g6,
-  // replied to with Bg2) alongside the existing 3rd-move opponent reply
+  // replied to with e4) alongside the existing 3rd-move opponent reply
   // (Bb4 / Nf6 respectively) -- i.e. right after each corridor's 2nd member
   // (the Nc3 reply), squarely interior to both rooms.
   const closeVR = async () => {
@@ -9794,10 +9794,16 @@ try {
   await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
   await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
   await appCC.page.fill('#importLineInput',
-    '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. Bg2\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. Bg2');
+    '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. e4\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. e4');
   await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
   await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
   await openVR(appCC.page);
+  // openVR's own readiness check (__threeTestEdit/__threeTestState) is set
+  // once and never cleared on close, so it can resolve on stale globals from
+  // the FIRST open, racing ahead of THIS open's (now cache-missing) rebuild
+  // -- same known race Phase AV's primeCache() works around. Wait on the
+  // rebuilt cache itself instead, which is unambiguous per-open.
+  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 10000 });
 
   // 195. Beta (memorized before the edit): stays a 4-member corridor and
   //      gains exactly one forward door -- to the new branch alone. Its
