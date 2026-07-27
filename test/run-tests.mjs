@@ -58,6 +58,7 @@ const SUBSYSTEMS = {
   'import-export':     'full backup import/export',
   'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
+  'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -9705,6 +9706,257 @@ try {
   await appCB.close();
 }
 } catch(e){ bad('Phase CB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear
+//     (corridor) room keeps its shape when a new variation lands on one of
+//     its interior members, instead of splitting like an unmemorized room
+//     does. Two identically-shaped 4-member corridors (Alpha, Beta) get the
+//     SAME interior branch added after setup; Alpha is left unmemorized (the
+//     control -- proves the edit really would split it) and Beta is marked
+//     memorized first (proves the side-door mechanism actually changes the
+//     outcome, not just "nothing broke"). ---
+if(shouldRunPhase(['memorized-stability'])){
+try {
+const appCC = await launchApp();
+try {
+  const keys = await appCC.page.evaluate(() => {
+    const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    const fenAt = (mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true}); return c.fen(); };
+    return {
+      alpha: pk('L1_Alpha', ['d4','Nf6','c4']),
+      beta: pk('L1_Beta', ['d4','d5','c4']),
+      betaFen: fenAt(['d4','d5','c4']),
+    };
+  });
+  await seedBackup(appCC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      // Alpha: 4-member corridor (c4 / Nc3 / e3 / Bd3), left unmemorized -- the control.
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','e3','O-O'], reply: 'Bd3' },
+      // Beta: identically-shaped corridor on a different opening try, gets memorized.
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6'], reply: 'e3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6','e3','Be7'], reply: 'Bd3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6 e3 Be7 Bd3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCC.page);
+
+  const shapeOf = (k) => appCC.page.evaluate((k) => window.__threeTestEdit.roomShape(k), k);
+  const doorsOf = (k) => appCC.page.evaluate((k) =>
+    (window.__threeTestEdit.exits(k) || []).filter(e => !e.back).length, k);
+
+  // 193. Setup sanity: both Alpha and Beta start as 4-member corridors with
+  //      no forward doors (their tails are unreplied game leaves).
+  try {
+    const a = await shapeOf(keys.alpha), b = await shapeOf(keys.beta);
+    assert(a && a.kind === 'corridor' && a.members.length === 4,
+      `expected Alpha to start as a 4-member corridor, got ${JSON.stringify(a)}`);
+    assert(b && b.kind === 'corridor' && b.members.length === 4,
+      `expected Beta to start as a 4-member corridor, got ${JSON.stringify(b)}`);
+    assert((await doorsOf(keys.alpha)) === 0 && (await doorsOf(keys.beta)) === 0,
+      'expected neither corridor to have a forward door yet (both tails are unreplied leaves)');
+    ok('memorized-stability setup: Alpha and Beta both start as identically-shaped 4-member corridors');
+  } catch(e){ bad('memorized-stability setup: both corridors start as 4-member', e); }
+
+  // 194. Marking Beta memorized captures a shape snapshot matching its live shape.
+  try {
+    await appCC.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.beta);
+    await appCC.page.waitForTimeout(200);
+    await appCC.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const live = await shapeOf(keys.beta);
+    const snap = await appCC.page.evaluate((k) => window.__threeTestEdit.memorizedShape(k), keys.beta);
+    assert(snap && JSON.stringify(snap.members) === JSON.stringify(live.members),
+      `expected the memorized snapshot's members to match the live shape, got snap=${JSON.stringify(snap)} live=${JSON.stringify(live)}`);
+    ok('memorized-stability: marking Beta memorized snapshots its live 4-member shape');
+  } catch(e){ bad('memorized-stability: memorize captures matching snapshot', e); }
+
+  // Add the SAME interior branch to both castles: a new opponent try (g6,
+  // replied to with e4) alongside the existing 3rd-move opponent reply
+  // (Bb4 / Nf6 respectively) -- i.e. right after each corridor's 2nd member
+  // (the Nc3 reply), squarely interior to both rooms.
+  const closeVR = async () => {
+    await appCC.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appCC.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  };
+  await closeVR();
+  await appCC.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
+  await appCC.page.fill('#importLineInput',
+    '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. e4\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. e4');
+  await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+  await openVR(appCC.page);
+  // openVR's own readiness check (__threeTestEdit/__threeTestState) is set
+  // once and never cleared on close, so it can resolve on stale globals from
+  // the FIRST open, racing ahead of THIS open's (now cache-missing) rebuild
+  // -- same known race Phase AV's primeCache() works around. Wait on the
+  // rebuilt cache itself instead, which is unambiguous per-open.
+  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 10000 });
+
+  // 195. Beta (memorized before the edit): stays a 4-member corridor and
+  //      gains exactly one forward door -- to the new branch alone. Its
+  //      original tail content never became a separately-doored room.
+  try {
+    const b = await shapeOf(keys.beta);
+    assert(b && b.kind === 'corridor' && b.members.length === 4,
+      `expected memorized Beta to KEEP its 4-member shape after the interior branch, got ${JSON.stringify(b)}`);
+    const doors = await doorsOf(keys.beta);
+    assert(doors === 1, `expected exactly 1 new forward door (the side-door to the new branch), got ${doors}`);
+    ok('memorized-stability Phase 3: a memorized corridor keeps its shape and gains a single side-door');
+  } catch(e){ bad('memorized-stability Phase 3: memorized room preserved via side-door', e); }
+
+  // 200. The side-door isn't just present -- it's positioned near its SIBLING
+  //      member's own wall slot, not the member the branch actually forked
+  //      FROM. The branch is at M2 (Nc3, L1); its sibling is M3 (the reply
+  //      that already occupied that decision point, L2) -- lining up with L2
+  //      is what makes it read as "an alternate to L2," not "hanging off L1."
+  //      West wall (a left-side sequence). The door itself sits
+  //      MEMBER_DOOR_OFFSET (1.7m) past L2 (further from the entrance, i.e. a
+  //      MORE negative z, since z decreases going north).
+  try {
+    const slots = await appCC.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotsFull(k), keys.beta);
+    const l2 = slots.find(s => s.side === 'left' && s.order === 2);
+    assert(l2, `expected an L2 slot on Beta, got ${JSON.stringify(slots)}`);
+    const exits = await appCC.page.evaluate((k) => window.__threeTestEdit.exits(k), keys.beta);
+    const door = exits.find(e => !e.back);
+    assert(door, `expected exactly one forward door on Beta, got ${JSON.stringify(exits)}`);
+    assert(door.wall === 'west', `expected the side-door on the west (left) wall, got ${JSON.stringify(door)}`);
+    const expected = l2.z - 1.7;
+    assert(Math.abs(door.offset - expected) < 0.01,
+      `expected the door ~1.7m past its sibling L2 (L2.z=${l2.z}, expected offset=${expected}), got ${JSON.stringify(door)}`);
+    ok('memorized-stability Phase 3: the side-door sits near its SIBLING member\'s slot, not the entrance');
+  } catch(e){ bad('memorized-stability Phase 3: side-door positioned near its sibling member', e); }
+
+  // 197. Beta stays memorized (its content is fully preserved, side-door and
+  //      all) but now reads DIRTY -- isRoomDirty was originally scoped to
+  //      non-linear rooms only, deferred until Phase 3 gave a linear room's
+  //      exitPosKeys somewhere stable to diff against; that's exactly what
+  //      just happened, so the toolbar's dirty badge should now light up.
+  try {
+    await appCC.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.beta);
+    await appCC.page.waitForTimeout(200);
+    const stillMemorized = await appCC.page.evaluate(() => window.__threeTestEdit.memorized());
+    assert(stillMemorized, 'expected Beta to remain memorized -- its content is preserved, not stale');
+    const dirty = await appCC.page.evaluate(() => window.__threeTestEdit.isRoomDirty());
+    assert(dirty, 'expected Beta to read dirty now that its live exitPosKeys include the new side-door');
+    const badge = await appCC.page.evaluate(() => window.__threeTestEdit.dirtyBadgeStyle());
+    assert(badge && badge.display !== 'none', `expected the dirty toolbar badge visible, got ${JSON.stringify(badge)}`);
+    ok('memorized-stability: a memorized linear room with a new side-door stays memorized AND reads dirty');
+  } catch(e){ bad('memorized-stability: linear-room dirty detection (Phase 3 closes the Phase 2 gap)', e); }
+
+  // 196. Alpha (never memorized, the control): the SAME edit splits it --
+  //      its original room key shrinks to 2 members and shows 2 forward
+  //      doors (one to the new branch, one to what used to be silently
+  //      inside the room but is now a separate, newly-orphaned room).
+  try {
+    const a = await shapeOf(keys.alpha);
+    assert(a && a.kind === 'corridor' && a.members.length === 2,
+      `expected unmemorized Alpha to SPLIT down to its first 2 members, got ${JSON.stringify(a)}`);
+    const doors = await doorsOf(keys.alpha);
+    assert(doors === 2, `expected 2 forward doors (new branch + the split-off back half), got ${doors}`);
+    ok('memorized-stability control: an unmemorized corridor splits on the identical interior branch');
+  } catch(e){ bad('memorized-stability control: unmemorized room still splits (proves the mechanism matters)', e); }
+
+  // 201. The digraph shows the same dirty (⚠️) signal as VR for Beta, and the
+  //      node carries a native-tooltip explanation (attachGraphHoverTooltip).
+  try {
+    await closeVR();
+    await appCC.page.evaluate(() => document.querySelector('.line-row').click());
+    await appCC.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appCC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    const node = await appCC.page.evaluate((fen) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
+      return n.nonempty() ? { label: n.data('label'), dirty: n.data('dirty'), tooltip: n.data('tooltip') } : null;
+    }, keys.betaFen);
+    assert(node, `expected to find Beta's own node in the digraph, fen=${keys.betaFen}`);
+    assert(/⚠️/.test(node.label || ''), `expected the dirty glyph in Beta's label, got ${JSON.stringify(node.label)}`);
+    assert(node.dirty === true, `expected data('dirty') true on Beta's node, got ${JSON.stringify(node.dirty)}`);
+    assert(typeof node.tooltip === 'string' && node.tooltip.length > 0,
+      `expected a non-empty tooltip on Beta's node, got ${JSON.stringify(node.tooltip)}`);
+    ok('memorized-stability: the digraph shows the dirty glyph and a tooltip for Beta');
+  } catch(e){ bad('memorized-stability: digraph dirty glyph + tooltip', e); }
+} finally {
+  await appCC.close();
+}
+} catch(e){ bad('Phase CC: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CD: row menu's "Copy Moves" action copies the moves up to and
+//     including that row, formatted for round-tripping straight back through
+//     Import Line ("1. d4 Nf6 2. c4 e6"). ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appCD = await launchApp();
+try {
+  await seedBackup(appCD.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appCD.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 10000 });
+
+  // stub navigator.clipboard.writeText so the test doesn't depend on real
+  // clipboard permissions in headless Chromium -- captures the string instead.
+  await appCD.page.evaluate(() => {
+    window.__copiedText = null;
+    navigator.clipboard.writeText = (t) => { window.__copiedText = t; return Promise.resolve(); };
+  });
+
+  // 198. "Copy Moves" lives right after "Set Move Quality" and carries a
+  //      copy icon.
+  try {
+    await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] .rowMenuBtn').click());
+    // the quality control is a wrapping <div>, not a top-level data-act item --
+    // find its position via the .row-menu-quality div's own class instead.
+    const order = await appCD.page.evaluate(() =>
+      [...document.querySelectorAll('tr.data-row[data-seq="d4,Nf6,c4,e6"] .row-menu > *')]
+        .map(el => el.classList.contains('row-menu-quality') ? 'quality' : (el.dataset?.act || el.tagName)));
+    const qualityPos = order.indexOf('quality');
+    const copyPos = order.indexOf('copyMoves');
+    assert(qualityPos >= 0 && copyPos === qualityPos + 1,
+      `expected copyMoves immediately after the quality control, got order ${JSON.stringify(order)}`);
+    const iconClass = await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] [data-act="copyMoves"] i')?.className);
+    assert(/fa-copy/.test(iconClass || ''), `expected a copy icon, got ${JSON.stringify(iconClass)}`);
+    ok('Copy Moves sits right after Set Move Quality with a copy icon');
+  } catch(e){ bad('Copy Moves: menu placement and icon', e); }
+
+  // 199. Clicking it copies "1. d4 Nf6 2. c4 e6" -- the moves up to and
+  //      including THIS row (which ends in the opponent's e6, not our
+  //      further-down Nc3/Bb4) -- in the exact format Import Line accepts,
+  //      so it round-trips.
+  try {
+    await appCD.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] [data-act="copyMoves"]').click());
+    const copied = await appCD.page.evaluate(() => window.__copiedText);
+    assert(copied === '1. d4 Nf6 2. c4 e6',
+      `expected the formatted move list, got ${JSON.stringify(copied)}`);
+    ok('Copy Moves copies a correctly move-numbered, Import-Line-ready string');
+  } catch(e){ bad('Copy Moves: copied text format', e); }
+} finally {
+  await appCD.close();
+}
+} catch(e){ bad('Phase CD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

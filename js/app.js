@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260724-5';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260726-118';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260727-123';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260723-72';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260726-44';
 cytoscape.use(cytoscapeDagre);
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-220';
+const BUILD_TAG = '-226';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1407,11 +1407,55 @@ function genRoomMeta(seq, line = CURRENT_LINE){
    with its contained moves and its exits (doors) to other rooms. Built on the
    shared analyzer so it matches the network graph exactly. Data-only; the VR
    rendering (G2) and decoration persistence (G3) come later. */
+// Builds the frozen-adjacency lookup Phase 3 of memorized-room-stability
+// needs: for every memorized 'corridor'/'two-track' room belonging to this
+// castle instance, which live edges still count as that room's ORIGINAL
+// chain-forming links (so analyzeCastleStructure keeps treating them as such
+// even once a node they pass through gains an extra live edge), and which
+// live edges are new/"excess" and should fall out as ordinary exits instead.
+// 'branch'/'room' snapshots are skipped -- they have no restructuring risk to
+// protect against (Phase 2 already flags them via isRoomDirty, no regen
+// change needed). Keyed off MEMORIZED_SHAPES (an app.js-local mirror of
+// threeVR.js's own store, same independent-read convention as
+// MEMORIZED_ROOMS/DECORATED_ROOMS) -- entries whose node posKeys no longer
+// exist in the live graph (e.g. a deleted variation) are silently skipped
+// rather than erroring; they simply can't protect anything anymore.
+function buildFrozenAdjacency(instanceId, idByPosKey){
+  const prefix = `cas:${instanceId}:`;
+  const frozenChainEdge = new Map();     // live node id -> live node id (the one edge that still counts as a chain link)
+  const frozenTwoTrackKids = new Map();  // live node id (head) -> Set of live node ids (its frozen two children)
+  const chainLinks = arr => { for(let i=0;i<arr.length-1;i++){
+    const a = idByPosKey.get(arr[i]), b = idByPosKey.get(arr[i+1]);
+    if(a != null && b != null) frozenChainEdge.set(a, b);
+  } };
+  for(const roomKey in MEMORIZED_SHAPES){
+    if(!roomKey.startsWith(prefix)) continue;
+    const snap = MEMORIZED_SHAPES[roomKey];
+    if(!snap || !snap.anchorPosKey) continue;
+    if(snap.kind === 'two-track'){
+      const headId = idByPosKey.get(snap.anchorPosKey);
+      if(headId == null) continue;
+      const kids = [];
+      if(snap.left && snap.left.length){ const id = idByPosKey.get(snap.left[0]); if(id != null) kids.push(id); }
+      if(snap.right && snap.right.length){ const id = idByPosKey.get(snap.right[0]); if(id != null) kids.push(id); }
+      if(kids.length === 2) frozenTwoTrackKids.set(headId, new Set(kids));
+      chainLinks(snap.left || []);
+      chainLinks(snap.right || []);
+    } else if(snap.kind === 'corridor'){
+      chainLinks(snap.members || []);
+    }
+  }
+  return { frozenChainEdge, frozenTwoTrackKids };
+}
+
 function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   // leadIn=false: start the mansion at its root room, not at the opening moves
   // that lead into it (those would otherwise show as a lead-in corridor).
   const graph = buildCastleGraph(line, games, rootSeq, false, ownCastleName);
-  const a = analyzeCastleStructure(graph);
+  const idByPosKey = new Map(graph.rooms.map(r => [positionKey(r.fen), r.id]));
+  const instanceId = castleInstanceId(line.id, ownCastleName || '');
+  const frozen = buildFrozenAdjacency(instanceId, idByPosKey);
+  const a = analyzeCastleStructure(graph, frozen);
   const nodeById = new Map(graph.rooms.map(r=>[r.id, r]));
   const leafIds = new Set(graph.leaves.map(l=>l.id));
   const genIdOf = id => a.boxOf.get(id) || ('solo:' + id);
@@ -1501,10 +1545,31 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     const leftSet = g.kind === 'two-track' ? new Set(g.left) : null;
     const rightSet = g.kind === 'two-track' ? new Set(g.right) : null;
     const trackOf = src => !leftSet ? undefined : (rightSet.has(src) ? 'right' : 'left');
+    // which of THIS room's own wall slots (see the `pairs` loop below, whose
+    // side/order assignment this mirrors) the exit's source member occupies --
+    // 'center' for the anchor/head, otherwise 'left'/'right' with a 1-based
+    // order matching mnemPairLayout's (side, order) lookup in threeVR.js. Lets
+    // an interior side-door (memorized-room-stability Phase 3) get positioned
+    // near its sibling member's own slot instead of the generic door-hash
+    // placement, which only ever made sense when every door in a room
+    // belonged to the same single anchor member. null for a member somehow
+    // missing from this room's own arrays (shouldn't happen).
+    const memberSideOrder = id => {
+      if(g.kind === 'two-track'){
+        if(id === g.head) return { side: 'center', order: 1 };
+        const li = g.left.indexOf(id); if(li >= 0) return { side: 'left', order: li + 1 };
+        const ri = g.right.indexOf(id); if(ri >= 0) return { side: 'right', order: ri + 1 };
+        return null;
+      }
+      const mi = g.members.indexOf(id);
+      if(mi < 0) return null;
+      return mi === 0 ? { side: 'center', order: 1 } : { side: 'left', order: mi };
+    };
     const exits = [];
     for(const e of graph.edges){
       if(!memberSet.has(e.source)) continue;
       const track = trackOf(e.source);
+      const from = memberSideOrder(e.source);
       // "N (M%)" -- how often this exact opponent reply has actually occurred
       // in the user's own games, out of this room's total recorded
       // continuations, so the VR door plaque / digraph edge can show it.
@@ -1514,17 +1579,20 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
         // redirect in buildCastleGraph) -- `to`/`toKey` stay null (nothing of
         // ours to point at); `foreignKey` is the real destination.
         exits.push({ opp: e.label, to: null, foreignCastle: e.foreignCastle, foreignKey: e.foreignKey,
-                     pair: pairFromSeq(e.destSeq), track, occurrence });
+                     pair: pairFromSeq(e.destSeq), track, occurrence, fromSide: from?.side, fromOrder: from?.order });
         continue;
       }
-      if(leafIds.has(e.target)){ exits.push({ opp: e.label, to: null, track, occurrence }); continue; }
+      if(leafIds.has(e.target)){
+        exits.push({ opp: e.label, to: null, track, occurrence, fromSide: from?.side, fromOrder: from?.order });
+        continue;
+      }
       const tgt = genIdOf(e.target);
       if(tgt === gid) continue;   // internal link inside a corridor / two-track
       // `to` is the R# label (for the readable report); `toKey` is the stable
       // position identity the VR uses to wire doors + persist decorations.
       exits.push({ opp: e.label, to: labelOf.get(tgt) || null, toKey: posKeyByGid.get(tgt) || null,
                    // edge-specific move pair, shown beside this door in the VR walk
-                   pair: pairFromSeq(e.destSeq), track, occurrence });
+                   pair: pairFromSeq(e.destSeq), track, occurrence, fromSide: from?.side, fromOrder: from?.order });
     }
     const walls = g.kind === 'two-track'
       ? { center: [moveOf(g.head)], left: g.left.map(moveOf), right: g.right.map(moveOf) }
@@ -1554,8 +1622,25 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     // doors that happen to cross into a different room. A corridor step is
     // still a move you have to know even though it doesn't leave the room.
     const moveCount = g.members.reduce((sum, id) => sum + (a.outDeg.get(id) || 0), 0);
+    // frozen-shape snapshot for the memorized-room-stability feature: captured
+    // (by threeVR.js's toggleMemorized, into MEMORIZED_SHAPES) when the user
+    // marks a room memorized, then consulted on a later regen both to detect
+    // a new variation landing inside an already-memorized room (Phase 2,
+    // non-linear rooms) and to keep a memorized linear room's shape intact
+    // via a side-door instead of splitting it (Phase 3, see
+    // buildFrozenAdjacency). members/left/right/anchorPosKey are position
+    // keys, in walk order, so identity survives node-id churn across
+    // regenerations the same way posKeyByGid already does. anchorPosKey is
+    // this room's own posKey, stored explicitly because the sanitized
+    // roomKey string it's normally embedded in isn't reliably reversible.
+    const memberPosKey = id => positionKey(nodeById.get(id).fen);
+    const shape = g.kind === 'two-track'
+      ? { kind: 'two-track', left: g.left.map(memberPosKey), right: g.right.map(memberPosKey) }
+      : { kind: g.kind, members: g.members.map(memberPosKey) };
+    shape.anchorPosKey = posKeyByGid.get(gid);
+    shape.exitPosKeys = exits.filter(e => e.toKey).map(e => e.toKey);
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs };
+             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs, shape };
   });
 
   return { genRooms, stats: a, graph };
@@ -1713,8 +1798,19 @@ async function showGeneratedCastleReport(games, seq){
    Given a buildCastleGraph result, detect linear runs and two-track rooms and
    assign every room node to a box (or leave it standalone). Used by both the
    network graph (boxing + collapsed-room stats) and the castle generator (G1),
-   so the two always agree. See LinearSequencesAndRoomObjects.md. */
-function analyzeCastleStructure(graph){
+   so the two always agree. See LinearSequencesAndRoomObjects.md.
+   `frozen` (optional, see buildFrozenAdjacency) is the memorized-room-
+   stability Phase 3 hook: when a node's outgoing edge is protected by a
+   memorized snapshot, that ONE edge participates in chain/two-track
+   detection as if it were still the node's only edge, regardless of what its
+   live out-degree actually is now -- any other live edge from that node
+   falls through untouched as an ordinary edge, which the caller's own exits
+   computation already turns into a ordinary door (a "side-door") for free,
+   since it isn't internal to the box either. Only ever passed by
+   buildGeneratedCastle, which knows a single castle instance; the network
+   graph's own call (potentially spanning multiple castle instances at once)
+   passes nothing and gets today's unprotected behavior. */
+function analyzeCastleStructure(graph, frozen=null){
   const { rooms, edges } = graph;
   const indegree = new Map();
   edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
@@ -1729,7 +1825,10 @@ function analyzeCastleStructure(graph){
   const chainNext = new Map(), chainTarget = new Set();
   for(const e of edges){
     if(!roomIds.has(e.source) || !roomIds.has(e.target)) continue;
-    if(outDeg.get(e.source) !== 1) continue;
+    const frozenTarget = frozen && frozen.frozenChainEdge.get(e.source);
+    if(frozenTarget != null){
+      if(e.target !== frozenTarget) continue;   // an extra edge beyond the frozen one -- not a chain link, falls through as a plain exit
+    } else if(outDeg.get(e.source) !== 1) continue;
     if((indegree.get(e.target)||0) !== 1) continue;
     chainNext.set(e.source, e.target);
     chainTarget.add(e.target);
@@ -1753,8 +1852,20 @@ function analyzeCastleStructure(graph){
   const boxOf = new Map(), boxes = [], consumed = new Set();
   let twoTrackCount = 0;
   rooms.forEach(H => {
-    if(outDeg.get(H.id) !== 2) return;
-    const [t1, t2] = outTargets.get(H.id) || [];
+    const frozenKids = frozen && frozen.frozenTwoTrackKids.get(H.id);
+    let t1, t2;
+    if(frozenKids){
+      // memorized two-track head: qualify on its ORIGINAL two children, no
+      // matter how many live children H has now -- both must still actually
+      // be live edges from H (a deleted variation could have removed one).
+      const live = new Set(outTargets.get(H.id) || []);
+      const kids = [...frozenKids].filter(id => live.has(id));
+      if(kids.length !== 2) return;
+      [t1, t2] = kids;
+    } else {
+      if(outDeg.get(H.id) !== 2) return;
+      [t1, t2] = outTargets.get(H.id) || [];
+    }
     if(!runByHead.has(t1) || !runByHead.has(t2) || t1 === t2) return;
     if((indegree.get(t1)||0) !== 1 || (indegree.get(t2)||0) !== 1) return;
     const runA = runByHead.get(t1), runB = runByHead.get(t2);
@@ -1868,6 +1979,36 @@ async function loadDecoratedRooms(){
   try { DECORATED_ROOMS = JSON.parse(await getMeta('threeDecoratedRooms') || '{}'); }
   catch { DECORATED_ROOMS = {}; }
 }
+// frozen shape snapshots for memorized rooms (see js/threeVR.js's own
+// MEMORIZED_SHAPES, which this mirrors) -- same independent-read pattern.
+// Used by isRoomDirty below to badge a memorized room whose live shape has
+// picked up a new exit since it was last memorized.
+let MEMORIZED_SHAPES = {};
+async function loadMemorizedShapes(){
+  try { MEMORIZED_SHAPES = JSON.parse(await getMeta('threeMemorizedShapes') || '{}'); }
+  catch { MEMORIZED_SHAPES = {}; }
+}
+// Mirrors threeVR.js's own isRoomDirty (see its longer comment for the
+// Phase-3-closed-the-gap reasoning behind covering linear rooms too).
+// `liveShape` is the room's shape.exitPosKeys as computed by THIS regen
+// (buildGeneratedCastle), passed in by the caller since it already has it in
+// hand from the coverage-stats loop -- no need to recompute here.
+// CAVEAT specific to this copy: this file's buildGeneratedCastle calls never
+// pass the frozen-adjacency map (a single castle instance's worth doesn't
+// apply cleanly to the network graph, which can span several at once -- see
+// buildFrozenAdjacency's own comment), so a memorized linear room whose
+// interior branch landed exactly on its own anchor can still show a KIND
+// mismatch here (the unprotected view reclassifies it as 'branch') even
+// though the protected VR view correctly keeps it 'corridor' and flags it
+// dirty there. That specific case silently reads as not-dirty in the
+// digraph; every other linear-room case (branch anywhere else in the room)
+// is unaffected, since only an anchor-level branch changes kind.
+function isRoomDirty(roomKey, liveShape){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  if(!snap || !liveShape || snap.kind !== liveShape.kind) return false;
+  const known = new Set(snap.exitPosKeys || []);
+  return (liveShape.exitPosKeys || []).some(k => !known.has(k));
+}
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -1893,6 +2034,7 @@ async function showTranspositionGraph(){
     await loadGraphLayout();
     await loadMemorizedRooms();
     await loadDecoratedRooms();
+    await loadMemorizedShapes();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
@@ -1928,6 +2070,11 @@ async function showTranspositionGraph(){
     const castleNames = focusedName ? [focusedName] : definedCastles();
     let totalCastleRooms = 0, totalCastleMoves = 0;
     let memorizedRoomCount = 0, decoratedRoomCount = 0, memorizedMoveCount = 0;
+    // roomKey -> this regen's live shape, gathered while we're already
+    // iterating every generated room below -- reused by isRoomDirty in the
+    // node-labeling loop further down instead of a second buildGeneratedCastle
+    // pass per castle.
+    const liveShapeByRoomKey = new Map();
     for(const name of castleNames){
       const castleRootSeq = castleRootRoomSeq(name);
       if(!castleRootSeq) continue;
@@ -1937,6 +2084,7 @@ async function showTranspositionGraph(){
       for(const gr of genRooms){
         totalCastleMoves += gr.moveCount;
         const roomKey = castleRoomKey(instanceId, gr.posKey);
+        liveShapeByRoomKey.set(roomKey, gr.shape);
         if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.moveCount; }
         if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
       }
@@ -2051,14 +2199,23 @@ async function showTranspositionGraph(){
         const q = moveQualityFor(r.seq);                 // annotate the arriving (opponent) move
         const memorized = roomKey ? !!MEMORIZED_ROOMS[roomKey] : false;
         const decorated = roomKey ? !!DECORATED_ROOMS[roomKey] : false;
-        // 🧠 (memorized) / 🎨 (decorated) glyphs read at normal zoom; the
-        // "all done" border (below) is the zoomed-out signal, so both glyphs
-        // still show even when it's also on.
-        const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '');
+        // dirty (Phase 2 of memorized-room-stability): a memorized non-linear
+        // room that's picked up a new door since it was last memorized -- see
+        // isRoomDirty for why linear rooms aren't covered yet.
+        const dirty = memorized && roomKey && isRoomDirty(roomKey, liveShapeByRoomKey.get(roomKey));
+        // 🧠 (memorized) / 🎨 (decorated) / ⚠️ (dirty) glyphs read at normal
+        // zoom; the "all done" border (below) is the zoomed-out signal, so
+        // all glyphs still show even when it's also on.
+        const moveLabel = r.label + (q ? ' ' + q : '') + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '') + (dirty ? ' ⚠️' : '');
         const data = {id:r.id, label: name ? `${moveLabel}\n${name}` : moveLabel, fen:r.fen, seq:r.seq};
         if(!flat && boxOf.has(r.id)) data.parent = boxOf.get(r.id);   // box this room into its run / two-track room
         Object.assign(data, boxMemberInfo(r));   // track/chainIdx for "Arrange" (no-op if not boxed)
         data.roomKey = roomKey;   // exposed for the test hook / room-info panel use
+        data.dirty = dirty;      // exposed for the test hook, same reasoning as data.roomKey above
+        // native browser tooltip text (see attachGraphHoverTooltip) -- only
+        // the dirty glyph needs one; everything else on the node already
+        // reads for itself (the move label, the room name).
+        if(dirty) data.tooltip = 'This room changed since it was memorized -- a new door was added.';
         // a VR dead-end reached through a locked door -- empty (no forward
         // continuation) and not its castle's own entry room (that one is
         // reached from the street, not a locked door). "Jump to VR" is hidden
@@ -2183,6 +2340,7 @@ async function showTranspositionGraph(){
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
     attachGraphClickHandler(cy);
     attachGraphContextMenu(cy, scopeKey);
+    attachGraphHoverTooltip(cy);
 
     // Save a manual de-overlap drag: delta from dagre's own placement, keyed
     // by the node's position (stable across a rebuild, unlike its cytoscape id).
@@ -2505,6 +2663,18 @@ function attachGraphClickHandler(cy){
     showRoomInfoPanel(el);
   });
   cy.on('tap', evt => { if(evt.target === cy) hideGraphHoverPreview(); });  // tap empty space dismisses the position preview
+}
+// A native browser tooltip for the dirty (⚠️) glyph explaining what it means
+// -- just the container's own `title` attribute, toggled on node hover, so
+// it's the browser's standard hover-delay tooltip (no custom popup/position
+// tracking needed, unlike showGraphNodePosition's board preview, which was
+// deliberately moved OFF hover because a full interactive preview was too
+// easy to trigger by accident -- plain text on the native tooltip doesn't
+// have that problem). Only nodes carrying data('tooltip') (currently just
+// dirty rooms) get one; every other node clears it back to empty on hover.
+function attachGraphHoverTooltip(cy){
+  cy.on('mouseover', 'node', evt => { cy.container().title = evt.target.data('tooltip') || ''; });
+  cy.on('mouseout', 'node', () => { cy.container().title = ''; });
 }
 // White's ply number ("N."), glued right onto the move's thumbnail image (in
 // the same nowrap wrapper) so it can't end up visually separated from the
@@ -3392,6 +3562,7 @@ function renderBranch(parent,games,seq,depth,flip=false){
                  <button type="button" class="rmq rmq-clear" data-q="" title="clear annotation">✕</button>
                </span>
              </div>
+             <button type="button" data-act="copyMoves"><i class="fa-solid fa-copy"></i>Copy Moves</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
              <button type="button" data-act="compareActual"><i class="fa-solid fa-code-compare"></i>Compare Games</button>
@@ -3645,6 +3816,13 @@ function renderBranch(parent,games,seq,depth,flip=false){
         rowMenu.classList.remove('show');
       };
     });
+    rowMenu.querySelector('[data-act="copyMoves"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      navigator.clipboard.writeText(formatMoveListPgn(lineSeq)).then(
+        () => log(`copied ${lineSeq.length} move(s) to the clipboard`),
+        () => log('failed to copy to the clipboard', true));
+    };
     rowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -4302,6 +4480,14 @@ $('lineStreetEditBtn').onclick = () => {
     refreshLineStreetName();
   });
 };
+
+// inverse of parseAlgebraicMoveList: a seq (plain SAN array, ply 1 = White's
+// first move) -> a "1. d4 Nf6 2. c4 e6" string, for the row menu's Copy Moves
+// action -- lets the user build an Import Line variation string by pasting
+// this, editing/extending it, and pasting the result back in.
+function formatMoveListPgn(seq){
+  return seq.map((san, i) => (i % 2 === 0 ? `${i / 2 + 1}. ` : '') + san).join(' ');
+}
 
 /* ---------- import variations: bulk-set standard responses from pasted variations ----------
    Parses a full variation of algebraic notation (move numbers, "...", comments,
@@ -5311,6 +5497,11 @@ async function gatherBuiltCastles(lines){
   }
   const t0 = performance.now();
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
+  // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
+  // hit above already returned without reaching here, so this only runs on an
+  // actual rebuild, exactly when a fresh read matters.
+  await loadMemorizedShapes();
   // one prefs swap per line, done concurrently rather than one-line-at-a-time:
   // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
   // so the "swap in this line's PREFS, run fn, restore" sequence for each line

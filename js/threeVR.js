@@ -295,6 +295,12 @@ const EDGE_MARGIN = 1.6;       // keep a door's half-width off the wall corners
 // this much clear to the side wall so its pair doesn't poke through.
 const PAIR_MARGIN = 2.8;
 const EW_BEHIND_HEAD = 3;      // closest left/right door sits this far north of the head mnemonic (center anchor pair)
+// how far past its sibling member's wall slot a member-anchored side-door's
+// DOOR sits (memorized-room-stability's side-doors) -- set to exactly cancel
+// out doorSideXZ's own "pair sits DOOR_W/2+0.6 before the door" shift, so a
+// member-anchored door's pair billboard lands ON its sibling's own z (lines
+// up with it) while the door itself ends up that same distance past it.
+const MEMBER_DOOR_OFFSET = DOOR_W / 2 + 0.6;
 // Stable door ordering (navigation memory): a door's wall is derived from its
 // own target position, not its index among the current doors, so adding/removing
 // a variation never makes an existing door jump walls. `doorCmp` then orders the
@@ -386,8 +392,22 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // added or removed), and doors on a wall are sorted by move — so existing
       // doors keep their wall AND relative order across regenerations; only a
       // genuinely new variation slots in. Room grows so doors never collide.
+      // EXCEPTION: an exit whose source is an INTERIOR member of this room's
+      // own wall sequence (fromSide/fromOrder -- memorized-room-stability's
+      // side-doors, the only way that happens today) skips the hash entirely
+      // and instead rides along with that member's own slot -- the generic
+      // hash+hallway-entrance placement only ever made sense when every door
+      // in the room belonged to the single anchor member, which an interior
+      // side-door isn't.
       const byWall = { north: [], east: [], west: [] };
-      for(const ex of fwd) byWall[doorWallFor(ex.toKey || ex.foreignKey || ex.opp)].push(ex);
+      const memberAnchored = [];   // {wall, ex} -- positioned near their own sibling member's slot, not hashed
+      for(const ex of fwd){
+        if((ex.fromSide === 'left' || ex.fromSide === 'right') && typeof ex.fromOrder === 'number'){
+          memberAnchored.push({ wall: ex.fromSide === 'left' ? 'west' : 'east', ex });
+        } else {
+          byWall[doorWallFor(ex.toKey || ex.foreignKey || ex.opp)].push(ex);
+        }
+      }
       for(const w of ['north', 'east', 'west']) byWall[w].sort(doorCmp);
       // east/west ("left/right") doors sit at least EW_BEHIND_HEAD metres north
       // of the head mnemonic (center anchor pair) so it's clearly the first
@@ -397,11 +417,31 @@ function registerOneCastle(castle, instanceId, opts = {}){
         ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + EW_BEHIND_HEAD
           + (maxEW - 1) * DOOR_SPACING + EDGE_MARGIN
         : 0;
+      // a member-anchored door's pair billboard lands on its SIBLING member's
+      // own z (fromOrder+1 -- the member that already occupies "this branch
+      // point," which the new option is an alternate to), same as the depth
+      // calc below needs. Falls back to fromOrder itself when there's no
+      // such sibling (the branch is past the room's current last member, not
+      // interior to it) -- nothing to align with there, so it just extends
+      // past the tail like an ordinary new door would.
+      const siblingOrderFor = ex => {
+        const has = (r.pairs || []).some(p => (p.side || 'left') === ex.fromSide && p.order === ex.fromOrder + 1);
+        return has ? ex.fromOrder + 1 : ex.fromOrder;
+      };
+      // a member-anchored door rides MEMBER_DOOR_OFFSET past its sibling's
+      // own slot -- only matters for room depth when that sibling is the
+      // DEEPEST member on its wall (sideMax), since anywhere earlier is
+      // already comfortably inside pairDepth's own margin.
+      const memberDoorDepth = memberAnchored.length
+        ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
+          + (Math.max(...memberAnchored.map(m => siblingOrderFor(m.ex))) - 1) * CAS_LAYOUT.sideStride
+          + MEMBER_DOOR_OFFSET + CAS_LAYOUT.northMargin
+        : 0;
       sz = {
         // PAIR_MARGIN (not EDGE_MARGIN) each side so the leftmost north door's
         // pair, which overhangs ~2.3 m to its left, clears the west wall.
         w: Math.max(base.w, span(byWall.north.length) + 2 * PAIR_MARGIN),
-        d: Math.max(base.d, pairDepth, ewDepth),
+        d: Math.max(base.d, pairDepth, ewDepth, memberDoorDepth),
         h: base.h
       };
       const centerZ = sz.d / 2 - CAS_LAYOUT.entrySetback - CAS_LAYOUT.centerAhead;   // head mnemonic z
@@ -412,6 +452,17 @@ function registerOneCastle(castle, instanceId, opts = {}){
         doorPlacements.push({ wall: 'north', offset: (j - (byWall.north.length - 1) / 2) * DOOR_SPACING, ex }));
       for(const wall of ['east', 'west'])
         byWall[wall].forEach((ex, j) => doorPlacements.push({ wall, offset: ewSouth - j * DOOR_SPACING, ex }));
+      // member-anchored doors: MEMBER_DOOR_OFFSET (= doorSideXZ's own
+      // DOOR_W/2+0.6 "pair sits before the door" shift) exactly cancels out,
+      // so the pair billboard lands ON the sibling's own z (lines up with
+      // it, as requested) while the door itself sits MEMBER_DOOR_OFFSET
+      // beyond it -- past the sibling, farther from the entrance.
+      // v1 known gap: two side-doors landing on the same sibling member would
+      // currently collide here -- not handled yet, no case has needed it.
+      for(const { wall, ex } of memberAnchored){
+        const siblingZ = centerZ - CAS_LAYOUT.sideFirst - (siblingOrderFor(ex) - 1) * CAS_LAYOUT.sideStride;
+        doorPlacements.push({ wall, offset: siblingZ - MEMBER_DOOR_OFFSET, ex });
+      }
     }
     const exits = [];
     // back door (south) → parent room. The entry room instead exits to the
@@ -456,6 +507,9 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // building -- keeps its centre pair in-room (nowhere else to show it).
       entryNoStreet: r === entry && !opts.backToStreet,
       posKey: r.posKey,   // first-4-FEN-fields for this room's position (mini-board icon)
+      // this generation's live shape snapshot (member/exit position keys) --
+      // see MEMORIZED_SHAPES for what captures it and why.
+      shape: r.shape,
       castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
     };
   }
@@ -584,6 +638,15 @@ let MEMORIZED = {};
 // gets renamed elsewhere later. { [roomKey]: msEpochWhenLastFlaggedComplete }.
 const DECORATED_KEY = 'threeDecoratedRooms';
 let DECORATED = {};
+// frozen shape snapshot for every currently-memorized room, captured at the
+// moment MEMORIZED is set (and dropped when it's cleared) -- see the room's
+// live `shape` (registerOneCastle) for what gets copied in. This is the data
+// a later regeneration will diff against to detect a new variation landing
+// inside an already-memorized room, and to preserve the room's layout instead
+// of letting it split. Not consulted for anything yet in this phase --
+// capture-only. { [roomKey]: { kind, members?|left?/right?, exitPosKeys } }.
+const MEMORIZED_SHAPE_KEY = 'threeMemorizedShapes';
+let MEMORIZED_SHAPES = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
@@ -607,7 +670,7 @@ let joyVec = { x: 0, y: 0 };
    since closing the modal and opening the asset manager live in app.js. */
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
-let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, editGroup = null;
+let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, dirtyBadge = null, editGroup = null;
 let undoBtn = null, redoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
@@ -1125,17 +1188,44 @@ async function loadMemorized(){
   try { MEMORIZED = raw ? JSON.parse(raw) : {}; }
   catch { MEMORIZED = {}; }
 }
-function persistMemorized(){ setMeta(MEMORIZED_KEY, JSON.stringify(MEMORIZED)); }
+// returns the write's promise (was fire-and-forget) -- toggleMemorized below
+// awaits both this and persistMemorizedShapes together so a caller that
+// awaits the toggle can rely on the write having actually landed, not just
+// been kicked off. Matters more now that two persists race the same IDB
+// database instead of one; a genuinely-fire-and-forget pair narrowly worked
+// before but wasn't correct.
+function persistMemorized(){ return setMeta(MEMORIZED_KEY, JSON.stringify(MEMORIZED)); }
+
+async function loadMemorizedShapes(){
+  const raw = await getMeta(MEMORIZED_SHAPE_KEY);
+  try { MEMORIZED_SHAPES = raw ? JSON.parse(raw) : {}; }
+  catch { MEMORIZED_SHAPES = {}; }
+}
+function persistMemorizedShapes(){ return setMeta(MEMORIZED_SHAPE_KEY, JSON.stringify(MEMORIZED_SHAPES)); }
+
 // Toggles the CURRENT room's memorized flag. No-op outside a real castle room
 // (currentRoomFen() is null on mainStreet/buildings) -- the toolbar icon that
 // calls this is hidden there for the same reason. No scene rebuild needed:
 // nothing in the 3D scene itself depends on this flag, only the toolbar icon.
-function toggleMemorized(){
+// Marking memorized also snapshots the room's current shape (see
+// MEMORIZED_SHAPES) -- captured here rather than kept continuously live, same
+// checkpoint discipline as DECORATED's evaluate-on-exit-edit-mode. Clearing
+// memorized drops the snapshot too: a shape is only meaningful while the room
+// is actually memorized. async so both callers (a fire-and-forget button
+// click, and a test that DOES await it) get correct behavior either way --
+// the toolbar itself still updates immediately, before the writes settle.
+async function toggleMemorized(){
   if(!currentRoomFen()) return;
-  if(MEMORIZED[currentRoomKey]) delete MEMORIZED[currentRoomKey];
-  else MEMORIZED[currentRoomKey] = Date.now();
-  persistMemorized();
+  if(MEMORIZED[currentRoomKey]){
+    delete MEMORIZED[currentRoomKey];
+    delete MEMORIZED_SHAPES[currentRoomKey];
+  } else {
+    MEMORIZED[currentRoomKey] = Date.now();
+    const shape = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].shape;
+    if(shape) MEMORIZED_SHAPES[currentRoomKey] = shape;
+  }
   updateToolbar();
+  await Promise.all([persistMemorized(), persistMemorizedShapes()]);
 }
 
 async function loadDecorated(){
@@ -1187,6 +1277,30 @@ function evaluateDecorated(roomKey){
   if(computeFullyDecorated(roomKey)) DECORATED[roomKey] = Date.now();
   else delete DECORATED[roomKey];
   persistDecorated();
+}
+
+// Whether a memorized room has picked up a new forward exit since it was last
+// memorized -- Phase 2 of the memorized-room-stability design (see
+// MEMORIZED_SHAPES). Originally scoped to non-linear rooms only, because a
+// linear room's ('corridor'/'two-track') snapshot didn't stay meaningfully
+// comparable once a mid-sequence branch restructured it -- Phase 3's
+// side-door mechanism closed exactly that gap: a memorized linear room's
+// `kind` and `members`/`left`/`right` now stay stable across a regen even
+// after an interior branch lands (that's the whole point of the side-door),
+// so its exitPosKeys are just as diffable as a non-linear room's. The
+// `snap.kind !== live.kind` guard below still protects the one remaining
+// case a side-door doesn't cover: a room whose memorized shape didn't
+// survive at all (e.g. the anchor itself vanished, or the room fell outside
+// what the side-door mechanism could preserve) -- that shows as NOT dirty
+// here, on the theory that a room this drastically different from its own
+// memory isn't well-served by a "new door" framing; MEMORIZED simply stays
+// stale until the user notices in VR and either re-memorizes or resets it.
+function isRoomDirty(roomKey){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  const live = ROOMS[roomKey] && ROOMS[roomKey].shape;
+  if(!snap || !live || snap.kind !== live.kind) return false;
+  const known = new Set(snap.exitPosKeys || []);
+  return (live.exitPosKeys || []).some(k => !known.has(k));
 }
 
 // A room is "empty" when it has no forward (non-back) exits AND no wall
@@ -6103,6 +6217,8 @@ function buildTopToolbar(){
   assetsBtn   = makeIconBtn('fa-cubes',          'Asset library', () => { if(threeOpts.onAssets) threeOpts.onAssets(); });
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
+  dirtyBadge  = makeIconBtn('fa-triangle-exclamation', 'A new variation added a door here since you memorized this room',
+                             () => showToast('New door since you memorized this room -- give it a look!'));
   memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
@@ -6117,8 +6233,9 @@ function buildTopToolbar(){
   editGroup.append(editBtn, undoBtn, redoBtn, roomGeomBtn, wallListsBtn, assetsBtn);
   left.append(hintsBtn, editGroup, boardBtn, infoBtn);
   // memorize is the rightmost status badge (right next to Close); decorated,
-  // when shown, sits immediately to its left.
-  right.append(decoratedBadge, memBtn, closeBtn);
+  // when shown, sits immediately to its left; dirty (when shown) sits between
+  // decorated and memorize -- it's specifically about the memorized state.
+  right.append(decoratedBadge, dirtyBadge, memBtn, closeBtn);
   bar.append(left, right);
   return bar;
 }
@@ -6165,6 +6282,10 @@ function updateToolbar(){
   // decorated is a computed, read-only badge (see evaluateDecorated) -- shown
   // only when true, so it never competes with memorize's on/off toggle look.
   if(decoratedBadge) decoratedBadge.style.display = DECORATED[currentRoomKey] ? '' : 'none';
+  // dirty (see isRoomDirty) only ever applies to an already-memorized room --
+  // computed live (cheap: a couple of array lookups) rather than cached like
+  // DECORATED, so it can't go stale between updateToolbar() calls.
+  if(dirtyBadge) dirtyBadge.style.display = (MEMORIZED[currentRoomKey] && isRoomDirty(currentRoomKey)) ? '' : 'none';
   if(assetsBtn)   assetsBtn.style.display   = editMode ? '' : 'none';
 }
 function setHintsOn(on){
@@ -7268,7 +7389,7 @@ export async function openThreeTest(containerEl, opts){
   // five independent IDB reads, each populating its own module global with no
   // cross-dependency on the others' results -- run concurrently rather than
   // one round-trip after another.
-  await Promise.all([loadLayout(), loadMemorized(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
+  await Promise.all([loadLayout(), loadMemorized(), loadMemorizedShapes(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -7365,9 +7486,10 @@ export async function openThreeTest(containerEl, opts){
       // occurrence stats ("N (M%)") on the current (or a given) room's
       // exits -- how often that exact opponent reply has actually occurred
       // in the user's own games, threaded through buildGeneratedCastle ->
-      // registerOneCastle -> ROOMS[key].exits.
+      // registerOneCastle -> ROOMS[key].exits. wall/offset added for testing
+      // the member-anchored side-door placement (memorized-room-stability).
       exits: (roomKeyArg) => (mergedRoom(roomKeyArg || currentRoomKey)?.exits || [])
-        .map(e => ({ target: e.target, back: !!e.back, occurrence: e.occurrence || null })),
+        .map(e => ({ target: e.target, back: !!e.back, occurrence: e.occurrence || null, wall: e.wall, offset: e.offset })),
       // "memorized" toggle (Phase 1): drives the real toggleMemorized()/toolbar
       // state so a test doesn't need to click the actual button DOM element.
       memorized: () => MEMORIZED[currentRoomKey] || null,
@@ -7377,8 +7499,19 @@ export async function openThreeTest(containerEl, opts){
         persistMemorized();
         updateToolbar();
       },
+      // memorized-room-stability Phase 1: the live shape this generation
+      // computed for a room (independent of whether it's memorized), and the
+      // snapshot actually captured for a memorized room -- for testing that
+      // toggleMemorized snapshots/drops the right thing.
+      roomShape: (roomKeyArg) => (ROOMS[roomKeyArg || currentRoomKey] || {}).shape || null,
+      memorizedShape: (roomKeyArg) => MEMORIZED_SHAPES[roomKeyArg || currentRoomKey] || null,
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
+      // memorized-room-stability Phase 2: the dirty badge's visibility, and
+      // the underlying computed flag directly (roomKeyArg optional, defaults
+      // to the current room) -- mirrors decoratedBadgeStyle/decorated above.
+      dirtyBadgeStyle: () => dirtyBadge ? { display: dirtyBadge.style.display } : null,
+      isRoomDirty: (roomKeyArg) => isRoomDirty(roomKeyArg || currentRoomKey),
       // the fading toast's current text (null if not currently shown) --
       // showToast() has no DOM id, so this is the only way to check it fired
       // without scraping the whole container for an untagged div.
@@ -7655,6 +7788,11 @@ export async function openThreeTest(containerEl, opts){
       // e.g. "obj-L1") -- for testing Part A's "fully decorated" slot check
       // without scraping placeholder sprites out of the scene by hand.
       moveObjectSlotIds: (roomKey) => moveObjectSlots(roomKey).map(s => s.id),
+      // full slot geometry (id/side/order/x/z) -- for testing that a new
+      // side-door's position (see exits() above) lands near its sibling
+      // member's own slot rather than the generic door-hash placement.
+      moveObjectSlotsFull: (roomKeyArg) => moveObjectSlots(roomKeyArg || currentRoomKey)
+        .map(s => ({ id: s.id, side: s.side, order: s.order, x: s.x, z: s.z })),
       // assigns (or clears, if assetId is falsy) a manual per-slot asset
       // override -- the same mutation the real prop picker makes
       // (setSlotOverride), but AWAITED end-to-end (setSlotOverride itself
@@ -7776,7 +7914,7 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = editGroup = undoBtn = redoBtn = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
