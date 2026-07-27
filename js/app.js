@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-222';
+const BUILD_TAG = '-223';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1407,11 +1407,55 @@ function genRoomMeta(seq, line = CURRENT_LINE){
    with its contained moves and its exits (doors) to other rooms. Built on the
    shared analyzer so it matches the network graph exactly. Data-only; the VR
    rendering (G2) and decoration persistence (G3) come later. */
+// Builds the frozen-adjacency lookup Phase 3 of memorized-room-stability
+// needs: for every memorized 'corridor'/'two-track' room belonging to this
+// castle instance, which live edges still count as that room's ORIGINAL
+// chain-forming links (so analyzeCastleStructure keeps treating them as such
+// even once a node they pass through gains an extra live edge), and which
+// live edges are new/"excess" and should fall out as ordinary exits instead.
+// 'branch'/'room' snapshots are skipped -- they have no restructuring risk to
+// protect against (Phase 2 already flags them via isRoomDirty, no regen
+// change needed). Keyed off MEMORIZED_SHAPES (an app.js-local mirror of
+// threeVR.js's own store, same independent-read convention as
+// MEMORIZED_ROOMS/DECORATED_ROOMS) -- entries whose node posKeys no longer
+// exist in the live graph (e.g. a deleted variation) are silently skipped
+// rather than erroring; they simply can't protect anything anymore.
+function buildFrozenAdjacency(instanceId, idByPosKey){
+  const prefix = `cas:${instanceId}:`;
+  const frozenChainEdge = new Map();     // live node id -> live node id (the one edge that still counts as a chain link)
+  const frozenTwoTrackKids = new Map();  // live node id (head) -> Set of live node ids (its frozen two children)
+  const chainLinks = arr => { for(let i=0;i<arr.length-1;i++){
+    const a = idByPosKey.get(arr[i]), b = idByPosKey.get(arr[i+1]);
+    if(a != null && b != null) frozenChainEdge.set(a, b);
+  } };
+  for(const roomKey in MEMORIZED_SHAPES){
+    if(!roomKey.startsWith(prefix)) continue;
+    const snap = MEMORIZED_SHAPES[roomKey];
+    if(!snap || !snap.anchorPosKey) continue;
+    if(snap.kind === 'two-track'){
+      const headId = idByPosKey.get(snap.anchorPosKey);
+      if(headId == null) continue;
+      const kids = [];
+      if(snap.left && snap.left.length){ const id = idByPosKey.get(snap.left[0]); if(id != null) kids.push(id); }
+      if(snap.right && snap.right.length){ const id = idByPosKey.get(snap.right[0]); if(id != null) kids.push(id); }
+      if(kids.length === 2) frozenTwoTrackKids.set(headId, new Set(kids));
+      chainLinks(snap.left || []);
+      chainLinks(snap.right || []);
+    } else if(snap.kind === 'corridor'){
+      chainLinks(snap.members || []);
+    }
+  }
+  return { frozenChainEdge, frozenTwoTrackKids };
+}
+
 function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   // leadIn=false: start the mansion at its root room, not at the opening moves
   // that lead into it (those would otherwise show as a lead-in corridor).
   const graph = buildCastleGraph(line, games, rootSeq, false, ownCastleName);
-  const a = analyzeCastleStructure(graph);
+  const idByPosKey = new Map(graph.rooms.map(r => [positionKey(r.fen), r.id]));
+  const instanceId = castleInstanceId(line.id, ownCastleName || '');
+  const frozen = buildFrozenAdjacency(instanceId, idByPosKey);
+  const a = analyzeCastleStructure(graph, frozen);
   const nodeById = new Map(graph.rooms.map(r=>[r.id, r]));
   const leafIds = new Set(graph.leaves.map(l=>l.id));
   const genIdOf = id => a.boxOf.get(id) || ('solo:' + id);
@@ -1554,17 +1598,22 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     // doors that happen to cross into a different room. A corridor step is
     // still a move you have to know even though it doesn't leave the room.
     const moveCount = g.members.reduce((sum, id) => sum + (a.outDeg.get(id) || 0), 0);
-    // frozen-shape snapshot for the memorized-room-stability feature: NOT used
-    // by regeneration itself -- only captured (by threeVR.js's toggleMemorized,
-    // into MEMORIZED_SHAPES) when the user marks a room memorized, then diffed
-    // on a later regen to detect a new variation landing inside an
-    // already-memorized room. members/left/right are position keys, in walk
-    // order, so identity survives node-id churn across regenerations the same
-    // way posKeyByGid already does.
+    // frozen-shape snapshot for the memorized-room-stability feature: captured
+    // (by threeVR.js's toggleMemorized, into MEMORIZED_SHAPES) when the user
+    // marks a room memorized, then consulted on a later regen both to detect
+    // a new variation landing inside an already-memorized room (Phase 2,
+    // non-linear rooms) and to keep a memorized linear room's shape intact
+    // via a side-door instead of splitting it (Phase 3, see
+    // buildFrozenAdjacency). members/left/right/anchorPosKey are position
+    // keys, in walk order, so identity survives node-id churn across
+    // regenerations the same way posKeyByGid already does. anchorPosKey is
+    // this room's own posKey, stored explicitly because the sanitized
+    // roomKey string it's normally embedded in isn't reliably reversible.
     const memberPosKey = id => positionKey(nodeById.get(id).fen);
     const shape = g.kind === 'two-track'
       ? { kind: 'two-track', left: g.left.map(memberPosKey), right: g.right.map(memberPosKey) }
       : { kind: g.kind, members: g.members.map(memberPosKey) };
+    shape.anchorPosKey = posKeyByGid.get(gid);
     shape.exitPosKeys = exits.filter(e => e.toKey).map(e => e.toKey);
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
              nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs, shape };
@@ -1725,8 +1774,19 @@ async function showGeneratedCastleReport(games, seq){
    Given a buildCastleGraph result, detect linear runs and two-track rooms and
    assign every room node to a box (or leave it standalone). Used by both the
    network graph (boxing + collapsed-room stats) and the castle generator (G1),
-   so the two always agree. See LinearSequencesAndRoomObjects.md. */
-function analyzeCastleStructure(graph){
+   so the two always agree. See LinearSequencesAndRoomObjects.md.
+   `frozen` (optional, see buildFrozenAdjacency) is the memorized-room-
+   stability Phase 3 hook: when a node's outgoing edge is protected by a
+   memorized snapshot, that ONE edge participates in chain/two-track
+   detection as if it were still the node's only edge, regardless of what its
+   live out-degree actually is now -- any other live edge from that node
+   falls through untouched as an ordinary edge, which the caller's own exits
+   computation already turns into a ordinary door (a "side-door") for free,
+   since it isn't internal to the box either. Only ever passed by
+   buildGeneratedCastle, which knows a single castle instance; the network
+   graph's own call (potentially spanning multiple castle instances at once)
+   passes nothing and gets today's unprotected behavior. */
+function analyzeCastleStructure(graph, frozen=null){
   const { rooms, edges } = graph;
   const indegree = new Map();
   edges.forEach(e=>indegree.set(e.target,(indegree.get(e.target)||0)+1));
@@ -1741,7 +1801,10 @@ function analyzeCastleStructure(graph){
   const chainNext = new Map(), chainTarget = new Set();
   for(const e of edges){
     if(!roomIds.has(e.source) || !roomIds.has(e.target)) continue;
-    if(outDeg.get(e.source) !== 1) continue;
+    const frozenTarget = frozen && frozen.frozenChainEdge.get(e.source);
+    if(frozenTarget != null){
+      if(e.target !== frozenTarget) continue;   // an extra edge beyond the frozen one -- not a chain link, falls through as a plain exit
+    } else if(outDeg.get(e.source) !== 1) continue;
     if((indegree.get(e.target)||0) !== 1) continue;
     chainNext.set(e.source, e.target);
     chainTarget.add(e.target);
@@ -1765,8 +1828,20 @@ function analyzeCastleStructure(graph){
   const boxOf = new Map(), boxes = [], consumed = new Set();
   let twoTrackCount = 0;
   rooms.forEach(H => {
-    if(outDeg.get(H.id) !== 2) return;
-    const [t1, t2] = outTargets.get(H.id) || [];
+    const frozenKids = frozen && frozen.frozenTwoTrackKids.get(H.id);
+    let t1, t2;
+    if(frozenKids){
+      // memorized two-track head: qualify on its ORIGINAL two children, no
+      // matter how many live children H has now -- both must still actually
+      // be live edges from H (a deleted variation could have removed one).
+      const live = new Set(outTargets.get(H.id) || []);
+      const kids = [...frozenKids].filter(id => live.has(id));
+      if(kids.length !== 2) return;
+      [t1, t2] = kids;
+    } else {
+      if(outDeg.get(H.id) !== 2) return;
+      [t1, t2] = outTargets.get(H.id) || [];
+    }
     if(!runByHead.has(t1) || !runByHead.has(t2) || t1 === t2) return;
     if((indegree.get(t1)||0) !== 1 || (indegree.get(t2)||0) !== 1) return;
     const runA = runByHead.get(t1), runB = runByHead.get(t2);
@@ -5357,6 +5432,11 @@ async function gatherBuiltCastles(lines){
   }
   const t0 = performance.now();
   if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
+  // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
+  // hit above already returned without reaching here, so this only runs on an
+  // actual rebuild, exactly when a fresh read matters.
+  await loadMemorizedShapes();
   // one prefs swap per line, done concurrently rather than one-line-at-a-time:
   // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
   // so the "swap in this line's PREFS, run fn, restore" sequence for each line
