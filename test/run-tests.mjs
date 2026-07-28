@@ -9831,6 +9831,75 @@ try {
 }
 } catch(e){ bad('Phase CB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase CB2: a wall list assigned to a single-run room's 'all' bucket
+//     must skip the center/anchor slot -- its pair is the arrival move
+//     (the same pair the previous room's own door object already shows via
+//     doorPairContent reusing this room's center slot), not a step of
+//     walking THIS room's own sequence. Was giving list item[0] to the
+//     center slot, shifting the room's own L1..Ln down by one and
+//     reporting one slot too many in bucketSlotCount/the dialog's "N
+//     move-pair slots" label. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB2 = await launchApp();
+try {
+  await seedBackup(appCB2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      // Seq: a 3-member plain corridor (C1 anchor + L1 + L2).
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Seq', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+    objectLists: [
+      { id: 'seq_list', name: 'Seq List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCB2.page);
+
+  const roomKey = await appCB2.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Seq:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appCB2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appCB2.page.waitForTimeout(200);
+
+  // 193. bucketSlotCount excludes the center slot: a 3-slot room (C1+L1+L2)
+  //      reports 2 ("N move-pair slots" in the dialog), matching the room's
+  //      own 2-item walk sequence, not the 3 total slots including arrival.
+  try {
+    const slots = await appCB2.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    assert(slots.length === 3, `expected 3 total slots (C1+L1+L2), got ${slots.length}: ${JSON.stringify(slots)}`);
+    const need = await appCB2.page.evaluate((k) => window.__threeTestEdit.wallBucketSlotCount(k, 'all'), roomKey);
+    assert(need === 2, `expected bucketSlotCount to exclude the center slot (2, not 3), got ${need}`);
+    ok('wall lists: bucketSlotCount excludes the center/anchor slot');
+  } catch(e){ bad('wall lists: bucketSlotCount excludes center', e); }
+
+  // 194. Assigning a 2-item list to the 'all' bucket gives item[0] ("First")
+  //      to L1 and item[1] ("Second") to L2 -- C1 (the arrival pair) gets
+  //      no list-driven content at all, not "First".
+  try {
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'seq_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const c1 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-C1'), roomKey);
+    const l1 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-L1'), roomKey);
+    const l2 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-L2'), roomKey);
+    assert(c1 === null, `expected the center slot to have no list-driven word (arrival pair, not part of the sequence), got ${JSON.stringify(c1)}`);
+    assert(l1 === 'First', `expected L1 to get the list's first item, got ${JSON.stringify(l1)}`);
+    assert(l2 === 'Second', `expected L2 to get the list's second item, got ${JSON.stringify(l2)}`);
+    ok('wall lists: item[0] lands on the room\'s own first (L1) slot, never the center/arrival slot');
+  } catch(e){ bad('wall lists: list items map to L1..Ln, skipping center', e); }
+} finally {
+  await appCB2.close();
+}
+} catch(e){ bad('Phase CB2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 
 // --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear
 //     (corridor) room keeps its shape when a new variation lands on one of

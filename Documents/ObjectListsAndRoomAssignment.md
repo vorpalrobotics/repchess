@@ -134,8 +134,10 @@ existing `assetId` bindings** by matching on immutable item `name`.
   the existing threeLayout backup).
 - VR: for each slot on an assigned wall, if `assetId` null render a **word plaque**
   (canvas-text). Walkable immediately. A slot's item index is its position in the
-  room's walk order (center → left → right); the two-track shared head is not
-  list-driven.
+  room's own walk order (left → right); the center/anchor slot is never
+  list-driven, in any room kind — its pair is the arrival move (the same pair
+  the previous room's own door object already shows), not a step of walking
+  this room's own sequence.
 
 ### Phase 3 — Image assets render in VR  ✅ built
 - `assetId` non-null → render the bound asset as a prop at the slot (reuses the
