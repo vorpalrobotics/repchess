@@ -125,7 +125,13 @@ let SIZE_LOCK = true;     // when on, editing width (m) auto-sets height (m) to 
 let FILTER_TYPE = 'all';
 let FILTER_TEXT = '';
 
-function $(id){ return containerEl.querySelector(`#${id}`); }
+// containerEl is null until openAssetManager (or openNewAssetModal's own
+// repoint) sets it -- refreshGrid's ASSETS-cache refresh (now also called
+// from openNewAssetModal, so a caller can validate against a fresh cache
+// even if the full Asset Manager was never opened this session) runs
+// renderGrid() unconditionally, which needs $() to fail soft here rather
+// than throw on containerEl.querySelector.
+function $(id){ return containerEl ? containerEl.querySelector(`#${id}`) : null; }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 export async function openAssetManager(container){
@@ -1386,7 +1392,14 @@ async function deleteEditor(id){
    no-op when there's no #assetsGrid in the current container, so saveEditor's
    normal post-save calls stay harmless here. Resolves the new asset's id on
    Save, or null on Cancel. */
-export function openNewAssetModal(initialType, allowTypes){
+export async function openNewAssetModal(initialType, allowTypes){
+  // saveEditor's duplicate-id check reads the module-level ASSETS cache,
+  // which is only ever populated by openAssetManager -- a caller that
+  // reaches this modal without the full Asset Manager having been opened
+  // this session (e.g. the Object List Manager's item picker) would
+  // otherwise check against a stale/empty cache and let a typed-in id that
+  // already exists silently overwrite that asset via setAsset.
+  await refreshGrid();
   return new Promise((resolve) => {
     const prevContainer = containerEl;
     let ov = document.getElementById('assetNewOverlay');

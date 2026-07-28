@@ -8439,7 +8439,13 @@ try {
   await seedBackup(appAY3.page, {
     version: 6, user: 'tester',
     lines: [],
-    assets: [{ id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } }],
+    assets: [
+      { id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } },
+      // all-lowercase id (unlike ovenAsset above) so typing it verbatim into
+      // the New Asset editor round-trips through saveEditor's own
+      // .toLowerCase() unchanged -- for the duplicate-id regression test.
+      { id: 'dup-check-asset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } },
+    ],
     // a malformed record (finding 3): written verbatim by the raw
     // backup-restore path (js/app.js's `for(const list of data.objectLists)
     // await setObjectList(...)`), never touched by this module's own
@@ -8589,6 +8595,29 @@ try {
     assert(thumbSrc && thumbSrc.startsWith('data:image'), `expected the item row's thumbnail to show the new asset's image immediately, got ${JSON.stringify(thumbSrc)}`);
     ok('object lists: item picker\'s New Asset button creates and assigns an asset without leaving the list manager');
   } catch(e){ bad('object lists: "New Asset…" escape hatch from the item picker', e); }
+
+  // 167. Regression: typing an id that already exists into the New Asset
+  //      modal opened from THIS path (never having opened the full Asset
+  //      Manager this session, so its own ASSETS cache would otherwise be
+  //      stale/empty) is still caught -- Save shows the duplicate-id error
+  //      and does NOT silently overwrite the existing asset.
+  try {
+    await appAY3.page.evaluate(() => document.querySelector('#ol_items [data-pick]').click());
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistPickNewAsset');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#assetIdInput', 'dup-check-asset');   // already exists (seeded at phase setup)
+    await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.waitForSelector('#assetsError:has-text("already exists")', { timeout: 5000 });
+    const stillOpen = await appAY3.page.evaluate(() => document.getElementById('assetNewOverlay').style.display !== 'none');
+    assert(stillOpen, 'expected the New Asset modal to stay open on a duplicate id, not silently save');
+    const dupImage = await appAY3.page.evaluate(async () => (await getAllAssets()).find(a => a.id === 'dup-check-asset')?.image);
+    assert(dupImage === 'data:image/png;base64,iVBORw0KGgo=', `expected the original dup-check-asset image untouched, got ${JSON.stringify(dupImage)}`);
+    await appAY3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+    ok('object lists: New Asset\'s duplicate-id check works even when Manage VR Assets was never opened this session');
+  } catch(e){ bad('object lists: duplicate-id guard reaches a fresh ASSETS cache from this path', e); }
 } finally {
   await appAY3.close();
 }
@@ -9859,6 +9888,12 @@ try {
         orderingType: 'procedural', orderingRule: '',
         items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
         mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      // an ordering rule but no phrase -- the mnemonic plaque should still
+      // mount to show the rule alone (see buildWallListPlaques).
+      { id: 'rule_only_list', name: 'Rule Only List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: 'Size order: smallest to largest',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
     ],
   }, { defaultPlayerColor: 'white' });
   await openVR(appCB2.page);
@@ -9895,10 +9930,85 @@ try {
     assert(l2 === 'Second', `expected L2 to get the list's second item, got ${JSON.stringify(l2)}`);
     ok('wall lists: item[0] lands on the room\'s own first (L1) slot, never the center/arrival slot');
   } catch(e){ bad('wall lists: list items map to L1..Ln, skipping center', e); }
+
+  // 195. A list with an ordering rule but no phrase still gets a wall
+  //      plaque (showing just the rule) -- was gated on the phrase alone,
+  //      silently dropping the whole plaque (rule included) whenever only
+  //      the ordering rule was set.
+  try {
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'seq_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const noPlaque = await appCB2.page.evaluate(() => window.__threeTestEdit.hasWallListPlaque());
+    assert(!noPlaque, 'expected no plaque for a list with neither a phrase nor an ordering rule');
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'rule_only_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const hasPlaque = await appCB2.page.evaluate(() => window.__threeTestEdit.hasWallListPlaque());
+    assert(hasPlaque, 'expected a plaque showing just the ordering rule when the list has one but no phrase');
+    ok('wall list mnemonic plaque: shows for an ordering-rule-only list, not gated on a phrase');
+  } catch(e){ bad('wall list mnemonic plaque: ordering rule alone is enough to mount it', e); }
 } finally {
   await appCB2.close();
 }
 } catch(e){ bad('Phase CB2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase CB3: the entryNoStreet exception -- a castle's own entry room,
+//     walked via the report preview (no street building to show its own
+//     entry pair on instead), has nowhere else that pair is shown at all,
+//     so its center/anchor slot IS list-drivable there -- unlike the same
+//     slot in the normal "Run VR" world, where the previous room's own
+//     door object already shows it (see Phase CB2). Same exception
+//     computeFullyDecorated and buildSlots' render-skip already carve out
+//     for this slot. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB3 = await launchApp();
+try {
+  await seedBackup(appCB3.page, {
+    version: 6, user: 'tester',
+    // a castle root with NOTHING beyond its own entry reply -- no games
+    // continuation either, so there's no unbuilt reply to complicate the
+    // read: moveObjectSlots is exactly [C1], nothing more.
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [ { id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' } ],
+    objectLists: [
+      { id: 'entry_list', name: 'Entry List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Solo', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appCB3.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appCB3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appCB3.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appCB3.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appCB3.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appCB3.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appCB3.page.waitForTimeout(400);
+
+  // 196. In the report-preview walk, the entry room's own center slot IS
+  //      list-drivable: bucketSlotCount is 1 (not 0), and assigning a
+  //      1-item list gives that item straight to the C1 slot.
+  try {
+    const slots = await appCB3.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    assert(slots.length === 1 && slots[0].side === 'center', `expected exactly one (center) slot, got ${JSON.stringify(slots)}`);
+    const roomKey = await appCB3.page.evaluate(() => window.__threeTestEdit.room());
+    const need = await appCB3.page.evaluate((k) => window.__threeTestEdit.wallBucketSlotCount(k, 'all'), roomKey);
+    assert(need === 1, `expected bucketSlotCount to count the center slot here (entryNoStreet), got ${need}`);
+    await appCB3.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'entry_list'), roomKey);
+    await appCB3.page.waitForTimeout(200);
+    const c1 = await appCB3.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-C1'), roomKey);
+    assert(c1 === 'Solo', `expected the entry room's C1 slot to get the list's only item (entryNoStreet), got ${JSON.stringify(c1)}`);
+    ok('wall lists: entryNoStreet makes the entry room\'s own center slot list-drivable');
+  } catch(e){ bad('wall lists: entryNoStreet exception for the center slot', e); }
+} finally {
+  await appCB3.close();
+}
+} catch(e){ bad('Phase CB3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear

@@ -3108,40 +3108,46 @@ function wallListId(roomKey, bucket){
 }
 // how many move-object slots a bucket holds — the "run length" a list is
 // matched against in the assignment dialog. The center (anchor) slot is
-// never list-driven, even for a single-run room's 'all' bucket -- its pair
-// is the move that walking in through the door already represents (the
-// SAME pair the previous room's own door-object shows, via doorPairContent
-// reusing this room's own center slot), not a step of walking THIS room's
-// own sequence. Was `s.side !== 'center' || true` -- an always-true no-op
-// that counted the center slot in anyway, one too many, and gave list
-// item[0] to the arrival move instead of the room's own first L slot.
+// excluded from the 'all' bucket -- its pair is the move that walking in
+// through the door already represents (the SAME pair the previous room's
+// own door-object shows, via doorPairContent reusing this room's own
+// center slot), not a step of walking THIS room's own sequence -- UNLESS
+// room.entryNoStreet: the castle's own entry room, walked with no street
+// building to show its entry pair on instead (a report-preview/standalone
+// walk), has nowhere else that pair is shown at all, so it's decorated
+// (and here, list-drivable) in-room, same exception computeFullyDecorated
+// and buildSlots' render-skip already carve out for it.
 function bucketSlotCount(roomKey, bucket){
+  const room = mergedRoom(roomKey);
+  const centerCounts = !!(room && room.entryNoStreet);
   const slots = moveObjectSlots(roomKey);
   if(bucket === 'left')  return slots.filter(s => s.side === 'left').length;
   if(bucket === 'right') return slots.filter(s => s.side === 'right').length;
-  return slots.filter(s => s.side !== 'center').length;   // 'all' = every non-anchor slot
+  return slots.filter(s => s.side !== 'center' || centerCounts).length;   // 'all'
 }
 // which (bucket, index) a given move-object slot maps to, or null if the slot
 // is not list-driven -- the center/anchor slot, in EVERY room kind, not just
-// a two-track's shared head. Its pair is the move that walking in through
-// the door already represents (the same pair the previous room's own door
-// object shows, via doorPairContent reusing this room's own center slot),
-// not a step of walking this room's own sequence -- assigning it list
-// item[0] was pairing the SAME move twice while quietly shifting the room's
-// own L1..Ln down by one and reporting one slot too many (bucketSlotCount).
+// a two-track's shared head, EXCEPT room.entryNoStreet (see bucketSlotCount).
+// Its pair is the move that walking in through the door already represents
+// (the same pair the previous room's own door object shows, via
+// doorPairContent reusing this room's own center slot), not a step of
+// walking this room's own sequence -- assigning it list item[0] was pairing
+// the SAME move twice while quietly shifting the room's own L1..Ln down by
+// one and reporting one slot too many (bucketSlotCount).
 const SIDE_WALK_RANK = { center: 0, left: 1, right: 2 };
 function slotListContext(roomKey, slot){
-  if(slot.side === 'center') return null;        // arrival pair — not part of any wall list
   const room = mergedRoom(roomKey);
+  const centerDrivable = !!(room && room.entryNoStreet);
+  if(slot.side === 'center' && !centerDrivable) return null;   // arrival pair — not part of any wall list
   if(room && room.twoTrack){
     const bucket = slot.side === 'right' ? 'right' : 'left';
     return { bucket, index: (slot.order || 1) - 1 };
   }
   // single 'all' bucket: index = position in the room's own walk order
-  // (left then right, each by order — center excluded above). Computed from
-  // the actual slot set so a room with any mix of sides gets a unique,
-  // collision-free index.
-  const ordered = moveObjectSlots(roomKey).filter(s => s.side !== 'center').sort((a, b) =>
+  // (left then right, each by order — center excluded unless entryNoStreet).
+  // Computed from the actual slot set so a room with any mix of sides gets
+  // a unique, collision-free index.
+  const ordered = moveObjectSlots(roomKey).filter(s => s.side !== 'center' || centerDrivable).sort((a, b) =>
     ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
   const index = ordered.findIndex(s => s.id === slot.id);
   return { bucket: 'all', index: index < 0 ? 0 : index };
@@ -3906,7 +3912,13 @@ function buildWallListPlaques(room, roomKey){
     const id = wallListId(roomKey, bucket);
     if(!id) continue;
     const list = OBJECT_LISTS[id];
-    if(!list || !list.mnemonic || !list.mnemonic.phrase) continue;
+    // a plaque is worth mounting whenever it has EITHER the phrase or the
+    // ordering rule to show -- makeMnemonicPlaqueMesh already draws each
+    // independently (an empty phrase just draws nothing there, the
+    // ordering rule is its own `if(list.orderingRule)` footer), but this
+    // gate used to require a phrase even when only an ordering rule was
+    // set, silently dropping the plaque instead of showing just the rule.
+    if(!list || !((list.mnemonic && list.mnemonic.phrase) || list.orderingRule)) continue;
     const wall = bucket === 'right' ? 'east' : 'west';
     const { fixed, half } = wallSpan(room.size, wall);
     const clearance = WALL_THICK / 2 + 0.03;
@@ -3915,7 +3927,7 @@ function buildWallListPlaques(room, roomKey){
     const mesh = makeMnemonicPlaqueMesh(list);
     if(wall === 'west'){ mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI / 2; }
     else               { mesh.position.set(fixed - clearance, y, along); mesh.rotation.y = -Math.PI / 2; }
-    mesh.userData = { decorative: true };
+    mesh.userData = { kind: 'wall-list-plaque', decorative: true };
     scene.add(mesh);
   }
 }
@@ -8119,6 +8131,15 @@ export async function openThreeTest(containerEl, opts){
         if(listId) r.wallLists[bucket] = { listId }; else delete r.wallLists[bucket];
         persistLayout();
         buildRoom(currentRoomKey);
+      },
+      // whether a wall-list mnemonic plaque (buildWallListPlaques) is
+      // currently in the scene -- for testing that it shows whenever the
+      // assigned list has EITHER a phrase or an ordering rule, not only
+      // when both/a phrase specifically is set.
+      hasWallListPlaque: () => {
+        let found = false;
+        scene && scene.traverse(o => { if(o.userData && o.userData.kind === 'wall-list-plaque') found = true; });
+        return found;
       },
       // the current room's rendered chain segments (buildMoveObjectChain) --
       // count + midpoint position of each, for testing that a corridor gets
