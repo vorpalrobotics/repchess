@@ -4885,7 +4885,26 @@ const CHAIN_LINK_SIZE = 0.5, CHAIN_WIDTH = 0.22, CHAIN_Y = 0.02;
 // meant to be instant rather than recalled per room. Never drawn for a
 // two-track room (already has its own divider) or a solo branch/room kind
 // (a single slot has nothing to connect to). Returns null (nothing to add)
-// when the room has fewer than 2 slots.
+// when the room has fewer than 2 links worth of position to draw.
+function addChainSegment(group, a, b){
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const len = Math.hypot(dx, dz);
+  if(len < 0.05) return;   // endpoints on top of each other -- nothing to draw
+  const geo = new THREE.PlaneGeometry(CHAIN_WIDTH, len);
+  geo.rotateX(-Math.PI / 2);   // lie flat, "length" now along local Z
+  // .clone() before mutating -- makeChainTexture hands out a single
+  // shared, cached texture (see _chainTexture); wrapS/wrapT/repeat set
+  // directly on it would leak into every other chain segment/room.
+  const tex = makeChainTexture().clone();
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, Math.max(1, len / CHAIN_LINK_SIZE));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(
+    { map: tex, transparent: true, roughness: 0.4, metalness: 0.6 }));
+  mesh.position.set((a.x + b.x) / 2, CHAIN_Y, (a.z + b.z) / 2);
+  mesh.rotation.y = Math.atan2(dx, dz);
+  mesh.userData = { kind: 'moveObjectChain' };
+  group.add(mesh);
+}
 function buildMoveObjectChain(room, roomKey){
   // resolve each slot's ACTUAL position, not just its default computed one --
   // a moveObject slot can be individually nudged in edit mode (slotXformFor,
@@ -4898,27 +4917,26 @@ function buildMoveObjectChain(room, roomKey){
   };
   const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
     ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
-  if(ordered.length < 2) return null;
   const group = new THREE.Group();
-  for(let i = 0; i < ordered.length - 1; i++){
-    const a = resolved(ordered[i]), b = resolved(ordered[i + 1]);
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const len = Math.hypot(dx, dz);
-    if(len < 0.05) continue;   // slots nudged on top of each other -- nothing to draw
-    const geo = new THREE.PlaneGeometry(CHAIN_WIDTH, len);
-    geo.rotateX(-Math.PI / 2);   // lie flat, "length" now along local Z
-    // .clone() before mutating -- makeChainTexture hands out a single
-    // shared, cached texture (see _chainTexture); wrapS/wrapT/repeat set
-    // directly on it would leak into every other chain segment/room.
-    const tex = makeChainTexture().clone();
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(1, Math.max(1, len / CHAIN_LINK_SIZE));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(
-      { map: tex, transparent: true, roughness: 0.4, metalness: 0.6 }));
-    mesh.position.set((a.x + b.x) / 2, CHAIN_Y, (a.z + b.z) / 2);
-    mesh.rotation.y = Math.atan2(dx, dz);
-    mesh.userData = { kind: 'moveObjectChain' };
-    group.add(mesh);
+  for(let i = 0; i < ordered.length - 1; i++) addChainSegment(group, resolved(ordered[i]), resolved(ordered[i + 1]));
+  // final link: a forward door carries its OWN pair/object preview of the
+  // room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
+  // slotXform) -- a wholly separate object from this room's own
+  // moveObjectSlots, but the last thing you see walking the sequence before
+  // stepping through, so the chain should end there rather than stopping
+  // short at the room's own last internal slot (the real bug report: a
+  // corridor's chain stopped at its last slot and never reached the door's
+  // own horse-statue pair-object beyond it). A plain corridor's tail can in
+  // principle branch into more than one forward door (a branch that didn't
+  // qualify as a two-track); picking just the first is an arbitrary but
+  // deterministic choice for that rare case, not a claim only one exists.
+  const fwd = ordered.length && room.exits ? room.exits.find(e => !e.back) : null;
+  if(fwd){
+    const sideSign = fwd.wall === 'east' ? 1 : -1;
+    const base = doorSideXZ(room, fwd.wall, fwd.offset, sideSign);
+    const xf = slotXformFor(roomKey, 'dobj-' + fwd.target);
+    const doorPos = { x: base.x + (xf?.dx || 0), z: base.z + (xf?.dz || 0) };
+    addChainSegment(group, resolved(ordered[ordered.length - 1]), doorPos);
   }
   return group.children.length ? group : null;
 }
@@ -7887,6 +7905,16 @@ export async function openThreeTest(containerEl, opts){
         const found = [];
         scene && scene.traverse(o => { if(o.userData && o.userData.kind === 'moveObjectChain') found.push(o); });
         return found.map(m => ({ x: m.position.x, z: m.position.z }));
+      },
+      // a room's forward door-pair object's BASE (unnudged) floor position,
+      // via the same doorSideXZ a real door pair renders at -- lets a test
+      // compute the expected terminal chain-link endpoint independently of
+      // buildMoveObjectChain's own internals.
+      doorObjBasePos: (roomKeyArg, target) => {
+        const r = mergedRoom(roomKeyArg || currentRoomKey);
+        const ex = (r.exits || []).find(e => !e.back && e.target === target);
+        if(!ex) return null;
+        return doorSideXZ(r, ex.wall, ex.offset, ex.wall === 'east' ? 1 : -1);
       },
       // nudges a moveObject slot's stored xform directly (bypassing the real
       // arrow-key drag flow) and rebuilds -- for testing that dependents
