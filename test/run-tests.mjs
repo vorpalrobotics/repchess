@@ -10000,6 +10000,9 @@ try {
       { id: 'g3', moves: 'd4 d5 c4 g6 Nc3 Bg7 e3 Nf6', white: 'a', black: 'b', result: '*' },
       { id: 'g4', moves: 'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6', white: 'a', black: 'b', result: '*' },
     ],
+    assets: [
+      { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+    ],
   }, { defaultPlayerColor: 'white' });
   await openVR(appCE.page);
 
@@ -10093,6 +10096,46 @@ try {
     assert(hitDoor, `expected the terminal chain segment reaching the door's pair-object at ${JSON.stringify(doorMid)}, got ${JSON.stringify(segs)}`);
     ok('memorization-aid: a corridor\'s terminal chain link reaches its forward door\'s own pair-object');
   } catch(e){ bad('memorization-aid: corridor chain reaches the forward door\'s pair-object', e); }
+
+  // 206. A room with no forward exit at all gets a skinnable "no entry" sign
+  //      on the wall a forward door would have used (built-in icon by
+  //      default), so a dead end reads as intentional rather than "not
+  //      built yet" -- distinct from a locked door, which is a real (if
+  //      unbuilt) reply. A room WITH a forward door gets no such sign.
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    const before = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
+    assert(before.wall === 'north', `expected the Chain dead-end sign on the north wall, got ${JSON.stringify(before)}`);
+    assert(before.icon && !before.panel, `expected the built-in no-entry icon (no override yet), got ${JSON.stringify(before)}`);
+
+    // a room with a real forward door (Vault) gets no dead-end sign at all.
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.vault);
+    await appCE.page.waitForTimeout(200);
+    const vaultSign = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
+    assert(!vaultSign.icon && !vaultSign.panel, `expected no dead-end sign on a room with a forward door, got ${JSON.stringify(vaultSign)}`);
+
+    // skinning it through the real picker (edit mode + the marker's own
+    // click target) swaps the built-in icon for the custom panel.
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    await appCE.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appCE.page.waitForTimeout(60);
+    await appCE.page.evaluate((k) => window.__threeTestEdit.target({ kind: 'dead-end', roomKey: k }), keys.chain);
+    await appCE.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appCE.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+        .find(c => !c.classList.contains('asset-card-color') && c.textContent.includes('doorSkin1'));
+      card.click();
+    });
+    await appCE.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appCE.page.waitForTimeout(150);
+    const overrideId = await appCE.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k), keys.chain);
+    assert(overrideId === 'doorSkin1', `expected the dead-end sign's override to be doorSkin1, got ${overrideId}`);
+    const after = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
+    assert(after.panel && !after.icon, `expected the custom skin panel (not the built-in icon) once assigned, got ${JSON.stringify(after)}`);
+    ok('memorization-aid: a dead-end room gets a skinnable no-entry sign; a room with a real door does not');
+  } catch(e){ bad('memorization-aid: dead-end sign presence, default icon, and skinning', e); }
 } finally {
   await appCE.close();
 }

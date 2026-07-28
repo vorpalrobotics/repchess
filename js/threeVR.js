@@ -804,6 +804,21 @@ function doorAssetFor(roomKey, dKey){
   const id = LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey];
   return id ? ASSET_BY_ID[id] : null;
 }
+// a room with no forward exit at all gets a skinnable "no continuation" sign
+// on the wall a forward door would have used (see buildRoom's dead-end hook)
+// -- a separate storage field from r.doors (not a doorKey lookup) so a stale
+// override can't silently reappear as a real door's skin if the room later
+// gains an actual continuation and a real door lands on that same wall spot.
+function deadEndAssetFor(roomKey){
+  const id = LAYOUT[roomKey] && LAYOUT[roomKey].deadEnd;
+  return id ? ASSET_BY_ID[id] : null;
+}
+function setDeadEndOverride(roomKey, assetId){
+  applyEdit(() => {
+    const r = ensureRoomLayout(roomKey);
+    if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
+  });
+}
 // the static ROOMS table with any LAYOUT[roomKey].geom (w/d/h) override and
 // any LAYOUT[roomKey].exits (per-target wall/offset) override folded in --
 // the single accessor every size- or exit-dependent read should use, so a
@@ -995,7 +1010,7 @@ function clearRoomStyles(roomKey){
   applyEdit(() => {
     const r = LAYOUT[roomKey];
     if(!r) return;
-    delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom;
+    delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom; delete r.deadEnd;
     r.walls = {}; r.doors = {}; r.slots = {}; r.slotWords = {}; r.slotXform = {}; r.exits = {}; r.wallLists = {};
     r.buildings = {}; r.signs = {}; r.signPos = {}; r.yards = {};   // outdoor maps; no-ops indoors
   });
@@ -1793,8 +1808,24 @@ function makeChainTexture(){
       ctx.ellipse(cx - rx * 0.15, cy - ry * 0.15, rx * 0.78, ry * 0.78, 0, 0, Math.PI * 2);
       ctx.stroke();
     };
-    drawLink(size / 2, size * 0.27, size * 0.16, size * 0.22);   // vertical-oriented link
-    drawLink(size / 2, size * 0.73, size * 0.22, size * 0.16);   // horizontal-oriented link
+    // Each link is drawn three times (at its true v-position, and one tile
+    // height above/below) so a link whose reach spills past the canvas edge
+    // still shows its wrapped portion at the opposite edge -- a plain
+    // canvas draw just clips at 0/size, it doesn't wrap on its own, so
+    // without this an overlapping link would be cut off rather than
+    // reappearing where RepeatWrapping needs it to.
+    const drawLinkTiled = (cyFrac, rx, ry) => {
+      for(const k of [-1, 0, 1]) drawLink(size / 2, size * (cyFrac + k), rx, ry);
+    };
+    // Two alternating-orientation links per tile, centers exactly half a
+    // period apart (0.25/0.75 -- the previous 0.27/0.73 was off-center by
+    // 0.04, which made the within-tile gap and the across-the-seam gap
+    // different sizes) with vertical reaches (ry) summing to slightly OVER
+    // half a period so neighbors overlap a touch instead of leaving a
+    // hairline gap to anti-aliasing -- with evenly-spaced centers, that one
+    // sum governs both the within-tile gap and the wrap-seam gap at once.
+    drawLinkTiled(0.25, size * 0.15, size * 0.30);   // vertical-oriented link
+    drawLinkTiled(0.75, size * 0.26, size * 0.22);   // horizontal-oriented link
   }, 128);
   return _chainTexture;
 }
@@ -4243,6 +4274,69 @@ function buildDoorMarker(size, wall, offset, roomKey, dKey){
   marker.userData = { kind: 'door', roomKey, doorKey: dKey };
   return marker;
 }
+// standard red circle-slash "no entry" glyph -- the built-in look for a
+// room's dead-end sign (see buildRoom's dead-end hook) before it's been
+// given a custom skin. Vector-drawn, same reasoning as makeLockIconTexture:
+// guaranteed to render identically everywhere, no external image/font.
+let noContinuationTex = null;
+function makeNoContinuationTexture(){
+  if(noContinuationTex) return noContinuationTex;
+  const px = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = px; canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  const cx = px / 2, cy = px / 2, r = px * 0.42, ringW = px * 0.16;
+  ctx.strokeStyle = '#e21b1b';
+  ctx.lineWidth = ringW;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-Math.PI / 4);
+  ctx.fillStyle = '#e21b1b';
+  ctx.fillRect(-r, -ringW / 2, r * 2, ringW);
+  ctx.restore();
+  noContinuationTex = new THREE.CanvasTexture(canvas);
+  noContinuationTex.colorSpace = THREE.SRGBColorSpace;
+  return noContinuationTex;
+}
+let noContinuationMat = null;
+function noContinuationMaterial(){
+  if(!noContinuationMat){
+    noContinuationMat = tagShared(new THREE.MeshBasicMaterial({ map: makeNoContinuationTexture(), transparent: true, side: THREE.DoubleSide }));
+  }
+  return noContinuationMat;
+}
+// the visible sign itself, mounted flush on the SOLID wall (there's no
+// doorway cut here -- the room has no forward exit to make one for).
+function buildNoContinuationIcon(size, wall, offset){
+  const iconSize = 1.4;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(iconSize, iconSize), noContinuationMaterial());
+  mesh.userData = { kind: 'no-continuation-icon', wall };
+  const { fixed } = wallSpan(size, wall);
+  const y = DOOR_H / 2;
+  const f = WALL_THICK/2 + DOOR_SKIN_FORWARD_OFFSET;
+  if(wall === 'north'){ mesh.position.set(offset, y, fixed + f); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(offset, y, fixed - f); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + f, y, offset); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - f, y, offset); mesh.rotation.y = -Math.PI/2; }
+  return mesh;
+}
+// editor-only click target for the dead-end sign, same hotspot convention as
+// buildDoorMarker (a real door's own click target).
+function buildDeadEndMarker(size, wall, offset, roomKey){
+  const { fixed } = wallSpan(size, wall);
+  const marker = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * 0.9, DOOR_H * 0.9), doorMarkerMaterial());
+  const y = DOOR_H / 2;
+  const clearance = WALL_THICK/2 + 0.08;
+  if(wall === 'north'){ marker.position.set(offset, y, fixed + clearance); marker.rotation.y = 0; }
+  if(wall === 'south'){ marker.position.set(offset, y, fixed - clearance); marker.rotation.y = Math.PI; }
+  if(wall === 'west'){  marker.position.set(fixed + clearance, y, offset); marker.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  marker.position.set(fixed - clearance, y, offset); marker.rotation.y = -Math.PI/2; }
+  marker.userData = { kind: 'dead-end', roomKey };
+  return marker;
+}
 function drawSignBase(ctx, w, h){
   ctx.fillStyle = '#caa46a';
   ctx.fillRect(0, 0, w, h);
@@ -5156,6 +5250,22 @@ function buildRoom(roomKey){
   else if((room.castleSign && room.castleSign.type) === 'corridor'){
     const chain = buildMoveObjectChain(room, roomKey);
     if(chain) scene.add(chain);
+  }
+
+  // a room with no forward exit at all -- the sequence genuinely ends here,
+  // as opposed to a locked door (a real, if unbuilt, reply) -- gets a
+  // skinnable "no entry" sign where a forward door would have gone, so its
+  // absence reads as intentional rather than "not built yet" (see
+  // deadEndAssetFor/buildNoContinuationIcon). Per-track dead ends within a
+  // two-track room aren't handled here (room.twoTrack excluded) -- each
+  // track would need its own member-anchored sign position, not this
+  // single-slot convention.
+  if(room.castleSign && !room.twoTrack && !room.exits.some(e => !e.back)){
+    const back = room.exits.find(e => e.back);
+    const deadEndWall = back ? WALL_OPPOSITE[back.wall] : 'north';
+    const deadEndAsset = deadEndAssetFor(roomKey);
+    scene.add(deadEndAsset ? buildDoorPanel(room.size, deadEndWall, 0, deadEndAsset) : buildNoContinuationIcon(room.size, deadEndWall, 0));
+    if(editMode) scene.add(buildDeadEndMarker(room.size, deadEndWall, 0, roomKey));
   }
 
   currentStairCorridors = {};
@@ -6166,6 +6276,20 @@ function handleEditTarget(ud){
         }
       },
       onRemove: () => setDoorOverride(ud.roomKey, ud.doorKey, null)
+    });
+  } else if(ud.kind === 'dead-end'){
+    // the "no continuation" sign on a room with no forward exit at all --
+    // see deadEndAssetFor. No building-level default tier (unlike ordinary/
+    // locked doors): this is meant for occasional per-room custom skins to
+    // make a specific dead end more memorable, not a castle-wide restyle.
+    const override = deadEndAssetFor(ud.roomKey);
+    openAssetPicker({
+      allow: ['door'], onClose,
+      allowRemove: !!override,
+      currentId: (override && override.id) || null,
+      currentSource: override ? 'room' : null,
+      onPick: id => setDeadEndOverride(ud.roomKey, id),
+      onRemove: () => setDeadEndOverride(ud.roomKey, null)
     });
   }
 }
@@ -7835,6 +7959,7 @@ export async function openThreeTest(containerEl, opts){
       // -- for testing entrance->exit door-skin sync (setDoorOverride)
       // without scraping the door panel mesh's texture out of the scene.
       doorOverrideId: (roomKey, dKey) => (LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey]) || null,
+      deadEndOverrideId: (roomKey) => (LAYOUT[roomKey] && LAYOUT[roomKey].deadEnd) || null,
       // drives the real "make default" capture the Room Geometry dialog's
       // Apply button does (captureBuildingDefaults), persisted + rebuilt the
       // same way that flow's commitRoomGeomDialog does right after -- for
@@ -7932,6 +8057,33 @@ export async function openThreeTest(containerEl, opts){
       chainEntryPos: (roomKeyArg) => {
         const r = mergedRoom(roomKeyArg || currentRoomKey);
         return roomNameFloorPos(r.size, entranceWall(r));
+      },
+      // the current room's dead-end sign (see buildRoom's dead-end hook):
+      // which wall it's on, and whether the built-in icon or a custom-skin
+      // panel is what's actually in the scene right now (mutually exclusive).
+      deadEndSign: (roomKeyArg) => {
+        const r = mergedRoom(roomKeyArg || currentRoomKey);
+        const back = (r.exits || []).find(e => e.back);
+        const wall = back ? WALL_OPPOSITE[back.wall] : 'north';
+        let icon = false, panel = false;
+        scene && scene.traverse(o => {
+          if(!o.userData) return;
+          if(o.userData.kind === 'no-continuation-icon' && o.userData.wall === wall) icon = true;
+          if(o.userData.kind === 'door-panel' && o.userData.wall === wall) panel = true;
+        });
+        return { wall, icon, panel };
+      },
+      // assigns (or clears, if assetId is falsy) the dead-end sign's per-room
+      // skin override -- the same mutation setDeadEndOverride makes, but
+      // AWAITED end-to-end (setDeadEndOverride itself fires its applyEdit
+      // and returns immediately, same reason setSlotAsset above doesn't
+      // reuse setSlotOverride) so a test isn't racing refreshAssetMap.
+      setDeadEndAsset: async (roomKey, assetId) => {
+        const r = ensureRoomLayout(roomKey);
+        if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
+        persistLayout();
+        await refreshAssetMap();
+        buildRoom(currentRoomKey);
       },
       // nudges a moveObject slot's stored xform directly (bypassing the real
       // arrow-key drag flow) and rebuilds -- for testing that dependents
