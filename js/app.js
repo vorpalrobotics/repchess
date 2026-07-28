@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-238';
+const BUILD_TAG = '-239';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1070,7 +1070,46 @@ function fenForSeq(seq){
    into the same position collapse into a single node with multiple
    incoming edges — exactly the merge a memory-castle "room" should map to. */
 function positionKey(fen){
-  return fen.split(' ').slice(0,4).join(' ');
+  // (board, side-to-move, castling, en-passant) -- but the en-passant field
+  // needs care. FEN records an en-passant target square after ANY pawn
+  // double-push, even when no enemy pawn can actually capture there. So two
+  // move orders that transpose into the byte-for-byte identical board can
+  // still disagree on this one field: whichever order played the double-push
+  // LAST carries the target square, the other (which pushed that pawn earlier)
+  // does not. That "phantom" square never gets exercised -- the position plays
+  // identically either way -- yet keying on it splits one true position into
+  // two separate rooms, each with its own walls/floor/decorations/nudges
+  // depending on which door you came through (exactly the reported bug). Strip
+  // a phantom target so the key matches how the position really plays; a
+  // genuinely capturable en-passant still distinguishes positions (it changes
+  // the legal moves) and is kept.
+  const parts = fen.split(' ');
+  const ep = parts[3];
+  if(ep && ep !== '-'){
+    const file = ep.charCodeAt(0) - 97;   // 'a'..'h' -> 0..7
+    const rank = ep.charCodeAt(1) - 48;   // 3 (a white pawn pushed) or 6 (black)
+    const rows = parts[0].split('/');      // rows[0]=rank 8 .. rows[7]=rank 1
+    const pieceAt = (r, f) => {            // piece char at board rank r (1-8), file f, or ''
+      const row = rows[8 - r];
+      if(!row) return '';
+      let col = 0;
+      for(const ch of row){
+        if(ch >= '1' && ch <= '8') col += ch.charCodeAt(0) - 48;
+        else { if(col === f) return ch; col++; }
+        if(col > f) break;
+      }
+      return '';
+    };
+    // the only pawn that could capture en-passant sits beside the just-pushed
+    // pawn: on rank 4 (a black pawn, if White pushed to the rank-3 target) or
+    // rank 5 (a white pawn, if Black pushed to the rank-6 target).
+    const capRank = rank === 3 ? 4 : 5;
+    const capPawn = rank === 3 ? 'p' : 'P';
+    const capturable = (file > 0 && pieceAt(capRank, file - 1) === capPawn)
+                    || (file < 7 && pieceAt(capRank, file + 1) === capPawn);
+    if(!capturable) parts[3] = '-';
+  }
+  return parts.slice(0, 4).join(' ');
 }
 
 /* Graph nodes are "rooms" (the position right after OUR move — same
@@ -8284,6 +8323,13 @@ if(localStorage.getItem('threeTestDebug')){
     open: (dataUrl) => { window.__cropResult = cropImage(dataUrl); },
     result: () => window.__cropResult,
   };
+}
+
+// test-only hook for the position identity used by the digraph, castle
+// builder, and VR room keys -- so a test can assert the phantom-en-passant
+// normalization directly without reconstructing it.
+if(localStorage.getItem('threeTestDebug')){
+  window.__positionKey = (fen) => positionKey(fen);
 }
 
 // test-only hook for the background analysis queue: add/dedup, cancel, and

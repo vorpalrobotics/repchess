@@ -328,7 +328,7 @@ const appC2 = await launchApp();
 try {
   const keys = await appC2.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       alphaEntry: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
       betaEntry: 'cas:L1_Beta:' + pk(['d4','Nf6','c4','e6','Nc3']),
@@ -401,7 +401,7 @@ const app4 = await launchApp();
 try {
   const keys = await app4.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { alpha: pk(['d4','Nf6','c4']), r2: pk(['d4','Nf6','c4','e6','Nc3']) };
   });
   // a castle entry with FIVE forward branches (so doors share walls) + the e6
@@ -2915,7 +2915,7 @@ const appY = await launchApp();
 try {
   const keys = await appY.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { alpha: pk(['d4','Nf6','c4']) };
   });
   await seedBackup(appY.page, {
@@ -3067,7 +3067,7 @@ const appAA = await launchApp();
 try {
   const keys = await appAA.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { rootRoom: pk(['d4','Nf6','c4']), e6Room: pk(['d4','Nf6','c4','e6','Nc3']), g6Room: pk(['d4','Nf6','c4','g6','Nc3']) };
   });
   await seedBackup(appAA.page, {
@@ -3412,7 +3412,7 @@ try {
   const roomKey = await appAC.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAC.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAC.page.waitForTimeout(300);
@@ -3505,7 +3505,7 @@ try {
   const keyFor = (moves) => appAD.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);   // NOT empty -- naming required
@@ -3884,7 +3884,7 @@ try {
   const keyFor = (moves) => appAH.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -4013,12 +4013,12 @@ try {
   const root = await appAH2.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   const g6Room = await appAH2.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4','g6','Nc3']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAH2.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAH2.page.waitForTimeout(300);
@@ -4094,7 +4094,7 @@ try {
   const root = await appAH3.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 106b. The two-track room (both tracks dead-ending, no forward door)
@@ -4134,7 +4134,7 @@ try {
   const roomKey = await appAI.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAI.page.waitForTimeout(200);
@@ -4229,7 +4229,7 @@ try {
   const root = await appAJ.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAJ.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAJ.page.waitForTimeout(300);
@@ -4678,7 +4678,7 @@ try {
   const roomKey = await appAM.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAM.page.waitForTimeout(300);
@@ -4739,7 +4739,7 @@ try {
   const roomKey = await appAN.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAN.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAN.page.waitForTimeout(300);
@@ -5006,7 +5006,7 @@ const appAQ = await launchApp();
 try {
   const keys = await appAQ.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       root: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
       // a room is keyed by the position right after OUR reply, not the
@@ -5116,7 +5116,7 @@ try {
   const roomKey = await appAR.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAR.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAR.page.waitForTimeout(300);
@@ -5375,6 +5375,59 @@ try {
 }
 
 } catch(e){ bad("phase @ line 5197 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase AS2: positionKey strips a "phantom" en-passant target (one a FEN
+//     records after any pawn double-push, but that no enemy pawn can actually
+//     capture) so two move orders transposing into the identical board -- one
+//     of which played the double-push last -- resolve to the SAME position
+//     (and thus the same digraph node / castle room / VR room key). A
+//     genuinely capturable en-passant is a real difference and is kept. ---
+if(shouldRunPhase(['digraph'])){
+try {
+const appAS2 = await launchApp();
+try {
+  // 145. The exact case reported in the field: the "boiler room" reached two
+  //      ways -- one order's last move is c2-c4 (FEN ep target c3, but Black
+  //      has no pawn on b4/d4 to take it -> phantom), the other order arrived
+  //      at the same board with the c-pawn already there (no ep target). Both
+  //      must key the same, and to the ep-stripped form.
+  try {
+    const r = await appAS2.page.evaluate(() => {
+      const board = 'r1bqkb1r/ppp1pp1p/2n2np1/3p4/2PP1B2/4PN2/PP3PPP/RN1QKB1R b KQkq';
+      const withPhantom = window.__positionKey(board + ' c3 0 7');
+      const withoutEp  = window.__positionKey(board + ' - 0 7');
+      return { withPhantom, withoutEp };
+    });
+    assert(r.withPhantom === r.withoutEp,
+      `expected the phantom-ep and no-ep positions to key identically, got ${JSON.stringify(r)}`);
+    assert(/ -$/.test(r.withPhantom), `expected the key to end with a stripped ep, got ${JSON.stringify(r.withPhantom)}`);
+    ok('positionKey: a phantom en-passant target is stripped, merging the two transposing paths into one position');
+  } catch(e){ bad('positionKey: phantom en-passant stripped', e); }
+
+  // 146. A genuinely capturable en-passant (a real difference in the legal
+  //      moves) is preserved -- after 1.e4 d5 2.e5 f5, White's e5 pawn can
+  //      take f6 en passant, so the target must survive.
+  try {
+    const kept = await appAS2.page.evaluate(() =>
+      window.__positionKey('rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3'));
+    assert(/ f6$/.test(kept), `expected a genuinely capturable ep (f6) to be kept, got ${JSON.stringify(kept)}`);
+    ok('positionKey: a genuinely capturable en-passant target is preserved');
+  } catch(e){ bad('positionKey: capturable en-passant preserved', e); }
+
+  // 147. A position with no en-passant field at all is unchanged (regression
+  //      guard: the normalization must not disturb the common case).
+  try {
+    const plain = await appAS2.page.evaluate(() =>
+      window.__positionKey('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'));
+    assert(plain === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -',
+      `expected an ep-less position to key unchanged, got ${JSON.stringify(plain)}`);
+    ok('positionKey: a position with no en-passant target is unchanged');
+  } catch(e){ bad('positionKey: no-ep position unchanged', e); }
+} finally {
+  await appAS2.close();
+}
+} catch(e){ bad("Phase AS2 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AT: node statistics "complete to move N" -- the shallowest branch's
 //     move number, measured by OUR last move (reaching our move N counts even
@@ -6265,7 +6318,7 @@ try {
   try {
     const alphaKey = await appBB.page.evaluate(() => {
       const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+        return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
       return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
     });
     await openVR(appBB.page);
@@ -6320,7 +6373,7 @@ try {
   try {
     const alphaEntryKey = await appBC.page.evaluate(() => {
       const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+        return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
       return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
     });
     await openVR(appBC.page);
@@ -7183,7 +7236,7 @@ try {
   const keyFor = (moves) => appBO.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7256,11 +7309,11 @@ try {
   await openVR(appBP.page);
   const alphaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   const betaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','d5','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Beta:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Beta:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 99. A two-track room is rejected (message mentions two-track).
@@ -7323,7 +7376,7 @@ try {
   const keyFor = (moves) => appBQ.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7649,7 +7702,7 @@ try {
   const keyFor = (moves) => appBR.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const X = await keyFor(['d4','Nf6','c4','a6','e4']);
@@ -7769,7 +7822,7 @@ try {
   const keyFor = (moves) => appBS.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7854,7 +7907,7 @@ try {
   const keyFor = (moves) => appBT.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
   await appBT.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
@@ -7902,7 +7955,7 @@ try {
   const roomKey = await appBU.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 113. Repeatedly rebuilding the same room (walk-mode -- no edit-only
@@ -9900,7 +9953,7 @@ try {
 
   const roomKey = await appCB2.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
-    return 'cas:L1_Seq:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Seq:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appCB2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appCB2.page.waitForTimeout(200);
@@ -10025,7 +10078,7 @@ const appCC = await launchApp();
 try {
   const keys = await appCC.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     const fenAt = (mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true}); return c.fen(); };
     return {
       alpha: pk('L1_Alpha', ['d4','Nf6','c4']),
@@ -10318,7 +10371,7 @@ try {
 
   const keys = await appCE.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       chain: pk('L1_Chain', ['d4','Nf6','c4']), fork: pk('L1_Fork', ['d4','d5','c4']),
       vault: pk('L1_Vault', ['e4','e5','Nf3']), annex: pk('L1_Annex', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
@@ -10504,7 +10557,7 @@ try {
 
   const keys = await appCF.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       nav: pk('L1_Nav', ['e4','e5','Nf3']),
       navB: pk('L1_NavB', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
@@ -10681,7 +10734,7 @@ try {
   const cgKey = (moves) => appCG.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const cgRoot = await cgKey(['d4','Nf6','c4']);
   const cgX = await cgKey(['d4','Nf6','c4','a6','e4']);
