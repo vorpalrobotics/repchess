@@ -4872,7 +4872,9 @@ function buildTwoTrackDivider(room){
 // how long (world units) one chain-link tile reads as, so the texture's
 // repeat count -- and thus the apparent link count -- scales with the
 // actual gap between two consecutive move-object slots, not a fixed count.
-const CHAIN_LINK_SIZE = 0.75, CHAIN_WIDTH = 0.32, CHAIN_Y = 0.02;
+// stays below the room-name floor label (floorY + 0.015) so the chain never
+// draws on top of the name text where their paths cross near the entrance.
+const CHAIN_LINK_SIZE = 0.75, CHAIN_WIDTH = 0.32, CHAIN_Y = 0.01;
 // Grammar, not decoration (see the memorization-strategy discussion this
 // implements): a plain (non-two-track) corridor room's move-object slots
 // are a forced sequence, and there's otherwise nothing distinguishing that
