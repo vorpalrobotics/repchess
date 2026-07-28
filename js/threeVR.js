@@ -556,6 +556,20 @@ let elevatorBlockedToastShown = false;
 let currentStairCorridors = {};
 let currentBuildingColliders = []; // outdoor only: [{origin,size,doorWall,doorOffset}]
 let teleportLockUntil = 0;
+// roomKey -> the room the player most recently walked in FROM, for an
+// ordinary (non-elevator) door crossing -- session-only, not persisted. A
+// transposition room (reached from more than one parent) still has exactly
+// one physical back door (registerOneCastle only ever wires one -- the wall
+// space for a second doesn't reliably exist), but which room that one door
+// actually leads back to shouldn't be permanently frozen to whichever parent
+// the castle-builder happened to discover first: walking IN from a
+// non-canonical parent and then walking back OUT should return you there,
+// not silently redirect to the canonical one. Set in fireDoorTrigger right
+// before the room-change; read in buildRoom while placing the back exit's
+// trigger/spawn. The room's own CONTENT (walls/floor/ceiling/objects/move
+// objects, and the door's own skin) stays exactly what it always was --
+// this only ever changes which room the one back door's trigger points at.
+let roomEnteredFrom = {};
 const PLAYER_RADIUS = 0.4;
 let textureLoader = null;
 let buildGeneration = 0;
@@ -5385,13 +5399,22 @@ function buildRoom(roomKey){
           const locked = !ex.back && !isStair && ex.type !== 'elevator' && isRoomEmpty(ex.target);
           const doorAsset = doorAssetFor(roomKey, dKey)
             || (locked ? defaultLockedDoorAsset(roomKey) : defaultDoorAsset(roomKey, !!ex.back));
-          const spawn = computeSpawnForExit(roomKey, room, ex);
+          // the back door's own physical slot (wall/offset/skin) is always
+          // this room's static one, but a transposition room only ever gets
+          // ONE such slot for however many real entrances it has -- where it
+          // actually leads is the room the player walked in from THIS visit
+          // (roomEnteredFrom), falling back to the static canonical parent
+          // when there's no recorded visit yet (a fresh page load, a direct
+          // "Jump to VR", etc). Forward doors are unaffected -- their target
+          // is intrinsic to the door, never ambiguous.
+          const navTarget = (ex.back && ROOMS[roomEnteredFrom[roomKey]]) ? roomEnteredFrom[roomKey] : ex.target;
+          const spawn = computeSpawnForExit(roomKey, room, navTarget === ex.target ? ex : { ...ex, target: navTarget });
           const box = isStair ? stairTriggerBox(room, wall, ex.offset) : doorTriggerBox(room.size, wall, ex.offset);
           // a locked door gets no teleport trigger -- clampToRoom already keeps
           // an ordinary doorway solid right up to the wall plane (the trigger is
           // what normally lets you cross it before you'd hit that boundary), so
           // simply not registering one is enough to make it impassable.
-          if(!locked) exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: ex.target, spawn });
+          if(!locked) exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: navTarget, back: !!ex.back, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
           // unskinned locked door: a floating lock icon in the open gap so it
@@ -5683,7 +5706,19 @@ function findDoorTrigger(x, z, fwd){
 // matched -- shared by walking into a door, jumping into one, and clicking
 // one. Returns true if it actually moved you into a new room.
 function fireDoorTrigger(m){
-  if(m.kind !== 'forward'){ enterRoom(m.target, m.spawn, false); return true; }
+  if(m.kind !== 'forward'){
+    // an ordinary (non-elevator) FORWARD door crossing -- remember where the
+    // player walked in from, so if the target has more than one real entrance
+    // (a transposition), its own back door can send them back here
+    // specifically rather than to whichever parent happened to be canonical.
+    // Only a forward crossing counts: walking a BACK door (e.g. returning
+    // from a room's own further child) must NOT overwrite the room being
+    // returned TO with "entered from" the child just left -- that would hijack
+    // its back door into leading somewhere nobody asked for. Elevators
+    // (m.kind === 'back') keep their fixed single link -- not a transposition.
+    if(m.kind == null && !m.back) roomEnteredFrom[m.target] = currentRoomKey;
+    enterRoom(m.target, m.spawn, false); return true;
+  }
   const ordinal = selectedElevatorOrdinal(currentRoomKey, m.floors);
   const dest = ordinal != null ? m.floors.find(f => f.ordinal === ordinal) : null;
   if(dest){ enterRoom(dest.target, dest.spawn, false); return true; }
@@ -7652,13 +7687,14 @@ function onKeyDown(e){
   }
   if(e.key === 'h' || e.key === 'H'){ enterRoom(START_ROOM, START_SPAWN); return; }
   // B instantly takes the room's own back door -- same target/spawn the
-  // physical walk-through would use (reuses exitMeta, which already has it),
-  // just without needing to actually walk there first. No-op where there's
-  // no back exit at all (Main Street).
+  // physical walk-through would use (reuses exitMeta, which already has the
+  // CURRENT, possibly-dynamic target -- see roomEnteredFrom), just without
+  // needing to actually walk there first. Routed through fireDoorTrigger (not
+  // a direct enterRoom call) so it records roomEnteredFrom the same as a real
+  // walk-through would. No-op where there's no back exit at all (Main Street).
   if(e.key === 'b' || e.key === 'B'){
-    const backEx = (mergedRoom(currentRoomKey)?.exits || []).find(ex => ex.back);
-    const m = backEx && exitMeta.find(m => m.target === backEx.target);
-    if(m) enterRoom(m.target, m.spawn, false);
+    const m = exitMeta.find(m => m.back);
+    if(m) fireDoorTrigger(m);
     return;
   }
   // Space jumps forward -- covers ground fast while testing/decorating

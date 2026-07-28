@@ -10642,5 +10642,110 @@ try {
 } catch(e){ bad('Phase CF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CG: a transposition room's single back door leads to the room
+//     the player actually walked in from THIS visit (roomEnteredFrom), not
+//     permanently to whichever parent the castle-builder discovered first.
+//     A round-trip into the room's own child must not clobber that memory
+//     (only a FORWARD crossing records where you came from). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appCG = await launchApp();
+try {
+  // a6/h6 transpose: root -> X (via a6) and root -> Y (via h6) both lead to
+  // one SHARED room (after Nc3). X is discovered first, so shared's static
+  // back exit targets X. The g6 child is a BRANCH room (two replies) so the
+  // shared room can't fold into a two-track (which would swallow its forward
+  // doors); each child chain continues far enough not to be a locked door.
+  await seedBackup(appCG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','a6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','h6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','h6','e4','a6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6'], reply: 'e5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5','Ng8'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5','Nh5'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','b6'], reply: 'e5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','b6','e5','Ng8'], reply: 'd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 g6 e5 Ng8 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 b6 e5 Ng8 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 g6 e5 Nh5 d5', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCG.page);
+  const cgKey = (moves) => appCG.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const cgRoot = await cgKey(['d4','Nf6','c4']);
+  const cgX = await cgKey(['d4','Nf6','c4','a6','e4']);
+  const cgY = await cgKey(['d4','Nf6','c4','h6','e4']);
+  const cgShared = await cgKey(['d4','Nf6','c4','a6','e4','h6','Nc3']);
+  const cgVest = await cgKey(['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5']);
+  // click through the LIVE trigger matching `matchFn` (exitInfo is the real
+  // exitMeta -- the fix rewires the back trigger's target, so navigation has
+  // to be driven through it, not through the static exits list). Waits past
+  // the 0.6s teleport lock each hop.
+  const cgClickDoor = async (matchFn, label) => {
+    await appCG.page.waitForTimeout(700);
+    const live = await appCG.page.evaluate(() => window.__threeTestEdit.exitInfo());
+    const m = live.find(matchFn);
+    assert(m, `${label}: no matching live door trigger`);
+    const c = { x: (m.box.minX + m.box.maxX) / 2, z: (m.box.minZ + m.box.maxZ) / 2 };
+    await appCG.page.evaluate((p) => window.__threeTestEdit.walkClickAt(p.x, p.z), c);
+    await appCG.page.waitForTimeout(150);
+    return (await appCG.page.evaluate(() => window.__threeTestEdit.playerPos())).room;
+  };
+  const cgFwd = await appCG.page.evaluate((k) =>
+    window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgShared);
+
+  // 213. Entering the shared room via its canonical first parent (X), the
+  //      back door returns to X.
+  try {
+    await appCG.page.evaluate((k) => window.__threeTestEdit.enter(k), cgRoot);
+    let r = await cgClickDoor(m => m.target === cgX, 'root->X');
+    assert(r === cgX, `expected to walk into X, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgShared, 'X->shared');
+    assert(r === cgShared, `expected to walk into the shared room, got ${r}`);
+    r = await cgClickDoor(m => !cgFwd.includes(m.target), 'shared back (via X)');
+    assert(r === cgX, `expected the back door to return to X (walked in from there), got ${r}`);
+    ok('transposition back door: entering via the canonical parent returns there');
+  } catch(e){ bad('transposition back door: canonical parent round-trip', e); }
+
+  // 214. Entering via the OTHER parent (Y), the same single back door now
+  //      returns to Y -- even after a round-trip into the shared room's own
+  //      child (which must not overwrite the entered-from memory, since only
+  //      a forward crossing records it).
+  try {
+    const xFwd = await appCG.page.evaluate((k) =>
+      window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgX);
+    let r = await cgClickDoor(m => !xFwd.includes(m.target), 'X back');
+    assert(r === cgRoot, `expected X's back door to lead to the root, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgY, 'root->Y');
+    assert(r === cgY, `expected to walk into Y, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgShared, 'Y->shared');
+    assert(r === cgShared, `expected to walk into the shared room, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgVest, 'shared->child');
+    assert(r === cgVest, `expected to walk into the child room, got ${r}`);
+    const vFwd = await appCG.page.evaluate((k) =>
+      window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgVest);
+    r = await cgClickDoor(m => !vFwd.includes(m.target), 'child back');
+    assert(r === cgShared, `expected the child's back door to return to the shared room, got ${r}`);
+    r = await cgClickDoor(m => !cgFwd.includes(m.target), 'shared back (via Y)');
+    assert(r === cgY, `expected the back door to return to Y this time, got ${r}`);
+    ok('transposition back door: entering via the other parent returns there, child round-trips don\'t clobber it');
+  } catch(e){ bad('transposition back door: non-canonical parent + child round-trip', e); }
+} finally {
+  await appCG.close();
+}
+} catch(e){ bad('Phase CG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
