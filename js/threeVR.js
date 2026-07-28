@@ -4872,7 +4872,7 @@ function buildTwoTrackDivider(room){
 // how long (world units) one chain-link tile reads as, so the texture's
 // repeat count -- and thus the apparent link count -- scales with the
 // actual gap between two consecutive move-object slots, not a fixed count.
-const CHAIN_LINK_SIZE = 0.5, CHAIN_WIDTH = 0.22, CHAIN_Y = 0.02;
+const CHAIN_LINK_SIZE = 0.75, CHAIN_WIDTH = 0.32, CHAIN_Y = 0.02;
 // Grammar, not decoration (see the memorization-strategy discussion this
 // implements): a plain (non-two-track) corridor room's move-object slots
 // are a forced sequence, and there's otherwise nothing distinguishing that
@@ -4917,8 +4917,16 @@ function buildMoveObjectChain(room, roomKey){
   };
   const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
     ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
+  if(!ordered.length) return null;
   const group = new THREE.Group();
-  for(let i = 0; i < ordered.length - 1; i++) addChainSegment(group, resolved(ordered[i]), resolved(ordered[i + 1]));
+  // the walk starts at the room's own name floor-label spot near the entrance,
+  // not at the first slot's (usually the center/anchor pair's) own position --
+  // that slot is often bare (its move is already shown via the previous room's
+  // door pair) so anchoring the chain there pointed at nothing memorable; the
+  // name label is an always-present, meaningful floor marker to start from.
+  const entryPos = roomNameFloorPos(room.size, entranceWall(room));
+  const path = [entryPos, ...ordered.slice(1).map(resolved)];
+  for(let i = 0; i < path.length - 1; i++) addChainSegment(group, path[i], path[i + 1]);
   // final link: a forward door carries its OWN pair/object preview of the
   // room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
   // slotXform) -- a wholly separate object from this room's own
@@ -4930,13 +4938,13 @@ function buildMoveObjectChain(room, roomKey){
   // principle branch into more than one forward door (a branch that didn't
   // qualify as a two-track); picking just the first is an arbitrary but
   // deterministic choice for that rare case, not a claim only one exists.
-  const fwd = ordered.length && room.exits ? room.exits.find(e => !e.back) : null;
+  const fwd = room.exits ? room.exits.find(e => !e.back) : null;
   if(fwd){
     const sideSign = fwd.wall === 'east' ? 1 : -1;
     const base = doorSideXZ(room, fwd.wall, fwd.offset, sideSign);
     const xf = slotXformFor(roomKey, 'dobj-' + fwd.target);
     const doorPos = { x: base.x + (xf?.dx || 0), z: base.z + (xf?.dz || 0) };
-    addChainSegment(group, resolved(ordered[ordered.length - 1]), doorPos);
+    addChainSegment(group, path[path.length - 1], doorPos);
   }
   return group.children.length ? group : null;
 }
@@ -7915,6 +7923,13 @@ export async function openThreeTest(containerEl, opts){
         const ex = (r.exits || []).find(e => !e.back && e.target === target);
         if(!ex) return null;
         return doorSideXZ(r, ex.wall, ex.offset, ex.wall === 'east' ? 1 : -1);
+      },
+      // the chain's own walk-start point (the room-name floor-label spot near
+      // the entrance) -- lets a test compute the expected first segment's
+      // midpoint independently of buildMoveObjectChain's own internals.
+      chainEntryPos: (roomKeyArg) => {
+        const r = mergedRoom(roomKeyArg || currentRoomKey);
+        return roomNameFloorPos(r.size, entranceWall(r));
       },
       // nudges a moveObject slot's stored xform directly (bypassing the real
       // arrow-key drag flow) and rebuilds -- for testing that dependents
