@@ -3107,29 +3107,41 @@ function wallListId(roomKey, bucket){
   return (wl && wl[bucket] && wl[bucket].listId) || null;
 }
 // how many move-object slots a bucket holds — the "run length" a list is
-// matched against in the assignment dialog.
+// matched against in the assignment dialog. The center (anchor) slot is
+// never list-driven, even for a single-run room's 'all' bucket -- its pair
+// is the move that walking in through the door already represents (the
+// SAME pair the previous room's own door-object shows, via doorPairContent
+// reusing this room's own center slot), not a step of walking THIS room's
+// own sequence. Was `s.side !== 'center' || true` -- an always-true no-op
+// that counted the center slot in anyway, one too many, and gave list
+// item[0] to the arrival move instead of the room's own first L slot.
 function bucketSlotCount(roomKey, bucket){
   const slots = moveObjectSlots(roomKey);
   if(bucket === 'left')  return slots.filter(s => s.side === 'left').length;
   if(bucket === 'right') return slots.filter(s => s.side === 'right').length;
-  return slots.filter(s => s.side !== 'center' || true).length;   // 'all' = every slot
+  return slots.filter(s => s.side !== 'center').length;   // 'all' = every non-anchor slot
 }
 // which (bucket, index) a given move-object slot maps to, or null if the slot
-// is not list-driven (the shared center/head slot of a two-track room). For a
-// single-run room the walk order is the center (anchor) pair first, then the
-// left-wall pairs, so the anchor gets item[0].
+// is not list-driven -- the center/anchor slot, in EVERY room kind, not just
+// a two-track's shared head. Its pair is the move that walking in through
+// the door already represents (the same pair the previous room's own door
+// object shows, via doorPairContent reusing this room's own center slot),
+// not a step of walking this room's own sequence -- assigning it list
+// item[0] was pairing the SAME move twice while quietly shifting the room's
+// own L1..Ln down by one and reporting one slot too many (bucketSlotCount).
 const SIDE_WALK_RANK = { center: 0, left: 1, right: 2 };
 function slotListContext(roomKey, slot){
+  if(slot.side === 'center') return null;        // arrival pair — not part of any wall list
   const room = mergedRoom(roomKey);
   if(room && room.twoTrack){
-    if(slot.side === 'center') return null;        // shared head — not part of either wall list
     const bucket = slot.side === 'right' ? 'right' : 'left';
     return { bucket, index: (slot.order || 1) - 1 };
   }
-  // single 'all' bucket: index = position in the room's walk order (center pairs
-  // first, then left, then right — each by order). Computed from the actual slot
-  // set so a room with any mix of sides gets a unique, collision-free index.
-  const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
+  // single 'all' bucket: index = position in the room's own walk order
+  // (left then right, each by order — center excluded above). Computed from
+  // the actual slot set so a room with any mix of sides gets a unique,
+  // collision-free index.
+  const ordered = moveObjectSlots(roomKey).filter(s => s.side !== 'center').sort((a, b) =>
     ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
   const index = ordered.findIndex(s => s.id === slot.id);
   return { bucket: 'all', index: index < 0 ? 0 : index };
@@ -8085,6 +8097,29 @@ export async function openThreeTest(containerEl, opts){
       // member's own slot rather than the generic door-hash placement.
       moveObjectSlotsFull: (roomKeyArg) => moveObjectSlots(roomKeyArg || currentRoomKey)
         .map(s => ({ id: s.id, side: s.side, order: s.order, x: s.x, z: s.z })),
+      // a wall bucket's slot count (bucketSlotCount) and a specific slot's
+      // list-driven word, if any (moveObjectListResolved) -- for testing
+      // that the center/anchor slot is excluded from both (it's the
+      // arrival-move pair, not a step of this room's own walk sequence).
+      wallBucketSlotCount: (roomKeyArg, bucket) => bucketSlotCount(roomKeyArg || currentRoomKey, bucket),
+      slotListWord: (roomKeyArg, slotId) => {
+        const rk = roomKeyArg || currentRoomKey;
+        const slot = moveObjectSlots(rk).find(s => s.id === slotId);
+        if(!slot) return undefined;
+        const r = moveObjectListResolved(rk, slot);
+        return r ? r.word : null;
+      },
+      // assigns (or clears, if listId is falsy) a wall bucket's list -- the
+      // same mutation the real Wall Object Lists dialog's <select> makes
+      // (see openWallListsDialog), for testing without driving that dialog.
+      setWallList: (roomKeyArg, bucket, listId) => {
+        const rk = roomKeyArg || currentRoomKey;
+        const r = ensureRoomLayout(rk);
+        if(!r.wallLists) r.wallLists = {};
+        if(listId) r.wallLists[bucket] = { listId }; else delete r.wallLists[bucket];
+        persistLayout();
+        buildRoom(currentRoomKey);
+      },
       // the current room's rendered chain segments (buildMoveObjectChain) --
       // count + midpoint position of each, for testing that a corridor gets
       // exactly (slot count - 1) segments and a non-corridor gets none.

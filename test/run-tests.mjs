@@ -3348,6 +3348,39 @@ try {
     await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
     await appAB.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: brush and bucket erase are mutually exclusive', e); }
+
+  // 80. Regression: AI-generated "transparent background" exports routinely
+  //     carry a faint near-transparent haze across the WHOLE canvas rather
+  //     than clean 0 alpha -- at the old AUTO_CROP_ALPHA=0 threshold every
+  //     haze pixel counted as content, so the computed bounds were the full
+  //     image and Auto-crop did nothing. A haze well under the new 24
+  //     threshold must be excluded from the bounds; real (near-opaque)
+  //     content must still be picked up correctly.
+  try {
+    const hazyUrl = await appAB.page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 100; c.height = 100;
+      const cx = c.getContext('2d');
+      cx.fillStyle = 'rgba(200,150,100,0.03)';    // alpha ~8/255 -- a faint haze reaching every edge
+      cx.fillRect(0, 0, 100, 100);
+      cx.fillStyle = 'rgba(255,0,0,1)';           // solid content, a 40x40 square at [30,70)
+      cx.fillRect(30, 30, 40, 40);
+      return c.toDataURL('image/png');
+    });
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), hazyUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    await appAB.page.evaluate(() => document.getElementById('cropAutoBtn').click());
+    await appAB.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    const result = await appAB.page.evaluate(() => window.__cropTestHooks.result());
+    assert(typeof result === 'string' && result.startsWith('data:image/png'), `expected a saved PNG data-URL, got ${JSON.stringify(result)}`);
+    const probe = await alphaProbe(result, [[0,0]]);
+    assert(probe.w === 40 && probe.h === 40,
+      `expected Auto-crop to trim the 100x100 haze down to the 40x40 solid content, got ${probe.w}x${probe.h}`);
+    ok('crop editor: Auto-crop excludes a faint whole-canvas haze, finds the real content bounds');
+  } catch(e){ bad('crop editor: Auto-crop is not fooled by a near-transparent haze', e); }
 } finally {
   await appAB.close();
 }
@@ -5219,6 +5252,67 @@ try {
 }
 
 } catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase AR2: switching an asset's Type must not silently discard its
+//     size -- renderTypeFields used to re-derive width/height/depth from
+//     the asset's ORIGINALLY-loaded size (or, for a brand-new asset, the
+//     new type's hardcoded default), throwing away anything currently
+//     typed into the fields, whether that's the just-loaded saved size or
+//     an in-progress unsaved edit made before switching type. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appAR2 = await launchApp();
+try {
+  await seedBackup(appAR2.page, {
+    version: 6, user: 'tester',
+    lines: [],
+    assets: [{ id: 'resize-me', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 2, h: 3, d: 0.4 } }],
+  });
+  await appAR2.page.evaluate(() => document.getElementById('menuAssets').click());
+  await appAR2.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+  await appAR2.page.evaluate(() => {
+    const card = [...document.querySelectorAll('#assetsGrid .asset-card')].find(c => c.textContent.includes('resize-me'));
+    card.click();
+  });
+  await appAR2.page.waitForSelector('#assetSizeW', { timeout: 5000 });
+
+  // 90. Switching an EXISTING asset's type carries its saved size over --
+  //     not the new type's hardcoded default.
+  try {
+    const before = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+    }));
+    assert(before.w === '2' && before.h === '3', `expected the saved size to show initially, got ${JSON.stringify(before)}`);
+    await appAR2.page.selectOption('#assetTypeInput', 'billboard-cylindrical');
+    const afterSwitch = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+    }));
+    assert(afterSwitch.w === '2' && afterSwitch.h === '3',
+      `expected width/height to carry over to billboard, not reset to its 0.8/1 default, got ${JSON.stringify(afterSwitch)}`);
+    ok('asset editor: switching type carries an EXISTING asset\'s saved size over, not the new type\'s default');
+  } catch(e){ bad('asset editor: type switch preserves an existing asset\'s size', e); }
+
+  // 91. Switching type ALSO carries over a size the user just typed THIS
+  //     session (before saving) -- not just the originally-loaded value.
+  //     Depth (never editable on a billboard) correctly falls back to the
+  //     original saved 0.4 rather than 0 once back on extruded.
+  try {
+    await appAR2.page.fill('#assetSizeW', '5');
+    await appAR2.page.fill('#assetSizeH', '6');
+    await appAR2.page.selectOption('#assetTypeInput', 'extruded');
+    const afterBack = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+      d: document.getElementById('assetSizeD').value,
+    }));
+    assert(afterBack.w === '5' && afterBack.h === '6',
+      `expected the just-typed 5/6 to carry over back to extruded, got ${JSON.stringify(afterBack)}`);
+    assert(afterBack.d === '0.4', `expected depth to fall back to the original saved 0.4 (never had a live value to carry), got ${afterBack.d}`);
+    ok('asset editor: switching type carries over an in-progress (unsaved) size edit');
+  } catch(e){ bad('asset editor: type switch preserves an in-progress size edit', e); }
+} finally {
+  await appAR2.close();
+}
+} catch(e){ bad('Phase AR2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
@@ -8465,6 +8559,36 @@ try {
     assert(alertMsg && /1 skipped/.test(alertMsg), `expected the import-complete alert to mention the 1 skipped entry, got ${JSON.stringify(alertMsg)}`);
     ok('object lists: an id-less entry is counted and reported as skipped, not silently dropped');
   } catch(e){ bad('object lists: skipped-entry count surfaced on import', e); }
+
+  // 166. The item picker's "New Asset…" button (previously the only way to
+  //      get an image for a list item was to cancel out to menu -> Manage VR
+  //      Assets, create it there, then come back and re-open this picker)
+  //      opens the real standalone New Asset editor; saving it assigns the
+  //      new asset straight to the item being picked for and closes the
+  //      picker, with the item's row showing the new thumbnail immediately
+  //      (not stale until the manager is reopened).
+  try {
+    await appAY3.page.evaluate(() => document.getElementById('ol_cancel')?.click());
+    await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await openCard('Valid List');
+    await appAY3.page.evaluate(() => document.querySelector('#ol_items [data-pick]').click());
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistPickNewAsset');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#assetIdInput', 'test-objlist-newasset-1');
+    await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'hidden', timeout: 5000 });
+    const boundId = await appAY3.page.evaluate(() =>
+      document.querySelector('#ol_items tr .objlist-asset-id')?.textContent);
+    assert(boundId === 'test-objlist-newasset-1', `expected the item bound to the freshly-created asset, got ${JSON.stringify(boundId)}`);
+    const thumbSrc = await appAY3.page.evaluate(() => document.querySelector('#ol_items tr img')?.getAttribute('src') || null);
+    assert(thumbSrc && thumbSrc.startsWith('data:image'), `expected the item row's thumbnail to show the new asset's image immediately, got ${JSON.stringify(thumbSrc)}`);
+    ok('object lists: item picker\'s New Asset button creates and assigns an asset without leaving the list manager');
+  } catch(e){ bad('object lists: "New Asset…" escape hatch from the item picker', e); }
 } finally {
   await appAY3.close();
 }
@@ -9706,6 +9830,75 @@ try {
   await appCB.close();
 }
 } catch(e){ bad('Phase CB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase CB2: a wall list assigned to a single-run room's 'all' bucket
+//     must skip the center/anchor slot -- its pair is the arrival move
+//     (the same pair the previous room's own door object already shows via
+//     doorPairContent reusing this room's center slot), not a step of
+//     walking THIS room's own sequence. Was giving list item[0] to the
+//     center slot, shifting the room's own L1..Ln down by one and
+//     reporting one slot too many in bucketSlotCount/the dialog's "N
+//     move-pair slots" label. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB2 = await launchApp();
+try {
+  await seedBackup(appCB2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      // Seq: a 3-member plain corridor (C1 anchor + L1 + L2).
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Seq', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+    objectLists: [
+      { id: 'seq_list', name: 'Seq List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCB2.page);
+
+  const roomKey = await appCB2.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Seq:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appCB2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appCB2.page.waitForTimeout(200);
+
+  // 193. bucketSlotCount excludes the center slot: a 3-slot room (C1+L1+L2)
+  //      reports 2 ("N move-pair slots" in the dialog), matching the room's
+  //      own 2-item walk sequence, not the 3 total slots including arrival.
+  try {
+    const slots = await appCB2.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    assert(slots.length === 3, `expected 3 total slots (C1+L1+L2), got ${slots.length}: ${JSON.stringify(slots)}`);
+    const need = await appCB2.page.evaluate((k) => window.__threeTestEdit.wallBucketSlotCount(k, 'all'), roomKey);
+    assert(need === 2, `expected bucketSlotCount to exclude the center slot (2, not 3), got ${need}`);
+    ok('wall lists: bucketSlotCount excludes the center/anchor slot');
+  } catch(e){ bad('wall lists: bucketSlotCount excludes center', e); }
+
+  // 194. Assigning a 2-item list to the 'all' bucket gives item[0] ("First")
+  //      to L1 and item[1] ("Second") to L2 -- C1 (the arrival pair) gets
+  //      no list-driven content at all, not "First".
+  try {
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'seq_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const c1 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-C1'), roomKey);
+    const l1 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-L1'), roomKey);
+    const l2 = await appCB2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-L2'), roomKey);
+    assert(c1 === null, `expected the center slot to have no list-driven word (arrival pair, not part of the sequence), got ${JSON.stringify(c1)}`);
+    assert(l1 === 'First', `expected L1 to get the list's first item, got ${JSON.stringify(l1)}`);
+    assert(l2 === 'Second', `expected L2 to get the list's second item, got ${JSON.stringify(l2)}`);
+    ok('wall lists: item[0] lands on the room\'s own first (L1) slot, never the center/arrival slot');
+  } catch(e){ bad('wall lists: list items map to L1..Ln, skipping center', e); }
+} finally {
+  await appCB2.close();
+}
+} catch(e){ bad('Phase CB2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear
