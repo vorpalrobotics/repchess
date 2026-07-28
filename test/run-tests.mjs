@@ -9993,12 +9993,19 @@ try {
       { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Vault', castleStreetNumber: 3 },
       { seq: ['e4','e5','Nf3','Nc6'], reply: 'Bc4' },
       { seq: ['e4','e5','Nf3','Nc6','Bc4','Bc5'], reply: 'c3', isCastleRoot: true, castleName: 'Annex', castleStreetNumber: 4 },
+      // Stub: a genuinely clean dead end -- one move, and NO recorded game
+      // goes even a single ply past it (unlike Chain, whose g1 keeps going
+      // with an opponent reply -- d5 -- nobody's prepared a response to
+      // yet). castleSign.unbuilt must be empty here for the dead-end sign
+      // test to mean anything.
+      { seq: ['c4','c5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Stub', castleStreetNumber: 5 },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6 e3 Be7', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 d5 c4 g6 Nc3 Bg7 e3 Nf6', white: 'a', black: 'b', result: '*' },
       { id: 'g4', moves: 'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'c4 c5 Nf3', white: 'a', black: 'b', result: '*' },
     ],
     assets: [
       { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
@@ -10012,6 +10019,7 @@ try {
     return {
       chain: pk('L1_Chain', ['d4','Nf6','c4']), fork: pk('L1_Fork', ['d4','d5','c4']),
       vault: pk('L1_Vault', ['e4','e5','Nf3']), annex: pk('L1_Annex', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
+      stub: pk('L1_Stub', ['c4','c5','Nf3']),
     };
   });
 
@@ -10097,16 +10105,23 @@ try {
     ok('memorization-aid: a corridor\'s terminal chain link reaches its forward door\'s own pair-object');
   } catch(e){ bad('memorization-aid: corridor chain reaches the forward door\'s pair-object', e); }
 
-  // 206. A room with no forward exit at all gets a skinnable "no entry" sign
-  //      on the wall a forward door would have used (built-in icon by
-  //      default), so a dead end reads as intentional rather than "not
-  //      built yet" -- distinct from a locked door, which is a real (if
-  //      unbuilt) reply. A room WITH a forward door gets no such sign.
+  // 206. A room with no forward exit at all AND no unbuilt (played but
+  //      unprepared) opponent replies gets a skinnable "no entry" sign on
+  //      the wall a forward door would have used (built-in icon by
+  //      default), so a genuine dead end reads as intentional rather than
+  //      "not built yet" -- distinct from a locked door, which is a real
+  //      (if unbuilt) reply. A room WITH a forward door gets no such sign,
+  //      and neither does a room whose sequence LOOKS like a dead end
+  //      (no built forward door) but actually has an unbuilt reply on
+  //      record (Chain -- g1 keeps going with d5 past its last prepared
+  //      move, nobody's built a response to it yet): showing "the line
+  //      ends here" there would contradict the room's own "unbuilt: d5"
+  //      sign and be actively misleading.
   try {
-    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.stub);
     await appCE.page.waitForTimeout(200);
     const before = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
-    assert(before.wall === 'north', `expected the Chain dead-end sign on the north wall, got ${JSON.stringify(before)}`);
+    assert(before.wall === 'north', `expected the Stub dead-end sign on the north wall, got ${JSON.stringify(before)}`);
     assert(before.icon && !before.panel, `expected the built-in no-entry icon (no override yet), got ${JSON.stringify(before)}`);
 
     // a room with a real forward door (Vault) gets no dead-end sign at all.
@@ -10115,13 +10130,21 @@ try {
     const vaultSign = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
     assert(!vaultSign.icon && !vaultSign.panel, `expected no dead-end sign on a room with a forward door, got ${JSON.stringify(vaultSign)}`);
 
+    // Chain has no BUILT forward door either, but its last prepared move
+    // (Bd3) has an unbuilt reply on record (d5, from g1) -- the sequence
+    // doesn't genuinely end there, so it must NOT get the no-entry sign.
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    const chainSign = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
+    assert(!chainSign.icon && !chainSign.panel, `expected no dead-end sign on a room with an unbuilt reply, got ${JSON.stringify(chainSign)}`);
+
     // skinning it through the real picker (edit mode + the marker's own
     // click target) swaps the built-in icon for the custom panel.
-    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.stub);
     await appCE.page.waitForTimeout(200);
     await appCE.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
     await appCE.page.waitForTimeout(60);
-    await appCE.page.evaluate((k) => window.__threeTestEdit.target({ kind: 'dead-end', roomKey: k }), keys.chain);
+    await appCE.page.evaluate((k) => window.__threeTestEdit.target({ kind: 'dead-end', roomKey: k }), keys.stub);
     await appCE.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await appCE.page.evaluate(() => {
       const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
@@ -10130,16 +10153,190 @@ try {
     });
     await appCE.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
     await appCE.page.waitForTimeout(150);
-    const overrideId = await appCE.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k), keys.chain);
+    const overrideId = await appCE.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k), keys.stub);
     assert(overrideId === 'doorSkin1', `expected the dead-end sign's override to be doorSkin1, got ${overrideId}`);
     const after = await appCE.page.evaluate(() => window.__threeTestEdit.deadEndSign());
     assert(after.panel && !after.icon, `expected the custom skin panel (not the built-in icon) once assigned, got ${JSON.stringify(after)}`);
-    ok('memorization-aid: a dead-end room gets a skinnable no-entry sign; a room with a real door does not');
-  } catch(e){ bad('memorization-aid: dead-end sign presence, default icon, and skinning', e); }
+    ok('memorization-aid: a dead-end room gets a skinnable no-entry sign; a real door or an unbuilt reply suppresses it');
+  } catch(e){ bad('memorization-aid: dead-end sign presence, default icon, unbuilt-reply gate, and skinning', e); }
 } finally {
   await appCE.close();
 }
 } catch(e){ bad('Phase CE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CF: spacebar jump-forward and click-to-walk-through-a-door --
+//     both cover ground fast while testing/decorating. A jump advances in
+//     small steps rather than one leap straight to the target point, so it
+//     can't skip clean over a door's trigger box (only ~2m deep) or land
+//     inside a wall; stepping into a door ends the jump at that door's OWN
+//     recorded spawn point, discarding whatever jump distance was left
+//     (not some arbitrary distance further into the new room). A click
+//     does the same door lookup for a deliberate tap, with no facing
+//     requirement (findDoorTrigger/fireDoorTrigger, shared with tick()'s
+//     own forward-walk trigger check). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appCF = await launchApp();
+try {
+  await seedBackup(appCF.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['e4'], prefs: [
+      // Nav: a single-continuation corridor (C1 + L1) with ONE forward
+      // door to a nested castle (NavB) -- same shape as Phase CE's
+      // Vault/Annex, reused here for movement rather than decoration.
+      // NavB needs its OWN further continuation (Nf6/d4) beyond its entry
+      // reply -- with nothing beyond, isRoomEmpty would mark it a "locked"
+      // door (a real, if unbuilt, dead end) instead of a real walkable one.
+      { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Nav', castleStreetNumber: 1 },
+      { seq: ['e4','e5','Nf3','Nc6'], reply: 'Bc4' },
+      { seq: ['e4','e5','Nf3','Nc6','Bc4','Bc5'], reply: 'c3', isCastleRoot: true, castleName: 'NavB', castleStreetNumber: 2 },
+      { seq: ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3','Nf6'], reply: 'd4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6 d4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCF.page);
+
+  const keys = await appCF.page.evaluate(() => {
+    const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      nav: pk('L1_Nav', ['e4','e5','Nf3']),
+      navB: pk('L1_NavB', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
+    };
+  });
+
+  // the forward door's wall is a HASH of its target key (doorWallFor) --
+  // north/east/west, never assumed -- so every test below looks it up via
+  // the real exits() rather than guessing a compass direction. YAW_FOR_WALL
+  // is the facing that walks INTO each wall (cameraForwardVec's own
+  // convention: {x:-sin(yaw), z:-cos(yaw)}).
+  const YAW_FOR_WALL = { north: 0, south: Math.PI, east: -Math.PI / 2, west: Math.PI / 2 };
+  await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+  await appCF.page.waitForTimeout(200);
+  const navExits = await appCF.page.evaluate((k) => window.__threeTestEdit.exits(k), keys.nav);
+  const doorEx = navExits.find(e => e.target === keys.navB);
+  assert(doorEx, `expected Nav to have a forward door to NavB, got ${JSON.stringify(navExits)}`);
+  const doorWall = doorEx.wall;
+  const freeWall = ['north', 'east', 'west'].find(w => w !== doorWall);   // guaranteed door-free -- only one of the three carries the single forward door
+  // a door's offset is only 0 along its own wall's lateral axis for a
+  // SINGLE north door (see doorPlacements) -- an east/west door's offset is
+  // a z-coordinate some distance south of the room's head (ewSouth), not
+  // room-center-relative. So the door's box center (what a jump/click needs
+  // to actually land in) is NOT just "(0,0) toward that wall" in general --
+  // compute it from the wall's fixed coordinate (wallSpan) + the door's own
+  // lateral offset.
+  const navSize = await appCF.page.evaluate((k) => window.__threeTestEdit.roomSize(k), keys.nav);
+  const wallFixed = { north: -navSize.d / 2, south: navSize.d / 2, east: navSize.w / 2, west: -navSize.w / 2 }[doorWall];
+  const doorAxisIsX = (doorWall === 'north' || doorWall === 'south');
+  const doorBoxCenter = doorAxisIsX ? { x: doorEx.offset, z: wallFixed } : { x: wallFixed, z: doorEx.offset };
+  // the room-center point ALONG the door's own wall, at the door's lateral
+  // offset -- the correct starting point to walk/jump straight through it.
+  const doorApproachStart = doorAxisIsX ? { x: doorEx.offset, z: 0 } : { x: 0, z: doorEx.offset };
+
+  // 207. Indoor/outdoor jump distances are configured 2m / 10m.
+  try {
+    const dist = await appCF.page.evaluate(() => window.__threeTestEdit.jumpDistances());
+    assert(dist.indoor === 2, `expected a 2m indoor jump, got ${JSON.stringify(dist)}`);
+    assert(dist.outdoor === 10, `expected a 10m outdoor jump, got ${JSON.stringify(dist)}`);
+    ok('jump-forward: indoor/outdoor distances are 2m / 10m');
+  } catch(e){ bad('jump-forward: configured distances', e); }
+
+  // 208. A single indoor jump in open space (facing a plain wall with no
+  //      door, well clear of it) moves the player forward by ~2m in the
+  //      facing direction -- not less (blocked early) or more (overshoot).
+  try {
+    await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+    await appCF.page.waitForTimeout(200);
+    await appCF.page.evaluate((yv) => window.__threeTestEdit.setPlayerPos(0, 0, yv), YAW_FOR_WALL[freeWall]);
+    await appCF.page.evaluate(() => window.__threeTestEdit.jump());
+    const after = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+    const expected = { x: -Math.sin(YAW_FOR_WALL[freeWall]) * 2, z: -Math.cos(YAW_FOR_WALL[freeWall]) * 2 };
+    assert(after.room === keys.nav, `expected to stay in Nav for an unobstructed jump, got ${after.room}`);
+    assert(Math.abs(after.x - expected.x) < 0.05 && Math.abs(after.z - expected.z) < 0.05,
+      `expected to land ~2m toward the free ${freeWall} wall ${JSON.stringify(expected)}, got (${after.x},${after.z})`);
+    ok('jump-forward: a single unobstructed indoor jump covers ~2m');
+  } catch(e){ bad('jump-forward: single unobstructed jump distance', e); }
+
+  // 209. Repeated jumps toward a plain wall (no door) stop right at the
+  //      wall -- never exceed it, and never change rooms.
+  try {
+    await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+    await appCF.page.waitForTimeout(200);
+    const size = await appCF.page.evaluate((k) => window.__threeTestEdit.roomSize(k), keys.nav);
+    await appCF.page.evaluate((yv) => window.__threeTestEdit.setPlayerPos(0, 0, yv), YAW_FOR_WALL[freeWall]);
+    for(let i = 0; i < 20; i++) await appCF.page.evaluate(() => window.__threeTestEdit.jump());
+    const after = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+    const half = (freeWall === 'east' || freeWall === 'west') ? size.w / 2 : size.d / 2;
+    const coord = (freeWall === 'east' || freeWall === 'west') ? after.x : after.z;
+    const mag = Math.abs(coord);
+    assert(after.room === keys.nav, `expected to stay in Nav (no door on the ${freeWall} wall), got ${after.room}`);
+    assert(mag <= half + 0.01, `expected the jump to stop AT the ${freeWall} wall, not past it (coord=${coord}, half=${half})`);
+    assert(mag > half - 1, `expected the jump to reach close to the ${freeWall} wall, got coord=${coord} (half=${half})`);
+    ok('jump-forward: repeated jumps into a plain wall stop right at it');
+  } catch(e){ bad('jump-forward: stops at a wall, does not overshoot', e); }
+
+  // 210. Jumping toward the room's forward door lands EXACTLY at that
+  //      door's own recorded spawn point in the new room -- not some
+  //      arbitrary distance further in, matching a physical walk-through.
+  //      Waits out enterRoom's own 0.6s teleport-lock cooldown first, or
+  //      the very first jump's door-trigger check would be skipped.
+  try {
+    await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+    await appCF.page.waitForTimeout(700);
+    const before = await appCF.page.evaluate(() => window.__threeTestEdit.exitMetaList());
+    const expected = before.find(m => m.target === keys.navB);
+    assert(expected, `expected Nav to have an exit trigger targeting NavB, got ${JSON.stringify(before)}`);
+    // start ALIGNED with the door's own lateral offset (see doorApproachStart
+    // -- an east/west door's box isn't centered on the room, only a single
+    // north door's is), then walk straight into the wall it's on.
+    await appCF.page.evaluate((args) => window.__threeTestEdit.setPlayerPos(args.p.x, args.p.z, args.yaw),
+      { p: doorApproachStart, yaw: YAW_FOR_WALL[doorWall] });
+    for(let i = 0; i < 10; i++){
+      const cur = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+      if(cur.room === keys.navB) break;
+      await appCF.page.evaluate(() => window.__threeTestEdit.jump());
+    }
+    const after = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+    assert(after.room === keys.navB, `expected to have jumped through into NavB, got ${after.room}`);
+    assert(Math.abs(after.x - expected.spawn.x) < 0.05 && Math.abs(after.z - expected.spawn.z) < 0.05,
+      `expected to land exactly at NavB's own entrance spawn ${JSON.stringify(expected.spawn)}, got (${after.x},${after.z})`);
+    ok('jump-forward: jumping through a door lands at its own spawn, not further in');
+  } catch(e){ bad('jump-forward: lands at the door\'s own spawn point', e); }
+
+  // 211. Clicking a world point inside a door's trigger box (no facing
+  //      requirement) walks straight through it to the same spawn point.
+  //      Clicks doorBoxCenter (this room's own local trigger-box center),
+  //      NOT an exitMeta entry's .spawn -- that's the DESTINATION room's
+  //      coordinates (where enterRoom lands you once through), a different
+  //      frame entirely from a point you'd click on in the room you're
+  //      currently standing in.
+  try {
+    await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+    await appCF.page.waitForTimeout(700);
+    const moved = await appCF.page.evaluate((p) => window.__threeTestEdit.walkClickAt(p.x, p.z), doorBoxCenter);
+    assert(moved, 'expected clicking inside the door\'s trigger box to walk through it');
+    const after = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+    assert(after.room === keys.navB, `expected the click to walk into NavB, got ${after.room}`);
+    ok('click-to-walk: tapping a door walks straight through it');
+  } catch(e){ bad('click-to-walk: tapping inside a door\'s trigger box', e); }
+
+  // 212. Clicking a point NOT inside any door's trigger box does nothing.
+  try {
+    await appCF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.nav);
+    await appCF.page.waitForTimeout(700);
+    const moved = await appCF.page.evaluate(() => window.__threeTestEdit.walkClickAt(0, 0));   // room center, nowhere near a door
+    assert(!moved, 'expected clicking open floor (no door there) to do nothing');
+    const after = await appCF.page.evaluate(() => window.__threeTestEdit.playerPos());
+    assert(after.room === keys.nav, `expected to stay in Nav, got ${after.room}`);
+    ok('click-to-walk: clicking open floor away from any door does nothing');
+  } catch(e){ bad('click-to-walk: no false positive away from a door', e); }
+} finally {
+  await appCF.close();
+}
+} catch(e){ bad('Phase CF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
