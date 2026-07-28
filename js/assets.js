@@ -284,7 +284,7 @@ function renderEditor(a, initialType, allowTypes){
   updateResHint();
 
   $('assetTypeInput').onchange = async e => {
-    renderTypeFields(e.target.value, a);
+    renderTypeFields(e.target.value, a, readLiveSize());
     updateResHint();
     await rederiveImage();              // category may change → re-down-convert the staged upload
   };
@@ -312,10 +312,32 @@ function renderEditor(a, initialType, allowTypes){
   if(a) $('assetsDeleteBtn').onclick = () => deleteEditor(a.id);
 }
 
-function renderTypeFields(type, a){
+// captures whatever's CURRENTLY typed into the size fields (before the Type
+// dropdown's change replaces them), so renderTypeFields can carry it over --
+// null when the outgoing type has no size fields at all (surface/door/etc.),
+// each dimension omitted when the outgoing type doesn't carry it (e.g. depth
+// on a billboard, so switching billboard -> extruded still falls back to the
+// saved/default depth rather than a bogus 0).
+function readLiveSize(){
+  const w = $('assetSizeW');
+  if(!w) return null;
+  const h = $('assetSizeH'), d = $('assetSizeD');
+  const out = { w: Number(w.value) || 0 };
+  if(h) out.h = Number(h.value) || 0;
+  if(d) out.d = Number(d.value) || 0;
+  return out;
+}
+
+function renderTypeFields(type, a, liveSize){
   const kind = (ASSET_TYPES[type] || {}).kind;
   const box = $('assetTypeFields');
-  const size = (a && a.size) || {};
+  // liveSize (whatever's CURRENTLY typed into the size fields being replaced,
+  // see readLiveSize) wins over the originally-loaded asset's own size --
+  // otherwise switching Type mid-edit silently discards an in-progress size
+  // change and reverts to the stale saved value (or, for a brand-new asset
+  // with no saved value at all, the new type's hardcoded default) without
+  // any indication anything happened.
+  const size = { ...((a && a.size) || {}), ...(liveSize || {}) };
   if(type === 'extruded'){
     box.innerHTML = `
       <div class="assets-size-row">
@@ -374,7 +396,7 @@ function renderTypeFields(type, a){
       <div class="field"><label>Metalness</label><input type="number" step="0.01" min="0" max="1" id="assetMetalness" value="${(a && a.metalness) ?? 0}"></div>
     `;
   } else if(kind === 'sign'){
-    const size = (a && a.size) || {};
+    const size = { ...((a && a.size) || {}), ...(liveSize || {}) };
     box.innerHTML = `
       <p class="asset-hint">Skins the whole freestanding sign at the size below — the
       image replaces the entire sign (posts included), so draw the legs/stand into the
@@ -1364,7 +1386,7 @@ async function deleteEditor(id){
    no-op when there's no #assetsGrid in the current container, so saveEditor's
    normal post-save calls stay harmless here. Resolves the new asset's id on
    Save, or null on Cancel. */
-function openNewAssetModal(initialType, allowTypes){
+export function openNewAssetModal(initialType, allowTypes){
   return new Promise((resolve) => {
     const prevContainer = containerEl;
     let ov = document.getElementById('assetNewOverlay');

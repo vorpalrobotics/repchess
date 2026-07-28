@@ -5253,6 +5253,67 @@ try {
 
 } catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AR2: switching an asset's Type must not silently discard its
+//     size -- renderTypeFields used to re-derive width/height/depth from
+//     the asset's ORIGINALLY-loaded size (or, for a brand-new asset, the
+//     new type's hardcoded default), throwing away anything currently
+//     typed into the fields, whether that's the just-loaded saved size or
+//     an in-progress unsaved edit made before switching type. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appAR2 = await launchApp();
+try {
+  await seedBackup(appAR2.page, {
+    version: 6, user: 'tester',
+    lines: [],
+    assets: [{ id: 'resize-me', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 2, h: 3, d: 0.4 } }],
+  });
+  await appAR2.page.evaluate(() => document.getElementById('menuAssets').click());
+  await appAR2.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+  await appAR2.page.evaluate(() => {
+    const card = [...document.querySelectorAll('#assetsGrid .asset-card')].find(c => c.textContent.includes('resize-me'));
+    card.click();
+  });
+  await appAR2.page.waitForSelector('#assetSizeW', { timeout: 5000 });
+
+  // 90. Switching an EXISTING asset's type carries its saved size over --
+  //     not the new type's hardcoded default.
+  try {
+    const before = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+    }));
+    assert(before.w === '2' && before.h === '3', `expected the saved size to show initially, got ${JSON.stringify(before)}`);
+    await appAR2.page.selectOption('#assetTypeInput', 'billboard-cylindrical');
+    const afterSwitch = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+    }));
+    assert(afterSwitch.w === '2' && afterSwitch.h === '3',
+      `expected width/height to carry over to billboard, not reset to its 0.8/1 default, got ${JSON.stringify(afterSwitch)}`);
+    ok('asset editor: switching type carries an EXISTING asset\'s saved size over, not the new type\'s default');
+  } catch(e){ bad('asset editor: type switch preserves an existing asset\'s size', e); }
+
+  // 91. Switching type ALSO carries over a size the user just typed THIS
+  //     session (before saving) -- not just the originally-loaded value.
+  //     Depth (never editable on a billboard) correctly falls back to the
+  //     original saved 0.4 rather than 0 once back on extruded.
+  try {
+    await appAR2.page.fill('#assetSizeW', '5');
+    await appAR2.page.fill('#assetSizeH', '6');
+    await appAR2.page.selectOption('#assetTypeInput', 'extruded');
+    const afterBack = await appAR2.page.evaluate(() => ({
+      w: document.getElementById('assetSizeW').value, h: document.getElementById('assetSizeH').value,
+      d: document.getElementById('assetSizeD').value,
+    }));
+    assert(afterBack.w === '5' && afterBack.h === '6',
+      `expected the just-typed 5/6 to carry over back to extruded, got ${JSON.stringify(afterBack)}`);
+    assert(afterBack.d === '0.4', `expected depth to fall back to the original saved 0.4 (never had a live value to carry), got ${afterBack.d}`);
+    ok('asset editor: switching type carries over an in-progress (unsaved) size edit');
+  } catch(e){ bad('asset editor: type switch preserves an in-progress size edit', e); }
+} finally {
+  await appAR2.close();
+}
+} catch(e){ bad('Phase AR2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
 //     in the walk is a locked door. Jumping inside a room you can otherwise
@@ -8498,6 +8559,36 @@ try {
     assert(alertMsg && /1 skipped/.test(alertMsg), `expected the import-complete alert to mention the 1 skipped entry, got ${JSON.stringify(alertMsg)}`);
     ok('object lists: an id-less entry is counted and reported as skipped, not silently dropped');
   } catch(e){ bad('object lists: skipped-entry count surfaced on import', e); }
+
+  // 166. The item picker's "New Asset…" button (previously the only way to
+  //      get an image for a list item was to cancel out to menu -> Manage VR
+  //      Assets, create it there, then come back and re-open this picker)
+  //      opens the real standalone New Asset editor; saving it assigns the
+  //      new asset straight to the item being picked for and closes the
+  //      picker, with the item's row showing the new thumbnail immediately
+  //      (not stale until the manager is reopened).
+  try {
+    await appAY3.page.evaluate(() => document.getElementById('ol_cancel')?.click());
+    await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await openCard('Valid List');
+    await appAY3.page.evaluate(() => document.querySelector('#ol_items [data-pick]').click());
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistPickNewAsset');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#assetIdInput', 'test-objlist-newasset-1');
+    await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'hidden', timeout: 5000 });
+    const boundId = await appAY3.page.evaluate(() =>
+      document.querySelector('#ol_items tr .objlist-asset-id')?.textContent);
+    assert(boundId === 'test-objlist-newasset-1', `expected the item bound to the freshly-created asset, got ${JSON.stringify(boundId)}`);
+    const thumbSrc = await appAY3.page.evaluate(() => document.querySelector('#ol_items tr img')?.getAttribute('src') || null);
+    assert(thumbSrc && thumbSrc.startsWith('data:image'), `expected the item row's thumbnail to show the new asset's image immediately, got ${JSON.stringify(thumbSrc)}`);
+    ok('object lists: item picker\'s New Asset button creates and assigns an asset without leaving the list manager');
+  } catch(e){ bad('object lists: "New Asset…" escape hatch from the item picker', e); }
 } finally {
   await appAY3.close();
 }

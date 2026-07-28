@@ -16,7 +16,12 @@
 
    Self-contained DOM (built once into the container handed to
    openObjectListManager), same pattern as js/assets.js and js/threeVR.js.
+   db.js's IndexedDB helpers (getAllAssets, getAllObjectLists, ...) are a
+   classic <script> global (see index.html), not an import, like every other
+   module here -- but assets.js IS a real ES module, so its own standalone
+   New Asset modal needs an actual import.
 */
+import { openNewAssetModal } from './assets.js?v=20260728-74';
 
 const ORDERING_TYPES = {
   'canonical_sequence': 'Canonical sequence (culturally fixed — planets, scale, HOMES)',
@@ -83,6 +88,7 @@ function buildShell(){
         <div class="objlist-pick-head">
           <strong>Pick an image asset</strong>
           <input type="text" id="objlistPickFilter" class="assets-search" placeholder="Search assets…">
+          <button id="objlistPickNewAsset"><i class="fa-solid fa-plus"></i> New Asset…</button>
           <button id="objlistPickNone">Use word only (no image)</button>
           <button id="objlistPickCancel">Cancel</button>
         </div>
@@ -97,6 +103,19 @@ function buildShell(){
   $('objlistPickCancel').onclick = () => closePicker(undefined);
   $('objlistPickNone').onclick = () => closePicker(null);
   $('objlistPickFilter').oninput = () => renderPickGrid($('objlistPickFilter').value.trim().toLowerCase());
+  // "escape out" to the full New Asset editor without leaving the list
+  // manager first -- previously the only way to get an image for a list
+  // item was to cancel out, go to menu -> Manage VR Assets, create it
+  // there, then come back and re-open this same picker. Reuses assets.js's
+  // own standalone New Asset modal (already built for exactly this kind of
+  // cross-module "just get me an id" reuse -- see its own doc comment).
+  // Assigns the freshly-created asset straight to the item being picked for
+  // and closes the picker, rather than just refreshing the grid for another
+  // click -- it was made for this one slot, there's nothing left to decide.
+  $('objlistPickNewAsset').onclick = async () => {
+    const newId = await openNewAssetModal();
+    if(newId){ ASSETS = await getAllAssets(); closePicker(newId); }
+  };
 }
 
 async function refresh(){
