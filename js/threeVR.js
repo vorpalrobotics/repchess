@@ -1772,6 +1772,33 @@ function makeBrickTextureUncached(tintHex){
   }, 256);
 }
 
+// Thin gray metal chain-link tile: one "vertical" link stacked over one
+// "horizontal" link (real chain links alternate orientation since each is
+// threaded through its neighbor) -- tiling this along a strip's length
+// (see buildMoveObjectChain) reads as a continuous chain whose apparent
+// link count scales with the strip's length, not a fixed sprite count.
+// Transparent background (canvas alpha, un-drawn = un-drawn) so only the
+// link outlines show against the floor, not a solid rectangle.
+let _chainTexture = null;
+function makeChainTexture(){
+  if(_chainTexture) return _chainTexture;
+  _chainTexture = makeCanvasTexture((ctx, size) => {
+    const drawLink = (cx, cy, rx, ry) => {
+      ctx.lineWidth = size * 0.11;
+      ctx.strokeStyle = '#7d8489';
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = size * 0.035;
+      ctx.strokeStyle = '#dfe3e6';
+      ctx.beginPath();
+      ctx.ellipse(cx - rx * 0.15, cy - ry * 0.15, rx * 0.78, ry * 0.78, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    drawLink(size / 2, size * 0.27, size * 0.16, size * 0.22);   // vertical-oriented link
+    drawLink(size / 2, size * 0.73, size * 0.22, size * 0.16);   // horizontal-oriented link
+  }, 128);
+  return _chainTexture;
+}
+
 // flat, unadorned wall surface for elevator car interiors -- brick reads
 // as un-elevator-like; just the room's tint with a faint panel seam so it
 // doesn't look like an untextured void.
@@ -4842,6 +4869,77 @@ function buildTwoTrackDivider(room){
   mesh.userData = { kind: 'divider' };
   return mesh;
 }
+// how long (world units) one chain-link tile reads as, so the texture's
+// repeat count -- and thus the apparent link count -- scales with the
+// actual gap between two consecutive move-object slots, not a fixed count.
+const CHAIN_LINK_SIZE = 0.5, CHAIN_WIDTH = 0.22, CHAIN_Y = 0.02;
+// Grammar, not decoration (see the memorization-strategy discussion this
+// implements): a plain (non-two-track) corridor room's move-object slots
+// are a forced sequence, and there's otherwise nothing distinguishing that
+// from a room with the same slot count but a separate door per slot -- no
+// half-wall divider the way a two-track room gets. A floor-laid chain
+// strip between each CONSECUTIVE slot (in true walk order, not raw array
+// order -- see SIDE_WALK_RANK) signals "these are linked" without being a
+// discrete object to remember: it can repeat identically in every corridor
+// room forever, the way a road sign repeats, because recognizing it is
+// meant to be instant rather than recalled per room. Never drawn for a
+// two-track room (already has its own divider) or a solo branch/room kind
+// (a single slot has nothing to connect to). Returns null (nothing to add)
+// when the room has fewer than 2 links worth of position to draw.
+function addChainSegment(group, a, b){
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const len = Math.hypot(dx, dz);
+  if(len < 0.05) return;   // endpoints on top of each other -- nothing to draw
+  const geo = new THREE.PlaneGeometry(CHAIN_WIDTH, len);
+  geo.rotateX(-Math.PI / 2);   // lie flat, "length" now along local Z
+  // .clone() before mutating -- makeChainTexture hands out a single
+  // shared, cached texture (see _chainTexture); wrapS/wrapT/repeat set
+  // directly on it would leak into every other chain segment/room.
+  const tex = makeChainTexture().clone();
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, Math.max(1, len / CHAIN_LINK_SIZE));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(
+    { map: tex, transparent: true, roughness: 0.4, metalness: 0.6 }));
+  mesh.position.set((a.x + b.x) / 2, CHAIN_Y, (a.z + b.z) / 2);
+  mesh.rotation.y = Math.atan2(dx, dz);
+  mesh.userData = { kind: 'moveObjectChain' };
+  group.add(mesh);
+}
+function buildMoveObjectChain(room, roomKey){
+  // resolve each slot's ACTUAL position, not just its default computed one --
+  // a moveObject slot can be individually nudged in edit mode (slotXformFor,
+  // applied the same way applyAccessoryTransform places the real prop: base
+  // x/z + xform.dx/dz), and the chain needs to end up where the props
+  // actually are, not where they'd sit before any nudging.
+  const resolved = s => {
+    const xf = slotXformFor(roomKey, s.id);
+    return { x: s.x + (xf?.dx || 0), z: s.z + (xf?.dz || 0) };
+  };
+  const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
+    ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
+  const group = new THREE.Group();
+  for(let i = 0; i < ordered.length - 1; i++) addChainSegment(group, resolved(ordered[i]), resolved(ordered[i + 1]));
+  // final link: a forward door carries its OWN pair/object preview of the
+  // room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
+  // slotXform) -- a wholly separate object from this room's own
+  // moveObjectSlots, but the last thing you see walking the sequence before
+  // stepping through, so the chain should end there rather than stopping
+  // short at the room's own last internal slot (the real bug report: a
+  // corridor's chain stopped at its last slot and never reached the door's
+  // own horse-statue pair-object beyond it). A plain corridor's tail can in
+  // principle branch into more than one forward door (a branch that didn't
+  // qualify as a two-track); picking just the first is an arbitrary but
+  // deterministic choice for that rare case, not a claim only one exists.
+  const fwd = ordered.length && room.exits ? room.exits.find(e => !e.back) : null;
+  if(fwd){
+    const sideSign = fwd.wall === 'east' ? 1 : -1;
+    const base = doorSideXZ(room, fwd.wall, fwd.offset, sideSign);
+    const xf = slotXformFor(roomKey, 'dobj-' + fwd.target);
+    const doorPos = { x: base.x + (xf?.dx || 0), z: base.z + (xf?.dz || 0) };
+    addChainSegment(group, resolved(ordered[ordered.length - 1]), doorPos);
+  }
+  return group.children.length ? group : null;
+}
 // briefly shows a status message top-center (e.g. the bounds-auto-fix notice)
 // so a silent data correction isn't invisible to the user; fades after ~3.5s.
 function showToast(msg){
@@ -5040,8 +5138,15 @@ function buildRoom(roomKey){
 
   const carMode = isElevatorCar(roomKey);
 
-  // two-track castle rooms get a half-wall dividing the left and right lanes
+  // two-track castle rooms get a half-wall dividing the left and right lanes;
+  // a plain corridor's move-object slots get a floor chain linking them
+  // instead (see buildMoveObjectChain) -- the two are mutually exclusive by
+  // room kind, never both.
   if(room.twoTrack) scene.add(buildTwoTrackDivider(room));
+  else if((room.castleSign && room.castleSign.type) === 'corridor'){
+    const chain = buildMoveObjectChain(room, roomKey);
+    if(chain) scene.add(chain);
+  }
 
   currentStairCorridors = {};
   for(const ex of room.exits){
@@ -7793,6 +7898,33 @@ export async function openThreeTest(containerEl, opts){
       // member's own slot rather than the generic door-hash placement.
       moveObjectSlotsFull: (roomKeyArg) => moveObjectSlots(roomKeyArg || currentRoomKey)
         .map(s => ({ id: s.id, side: s.side, order: s.order, x: s.x, z: s.z })),
+      // the current room's rendered chain segments (buildMoveObjectChain) --
+      // count + midpoint position of each, for testing that a corridor gets
+      // exactly (slot count - 1) segments and a non-corridor gets none.
+      chainSegments: () => {
+        const found = [];
+        scene && scene.traverse(o => { if(o.userData && o.userData.kind === 'moveObjectChain') found.push(o); });
+        return found.map(m => ({ x: m.position.x, z: m.position.z }));
+      },
+      // a room's forward door-pair object's BASE (unnudged) floor position,
+      // via the same doorSideXZ a real door pair renders at -- lets a test
+      // compute the expected terminal chain-link endpoint independently of
+      // buildMoveObjectChain's own internals.
+      doorObjBasePos: (roomKeyArg, target) => {
+        const r = mergedRoom(roomKeyArg || currentRoomKey);
+        const ex = (r.exits || []).find(e => !e.back && e.target === target);
+        if(!ex) return null;
+        return doorSideXZ(r, ex.wall, ex.offset, ex.wall === 'east' ? 1 : -1);
+      },
+      // nudges a moveObject slot's stored xform directly (bypassing the real
+      // arrow-key drag flow) and rebuilds -- for testing that dependents
+      // (the chain) follow a slot's ACTUAL nudged position, not its default.
+      nudgeSlot: (roomKey, slotId, dx, dz) => {
+        const r = ensureRoomLayout(roomKey);
+        r.slotXform[slotId] = { ...(r.slotXform[slotId] || {}), dx, dz };
+        persistLayout();
+        buildRoom(currentRoomKey);
+      },
       // assigns (or clears, if assetId is falsy) a manual per-slot asset
       // override -- the same mutation the real prop picker makes
       // (setSlotOverride), but AWAITED end-to-end (setSlotOverride itself

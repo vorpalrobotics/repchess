@@ -9959,5 +9959,141 @@ try {
 } catch(e){ bad('Phase CD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CE: a plain corridor room's move-object slots get a floor chain
+//     linking them in walk order (buildMoveObjectChain) -- the visual
+//     "these are a forced sequence" signal discussed as a memorization-
+//     strategy gap (a short 2-move corridor has no half-wall divider the
+//     way a two-track room does, so nothing distinguished it from "two
+//     moves, two separate doors"). A two-track room gets its own divider
+//     instead and must NOT also get a chain. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCE = await launchApp();
+try {
+  await seedBackup(appCE.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      // Chain: 4-member plain corridor.
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Chain', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','e3','O-O'], reply: 'Bd3' },
+      // Fork: a genuine two-track (two 2-member arms off a shared head).
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Fork', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','e6','Nc3','Nf6'], reply: 'e3' },
+      { seq: ['d4','d5','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','g6','Nc3','Bg7'], reply: 'e3' },
+      // Vault: a corridor whose single internal continuation (Nc6/Bc4) ends
+      // at a SINGLE forward door -- Black's only reply (Bc5) starts a nested
+      // castle (Annex), so the door isn't a branch/two-track, just a plain
+      // hand-off to another castle's room. Mirrors the real bug report: a
+      // corridor's terminal chain link should reach that door's own
+      // pair-object (buildDoorPair), not stop at the room's last own slot.
+      { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Vault', castleStreetNumber: 3 },
+      { seq: ['e4','e5','Nf3','Nc6'], reply: 'Bc4' },
+      { seq: ['e4','e5','Nf3','Nc6','Bc4','Bc5'], reply: 'c3', isCastleRoot: true, castleName: 'Annex', castleStreetNumber: 4 },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6 e3 Be7', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 d5 c4 g6 Nc3 Bg7 e3 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCE.page);
+
+  const keys = await appCE.page.evaluate(() => {
+    const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      chain: pk('L1_Chain', ['d4','Nf6','c4']), fork: pk('L1_Fork', ['d4','d5','c4']),
+      vault: pk('L1_Vault', ['e4','e5','Nf3']), annex: pk('L1_Annex', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
+    };
+  });
+
+  // 202. The 4-member corridor gets exactly 3 chain segments (one per gap
+  //      between consecutive slots), each roughly midway between its pair.
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    assert(slots.length === 4, `expected 4 move-object slots on Chain, got ${slots.length}`);
+    assert(segs.length === 3, `expected 3 chain segments (4 slots - 1), got ${segs.length}: ${JSON.stringify(segs)}`);
+    const ordered = slots.slice().sort((a, b) =>
+      ({center:0,left:1,right:2}[a.side] - {center:0,left:1,right:2}[b.side]) || (a.order - b.order));
+    for(let i = 0; i < ordered.length - 1; i++){
+      const a = ordered[i], b = ordered[i+1];
+      const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+      const hit = segs.some(s => Math.abs(s.x - mx) < 0.01 && Math.abs(s.z - mz) < 0.01);
+      assert(hit, `expected a chain segment at the midpoint of slot ${i} and ${i+1} (${mx},${mz}), got ${JSON.stringify(segs)}`);
+    }
+    ok('memorization-aid: a plain corridor gets a floor chain linking consecutive move-object slots');
+  } catch(e){ bad('memorization-aid: corridor chain segment count and placement', e); }
+
+  // 203. The two-track room (its own divider instead) gets NO chain segments.
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.fork);
+    await appCE.page.waitForTimeout(200);
+    const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    assert(segs.length === 0, `expected no chain segments in a two-track room, got ${segs.length}: ${JSON.stringify(segs)}`);
+    ok('memorization-aid: a two-track room does not also get a chain (has its own divider)');
+  } catch(e){ bad('memorization-aid: two-track room excluded from the chain', e); }
+
+  // 204. Nudging a slot moves the chain's endpoint with it -- the chain
+  //      follows the object's ACTUAL (possibly manually repositioned)
+  //      location, not the default computed slot position it would
+  //      otherwise sit at (the bug reported from a real decorated room: the
+  //      chain ran off toward a stale default position instead of the
+  //      object the user had dragged elsewhere).
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
+    await appCE.page.waitForTimeout(200);
+    const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    const l1 = slots.find(s => s.side === 'left' && s.order === 1);
+    assert(l1, `expected an L1 slot on Chain, got ${JSON.stringify(slots)}`);
+    const c1 = slots.find(s => s.side === 'center' && s.order === 1);
+    assert(c1, `expected a C1 slot on Chain, got ${JSON.stringify(slots)}`);
+    await appCE.page.evaluate((args) => window.__threeTestEdit.nudgeSlot(args.k, args.id, 2, -1), { k: keys.chain, id: l1.id });
+    await appCE.page.waitForTimeout(200);
+    const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    const expected = { x: (c1.x + (l1.x + 2)) / 2, z: (c1.z + (l1.z - 1)) / 2 };
+    const hit = segs.some(s => Math.abs(s.x - expected.x) < 0.01 && Math.abs(s.z - expected.z) < 0.01);
+    assert(hit, `expected a chain segment following L1's nudged position (midpoint ${JSON.stringify(expected)}), got ${JSON.stringify(segs)}`);
+    ok('memorization-aid: the chain follows a slot\'s actual nudged position, not its stale default');
+  } catch(e){ bad('memorization-aid: chain endpoint tracks a manually nudged slot', e); }
+
+  // 205. A corridor's terminal chain link reaches past the room's own last
+  //      slot to its single forward door's own pair-object position (the bug
+  //      reported from a real decorated room: "Master Suite" -- the chain
+  //      stopped at the room's own C1/L1 slots and never reached the door's
+  //      horse-statue pair-object beyond them).
+  try {
+    await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.vault);
+    await appCE.page.waitForTimeout(200);
+    const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    assert(slots.length === 2, `expected 2 move-object slots on Vault (C1 + L1), got ${slots.length}: ${JSON.stringify(slots)}`);
+    const c1 = slots.find(s => s.side === 'center' && s.order === 1);
+    const l1 = slots.find(s => s.side === 'left' && s.order === 1);
+    assert(c1 && l1, `expected a C1 and L1 slot on Vault, got ${JSON.stringify(slots)}`);
+    const doorPos = await appCE.page.evaluate((args) => window.__threeTestEdit.doorObjBasePos(args.k, args.target), { k: keys.vault, target: keys.annex });
+    assert(doorPos, `expected Vault to have a forward door to Annex's entry room ${keys.annex}`);
+    const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    assert(segs.length === 2, `expected 2 chain segments (C1-L1, then L1-door), got ${segs.length}: ${JSON.stringify(segs)}`);
+    const internalMid = { x: (c1.x + l1.x) / 2, z: (c1.z + l1.z) / 2 };
+    const doorMid = { x: (l1.x + doorPos.x) / 2, z: (l1.z + doorPos.z) / 2 };
+    const hitInternal = segs.some(s => Math.abs(s.x - internalMid.x) < 0.01 && Math.abs(s.z - internalMid.z) < 0.01);
+    const hitDoor = segs.some(s => Math.abs(s.x - doorMid.x) < 0.01 && Math.abs(s.z - doorMid.z) < 0.01);
+    assert(hitInternal, `expected the C1-L1 chain segment at ${JSON.stringify(internalMid)}, got ${JSON.stringify(segs)}`);
+    assert(hitDoor, `expected the terminal chain segment reaching the door's pair-object at ${JSON.stringify(doorMid)}, got ${JSON.stringify(segs)}`);
+    ok('memorization-aid: a corridor\'s terminal chain link reaches its forward door\'s own pair-object');
+  } catch(e){ bad('memorization-aid: corridor chain reaches the forward door\'s pair-object', e); }
+} finally {
+  await appCE.close();
+}
+} catch(e){ bad('Phase CE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
