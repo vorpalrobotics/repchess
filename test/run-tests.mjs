@@ -328,7 +328,7 @@ const appC2 = await launchApp();
 try {
   const keys = await appC2.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       alphaEntry: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
       betaEntry: 'cas:L1_Beta:' + pk(['d4','Nf6','c4','e6','Nc3']),
@@ -401,7 +401,7 @@ const app4 = await launchApp();
 try {
   const keys = await app4.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { alpha: pk(['d4','Nf6','c4']), r2: pk(['d4','Nf6','c4','e6','Nc3']) };
   });
   // a castle entry with FIVE forward branches (so doors share walls) + the e6
@@ -2915,7 +2915,7 @@ const appY = await launchApp();
 try {
   const keys = await appY.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { alpha: pk(['d4','Nf6','c4']) };
   });
   await seedBackup(appY.page, {
@@ -3067,7 +3067,7 @@ const appAA = await launchApp();
 try {
   const keys = await appAA.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return { rootRoom: pk(['d4','Nf6','c4']), e6Room: pk(['d4','Nf6','c4','e6','Nc3']), g6Room: pk(['d4','Nf6','c4','g6','Nc3']) };
   });
   await seedBackup(appAA.page, {
@@ -3412,7 +3412,7 @@ try {
   const roomKey = await appAC.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAC.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAC.page.waitForTimeout(300);
@@ -3505,7 +3505,7 @@ try {
   const keyFor = (moves) => appAD.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);   // NOT empty -- naming required
@@ -3884,7 +3884,7 @@ try {
   const keyFor = (moves) => appAH.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const e6Room = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -4013,12 +4013,12 @@ try {
   const root = await appAH2.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   const g6Room = await appAH2.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4','g6','Nc3']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAH2.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAH2.page.waitForTimeout(300);
@@ -4094,7 +4094,7 @@ try {
   const root = await appAH3.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 106b. The two-track room (both tracks dead-ending, no forward door)
@@ -4134,7 +4134,7 @@ try {
   const roomKey = await appAI.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAI.page.waitForTimeout(200);
@@ -4229,7 +4229,7 @@ try {
   const root = await appAJ.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAJ.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
   await appAJ.page.waitForTimeout(300);
@@ -4678,7 +4678,7 @@ try {
   const roomKey = await appAM.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAM.page.waitForTimeout(300);
@@ -4739,7 +4739,7 @@ try {
   const roomKey = await appAN.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAN.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAN.page.waitForTimeout(300);
@@ -5006,7 +5006,7 @@ const appAQ = await launchApp();
 try {
   const keys = await appAQ.page.evaluate(() => {
     const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       root: 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']),
       // a room is keyed by the position right after OUR reply, not the
@@ -5116,7 +5116,7 @@ try {
   const roomKey = await appAR.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appAR.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAR.page.waitForTimeout(300);
@@ -5375,6 +5375,59 @@ try {
 }
 
 } catch(e){ bad("phase @ line 5197 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase AS2: positionKey strips a "phantom" en-passant target (one a FEN
+//     records after any pawn double-push, but that no enemy pawn can actually
+//     capture) so two move orders transposing into the identical board -- one
+//     of which played the double-push last -- resolve to the SAME position
+//     (and thus the same digraph node / castle room / VR room key). A
+//     genuinely capturable en-passant is a real difference and is kept. ---
+if(shouldRunPhase(['digraph'])){
+try {
+const appAS2 = await launchApp();
+try {
+  // 145. The exact case reported in the field: the "boiler room" reached two
+  //      ways -- one order's last move is c2-c4 (FEN ep target c3, but Black
+  //      has no pawn on b4/d4 to take it -> phantom), the other order arrived
+  //      at the same board with the c-pawn already there (no ep target). Both
+  //      must key the same, and to the ep-stripped form.
+  try {
+    const r = await appAS2.page.evaluate(() => {
+      const board = 'r1bqkb1r/ppp1pp1p/2n2np1/3p4/2PP1B2/4PN2/PP3PPP/RN1QKB1R b KQkq';
+      const withPhantom = window.__positionKey(board + ' c3 0 7');
+      const withoutEp  = window.__positionKey(board + ' - 0 7');
+      return { withPhantom, withoutEp };
+    });
+    assert(r.withPhantom === r.withoutEp,
+      `expected the phantom-ep and no-ep positions to key identically, got ${JSON.stringify(r)}`);
+    assert(/ -$/.test(r.withPhantom), `expected the key to end with a stripped ep, got ${JSON.stringify(r.withPhantom)}`);
+    ok('positionKey: a phantom en-passant target is stripped, merging the two transposing paths into one position');
+  } catch(e){ bad('positionKey: phantom en-passant stripped', e); }
+
+  // 146. A genuinely capturable en-passant (a real difference in the legal
+  //      moves) is preserved -- after 1.e4 d5 2.e5 f5, White's e5 pawn can
+  //      take f6 en passant, so the target must survive.
+  try {
+    const kept = await appAS2.page.evaluate(() =>
+      window.__positionKey('rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3'));
+    assert(/ f6$/.test(kept), `expected a genuinely capturable ep (f6) to be kept, got ${JSON.stringify(kept)}`);
+    ok('positionKey: a genuinely capturable en-passant target is preserved');
+  } catch(e){ bad('positionKey: capturable en-passant preserved', e); }
+
+  // 147. A position with no en-passant field at all is unchanged (regression
+  //      guard: the normalization must not disturb the common case).
+  try {
+    const plain = await appAS2.page.evaluate(() =>
+      window.__positionKey('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'));
+    assert(plain === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -',
+      `expected an ep-less position to key unchanged, got ${JSON.stringify(plain)}`);
+    ok('positionKey: a position with no en-passant target is unchanged');
+  } catch(e){ bad('positionKey: no-ep position unchanged', e); }
+} finally {
+  await appAS2.close();
+}
+} catch(e){ bad("Phase AS2 (tags: ['digraph'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AT: node statistics "complete to move N" -- the shallowest branch's
 //     move number, measured by OUR last move (reaching our move N counts even
@@ -6265,7 +6318,7 @@ try {
   try {
     const alphaKey = await appBB.page.evaluate(() => {
       const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+        return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
       return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
     });
     await openVR(appBB.page);
@@ -6320,7 +6373,7 @@ try {
   try {
     const alphaEntryKey = await appBC.page.evaluate(() => {
       const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-        return c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+        return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
       return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
     });
     await openVR(appBC.page);
@@ -7183,7 +7236,7 @@ try {
   const keyFor = (moves) => appBO.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7256,11 +7309,11 @@ try {
   await openVR(appBP.page);
   const alphaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   const betaRoot = await appBP.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','d5','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Beta:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Beta:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 99. A two-track room is rejected (message mentions two-track).
@@ -7323,7 +7376,7 @@ try {
   const keyFor = (moves) => appBQ.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7649,7 +7702,7 @@ try {
   const keyFor = (moves) => appBR.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const X = await keyFor(['d4','Nf6','c4','a6','e4']);
@@ -7769,7 +7822,7 @@ try {
   const keyFor = (moves) => appBS.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const root = await keyFor(['d4','Nf6','c4']);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
@@ -7854,7 +7907,7 @@ try {
   const keyFor = (moves) => appBT.page.evaluate((mv) => {
     const c = new Chess();
     for(const m of mv) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   }, moves);
   const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
   await appBT.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
@@ -7902,7 +7955,7 @@ try {
   const roomKey = await appBU.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-    return 'cas:L1_Alpha:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
   // 113. Repeatedly rebuilding the same room (walk-mode -- no edit-only
@@ -8439,7 +8492,13 @@ try {
   await seedBackup(appAY3.page, {
     version: 6, user: 'tester',
     lines: [],
-    assets: [{ id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } }],
+    assets: [
+      { id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } },
+      // all-lowercase id (unlike ovenAsset above) so typing it verbatim into
+      // the New Asset editor round-trips through saveEditor's own
+      // .toLowerCase() unchanged -- for the duplicate-id regression test.
+      { id: 'dup-check-asset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } },
+    ],
     // a malformed record (finding 3): written verbatim by the raw
     // backup-restore path (js/app.js's `for(const list of data.objectLists)
     // await setObjectList(...)`), never touched by this module's own
@@ -8589,6 +8648,29 @@ try {
     assert(thumbSrc && thumbSrc.startsWith('data:image'), `expected the item row's thumbnail to show the new asset's image immediately, got ${JSON.stringify(thumbSrc)}`);
     ok('object lists: item picker\'s New Asset button creates and assigns an asset without leaving the list manager');
   } catch(e){ bad('object lists: "New Asset…" escape hatch from the item picker', e); }
+
+  // 167. Regression: typing an id that already exists into the New Asset
+  //      modal opened from THIS path (never having opened the full Asset
+  //      Manager this session, so its own ASSETS cache would otherwise be
+  //      stale/empty) is still caught -- Save shows the duplicate-id error
+  //      and does NOT silently overwrite the existing asset.
+  try {
+    await appAY3.page.evaluate(() => document.querySelector('#ol_items [data-pick]').click());
+    await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistPickNewAsset');
+    await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#assetIdInput', 'dup-check-asset');   // already exists (seeded at phase setup)
+    await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
+    await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.waitForSelector('#assetsError:has-text("already exists")', { timeout: 5000 });
+    const stillOpen = await appAY3.page.evaluate(() => document.getElementById('assetNewOverlay').style.display !== 'none');
+    assert(stillOpen, 'expected the New Asset modal to stay open on a duplicate id, not silently save');
+    const dupImage = await appAY3.page.evaluate(async () => (await getAllAssets()).find(a => a.id === 'dup-check-asset')?.image);
+    assert(dupImage === 'data:image/png;base64,iVBORw0KGgo=', `expected the original dup-check-asset image untouched, got ${JSON.stringify(dupImage)}`);
+    await appAY3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+    ok('object lists: New Asset\'s duplicate-id check works even when Manage VR Assets was never opened this session');
+  } catch(e){ bad('object lists: duplicate-id guard reaches a fresh ASSETS cache from this path', e); }
 } finally {
   await appAY3.close();
 }
@@ -9859,13 +9941,19 @@ try {
         orderingType: 'procedural', orderingRule: '',
         items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
         mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      // an ordering rule but no phrase -- the mnemonic plaque should still
+      // mount to show the rule alone (see buildWallListPlaques).
+      { id: 'rule_only_list', name: 'Rule Only List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: 'Size order: smallest to largest',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
     ],
   }, { defaultPlayerColor: 'white' });
   await openVR(appCB2.page);
 
   const roomKey = await appCB2.page.evaluate(() => {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
-    return 'cas:L1_Seq:' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_');
+    return 'cas:L1_Seq:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appCB2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appCB2.page.waitForTimeout(200);
@@ -9895,10 +9983,85 @@ try {
     assert(l2 === 'Second', `expected L2 to get the list's second item, got ${JSON.stringify(l2)}`);
     ok('wall lists: item[0] lands on the room\'s own first (L1) slot, never the center/arrival slot');
   } catch(e){ bad('wall lists: list items map to L1..Ln, skipping center', e); }
+
+  // 195. A list with an ordering rule but no phrase still gets a wall
+  //      plaque (showing just the rule) -- was gated on the phrase alone,
+  //      silently dropping the whole plaque (rule included) whenever only
+  //      the ordering rule was set.
+  try {
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'seq_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const noPlaque = await appCB2.page.evaluate(() => window.__threeTestEdit.hasWallListPlaque());
+    assert(!noPlaque, 'expected no plaque for a list with neither a phrase nor an ordering rule');
+    await appCB2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'rule_only_list'), roomKey);
+    await appCB2.page.waitForTimeout(200);
+    const hasPlaque = await appCB2.page.evaluate(() => window.__threeTestEdit.hasWallListPlaque());
+    assert(hasPlaque, 'expected a plaque showing just the ordering rule when the list has one but no phrase');
+    ok('wall list mnemonic plaque: shows for an ordering-rule-only list, not gated on a phrase');
+  } catch(e){ bad('wall list mnemonic plaque: ordering rule alone is enough to mount it', e); }
 } finally {
   await appCB2.close();
 }
 } catch(e){ bad('Phase CB2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase CB3: the entryNoStreet exception -- a castle's own entry room,
+//     walked via the report preview (no street building to show its own
+//     entry pair on instead), has nowhere else that pair is shown at all,
+//     so its center/anchor slot IS list-drivable there -- unlike the same
+//     slot in the normal "Run VR" world, where the previous room's own
+//     door object already shows it (see Phase CB2). Same exception
+//     computeFullyDecorated and buildSlots' render-skip already carve out
+//     for this slot. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB3 = await launchApp();
+try {
+  await seedBackup(appCB3.page, {
+    version: 6, user: 'tester',
+    // a castle root with NOTHING beyond its own entry reply -- no games
+    // continuation either, so there's no unbuilt reply to complicate the
+    // read: moveObjectSlots is exactly [C1], nothing more.
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [ { id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' } ],
+    objectLists: [
+      { id: 'entry_list', name: 'Entry List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Solo', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appCB3.page.evaluate(() => document.querySelector('.line-row').click());
+  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appCB3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appCB3.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appCB3.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appCB3.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appCB3.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appCB3.page.waitForTimeout(400);
+
+  // 196. In the report-preview walk, the entry room's own center slot IS
+  //      list-drivable: bucketSlotCount is 1 (not 0), and assigning a
+  //      1-item list gives that item straight to the C1 slot.
+  try {
+    const slots = await appCB3.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    assert(slots.length === 1 && slots[0].side === 'center', `expected exactly one (center) slot, got ${JSON.stringify(slots)}`);
+    const roomKey = await appCB3.page.evaluate(() => window.__threeTestEdit.room());
+    const need = await appCB3.page.evaluate((k) => window.__threeTestEdit.wallBucketSlotCount(k, 'all'), roomKey);
+    assert(need === 1, `expected bucketSlotCount to count the center slot here (entryNoStreet), got ${need}`);
+    await appCB3.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'entry_list'), roomKey);
+    await appCB3.page.waitForTimeout(200);
+    const c1 = await appCB3.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-C1'), roomKey);
+    assert(c1 === 'Solo', `expected the entry room's C1 slot to get the list's only item (entryNoStreet), got ${JSON.stringify(c1)}`);
+    ok('wall lists: entryNoStreet makes the entry room\'s own center slot list-drivable');
+  } catch(e){ bad('wall lists: entryNoStreet exception for the center slot', e); }
+} finally {
+  await appCB3.close();
+}
+} catch(e){ bad('Phase CB3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase CC: memorized-room-stability Phase 3 -- a memorized linear
@@ -9915,7 +10078,7 @@ const appCC = await launchApp();
 try {
   const keys = await appCC.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     const fenAt = (mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true}); return c.fen(); };
     return {
       alpha: pk('L1_Alpha', ['d4','Nf6','c4']),
@@ -10208,7 +10371,7 @@ try {
 
   const keys = await appCE.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       chain: pk('L1_Chain', ['d4','Nf6','c4']), fork: pk('L1_Fork', ['d4','d5','c4']),
       vault: pk('L1_Vault', ['e4','e5','Nf3']), annex: pk('L1_Annex', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
@@ -10394,7 +10557,7 @@ try {
 
   const keys = await appCF.page.evaluate(() => {
     const pk = (inst, mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
-      return 'cas:' + inst + ':' + c.fen().split(' ').slice(0,4).join(' ').replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:' + inst + ':' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
     return {
       nav: pk('L1_Nav', ['e4','e5','Nf3']),
       navB: pk('L1_NavB', ['e4','e5','Nf3','Nc6','Bc4','Bc5','c3']),
@@ -10530,6 +10693,111 @@ try {
   await appCF.close();
 }
 } catch(e){ bad('Phase CF: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CG: a transposition room's single back door leads to the room
+//     the player actually walked in from THIS visit (roomEnteredFrom), not
+//     permanently to whichever parent the castle-builder discovered first.
+//     A round-trip into the room's own child must not clobber that memory
+//     (only a FORWARD crossing records where you came from). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appCG = await launchApp();
+try {
+  // a6/h6 transpose: root -> X (via a6) and root -> Y (via h6) both lead to
+  // one SHARED room (after Nc3). X is discovered first, so shared's static
+  // back exit targets X. The g6 child is a BRANCH room (two replies) so the
+  // shared room can't fold into a two-track (which would swallow its forward
+  // doors); each child chain continues far enough not to be a locked door.
+  await seedBackup(appCG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','a6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','h6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','h6','e4','a6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6'], reply: 'e5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5','Ng8'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5','Nh5'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','b6'], reply: 'e5' },
+      { seq: ['d4','Nf6','c4','a6','e4','h6','Nc3','b6','e5','Ng8'], reply: 'd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 g6 e5 Ng8 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 h6 e4 a6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 b6 e5 Ng8 d5', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 a6 e4 h6 Nc3 g6 e5 Nh5 d5', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCG.page);
+  const cgKey = (moves) => appCG.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const cgRoot = await cgKey(['d4','Nf6','c4']);
+  const cgX = await cgKey(['d4','Nf6','c4','a6','e4']);
+  const cgY = await cgKey(['d4','Nf6','c4','h6','e4']);
+  const cgShared = await cgKey(['d4','Nf6','c4','a6','e4','h6','Nc3']);
+  const cgVest = await cgKey(['d4','Nf6','c4','a6','e4','h6','Nc3','g6','e5']);
+  // click through the LIVE trigger matching `matchFn` (exitInfo is the real
+  // exitMeta -- the fix rewires the back trigger's target, so navigation has
+  // to be driven through it, not through the static exits list). Waits past
+  // the 0.6s teleport lock each hop.
+  const cgClickDoor = async (matchFn, label) => {
+    await appCG.page.waitForTimeout(700);
+    const live = await appCG.page.evaluate(() => window.__threeTestEdit.exitInfo());
+    const m = live.find(matchFn);
+    assert(m, `${label}: no matching live door trigger`);
+    const c = { x: (m.box.minX + m.box.maxX) / 2, z: (m.box.minZ + m.box.maxZ) / 2 };
+    await appCG.page.evaluate((p) => window.__threeTestEdit.walkClickAt(p.x, p.z), c);
+    await appCG.page.waitForTimeout(150);
+    return (await appCG.page.evaluate(() => window.__threeTestEdit.playerPos())).room;
+  };
+  const cgFwd = await appCG.page.evaluate((k) =>
+    window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgShared);
+
+  // 213. Entering the shared room via its canonical first parent (X), the
+  //      back door returns to X.
+  try {
+    await appCG.page.evaluate((k) => window.__threeTestEdit.enter(k), cgRoot);
+    let r = await cgClickDoor(m => m.target === cgX, 'root->X');
+    assert(r === cgX, `expected to walk into X, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgShared, 'X->shared');
+    assert(r === cgShared, `expected to walk into the shared room, got ${r}`);
+    r = await cgClickDoor(m => !cgFwd.includes(m.target), 'shared back (via X)');
+    assert(r === cgX, `expected the back door to return to X (walked in from there), got ${r}`);
+    ok('transposition back door: entering via the canonical parent returns there');
+  } catch(e){ bad('transposition back door: canonical parent round-trip', e); }
+
+  // 214. Entering via the OTHER parent (Y), the same single back door now
+  //      returns to Y -- even after a round-trip into the shared room's own
+  //      child (which must not overwrite the entered-from memory, since only
+  //      a forward crossing records it).
+  try {
+    const xFwd = await appCG.page.evaluate((k) =>
+      window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgX);
+    let r = await cgClickDoor(m => !xFwd.includes(m.target), 'X back');
+    assert(r === cgRoot, `expected X's back door to lead to the root, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgY, 'root->Y');
+    assert(r === cgY, `expected to walk into Y, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgShared, 'Y->shared');
+    assert(r === cgShared, `expected to walk into the shared room, got ${r}`);
+    r = await cgClickDoor(m => m.target === cgVest, 'shared->child');
+    assert(r === cgVest, `expected to walk into the child room, got ${r}`);
+    const vFwd = await appCG.page.evaluate((k) =>
+      window.__threeTestEdit.exits(k).filter(e => !e.back).map(e => e.target), cgVest);
+    r = await cgClickDoor(m => !vFwd.includes(m.target), 'child back');
+    assert(r === cgShared, `expected the child's back door to return to the shared room, got ${r}`);
+    r = await cgClickDoor(m => !cgFwd.includes(m.target), 'shared back (via Y)');
+    assert(r === cgY, `expected the back door to return to Y this time, got ${r}`);
+    ok('transposition back door: entering via the other parent returns there, child round-trips don\'t clobber it');
+  } catch(e){ bad('transposition back door: non-canonical parent + child round-trip', e); }
+} finally {
+  await appCG.close();
+}
+} catch(e){ bad('Phase CG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
