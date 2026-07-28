@@ -5259,8 +5259,15 @@ function buildRoom(roomKey){
   // deadEndAssetFor/buildNoContinuationIcon). Per-track dead ends within a
   // two-track room aren't handled here (room.twoTrack excluded) -- each
   // track would need its own member-anchored sign position, not this
-  // single-slot convention.
-  if(room.castleSign && !room.twoTrack && !room.exits.some(e => !e.back)){
+  // single-slot convention. Also skipped when castleSign.unbuilt is
+  // non-empty: those are opponent replies actually seen in the user's
+  // games with no prepared response yet (registerOneCastle's leaf exits,
+  // shown on the room's own sign as "unbuilt: ..."), which is exactly the
+  // "known opponent move, no reply built" case a locked door already
+  // represents -- the sequence does NOT genuinely end here, so the no-entry
+  // sign would be actively misleading.
+  const hasUnbuilt = !!(room.castleSign && room.castleSign.unbuilt && room.castleSign.unbuilt.length);
+  if(room.castleSign && !room.twoTrack && !hasUnbuilt && !room.exits.some(e => !e.back)){
     const back = room.exits.find(e => e.back);
     const deadEndWall = back ? WALL_OPPOSITE[back.wall] : 'north';
     const deadEndAsset = deadEndAssetFor(roomKey);
@@ -5635,6 +5642,62 @@ function enterRoom(roomKey, spawn, preserveYaw){
   updateEditHud();
 }
 
+// finds the exit/elevator trigger (if any) whose box contains (x,z). `fwd`,
+// when given, restricts an ordinary exit to firing only while facing enough
+// into it (thru dot product > 0) -- the same distinction that stops backing
+// up to a wall from immediately firing the door you just backed away from.
+// Pass null for a deliberate action (a click, a jump landing) where facing
+// doesn't matter -- tapping or jumping into a door already unambiguously
+// means "go through", whichever way you happen to be looking.
+function findDoorTrigger(x, z, fwd){
+  const inBox = m => x >= m.box.minX && x <= m.box.maxX && z >= m.box.minZ && z <= m.box.maxZ
+    && (!fwd || !m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0);
+  return exitMeta.find(inBox) || elevatorMeta.find(inBox) || null;
+}
+// fires the room-change (or, for an elevator forward door with no floor
+// picked yet, the "select a floor" toast) for a trigger findDoorTrigger
+// matched -- shared by walking into a door, jumping into one, and clicking
+// one. Returns true if it actually moved you into a new room.
+function fireDoorTrigger(m){
+  if(m.kind !== 'forward'){ enterRoom(m.target, m.spawn, false); return true; }
+  const ordinal = selectedElevatorOrdinal(currentRoomKey, m.floors);
+  const dest = ordinal != null ? m.floors.find(f => f.ordinal === ordinal) : null;
+  if(dest){ enterRoom(dest.target, dest.spawn, false); return true; }
+  if(!elevatorBlockedToastShown){ showToast('Select a floor first'); elevatorBlockedToastShown = true; }
+  return false;
+}
+// Jumping forward (spacebar) covers ground fast while testing/decorating --
+// 10 m outdoors, 2 m indoors (mirrors the outdoor/indoor walk-speed split
+// below), advanced in small steps rather than one leap straight to the
+// target point so it can't skip clean over a door's trigger box (only ~2 m
+// deep) or land inside a wall. Landing behavior matches a physical walk:
+// stepping into a door's trigger box ends the jump AT that door's own
+// destination spawn point, discarding whatever jump distance was left --
+// not some arbitrary distance further into the new room -- and stepping
+// into a wall (or a two-track divider, or a building outdoors) stops the
+// jump right there, same as clampToRoom/clampBuildings/clampOutOfDivider
+// would stop ordinary walking.
+const JUMP_DIST_INDOOR = 2, JUMP_DIST_OUTDOOR = 10, JUMP_STEP = 0.25;
+function jumpForward(){
+  const room = mergedRoom(currentRoomKey);
+  const dist = room.outdoor ? JUMP_DIST_OUTDOOR : JUMP_DIST_INDOOR;
+  const fwd = cameraForwardVec();
+  const steps = Math.max(1, Math.round(dist / JUMP_STEP));
+  const stepDist = dist / steps;
+  for(let i = 0; i < steps; i++){
+    const nx = pos.x + fwd.x * stepDist, nz = pos.z + fwd.z * stepDist;
+    let clamped = clampToRoom(room.size, nx, nz);
+    if(room.outdoor) clamped = clampBuildings(clamped.x, clamped.z);
+    if(room.twoTrack) clamped = clampOutOfDivider(room, clamped.x, clamped.z);
+    const blocked = Math.abs(clamped.x - nx) > 1e-6 || Math.abs(clamped.z - nz) > 1e-6;
+    pos.x = clamped.x; pos.z = clamped.z;
+    if(clock.getElapsedTime() > teleportLockUntil){
+      const m = findDoorTrigger(pos.x, pos.z, fwd);
+      if(m){ fireDoorTrigger(m); return; }
+    }
+    if(blocked) return;
+  }
+}
 function tick(){
   animHandle = requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -5718,59 +5781,28 @@ function tick(){
     );
   }
 
-  // Doors (and elevators, below) teleport in edit mode too -- staying blocked
-  // there just confused users with no way to reach the next room short of
-  // exiting edit mode first. Standing in a doorway to edit the wall beside it
-  // is still safe: the trigger only fires on actually heading OUT through the
-  // door, forward movement (move > 0) whose facing has a positive component
-  // along the door's through direction -- not just standing in the box.
-  // Without the facing check, backing up to a wall (which leaves you parked
-  // inside the trigger box) and then nudging forward into the room would fire
-  // the exit even though you're walking away from the door. enterRoom clears
-  // any selected prop and refreshes the edit HUD, so edit mode carries over
-  // cleanly into the new room instead of leaving stale state behind.
-  if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
-    const fwd = cameraForwardVec();
-    for(const m of exitMeta){
-      if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
-         && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
-        enterRoom(m.target, m.spawn, false);
-        break;
-      }
-    }
-  }
-
-  // elevator doors teleport on forward contact just like a normal exit above
-  // -- no popup. The back door always; the forward door only once a floor
-  // has been picked by clicking its row on the panel (selectElevatorFloor).
-  // With nothing picked yet, the forward door stays impassable (no trigger
-  // fires here, and clampToRoom's solid wall plane catches you at the
-  // threshold) -- the same feel as an unbuilt "locked door" target -- but a
-  // one-shot toast explains why, so it doesn't just look broken. Reset the
-  // latch the moment the player isn't in a forward door's box at all, so
-  // backing off and re-approaching prompts again.
+  // Doors (and elevators) teleport in edit mode too -- staying blocked there
+  // just confused users with no way to reach the next room short of exiting
+  // edit mode first. Standing in a doorway to edit the wall beside it is
+  // still safe: findDoorTrigger only fires on actually heading OUT through
+  // the door, forward movement (move > 0) whose facing has a positive
+  // component along the door's through direction -- not just standing in
+  // the box. Without the facing check, backing up to a wall (which leaves
+  // you parked inside the trigger box) and then nudging forward into the
+  // room would fire the exit even though you're walking away from the door.
+  // enterRoom clears any selected prop and refreshes the edit HUD, so edit
+  // mode carries over cleanly into the new room instead of leaving stale
+  // state behind.
+  //
+  // The reset below (the toast latch, once you're not in a forward
+  // elevator door's box at all) runs every frame regardless of move
+  // direction, so backing off and re-approaching prompts again.
   const inFwdBox = elevatorMeta.some(m => m.kind === 'forward'
     && pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ);
   if(!inFwdBox) elevatorBlockedToastShown = false;
   if(move > 0 && clock.getElapsedTime() > teleportLockUntil){
-    const fwd = cameraForwardVec();
-    for(const m of elevatorMeta){
-      if(pos.x >= m.box.minX && pos.x <= m.box.maxX && pos.z >= m.box.minZ && pos.z <= m.box.maxZ
-         && (!m.thru || fwd.x*m.thru.x + fwd.z*m.thru.z > 0)){
-        if(m.kind === 'back'){
-          enterRoom(m.target, m.spawn, false);
-        } else {
-          const ordinal = selectedElevatorOrdinal(currentRoomKey, m.floors);
-          const dest = ordinal != null ? m.floors.find(f => f.ordinal === ordinal) : null;
-          if(dest) enterRoom(dest.target, dest.spawn, false);
-          else if(!elevatorBlockedToastShown){
-            showToast('Select a floor first');
-            elevatorBlockedToastShown = true;
-          }
-        }
-        break;
-      }
-    }
+    const m = findDoorTrigger(pos.x, pos.z, cameraForwardVec());
+    if(m) fireDoorTrigger(m);
   }
 
   renderer.render(scene, camera);
@@ -6090,8 +6122,23 @@ function handleWalkClick(e){
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(scene.children, true);
   const hit = hits[0];
-  if(!hit || !hit.uv || !hit.object.userData || hit.object.userData.kind !== 'elevator-panel') return;
-  selectElevatorFloor(hit.object.userData, hit.uv);
+  if(!hit) return;
+  if(hit.uv && hit.object.userData && hit.object.userData.kind === 'elevator-panel'){
+    selectElevatorFloor(hit.object.userData, hit.uv);
+    return;
+  }
+  // tapping a door (its skin, frame, name plaque, or locked-door icon --
+  // anything at/near the doorway) walks straight through it, landing at the
+  // same destination spawn a physical walk-up would reach. Matched by the
+  // click's own WORLD point falling inside that door's trigger box (the
+  // same boxes tick()'s forward-walk check uses) rather than by hit-testing
+  // a specific mesh kind, and with no facing requirement (fwd=null) -- a
+  // deliberate click already means "go through", whichever way you're
+  // currently looking.
+  if(clock.getElapsedTime() > teleportLockUntil){
+    const m = findDoorTrigger(hit.point.x, hit.point.z, null);
+    if(m) fireDoorTrigger(m);
+  }
 }
 
 // maps the click's UV (three.js PlaneGeometry: v=1 at top) to the row it
@@ -7590,6 +7637,11 @@ function onKeyDown(e){
     if(m) enterRoom(m.target, m.spawn, false);
     return;
   }
+  // Space jumps forward -- covers ground fast while testing/decorating
+  // without leaving the keyboard. e.preventDefault() so it doesn't also
+  // scroll the page or "click" a focused button, the browser's default
+  // behavior for a bare spacebar press.
+  if(e.key === ' '){ e.preventDefault(); jumpForward(); return; }
   keys[e.key] = true;
 }
 function onKeyUp(e){ keys[e.key] = false; }
@@ -8117,6 +8169,30 @@ export async function openThreeTest(containerEl, opts){
       // in, same accessor every real read site uses) -- for testing that
       // mainStreet's auto-computed minimum can't be shrunk by a stale override.
       roomSize: (roomKey) => { const r = mergedRoom(roomKey || currentRoomKey); return r ? { w: r.size.w, d: r.size.d, h: r.size.h } : null; },
+      // moves the player to an arbitrary (x,z,yaw) without walking there --
+      // for testing jumpForward/click-to-walk from a known starting point
+      // and facing, since enter() always spawns at a fixed (0,0,yaw:0).
+      setPlayerPos: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
+      playerPos: () => ({ x: pos.x, z: pos.z, yaw, room: currentRoomKey }),
+      // fires the real spacebar jump (see onKeyDown/jumpForward) directly,
+      // bypassing keyboard-event plumbing.
+      jump: () => jumpForward(),
+      // the current room's exit/elevator triggers -- for testing that a jump
+      // or click lands EXACTLY at a door's own recorded spawn (the same one
+      // a physical walk-through would use), not some other point.
+      exitMetaList: () => exitMeta.map(m => ({ target: m.target, spawn: { ...m.spawn } }))
+        .concat(elevatorMeta.map(m => ({ target: m.target || null, kind: m.kind, spawn: m.spawn ? { ...m.spawn } : null }))),
+      // fires the real click-to-walk-through-a-door logic (see
+      // handleWalkClick) for a given WORLD point, bypassing the
+      // raycast/screen-coordinate plumbing a simulated mouse click would
+      // otherwise need. Returns true if it actually moved you into a new
+      // room (or resolved an elevator floor).
+      walkClickAt: (x, z) => {
+        if(clock.getElapsedTime() <= teleportLockUntil) return false;
+        const m = findDoorTrigger(x, z, null);
+        return m ? fireDoorTrigger(m) : false;
+      },
+      jumpDistances: () => ({ indoor: JUMP_DIST_INDOOR, outdoor: JUMP_DIST_OUTDOOR }),
       // the raw (un-merged) LAYOUT entry for a room -- for testing that
       // clearRoomStyles actually empties every field it claims to, not just
       // the ones a real read-site would notice missing.
