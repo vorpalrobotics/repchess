@@ -99,10 +99,16 @@ const IMG_MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /* auto-crop: a pixel counts as "content" when its alpha is strictly above this.
-   0 means any non-fully-transparent pixel keeps its row/column — the literal
-   "smallest box with no all-transparent edges". Bump it if GPT exports leave a
-   faint near-transparent halo you also want trimmed. */
-const AUTO_CROP_ALPHA = 0;
+   AI-generated "transparent background" exports (GPT and similar) routinely
+   leave a faint near-transparent haze across the WHOLE canvas -- often just a
+   handful of alpha levels, never truly 0 -- rather than a clean cutout. At the
+   old 0 threshold every one of those haze pixels counts as "content", so the
+   computed bounds are the full image and auto-crop does nothing (the bug
+   report this constant's own comment anticipated). 24 (~9% opacity) sits
+   comfortably above typical haze levels while still well below the alpha a
+   real antialiased edge carries a pixel or two in from full transparency, so
+   genuine soft edges keep their crop bounds essentially unchanged. */
+const AUTO_CROP_ALPHA = 24;
 
 let containerEl = null;
 let ASSETS = [];          // cached array of all asset records

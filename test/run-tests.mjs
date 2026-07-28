@@ -3348,6 +3348,39 @@ try {
     await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
     await appAB.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: brush and bucket erase are mutually exclusive', e); }
+
+  // 80. Regression: AI-generated "transparent background" exports routinely
+  //     carry a faint near-transparent haze across the WHOLE canvas rather
+  //     than clean 0 alpha -- at the old AUTO_CROP_ALPHA=0 threshold every
+  //     haze pixel counted as content, so the computed bounds were the full
+  //     image and Auto-crop did nothing. A haze well under the new 24
+  //     threshold must be excluded from the bounds; real (near-opaque)
+  //     content must still be picked up correctly.
+  try {
+    const hazyUrl = await appAB.page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 100; c.height = 100;
+      const cx = c.getContext('2d');
+      cx.fillStyle = 'rgba(200,150,100,0.03)';    // alpha ~8/255 -- a faint haze reaching every edge
+      cx.fillRect(0, 0, 100, 100);
+      cx.fillStyle = 'rgba(255,0,0,1)';           // solid content, a 40x40 square at [30,70)
+      cx.fillRect(30, 30, 40, 40);
+      return c.toDataURL('image/png');
+    });
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), hazyUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+    await appAB.page.evaluate(() => document.getElementById('cropAutoBtn').click());
+    await appAB.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    const result = await appAB.page.evaluate(() => window.__cropTestHooks.result());
+    assert(typeof result === 'string' && result.startsWith('data:image/png'), `expected a saved PNG data-URL, got ${JSON.stringify(result)}`);
+    const probe = await alphaProbe(result, [[0,0]]);
+    assert(probe.w === 40 && probe.h === 40,
+      `expected Auto-crop to trim the 100x100 haze down to the 40x40 solid content, got ${probe.w}x${probe.h}`);
+    ok('crop editor: Auto-crop excludes a faint whole-canvas haze, finds the real content bounds');
+  } catch(e){ bad('crop editor: Auto-crop is not fooled by a near-transparent haze', e); }
 } finally {
   await appAB.close();
 }
