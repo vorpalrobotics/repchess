@@ -10012,22 +10012,26 @@ try {
     };
   });
 
-  // 202. The 4-member corridor gets exactly 3 chain segments (one per gap
-  //      between consecutive slots), each roughly midway between its pair.
+  // 202. The 4-member corridor gets exactly 3 chain segments: one from the
+  //      room's entry (name floor-label spot, not the C1 anchor slot -- C1's
+  //      own position is often bare, so the walk starts at the always-present
+  //      name label instead) to L1, then one per remaining consecutive pair.
   try {
     await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chain);
     await appCE.page.waitForTimeout(200);
     const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
     const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    const entryPos = await appCE.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
     assert(slots.length === 4, `expected 4 move-object slots on Chain, got ${slots.length}`);
     assert(segs.length === 3, `expected 3 chain segments (4 slots - 1), got ${segs.length}: ${JSON.stringify(segs)}`);
     const ordered = slots.slice().sort((a, b) =>
       ({center:0,left:1,right:2}[a.side] - {center:0,left:1,right:2}[b.side]) || (a.order - b.order));
-    for(let i = 0; i < ordered.length - 1; i++){
-      const a = ordered[i], b = ordered[i+1];
+    const path = [entryPos, ...ordered.slice(1)];
+    for(let i = 0; i < path.length - 1; i++){
+      const a = path[i], b = path[i+1];
       const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
       const hit = segs.some(s => Math.abs(s.x - mx) < 0.01 && Math.abs(s.z - mz) < 0.01);
-      assert(hit, `expected a chain segment at the midpoint of slot ${i} and ${i+1} (${mx},${mz}), got ${JSON.stringify(segs)}`);
+      assert(hit, `expected a chain segment at the midpoint of walk-point ${i} and ${i+1} (${mx},${mz}), got ${JSON.stringify(segs)}`);
     }
     ok('memorization-aid: a plain corridor gets a floor chain linking consecutive move-object slots');
   } catch(e){ bad('memorization-aid: corridor chain segment count and placement', e); }
@@ -10053,12 +10057,11 @@ try {
     const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
     const l1 = slots.find(s => s.side === 'left' && s.order === 1);
     assert(l1, `expected an L1 slot on Chain, got ${JSON.stringify(slots)}`);
-    const c1 = slots.find(s => s.side === 'center' && s.order === 1);
-    assert(c1, `expected a C1 slot on Chain, got ${JSON.stringify(slots)}`);
+    const entryPos = await appCE.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
     await appCE.page.evaluate((args) => window.__threeTestEdit.nudgeSlot(args.k, args.id, 2, -1), { k: keys.chain, id: l1.id });
     await appCE.page.waitForTimeout(200);
     const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
-    const expected = { x: (c1.x + (l1.x + 2)) / 2, z: (c1.z + (l1.z - 1)) / 2 };
+    const expected = { x: (entryPos.x + (l1.x + 2)) / 2, z: (entryPos.z + (l1.z - 1)) / 2 };
     const hit = segs.some(s => Math.abs(s.x - expected.x) < 0.01 && Math.abs(s.z - expected.z) < 0.01);
     assert(hit, `expected a chain segment following L1's nudged position (midpoint ${JSON.stringify(expected)}), got ${JSON.stringify(segs)}`);
     ok('memorization-aid: the chain follows a slot\'s actual nudged position, not its stale default');
@@ -10068,24 +10071,25 @@ try {
   //      slot to its single forward door's own pair-object position (the bug
   //      reported from a real decorated room: "Master Suite" -- the chain
   //      stopped at the room's own C1/L1 slots and never reached the door's
-  //      horse-statue pair-object beyond them).
+  //      horse-statue pair-object beyond them). The walk starts at the room's
+  //      name floor-label spot, not the C1 anchor slot itself.
   try {
     await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.vault);
     await appCE.page.waitForTimeout(200);
     const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
     assert(slots.length === 2, `expected 2 move-object slots on Vault (C1 + L1), got ${slots.length}: ${JSON.stringify(slots)}`);
-    const c1 = slots.find(s => s.side === 'center' && s.order === 1);
     const l1 = slots.find(s => s.side === 'left' && s.order === 1);
-    assert(c1 && l1, `expected a C1 and L1 slot on Vault, got ${JSON.stringify(slots)}`);
+    assert(l1, `expected an L1 slot on Vault, got ${JSON.stringify(slots)}`);
+    const entryPos = await appCE.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
     const doorPos = await appCE.page.evaluate((args) => window.__threeTestEdit.doorObjBasePos(args.k, args.target), { k: keys.vault, target: keys.annex });
     assert(doorPos, `expected Vault to have a forward door to Annex's entry room ${keys.annex}`);
     const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
-    assert(segs.length === 2, `expected 2 chain segments (C1-L1, then L1-door), got ${segs.length}: ${JSON.stringify(segs)}`);
-    const internalMid = { x: (c1.x + l1.x) / 2, z: (c1.z + l1.z) / 2 };
+    assert(segs.length === 2, `expected 2 chain segments (entry-L1, then L1-door), got ${segs.length}: ${JSON.stringify(segs)}`);
+    const internalMid = { x: (entryPos.x + l1.x) / 2, z: (entryPos.z + l1.z) / 2 };
     const doorMid = { x: (l1.x + doorPos.x) / 2, z: (l1.z + doorPos.z) / 2 };
     const hitInternal = segs.some(s => Math.abs(s.x - internalMid.x) < 0.01 && Math.abs(s.z - internalMid.z) < 0.01);
     const hitDoor = segs.some(s => Math.abs(s.x - doorMid.x) < 0.01 && Math.abs(s.z - doorMid.z) < 0.01);
-    assert(hitInternal, `expected the C1-L1 chain segment at ${JSON.stringify(internalMid)}, got ${JSON.stringify(segs)}`);
+    assert(hitInternal, `expected the entry-L1 chain segment at ${JSON.stringify(internalMid)}, got ${JSON.stringify(segs)}`);
     assert(hitDoor, `expected the terminal chain segment reaching the door's pair-object at ${JSON.stringify(doorMid)}, got ${JSON.stringify(segs)}`);
     ok('memorization-aid: a corridor\'s terminal chain link reaches its forward door\'s own pair-object');
   } catch(e){ bad('memorization-aid: corridor chain reaches the forward door\'s pair-object', e); }
