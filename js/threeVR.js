@@ -409,6 +409,21 @@ function registerOneCastle(castle, instanceId, opts = {}){
         }
       }
       for(const w of ['north', 'east', 'west']) byWall[w].sort(doorCmp);
+      // more than one door can branch from the SAME sibling member -- a plain
+      // branch at a corridor's own tail (the room's last member has 2+ opponent
+      // continuations), not a two-track. Grouped here (keyed by which member
+      // they're anchored to) so both the depth calc below and the actual
+      // placement loop further down stagger a group's doors along the wall
+      // instead of stacking them all on the exact same spot (previously: every
+      // door in a group computed the identical siblingZ, so they collided).
+      const memberGroups = new Map();   // 'side:order' -> [{wall, ex}, ...], insertion order
+      for(const m of memberAnchored){
+        const key = m.ex.fromSide + ':' + m.ex.fromOrder;
+        if(!memberGroups.has(key)) memberGroups.set(key, []);
+        memberGroups.get(key).push(m);
+      }
+      for(const group of memberGroups.values()) group.sort((a, b) => doorCmp(a.ex, b.ex));
+      const maxMemberGroupSize = memberGroups.size ? Math.max(...[...memberGroups.values()].map(g => g.length)) : 0;
       // east/west ("left/right") doors sit at least EW_BEHIND_HEAD metres north
       // of the head mnemonic (center anchor pair) so it's clearly the first
       // thing you look at; grow the room deep enough to fit them behind it.
@@ -431,11 +446,12 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // a member-anchored door rides MEMBER_DOOR_OFFSET past its sibling's
       // own slot -- only matters for room depth when that sibling is the
       // DEEPEST member on its wall (sideMax), since anywhere earlier is
-      // already comfortably inside pairDepth's own margin.
+      // already comfortably inside pairDepth's own margin. Plus however far
+      // the largest same-sibling group's own stagger reaches beyond that.
       const memberDoorDepth = memberAnchored.length
         ? CAS_LAYOUT.entrySetback + CAS_LAYOUT.centerAhead + CAS_LAYOUT.sideFirst
           + (Math.max(...memberAnchored.map(m => siblingOrderFor(m.ex))) - 1) * CAS_LAYOUT.sideStride
-          + MEMBER_DOOR_OFFSET + CAS_LAYOUT.northMargin
+          + MEMBER_DOOR_OFFSET + (maxMemberGroupSize - 1) * DOOR_SPACING + CAS_LAYOUT.northMargin
         : 0;
       sz = {
         // PAIR_MARGIN (not EDGE_MARGIN) each side so the leftmost north door's
@@ -456,12 +472,16 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // DOOR_W/2+0.6 "pair sits before the door" shift) exactly cancels out,
       // so the pair billboard lands ON the sibling's own z (lines up with
       // it, as requested) while the door itself sits MEMBER_DOOR_OFFSET
-      // beyond it -- past the sibling, farther from the entrance.
-      // v1 known gap: two side-doors landing on the same sibling member would
-      // currently collide here -- not handled yet, no case has needed it.
-      for(const { wall, ex } of memberAnchored){
-        const siblingZ = centerZ - CAS_LAYOUT.sideFirst - (siblingOrderFor(ex) - 1) * CAS_LAYOUT.sideStride;
-        doorPlacements.push({ wall, offset: siblingZ - MEMBER_DOOR_OFFSET, ex });
+      // beyond it -- past the sibling, farther from the entrance. When a
+      // sibling has more than one such door (a branch at the room's own
+      // tail), they fan out from that same base point by DOOR_SPACING --
+      // group[0] (closest to the entrance) sits right at MEMBER_DOOR_OFFSET,
+      // each later one marches one more DOOR_SPACING north, same convention
+      // the plain byWall east/west doors already use.
+      for(const group of memberGroups.values()){
+        const siblingZ = centerZ - CAS_LAYOUT.sideFirst - (siblingOrderFor(group[0].ex) - 1) * CAS_LAYOUT.sideStride;
+        group.forEach(({ wall, ex }, j) =>
+          doorPlacements.push({ wall, offset: siblingZ - MEMBER_DOOR_OFFSET - j * DOOR_SPACING, ex }));
       }
     }
     const exits = [];
