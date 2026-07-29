@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-242';
+const BUILD_TAG = '-244';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -554,18 +554,26 @@ async function loadPersistedIndexOnce(){
   try {
     const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
     if(!raw) return;
-    const map = new Map(JSON.parse(raw));
-    // Sanity-check the entry shape before trusting it. The very first version
-    // of this persisted format (before gameIndexKey existed) stored entries
-    // as {g:arrayIndex, move} instead of {key:gameIndexKey, move} -- a blob
-    // saved under that shape (e.g. still sitting in a browser's IndexedDB
-    // from before this format changed) would otherwise load silently and
-    // EVERY lookup would just quietly return zero matches (gamesAtPosition's
-    // byKey.get(undefined) for every hit, since old entries have no .key) --
-    // "Games with this Position" reporting no games for a position that
-    // obviously has some, with no error anywhere. Bail out to a fresh
-    // rebuild instead of trusting a shape that doesn't match what this
-    // build's code actually reads.
+    const parsed = JSON.parse(raw);
+    // Version-stamped, same as the built-castles cache: a persisted index built
+    // by a DIFFERENT build (or the legacy bare-array format that predates the
+    // stamp) is ignored and rebuilt. positionKey feeds this index, so a code
+    // change to the position-identity rule -- e.g. the phantom-en-passant fix --
+    // would otherwise leave "Games with this Position" matching a stale index
+    // until the games array next changed, with no error anywhere.
+    if(!parsed || parsed.version !== BUILD_TAG || !Array.isArray(parsed.data)){
+      console.warn(`[games index] persisted index is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
+      return;
+    }
+    const map = new Map(parsed.data);
+    // Secondary shape check (belt-and-suspenders behind the version stamp): the
+    // very first version of this format (before gameIndexKey existed) stored
+    // entries as {g:arrayIndex, move} instead of {key:gameIndexKey, move}. A
+    // blob in that shape would otherwise load silently and EVERY lookup would
+    // quietly return zero matches (gamesAtPosition's byKey.get(undefined) for
+    // every hit) -- "Games with this Position" reporting none for a position
+    // that obviously has some. Bail to a fresh rebuild rather than trust a
+    // shape this build's code doesn't read.
     const [sample] = map.values();
     if(map.size && !(sample?.[0] && 'key' in sample[0])){
       console.warn('[games index] persisted index is in an old/incompatible format -- rebuilding');
@@ -588,7 +596,7 @@ async function positionIndex(games, onProgress){
   const map = await buildPositionIndex(games, onProgress);
   _posIndex = { games, map };
   _posIndexBuildCount++;
-  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([...map]));   // fire-and-forget: persist across reloads
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: [...map] }));   // fire-and-forget: persist across reloads (stamped so a new build rebuilds)
   return map;
 }
 // Called right after a ROUTINE import (chess.com/Lichess download, local file
@@ -622,7 +630,7 @@ async function reindexAfterImport(freshGames, onProgress){
     }
     _posIndex.games = freshGames;
   }
-  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify([..._posIndex.map]));   // fire-and-forget: persist across reloads
+  setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: [..._posIndex.map] }));   // fire-and-forget: persist across reloads (stamped so a new build rebuilds)
 }
 // key -> game lookup for the CURRENT games array, memoized against its
 // identity (rebuilding it is cheap -- no chess.js involved -- but still O(n),
@@ -5528,9 +5536,21 @@ async function gatherBuiltCastles(lines){
     try {
       const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
       if(raw){
-        _builtCastlesCache = JSON.parse(raw);
-        console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
-        return _builtCastlesCache;
+        const parsed = JSON.parse(raw);
+        // Version-stamped: only reuse a persisted copy built by THIS exact
+        // build (BUILD_TAG). A code change to castle/room generation -- e.g.
+        // the positionKey position-identity rule, or the room-size floor --
+        // doesn't trip this cache's own data-write invalidation triggers, so
+        // without the stamp a reload after a deploy keeps serving a castle
+        // built under the OLD logic until a manual force-rebuild. A stamp
+        // mismatch (or an old, unstamped array) falls through to a fresh
+        // rebuild below, which re-persists under the current stamp.
+        if(parsed && parsed.version === BUILD_TAG && Array.isArray(parsed.data)){
+          _builtCastlesCache = parsed.data;
+          console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
+          return _builtCastlesCache;
+        }
+        console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
       }
     } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
   }
@@ -5581,7 +5601,9 @@ async function gatherBuiltCastles(lines){
   });
   _builtCastlesCache = out;
   _builtCastlesBuildCount++;
-  setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify(out));   // fire-and-forget: persist across reloads
+  // stamped with the current build so a later build detects the mismatch and
+  // rebuilds instead of serving this copy after castle-gen logic has changed.
+  setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
   console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
   return out;
 }
@@ -8408,6 +8430,17 @@ if(localStorage.getItem('threeTestDebug')){
     isPersisted: async () => !!(await getMeta(BUILT_CASTLES_CACHE_KEY)),
     buildCount: () => _builtCastlesBuildCount,
     invalidate: () => invalidateBuiltCastlesCache(),
+    // rewrites the persisted cache's build stamp to a bogus value, so a test
+    // can simulate "this persisted copy was built by a different build" without
+    // editing BUILD_TAG -- the next open should detect the mismatch and rebuild.
+    stalePersistedVersion: async () => {
+      const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
+      if(!raw) return false;
+      let parsed; try { parsed = JSON.parse(raw); } catch { return false; }
+      parsed.version = '__stale_build__';
+      await setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify(parsed));
+      return true;
+    },
     // direct calls into the manual-reply write path (same functions the
     // row menu's "Add opponent's move" / "Remove" actions call), so cache
     // invalidation there can be checked without choreographing the full
@@ -8460,6 +8493,17 @@ if(localStorage.getItem('threeTestDebug')){
     isIndexCachedInMemory: () => _posIndex.games === GAMES,
     invalidateIndex: () => invalidatePositionIndexCache(),
     indexBuildCount: () => _posIndexBuildCount,
+    // rewrites the persisted index's build stamp to a bogus value, so a test
+    // can simulate a persisted copy left by a different build -- the next query
+    // should detect the mismatch and rebuild rather than trust a stale index.
+    stalePersistedIndexVersion: async () => {
+      const raw = await getMeta(POSITION_INDEX_CACHE_KEY);
+      if(!raw) return false;
+      let parsed; try { parsed = JSON.parse(raw); } catch { return false; }
+      parsed.version = '__stale_build__';
+      await setMeta(POSITION_INDEX_CACHE_KEY, JSON.stringify(parsed));
+      return true;
+    },
     // forces a fresh (uncached) build and captures every onProgress(done,total)
     // call -- deterministic alternative to polling the DOM for the
     // "Indexing your games… N of M" text mid-build, which for a build fast
