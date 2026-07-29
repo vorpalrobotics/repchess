@@ -4140,8 +4140,11 @@ try {
   });
   await appAI.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
   await appAI.page.waitForTimeout(200);
+  // scope to the toolbar itself ([data-three-toolbar]) -- the VR pane also
+  // contains the Help overlay, whose documentation text carries the same inline
+  // fa-solid icons, which a pane-wide selector would wrongly count as buttons.
   const iconOrder = () => appAI.page.evaluate(() =>
-    [...document.querySelectorAll('#threeTestCanvasWrap i.fa-solid')].map(i =>
+    [...document.querySelectorAll('#threeTestCanvasWrap [data-three-toolbar] i.fa-solid')].map(i =>
       [...i.classList].find(c => c !== 'fa-solid')));
 
   // 110. Edit-only buttons (fa-ruler-combined, fa-list-ol, fa-cubes) come
@@ -4164,21 +4167,24 @@ try {
     ok('edit-only toolbar buttons sit immediately right of Edit, before board/brain/info');
   } catch(e){ bad('toolbar: edit-only buttons grouped right after Edit', e); }
 
-  // 111. Memorize (fa-brain) is the rightmost status icon -- immediately left
-  //      of Close (fa-circle-xmark); the decorated badge (fa-palette), when
-  //      present in the DOM, sits immediately to memorize's own left. Order
-  //      holds regardless of either badge's current show/hide state.
+  // 111. The right-hand status cluster, in order, is decorated (fa-palette),
+  //      dirty (fa-triangle-exclamation), memorize (fa-brain), then Close
+  //      (fa-circle-xmark) -- memorize is the rightmost tool, immediately left
+  //      of Close, with the two badges filing in to its left. All four live in
+  //      the DOM regardless of the badges' current show/hide state.
   try {
     const order = await iconOrder();
     const paletteIdx = order.indexOf('fa-palette');
+    const dirtyIdx = order.indexOf('fa-triangle-exclamation');
     const brainIdx = order.indexOf('fa-brain');
     const closeIdx = order.indexOf('fa-circle-xmark');
-    assert(paletteIdx >= 0 && brainIdx >= 0 && closeIdx >= 0,
-      `expected to find the palette, brain and close icons, got: ${JSON.stringify(order)}`);
+    assert(paletteIdx >= 0 && dirtyIdx >= 0 && brainIdx >= 0 && closeIdx >= 0,
+      `expected to find the palette, dirty, brain and close icons, got: ${JSON.stringify(order)}`);
     assert(closeIdx - brainIdx === 1, `expected brain immediately left of close, got order: ${JSON.stringify(order)}`);
-    assert(brainIdx - paletteIdx === 1, `expected the decorated badge immediately left of brain, got order: ${JSON.stringify(order)}`);
-    ok('memorize is the rightmost status icon (next to Close); the decorated badge sits immediately to its left');
-  } catch(e){ bad('toolbar: memorize rightmost, decorated badge immediately left of it', e); }
+    assert(brainIdx - dirtyIdx === 1, `expected the dirty badge immediately left of brain, got order: ${JSON.stringify(order)}`);
+    assert(dirtyIdx - paletteIdx === 1, `expected the decorated badge immediately left of the dirty badge, got order: ${JSON.stringify(order)}`);
+    ok('right cluster order: decorated, dirty, memorize, Close (memorize rightmost, next to Close)');
+  } catch(e){ bad('toolbar: right status cluster order (decorated, dirty, memorize, close)', e); }
 
   // 112. The decorated badge is hidden until the current room's "fully
   //      decorated" flag (see evaluateDecorated) is actually true, then
@@ -4195,17 +4201,17 @@ try {
     ok('the decorated badge shows in the VR toolbar exactly when the current room is fully decorated');
   } catch(e){ bad('toolbar: decorated badge reflects the room\'s fully-decorated flag', e); }
 
-  // 113. Edit and its edit-only buttons (room geometry, wall lists, asset
-  //      library) are wrapped in a single bordered "chip" -- visually one
-  //      grouped cluster -- containing exactly those four icons, in order,
-  //      and nothing else (hints/board/info stay outside it).
+  // 113. Edit and its edit-only buttons (undo, redo, room geometry, wall
+  //      lists, asset library) are wrapped in a single bordered "chip" --
+  //      visually one grouped cluster -- containing exactly those icons, in
+  //      order, and nothing else (hints/board/info stay outside it).
   try {
     const info = await appAI.page.evaluate(() => window.__threeTestEdit.editGroupInfo());
     assert(info, 'expected an editGroup wrapper element (test setup issue if not)');
     assert(info.hasBorder, `expected the edit-tools group to have a visible border, got ${JSON.stringify(info)}`);
-    assert(JSON.stringify(info.icons) === JSON.stringify(['fa-pencil', 'fa-ruler-combined', 'fa-list-ol', 'fa-cubes']),
-      `expected exactly Edit + its 3 edit-only icons inside the group, in order, got ${JSON.stringify(info.icons)}`);
-    ok('Edit and its edit-only buttons are wrapped in a single bordered group');
+    assert(JSON.stringify(info.icons) === JSON.stringify(['fa-pencil', 'fa-rotate-left', 'fa-rotate-right', 'fa-ruler-combined', 'fa-list-ol', 'fa-cubes']),
+      `expected exactly Edit + undo/redo + its edit-only icons inside the group, in order, got ${JSON.stringify(info.icons)}`);
+    ok('Edit and its edit-only buttons (incl. undo/redo) are wrapped in a single bordered group');
   } catch(e){ bad('toolbar: edit-tools bordered group', e); }
 } finally {
   await appAI.close();
