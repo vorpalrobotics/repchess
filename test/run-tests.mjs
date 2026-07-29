@@ -528,26 +528,28 @@ try {
 
     // dbg.resize() -> setRoomGeom() doesn't return a promise the caller can
     // await (applyEdit's persistLayout/refreshAssetMap/buildRoom chain runs
-    // async), so poll for the reconciled position rather than trust a fixed
-    // delay -- under load (this is the 5th browser launched in the run) a
-    // single guessed wait was occasionally too short, flaking the assertion
-    // even though the fix itself had already landed correctly.
-    const tolerance = 4/2 - 0.3 + 0.02;   // room half-width (w=d=4) plus a small margin
-    const afterResize = await app5.page.evaluate(async ({ rk, bound }) => {
+    // async), so poll rather than trust a fixed delay. NOTE: a stored size
+    // smaller than the room's own content floor now SELF-HEALS --
+    // reconcileRoomBounds grows it back up to relaxedContentMin on the next
+    // buildRoom -- so the room won't actually stay 4x4. The invariant under
+    // test is that the nudged billboard ends up inside the room's ACTUAL
+    // (healed) footprint, whatever that resolves to, not stranded in a wall;
+    // assert against the live roomSize rather than a hard-coded 4x4 bound.
+    const inBounds = (p, sz) => p && sz && Math.abs(p.x) <= sz.w/2 - 0.3 + 0.05 && Math.abs(p.z) <= sz.d/2 - 0.3 + 0.05;
+    const afterResize = await app5.page.evaluate(async ({ rk }) => {
       const dbg = window.__threeTestEdit;
       dbg.resize(rk, { w: 4, d: 4, h: 3 });
-      let pos = null;
+      let out = null;
       const deadline = Date.now() + 8000;
       while(Date.now() < deadline){
-        pos = dbg.posOf('mnem-C1');
-        if(pos && Math.abs(pos.x) <= bound && Math.abs(pos.z) <= bound) break;
+        const pos = dbg.posOf('mnem-C1'), sz = dbg.roomSize(rk);
+        if(pos && sz && Math.abs(pos.x) <= sz.w/2 - 0.3 + 0.05 && Math.abs(pos.z) <= sz.d/2 - 0.3 + 0.05){ out = { pos, sz }; break; }
         await new Promise(r => setTimeout(r, 100));
       }
-      return pos;
-    }, { rk: room, bound: tolerance });
-    const inBounds = p => p && Math.abs(p.x) <= tolerance && Math.abs(p.z) <= tolerance;
-    assert(inBounds(afterResize),
-      `billboard stayed outside the shrunk room after resize: ${JSON.stringify(afterResize)} (bound ±${tolerance})`);
+      return out || { pos: dbg.posOf('mnem-C1'), sz: dbg.roomSize(rk) };
+    }, { rk: room });
+    assert(inBounds(afterResize.pos, afterResize.sz),
+      `billboard stayed outside the room's footprint after resize: ${JSON.stringify(afterResize)}`);
 
     const afterReentry = await app5.page.evaluate(async (rk) => {
       const dbg = window.__threeTestEdit;
@@ -555,12 +557,12 @@ try {
       await new Promise(r => setTimeout(r, 150));
       dbg.enter(rk);
       await new Promise(r => setTimeout(r, 150));
-      return dbg.posOf('mnem-C1');
+      return { pos: dbg.posOf('mnem-C1'), sz: dbg.roomSize(rk) };
     }, room);
-    assert(inBounds(afterReentry),
-      `billboard drifted back out after a re-entry: ${JSON.stringify(afterReentry)} (bound ±${tolerance})`);
+    assert(inBounds(afterReentry.pos, afterReentry.sz),
+      `billboard drifted back out after a re-entry: ${JSON.stringify(afterReentry)}`);
 
-    ok('a nudged billboard is auto-clamped back inside a room that was made smaller');
+    ok('a nudged billboard stays inside the room\'s footprint after a resize (too-small size self-heals)');
   } catch(e){ bad('room-bounds auto-fix', e); }
 } finally {
   await app5.close();
@@ -4275,17 +4277,25 @@ try {
     ok('the room-name floor label is hint-gated (hidden/shown with the hints toggle)');
   } catch(e){ bad('room name floor label: hint-gated', e); }
 
-  // 118. Edge case: a room shallower than 4m + the far-wall margin clamps
-  //      the label so it never crowds (or sits past) the far wall.
+  // 118. A too-shallow stored size self-heals: reconcileRoomBounds grows a
+  //      room's depth back up to its content floor (relaxedContentMin, min 8m)
+  //      on the next buildRoom, so an attempted 2.5m depth never persists. The
+  //      floor label then sits at its normal 4m-in position in the healed
+  //      room, not crammed against a far wall. (The label's own far-wall clamp
+  //      is kept as defense but is no longer reachable via a saved size, since
+  //      no room can be shallower than the content floor.)
   try {
     await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 2.5, h: 6 }), root);
+    await appAJ.page.evaluate((k) => window.__threeTestEdit.enter(k), root);   // rebuild -> heal
     await appAJ.page.waitForTimeout(200);
+    const healed = await appAJ.page.evaluate((rk) => window.__threeTestEdit.roomSize(rk), root);
+    assert(healed.d > 2.5 + 0.01, `expected the too-shallow depth to self-heal above 2.5m, got ${healed.d}`);
     const label = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
-    const expectedZ = 2.5/2 - (2.5 - 0.6);   // clamped to (depth - far-wall margin), not the full 4m
+    const expectedZ = healed.d / 2 - 4;   // normal 4m-in placement, room is now deep enough
     assert(label && Math.abs(label.z - expectedZ) < 0.05,
-      `expected the label clamped clear of the far wall in a 2.5m-deep room (z~${expectedZ}), got ${JSON.stringify(label)}`);
-    ok('room name floor label: clamped to stay clear of the far wall in a shallow room');
-  } catch(e){ bad('room name floor label: shallow-room clamping', e); }
+      `expected the label at the normal 4m-in position in the healed room (z~${expectedZ}), got ${JSON.stringify(label)}`);
+    ok('room name floor label: a too-shallow room self-heals its depth and the label sits normally');
+  } catch(e){ bad('room name floor label: shallow-room self-heal', e); }
 
   // 119. The label spins so its "up" (readable-top) edge points AWAY from
   //      the camera's current position (like a floor decal read by someone
@@ -4699,7 +4709,14 @@ try {
     await appAM.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 6, h: 6 }), roomKey);
     await appAM.page.waitForTimeout(300);
 
-    const bound = 6/2 - 0.3;   // clampFloorXZ's margin, same math the reconciler uses
+    // d=6 is below what 2 side pairs need, so reconcileRoomBounds self-heals the
+    // room's depth back up to its content floor rather than cramming the pairs
+    // against a too-near wall. Every pair (never-nudged object placeholders AND
+    // their mnemonic billboards) then sits at its natural computed position
+    // INSIDE the healed footprint -- assert against the actual healed size.
+    const sz = await appAM.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+    assert(sz.d > 6.01, `expected the too-small depth to self-heal above the requested 6m, got ${sz.d}`);
+    const bound = sz.d/2 - 0.3;
     const after = await appAM.page.evaluate((k) => ({
       posL1: window.__threeTestEdit.posOf('obj-L1'),
       posL2: window.__threeTestEdit.posOf('obj-L2'),
@@ -4708,9 +4725,9 @@ try {
     }), roomKey);
     for(const [name, p] of Object.entries(after)){
       assert(p && Math.abs(p.z) <= bound + 0.01,
-        `expected ${name} pulled back inside the shrunk room (|z| <= ${bound}), got ${JSON.stringify(p)}`);
+        `expected ${name} inside the healed room (|z| <= ${bound}), got ${JSON.stringify(p)}`);
     }
-    ok('reconcileRoomBounds pulls never-nudged move-pairs (object AND billboard) back inside a shrunk room');
+    ok('a too-small room self-heals its depth so its move-pairs (object AND billboard) fit inside');
   } catch(e){ bad('reconcile: un-nudged move-pairs follow a shrink, not just previously-nudged ones', e); }
 } finally {
   await appAM.close();
@@ -10798,6 +10815,77 @@ try {
   await appCG.close();
 }
 } catch(e){ bad('Phase CG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CH: stored-size self-heal. reconcileRoomBounds grows a saved size
+//     override (LAYOUT[roomKey].geom) up to the room's own content floor
+//     (relaxedContentMin) on buildRoom, so an override left too small -- e.g.
+//     one kept under a room's key after the phantom-en-passant canonicalization
+//     merged another path's doors into it -- can't trap billboards/doors in the
+//     walls. Only ever GROWS a sub-floor override; a valid/larger one is left
+//     as-is; elevator cars (which legitimately shrink) are exempt. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCH = await launchApp();
+try {
+  // a 3-member plain corridor (C1 anchor + L1 + L2 on the west wall).
+  await seedBackup(appCH.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Seq', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCH.page);
+  const roomKey = await appCH.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Seq:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appCH.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appCH.page.waitForTimeout(200);
+  const base = await appCH.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+
+  // 213. A deliberately-too-small stored override (well under the content
+  //      floor, written straight to LAYOUT via the resize hook, bypassing the
+  //      dialog's own clamp) is grown back up on the next buildRoom: both the
+  //      effective size AND the persisted geom reach at least the base size,
+  //      and every pair sits inside.
+  try {
+    await appCH.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 4, d: 5, h: 6 }), roomKey);
+    await appCH.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);   // rebuild -> heal
+    await appCH.page.waitForTimeout(200);
+    const eff = await appCH.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+    assert(eff.d >= base.d - 0.01 && eff.w >= base.w - 0.01,
+      `expected the effective size healed up to at least the base (${base.w}x${base.d}), got ${eff.w}x${eff.d}`);
+    const stored = await appCH.page.evaluate((k) => window.__threeTestEdit.roomLayout(k), roomKey);
+    assert(stored.geom && stored.geom.d >= base.d - 0.01 && stored.geom.w >= base.w - 0.01,
+      `expected the PERSISTED override grown to the content floor, got ${JSON.stringify(stored.geom)}`);
+    const slots = await appCH.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    const farthest = Math.min(...slots.map(s => s.z));
+    assert(farthest > -eff.d / 2, `expected every pair inside the north wall (z > ${-eff.d / 2}), farthest at ${farthest}`);
+    ok('room size: a too-small override self-heals up to the content floor, keeping pairs off the walls');
+  } catch(e){ bad('room size: too-small override self-heals', e); }
+
+  // 214. A LARGER override is left exactly as saved -- the heal is a floor,
+  //      never a pin to the computed size, so a user's deliberate roomy resize
+  //      survives.
+  try {
+    await appCH.page.evaluate(({ k, w, d }) => window.__threeTestEdit.resize(k, { w, d, h: 6 }), { k: roomKey, w: base.w + 6, d: base.d + 8 });
+    await appCH.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appCH.page.waitForTimeout(200);
+    const eff = await appCH.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+    assert(Math.abs(eff.d - (base.d + 8)) < 0.01 && Math.abs(eff.w - (base.w + 6)) < 0.01,
+      `expected a larger override left untouched (${base.w + 6}x${base.d + 8}), got ${eff.w}x${eff.d}`);
+    ok('room size: a larger override is honored as-is (the heal is a floor, not a pin)');
+  } catch(e){ bad('room size: larger override honored', e); }
+} finally {
+  await appCH.close();
+}
+} catch(e){ bad('Phase CH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
