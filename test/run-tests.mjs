@@ -8270,6 +8270,30 @@ try {
     assert(buildCount === 1, `expected the old-format blob to be discarded and a real rebuild to happen, got ${buildCount} build(s)`);
     ok('games-list: an old-format persisted index blob is detected and discarded, not silently trusted');
   } catch(e){ bad('games-list: old-format persisted index is rejected, not trusted', e); }
+
+  // 154e. A persisted index stamped with a DIFFERENT build version is treated
+  //       as stale and rebuilt -- positionKey feeds this index, so a deployed
+  //       change to the position-identity rule must not keep matching against
+  //       an index built by the old code. (154d rebuilt+re-persisted the index
+  //       under the current stamp, so there's a valid copy to re-stamp here.)
+  try {
+    const staled = await appAV.page.evaluate(() => window.__gamesListHooks.stalePersistedIndexVersion());
+    assert(staled, 'test setup issue: expected a persisted index to re-stamp');
+    await appAV.page.reload();
+    await appAV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAV.page.click('.line-row');
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
+    const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
+    const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
+    assert(JSON.stringify(byPos.map(m=>m.id).sort()) === JSON.stringify(['lg2','lg3']),
+      `expected the real transposition results despite the stale-version blob, got ${JSON.stringify(byPos)}`);
+    assert(buildCount === 1, `expected a build-version mismatch to discard the blob and rebuild, got ${buildCount} build(s)`);
+    ok('games-list: a persisted index from a different build version is rebuilt, not reused');
+  } catch(e){ bad('games-list: index build-version mismatch triggers rebuild', e); }
 } finally {
   await appAV.close();
 }
