@@ -11255,5 +11255,64 @@ try {
 } catch(e){ bad('Phase CJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CK: multiple forward doors anchored to the SAME room member (a
+//     branch at a corridor's own tail, not a two-track) land on distinct,
+//     staggered wall+offset positions instead of colliding on the exact same
+//     spot. This is the "v1 known gap" the code used to explicitly flag as
+//     unhandled -- found while building Phase CJ's own fan-out fixture,
+//     which happens to hit this exact shape (3 forward doors off the same
+//     last slot L1). Reuses that identical fixture. ---
+if(shouldRunPhase(['castle-generation', 'vr-decorating'])){
+try {
+  const appCK = await launchApp();
+  try {
+    await seedBackup(appCK.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Fan', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','d5'], reply: 'cxd5' },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+        { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      ],
+    }, { defaultPlayerColor: 'white' });
+    await openVR(appCK.page);
+    const roomKey = await appCK.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+      return 'cas:L1_Fan:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+
+    // 223. The 3 forward doors off the same last member (L1) each land on a
+    //      distinct wall+offset -- not stacked on top of each other.
+    try {
+      const exits = await appCK.page.evaluate((k) => window.__threeTestEdit.exits(k), roomKey);
+      const forward = exits.filter(e => !e.back);
+      assert(forward.length === 3, `expected 3 forward doors, got ${JSON.stringify(exits)}`);
+
+      const combos = new Set(forward.map(e => `${e.wall}@${e.offset}`));
+      assert(combos.size === 3, `expected 3 distinct wall+offset combos (no collision), got ${JSON.stringify([...combos])} from ${JSON.stringify(forward)}`);
+
+      // staggered along the same wall by exactly DOOR_SPACING (5.6) between
+      // consecutive doors, mirroring the existing byWall east/west convention.
+      const wall = forward[0].wall;
+      assert(forward.every(e => e.wall === wall), `expected all 3 doors on the same wall (same source member), got ${JSON.stringify(forward)}`);
+      const offsets = forward.map(e => e.offset).sort((a, b) => b - a);
+      for(let i = 1; i < offsets.length; i++){
+        const gap = offsets[i - 1] - offsets[i];
+        assert(Math.abs(gap - 5.6) < 0.001, `expected consecutive doors DOOR_SPACING (5.6) apart, got gap ${gap} in ${JSON.stringify(offsets)}`);
+      }
+      ok('castle generation: doors sharing the same source member stagger instead of colliding');
+    } catch(e){ bad('castle generation: same-member doors land on distinct staggered positions', e); }
+  } finally {
+    await appCK.close();
+  }
+} catch(e){ bad('Phase CK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
