@@ -10943,5 +10943,121 @@ try {
 } catch(e){ bad('Phase CH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CI: a compacted (hoisted) run's own move labels are tappable
+//     pv-move chips (previously plain text -- couldn't open the mini board),
+//     and its triangle expands JUST that one line in place (per-move rows,
+//     each with its own menu) without leaving compact mode for the whole
+//     table -- previously the triangle rendered as the disabled/non-clickable
+//     .toggle-empty placeholder, so shortening a compacted line meant
+//     uncompacting (and re-compacting) the entire tree. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appCI = await launchApp();
+try {
+  // a 3-pair forced run (Nf6/c4, e6/Nc3, Bb4/e3) then a real 2-way branch
+  // (O-O vs c5) -- long enough to compact (>=2 forced pairs), with a genuine
+  // continuation past the run to confirm collapsing restores it untouched.
+  await seedBackup(appCI.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 c5',  white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appCI.page.click('.line-row');
+  await appCI.page.waitForSelector('tr.data-row', { timeout: 10000 });
+
+  // turn compact mode on (re-renders the already-open line) -- the run
+  // collapses into one .compact-run row.
+  await appCI.page.click('#compactModeBtn');
+  await appCI.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+
+  // 216. The compact row's move labels are real pv-move chips: tapping one
+  //      opens the mini board float, same as any other move in the tree.
+  try {
+    const chipCount = await appCI.page.evaluate(() =>
+      document.querySelector('tr.compact-run td.move').querySelectorAll('.pv-move').length);
+    assert(chipCount === 6, `expected 6 tappable chips (3 forced pairs), got ${chipCount}`);
+    await appCI.page.evaluate(() => document.querySelector('tr.compact-run .pv-move').click());
+    await appCI.page.waitForSelector('#pvFloat.pv-move-active, .pv-move-active', { timeout: 5000 }).catch(() => {});
+    const active = await appCI.page.evaluate(() => !!document.querySelector('tr.compact-run .pv-move.pv-move-active'));
+    assert(active, 'expected tapping a compacted move to open the mini board (pv-move-active)');
+    ok('compact mode: a compacted run\'s move labels are tappable (mini board opens)');
+  } catch(e){ bad('compact mode: compacted moves are clickable', e); }
+
+  // 217. The triangle is live (not the disabled .toggle-empty placeholder)
+  //      and expands JUST this line: its 3 forced moves render as normal
+  //      per-move rows (each with data-opp and its own working row menu),
+  //      while the table's OWN compact-run row (and its continuation into
+  //      O-O/c5) stays exactly as it was -- compact mode is untouched
+  //      everywhere else.
+  try {
+    const notEmpty = await appCI.page.evaluate(() =>
+      !document.querySelector('tr.compact-run button.toggle').classList.contains('toggle-empty'));
+    assert(notEmpty, 'expected the compact row\'s triangle to be a live (non-empty) toggle');
+
+    // real Playwright click(), not evaluate()-click: this button's icon-only
+    // layout collapses to a zero-height bounding box (a pre-existing .iconbtn
+    // characteristic, not specific to this row), which trips Playwright's
+    // actionability "visible" check for a real click.
+    await appCI.page.evaluate(() => document.querySelector('tr.compact-run button.toggle').click());
+    await appCI.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 5000 });
+    const opps = await appCI.page.evaluate(() =>
+      [...document.querySelectorAll('tr.data-row[data-opp]')].map(tr => tr.dataset.opp));
+    assert(opps.includes('Nf6') && opps.includes('e6') && opps.includes('Bb4'),
+      `expected the run's 3 forced moves as individual rows, got ${JSON.stringify(opps)}`);
+
+    // one of the newly-expanded rows has a REAL row menu (three-dot -> Set
+    // Standard Response etc.), unlike the compact-run row's single Analyse
+    // button -- confirms these are genuine per-move rows, not another
+    // read-only summary.
+    const hasRowMenu = await appCI.page.evaluate(() =>
+      !!document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn'));
+    assert(hasRowMenu, 'expected an expanded forced move to have its own row menu');
+
+    // the run's own downstream branch (O-O / c5) still shows too, past the
+    // expanded forced moves -- expansion resumes normal recursive rendering,
+    // it doesn't stop at the run's own extent.
+    const branchOpps = await appCI.page.evaluate(() =>
+      [...document.querySelectorAll('tr.data-row[data-opp]')].map(tr => tr.dataset.opp));
+    assert(branchOpps.includes('O-O') && branchOpps.includes('c5'),
+      `expected the run's downstream branch (O-O/c5) visible once expanded, got ${JSON.stringify(branchOpps)}`);
+    ok('compact mode: expanding one line renders its forced moves (with real per-move menus) plus its downstream branch');
+  } catch(e){ bad('compact mode: expand-this-line renders full per-move rows', e); }
+
+  // 218. Collapsing the SAME line again hides the per-move rows and brings
+  //      back the compact-run row's own (untouched) continuation -- a clean
+  //      round trip, not a one-way expansion. The expanded rows stay IN the
+  //      DOM (their ancestor branch-row is just display:none, like the
+  //      table's other collapsible branches) rather than being torn down --
+  //      so visibility (offsetParent), not mere presence, is what to check.
+  try {
+    await appCI.page.evaluate(() => document.querySelector('tr.compact-run button.toggle').click());
+    await appCI.page.waitForFunction(() => {
+      const el = document.querySelector('tr.data-row[data-opp="Nf6"]');
+      return !el || !el.offsetParent;
+    }, { timeout: 5000 });
+    const visibleOpps = () => appCI.page.evaluate(() =>
+      [...document.querySelectorAll('tr.data-row[data-opp]')].filter(tr => tr.offsetParent).map(tr => tr.dataset.opp));
+    const oppsAfterCollapse = await visibleOpps();
+    assert(!oppsAfterCollapse.includes('Nf6') && !oppsAfterCollapse.includes('e6') && !oppsAfterCollapse.includes('Bb4'),
+      `expected the forced-move rows hidden after collapsing, got ${JSON.stringify(oppsAfterCollapse)}`);
+    assert(oppsAfterCollapse.includes('O-O') && oppsAfterCollapse.includes('c5'),
+      `expected the run's own continuation (O-O/c5) still visible after collapsing, got ${JSON.stringify(oppsAfterCollapse)}`);
+    const stillCompact = await appCI.page.evaluate(() => !!document.querySelector('tr.compact-run'));
+    assert(stillCompact, 'expected the row to still be a compact-run row after collapsing (compact mode untouched)');
+    ok('compact mode: collapsing an expanded line restores the compact row and its own continuation');
+  } catch(e){ bad('compact mode: collapse-this-line round trip', e); }
+} finally {
+  await appCI.close();
+}
+} catch(e){ bad('Phase CI: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-244';
+const BUILD_TAG = '-245';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3395,17 +3395,24 @@ function computeCompactRun(games,seq,depth,flip){
 }
 
 function compactRunLabel(runMoves,flip){
-  return runMoves.map(({opp,reply,depth})=>
-    flip ? `${depth+1}. ${opp} ${reply}` : `${opp} ${depth+2}. ${reply}`
-  ).join(' ');
+  // each move a tappable pv-move chip (carrying the FEN right after it) so a
+  // click floats the mini board there, same as any other move in the tree --
+  // a compacted line's moves used to be plain, unclickable text.
+  return runMoves.map(({opp,reply,lineSeq,depth})=>{
+    const oppChip = pvChip(opp, fenForSeq(lineSeq));                 // lineSeq ends in opp
+    const replyChip = pvChip(reply, fenForSeq([...lineSeq,reply]));
+    return flip ? `${depth+1}. ${oppChip} ${replyChip}` : `${oppChip} ${depth+2}. ${replyChip}`;
+  }).join(' ');
 }
 
-/* single row standing in for a whole hoisted run: one Analyse button (no
-   per-move menu — switch to Full mode for per-move editing/notes), the
-   collapsed move text, and a branch-row that resumes normal rendering from
-   wherever the run ended. Always expanded — there's nothing to collapse,
-   since the run itself is already the collapsed form. */
-function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
+/* single row standing in for a whole hoisted run: one Analyse button and the
+   collapsed run as tappable move chips, plus a branch-row that resumes normal
+   rendering from wherever the run ended. The row itself has no per-move menu
+   (there's no single move to attach one to) -- but its triangle expands JUST
+   this one line in place, lazily rendering the run's forced moves as normal
+   per-move rows (each with its own full menu, for e.g. shortening the line)
+   without leaving compact mode for the whole table. */
+function renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel){
   const {runMoves,endSeq,endDepth} = run;
   const tr = document.createElement('tr');
   tr.className = 'data-row compact-run';
@@ -3414,7 +3421,7 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
        <button class="iconbtn" title="Analyse"><i class="fa-solid fa-chess-board"></i></button>
      </td>
      <td class="move" style="padding-left:${indentLevel}em">
-       <button class="iconbtn toggle toggle-empty"><i class="fa-solid fa-caret-right"></i></button>
+       <button class="iconbtn toggle" title="Expand just this line"><i class="fa-solid fa-caret-right"></i></button>
        ${compactRunLabel(runMoves,flip)}
      </td>
      <td class="cnt-col"><span class="completeBadge"></span></td>
@@ -3427,11 +3434,36 @@ function renderCompactRunRow(tb,games,depth,flip,run,indentLevel){
   attachHoverPreview(btnEval, endSeq);
   btnEval.onclick = () => showPosition(fenForSeq(endSeq), ()=>{}, ()=>{}, endSeq);
 
+  // collapsed view: resume normal rendering AFTER the run.
   const tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
   const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
   const div = document.createElement('div'); div.className='branch'; td1.appendChild(div);
   const sub = renderBranch(div,games,endSeq,endDepth,flip);
   updateCompleteBadge(tr.querySelector('.completeBadge'), sub.completeToMove);
+
+  // expand-this-line toggle: lazily render the run's FULL form (its forced
+  // moves as normal rows, followed by the same continuation) into a hidden
+  // branch-row, via renderBranch with compaction suppressed for this run's own
+  // extent (noCompactUntil=endSeq). The triangle swaps which branch-row shows,
+  // so one compacted line can be temporarily expanded (to shorten it, open a
+  // move's menu, etc.) without toggling compact mode for the whole tree.
+  const toggleBtn = tr.querySelector('button.toggle');
+  let trFull = null;
+  toggleBtn.onclick = () => {
+    const expanding = !trFull || trFull.style.display === 'none';
+    if(expanding && !trFull){
+      trFull = document.createElement('tr'); trFull.className = 'branch-row';
+      const tdF = document.createElement('td'); tdF.colSpan=5; tdF.style.padding='0'; trFull.appendChild(tdF);
+      const divF = document.createElement('div'); divF.className='branch'; tdF.appendChild(divF);
+      tr.after(trFull);   // directly under the handle, above the collapsed continuation
+      renderBranch(divF,games,seq,depth,flip,endSeq);
+    }
+    trFull.style.display = expanding ? '' : 'none';
+    tr1.style.display    = expanding ? 'none' : '';
+    toggleBtn.innerHTML  = expanding ? '<i class="fa-solid fa-caret-down"></i>' : '<i class="fa-solid fa-caret-right"></i>';
+    toggleBtn.title      = expanding ? 'Collapse this line' : 'Expand just this line';
+  };
+
   return sub;
 }
 
@@ -3513,7 +3545,11 @@ function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
    reply we set, displayed after it once chosen (e.g. "2. e4 d5"). For White
    lines (flip=false) the enumerated move is the opponent's reply to our own
    already-known move, e.g. "1. e4 e5". */
-function renderBranch(parent,games,seq,depth,flip=false){
+// noCompactUntil (a seq) is set only while rendering a single compacted line's
+// "expand this line" view: compaction is suppressed for every position strictly
+// before that end seq (i.e. the run's own forced moves), then resumes normally
+// at/after it. Null everywhere else, so the normal tree is unaffected.
+function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
   const {counts,tot}=replies(games,seq);
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
@@ -3561,10 +3597,14 @@ function renderBranch(parent,games,seq,depth,flip=false){
 
   const indentLevel = flip ? depth : depth+1;
 
-  if(compactMode){
+  // within a single-line expansion, this position's forced move renders in
+  // FULL as long as we're still strictly before the expanded run's end seq.
+  const withinExpansion = !!noCompactUntil && noCompactUntil.length > seq.length
+    && noCompactUntil.slice(0, seq.length).join(',') === seq.join(',');
+  if(compactMode && !withinExpansion){
     const run = computeCompactRun(games,seq,depth,flip);
     if(run){
-      const sub = renderCompactRunRow(tb,games,depth,flip,run,indentLevel);
+      const sub = renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel);
       completeToMove = Math.min(completeToMove, sub.completeToMove);
       if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
       return {completeToMove};
@@ -3781,7 +3821,10 @@ function renderBranch(parent,games,seq,depth,flip=false){
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
-      const sub = renderBranch(div,games,childrenSeq,depth+1,flip);
+      // carry noCompactUntil forward so a single-line expansion keeps rendering
+      // the run's own forced moves in full (the prefix test self-limits it to
+      // the run's extent; null in the normal tree, so this is a no-op there).
+      const sub = renderBranch(div,games,childrenSeq,depth+1,flip,noCompactUntil);
       updateCompleteBadge(completeSpan, sub.completeToMove);
       // a hidden row's own badge still reflects its subtree, but it doesn't
       // count toward the OWNING seq's aggregate -- matches visibleForComplete
