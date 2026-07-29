@@ -11140,5 +11140,120 @@ try {
 } catch(e){ bad('Phase CI2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CJ: a corridor's move-object chain fans out to EVERY forward door,
+//     not just the first, and follows a nudged slot/door-object live (no
+//     rebuild needed). Reported: a 2-item corridor room whose tail branches
+//     into 3 opponent continuations only got a chain link to the first of
+//     the 3 doors, and dragging the room's own move-object left the chain
+//     pointing at its old default spot until the room was re-entered. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCJ = await launchApp();
+try {
+  // a 2-member corridor (C1 anchor + L1) whose tail (after L1's own reply)
+  // branches into 3 real opponent tries, each with its own saved reply --
+  // 3 forward doors off the SAME last slot.
+  await seedBackup(appCJ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Fan', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCJ.page);
+  const roomKey = await appCJ.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Fan:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appCJ.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appCJ.page.waitForTimeout(200);
+
+  // 221. The chain has one internal link (entry->L1) plus one per forward
+  //      door (3), fanning out from the SAME last slot (L1) -- not just the
+  //      first door.
+  let targets, l1;
+  try {
+    const slots = await appCJ.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+    l1 = slots.find(s => s.side === 'left' && s.order === 1);
+    assert(l1, `expected an L1 slot, got ${JSON.stringify(slots)}`);
+    const exits = await appCJ.page.evaluate((k) => window.__threeTestEdit.exits(k), roomKey);
+    targets = exits.filter(e => !e.back).map(e => e.target);
+    assert(targets.length === 3, `expected 3 forward doors, got ${JSON.stringify(exits)}`);
+
+    const segs = await appCJ.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    assert(segs.length === 4, `expected 4 chain segments (1 internal + 3 door links), got ${segs.length}: ${JSON.stringify(segs)}`);
+
+    const entryPos = await appCJ.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
+    const internalMid = { x: (entryPos.x + l1.x) / 2, z: (entryPos.z + l1.z) / 2 };
+    const hitInternal = segs.some(s => Math.abs(s.x - internalMid.x) < 0.01 && Math.abs(s.z - internalMid.z) < 0.01);
+    assert(hitInternal, `expected the entry-L1 segment at ${JSON.stringify(internalMid)}, got ${JSON.stringify(segs)}`);
+
+    for(const target of targets){
+      const doorPos = await appCJ.page.evaluate((args) => window.__threeTestEdit.doorObjBasePos(args.k, args.target), { k: roomKey, target });
+      const mid = { x: (l1.x + doorPos.x) / 2, z: (l1.z + doorPos.z) / 2 };
+      const hit = segs.some(s => Math.abs(s.x - mid.x) < 0.01 && Math.abs(s.z - mid.z) < 0.01);
+      assert(hit, `expected a chain segment from L1 to door target ${target} at ${JSON.stringify(mid)}, got ${JSON.stringify(segs)}`);
+    }
+    ok('memorization-aid: a corridor\'s chain fans out to every forward door, not just the first');
+  } catch(e){ bad('memorization-aid: chain fans out to all forward doors', e); }
+
+  // 222. Selecting and arrow-key-nudging L1's own move-object (the REAL
+  //      interactive flow, not the nudgeSlot test shortcut) moves every chain
+  //      segment touching it LIVE -- the entry-L1 link and all 3 L1-door
+  //      links -- with no room rebuild/re-entry.
+  try {
+    await appCJ.page.evaluate((args) => window.__threeTestEdit.setSlotAsset(args.rk, 'obj-L1', 'testProp1'), { rk: roomKey });
+    await appCJ.page.waitForTimeout(150);
+
+    await appCJ.page.evaluate(async () => {
+      const dbg = window.__threeTestEdit;
+      dbg.toggle();
+      await new Promise(r => setTimeout(r, 60));
+      dbg.target({ kind: 'accessory', slotId: 'obj-L1' });
+      await new Promise(r => setTimeout(r, 60));
+    });
+    const sel = await appCJ.page.evaluate(() => window.__threeTestEdit.selected());
+    assert(sel && sel.slotId === 'obj-L1', `test setup issue: expected obj-L1 selected, got ${JSON.stringify(sel)}`);
+
+    for(let i = 0; i < 5; i++){
+      await appCJ.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+      await appCJ.page.waitForTimeout(30);
+    }
+    await appCJ.page.waitForTimeout(100);
+
+    const l1After = await appCJ.page.evaluate(() => window.__threeTestEdit.posOf('obj-L1'));
+    assert(l1After && Math.abs(l1After.x - l1.x) > 0.05, `nudge didn't move L1 far enough to test with, got ${JSON.stringify(l1After)}`);
+
+    const entryPos = await appCJ.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
+    const expectedInternal = { x: (entryPos.x + l1After.x) / 2, z: (entryPos.z + l1After.z) / 2 };
+    const segsAfter = await appCJ.page.evaluate(() => window.__threeTestEdit.chainSegments());
+    const hitInternalAfter = segsAfter.some(s => Math.abs(s.x - expectedInternal.x) < 0.01 && Math.abs(s.z - expectedInternal.z) < 0.01);
+    assert(hitInternalAfter, `expected the entry-L1 link to follow the LIVE nudge (no rebuild) to ${JSON.stringify(expectedInternal)}, got ${JSON.stringify(segsAfter)}`);
+
+    for(const target of targets){
+      const doorPos = await appCJ.page.evaluate((args) => window.__threeTestEdit.doorObjBasePos(args.k, args.target), { k: roomKey, target });
+      const mid = { x: (l1After.x + doorPos.x) / 2, z: (l1After.z + doorPos.z) / 2 };
+      const hit = segsAfter.some(s => Math.abs(s.x - mid.x) < 0.01 && Math.abs(s.z - mid.z) < 0.01);
+      assert(hit, `expected the L1-door link to target ${target} to follow the LIVE nudge to ${JSON.stringify(mid)}, got ${JSON.stringify(segsAfter)}`);
+    }
+    ok('memorization-aid: nudging a move-object live-updates every chain segment touching it, no rebuild needed');
+  } catch(e){ bad('memorization-aid: chain follows a live (unsaved-rebuild) nudge', e); }
+} finally {
+  await appCJ.close();
+}
+} catch(e){ bad('Phase CJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
