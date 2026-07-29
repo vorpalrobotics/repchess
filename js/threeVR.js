@@ -1466,6 +1466,7 @@ function setSlotXformLive(roomKey, slotId, xform){
     applyAccessoryTransform(obj, room, { kind: 'moveObject', x: obj.userData.base.x, z: obj.userData.base.z },
                             obj.userData.asset || { size: {} }, xform);
     refreshSelectionVisuals();
+    rebuildMoveObjectChainLive(roomKey);   // a door object is the chain's own final endpoint
     return;
   }
   if(obj.userData.doorBill){
@@ -1490,6 +1491,7 @@ function setSlotXformLive(roomKey, slotId, xform){
     // picture during a live nudge (it otherwise only catches up on a rebuild).
     const cap = findSubtitleObject(slotId);
     if(cap){ const p = moveObjectSubtitlePos(slot, xform); cap.position.set(p.x, p.y, p.z); }
+    if(slot.kind === 'moveObject') rebuildMoveObjectChainLive(roomKey);   // this slot's own position is a chain endpoint (not for a plain 'floor' prop)
   }
   refreshSelectionVisuals();
 }
@@ -5061,26 +5063,49 @@ function buildMoveObjectChain(room, roomKey){
   const entryPos = roomNameFloorPos(room.size, entranceWall(room));
   const path = [entryPos, ...ordered.slice(1).map(resolved)];
   for(let i = 0; i < path.length - 1; i++) addChainSegment(group, path[i], path[i + 1]);
-  // final link: a forward door carries its OWN pair/object preview of the
-  // room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
+  // final link(s): every forward door carries its OWN pair/object preview of
+  // the room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
   // slotXform) -- a wholly separate object from this room's own
   // moveObjectSlots, but the last thing you see walking the sequence before
   // stepping through, so the chain should end there rather than stopping
   // short at the room's own last internal slot (the real bug report: a
   // corridor's chain stopped at its last slot and never reached the door's
-  // own horse-statue pair-object beyond it). A plain corridor's tail can in
-  // principle branch into more than one forward door (a branch that didn't
-  // qualify as a two-track); picking just the first is an arbitrary but
-  // deterministic choice for that rare case, not a claim only one exists.
-  const fwd = room.exits ? room.exits.find(e => !e.back) : null;
-  if(fwd){
+  // own horse-statue pair-object beyond it). A plain corridor's tail can
+  // branch into more than one forward door (a branch that didn't qualify as a
+  // two-track) -- every one of them is a real possible continuation from the
+  // same last slot, so each gets its own link fanning out from there, not
+  // just the first.
+  const allFwd = room.exits ? room.exits.filter(e => !e.back) : [];
+  for(const fwd of allFwd){
     const sideSign = fwd.wall === 'east' ? 1 : -1;
     const base = doorSideXZ(room, fwd.wall, fwd.offset, sideSign);
     const xf = slotXformFor(roomKey, 'dobj-' + fwd.target);
     const doorPos = { x: base.x + (xf?.dx || 0), z: base.z + (xf?.dz || 0) };
     addChainSegment(group, path[path.length - 1], doorPos);
   }
-  return group.children.length ? group : null;
+  if(!group.children.length) return null;
+  // tagged so a live nudge (setSlotXformLive) can find and rebuild just this
+  // group in place, without a full buildRoom -- see rebuildMoveObjectChainLive.
+  group.userData = { kind: 'moveObjectChainGroup' };
+  return group;
+}
+// A move-object or door-object nudge (setSlotXformLive) moves the real prop
+// live without a full buildRoom (avoids the flash a rebuild would cause), but
+// the chain's segments were computed once at the last full build and don't
+// follow -- they'd visibly point at the object's old, default position until
+// the room was next entered. The chain is cheap to rebuild (a handful of
+// synchronous plane meshes sharing one cached texture, no async asset loads),
+// so just swap it out in place on every relevant nudge instead. A no-op if
+// this room has no chain at all (not a corridor, or nothing to link).
+function rebuildMoveObjectChainLive(roomKey){
+  if(!scene) return;
+  const room = mergedRoom(roomKey);
+  if(!room) return;
+  let old = null;
+  scene.traverse(o => { if(!old && o.userData && o.userData.kind === 'moveObjectChainGroup') old = o; });
+  if(old){ disposeSceneContents(old); scene.remove(old); }
+  const chain = buildMoveObjectChain(room, roomKey);
+  if(chain) scene.add(chain);
 }
 // briefly shows a status message top-center (e.g. the bounds-auto-fix notice)
 // so a silent data correction isn't invisible to the user; fades after ~3.5s.
