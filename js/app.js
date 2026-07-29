@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-245';
+const BUILD_TAG = '-246';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3412,8 +3412,14 @@ function compactRunLabel(runMoves,flip){
    this one line in place, lazily rendering the run's forced moves as normal
    per-move rows (each with its own full menu, for e.g. shortening the line)
    without leaving compact mode for the whole table. */
-function renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel){
-  const {runMoves,endSeq,endDepth} = run;
+// parentDiv/outerNoCompactUntil are the CALLING renderBranch's own `parent`
+// and `noCompactUntil` -- i.e. the context this compact run's position (seq)
+// was reached under, kept around only for the full-rebuild fallback below
+// (a compact run can only ever be invoked with !withinExpansion, so
+// outerNoCompactUntil is always either null or an OUTER run's endSeq that
+// doesn't cover this seq -- safe to just carry forward unchanged).
+function renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel,parentDiv,outerNoCompactUntil){
+  let {runMoves,endSeq,endDepth} = run;
   const tr = document.createElement('tr');
   tr.className = 'data-row compact-run';
   tr.innerHTML =
@@ -3422,7 +3428,7 @@ function renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel){
      </td>
      <td class="move" style="padding-left:${indentLevel}em">
        <button class="iconbtn toggle" title="Expand just this line"><i class="fa-solid fa-caret-right"></i></button>
-       ${compactRunLabel(runMoves,flip)}
+       <span class="compact-run-label">${compactRunLabel(runMoves,flip)}</span>
      </td>
      <td class="cnt-col"><span class="completeBadge"></span></td>
      <td class="eval-col"></td>
@@ -3430,39 +3436,81 @@ function renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel){
   tb.appendChild(tr);
   tr.dataset.seq = endSeq.join(',');   // identity for search/focus: this row stands in for the whole run, ending at endSeq
 
+  const labelSpan = tr.querySelector('.compact-run-label');
   const btnEval = tr.querySelector('td.resp > button.iconbtn');
   attachHoverPreview(btnEval, endSeq);
   btnEval.onclick = () => showPosition(fenForSeq(endSeq), ()=>{}, ()=>{}, endSeq);
 
-  // collapsed view: resume normal rendering AFTER the run.
-  const tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
-  const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
-  const div = document.createElement('div'); div.className='branch'; td1.appendChild(div);
-  const sub = renderBranch(div,games,endSeq,endDepth,flip);
-  updateCompleteBadge(tr.querySelector('.completeBadge'), sub.completeToMove);
+  // collapsed view: resume normal rendering AFTER the run. Rebuilt whenever
+  // rebuildSelf() below reconstructs it (endSeq/endDepth can shift).
+  let tr1 = document.createElement('tr'); tr1.className='branch-row'; tr.after(tr1);
+  function buildCollapsedContinuation(){
+    const td1 = document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
+    const div = document.createElement('div'); div.className='branch'; td1.appendChild(div);
+    const sub = renderBranch(div,games,endSeq,endDepth,flip);
+    updateCompleteBadge(tr.querySelector('.completeBadge'), sub.completeToMove);
+    return sub;
+  }
+  let sub = buildCollapsedContinuation();
 
   // expand-this-line toggle: lazily render the run's FULL form (its forced
   // moves as normal rows, followed by the same continuation) into a hidden
   // branch-row, via renderBranch with compaction suppressed for this run's own
-  // extent (noCompactUntil=endSeq). The triangle swaps which branch-row shows,
-  // so one compacted line can be temporarily expanded (to shorten it, open a
+  // extent (noCompactUntil=endSeq) and notifyDirty=rebuildSelf so an edit
+  // inside it (e.g. deleting one of the run's own moves) can refresh this
+  // row's own summary, below. The triangle swaps which branch-row shows, so
+  // one compacted line can be temporarily expanded (to shorten it, open a
   // move's menu, etc.) without toggling compact mode for the whole tree.
   const toggleBtn = tr.querySelector('button.toggle');
   let trFull = null;
+  function buildFull(){
+    trFull = document.createElement('tr'); trFull.className = 'branch-row';
+    const tdF = document.createElement('td'); tdF.colSpan=5; tdF.style.padding='0'; trFull.appendChild(tdF);
+    const divF = document.createElement('div'); divF.className='branch'; tdF.appendChild(divF);
+    tr.after(trFull);   // directly under the handle, above the collapsed continuation
+    renderBranch(divF,games,seq,depth,flip,endSeq,rebuildSelf);
+  }
   toggleBtn.onclick = () => {
     const expanding = !trFull || trFull.style.display === 'none';
-    if(expanding && !trFull){
-      trFull = document.createElement('tr'); trFull.className = 'branch-row';
-      const tdF = document.createElement('td'); tdF.colSpan=5; tdF.style.padding='0'; trFull.appendChild(tdF);
-      const divF = document.createElement('div'); divF.className='branch'; tdF.appendChild(divF);
-      tr.after(trFull);   // directly under the handle, above the collapsed continuation
-      renderBranch(divF,games,seq,depth,flip,endSeq);
-    }
+    if(expanding && !trFull) buildFull();
     trFull.style.display = expanding ? '' : 'none';
     tr1.style.display    = expanding ? 'none' : '';
     toggleBtn.innerHTML  = expanding ? '<i class="fa-solid fa-caret-down"></i>' : '<i class="fa-solid fa-caret-right"></i>';
     toggleBtn.title      = expanding ? 'Collapse this line' : 'Expand just this line';
   };
+
+  // Called after an edit anywhere inside the expanded view (trFull) that can
+  // change what THIS row itself should show -- e.g. deleting one of the run's
+  // own forced moves. Re-derives the run fresh from current data: if it's
+  // still a valid (>=2-pair) run, refreshes just the label/end-seq/collapsed-
+  // continuation in place, leaving trFull's own (already self-updated)
+  // content and current expanded/collapsed state untouched. If the run
+  // dissolved entirely (e.g. a deletion dropped it below 2 pairs), there's no
+  // clean partial update -- falls back to a full rebuild of this position,
+  // same pattern the plain (non-compact) tree already uses elsewhere
+  // (removeManualBtn's own onclick) for "something changed here, redo it".
+  function rebuildSelf(){
+    const fresh = computeCompactRun(games,seq,depth,flip);
+    if(!fresh){
+      parentDiv.innerHTML = '';
+      renderBranch(parentDiv,games,seq,depth,flip,outerNoCompactUntil);
+      return;
+    }
+    ({runMoves,endSeq,endDepth} = fresh);
+    labelSpan.innerHTML = compactRunLabel(runMoves,flip);
+    tr.dataset.seq = endSeq.join(',');
+    const wasCollapsedShown = tr1.style.display !== 'none';
+    tr1.remove();
+    tr1 = document.createElement('tr'); tr1.className='branch-row';
+    tr1.style.display = wasCollapsedShown ? '' : 'none';
+    (trFull || tr).after(tr1);
+    // (not reassigning the outer `sub`/completeToMove here -- rebuildSelf only
+    // ever runs after renderCompactRunRow has already returned that value up
+    // the call chain, so there'd be nothing left to propagate it to; matches
+    // this codebase's existing precedent of not re-threading completeToMove
+    // through a later local rebuild, e.g. removeManualBtn's own onclick.)
+    buildCollapsedContinuation();
+  }
 
   return sub;
 }
@@ -3549,7 +3597,13 @@ function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
 // "expand this line" view: compaction is suppressed for every position strictly
 // before that end seq (i.e. the run's own forced moves), then resumes normally
 // at/after it. Null everywhere else, so the normal tree is unaffected.
-function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
+// notifyDirty travels alongside it: also set only within that same expanded
+// view, called after any edit that can change an ANCESTOR compact-run row's
+// own displayed summary (its move labels, or whether it still forms a run at
+// all) -- e.g. deleting one of the run's own forced moves. The compact-run
+// row (renderCompactRunRow) refreshes itself in response; nothing outside an
+// expansion ever sets this, so it's a no-op everywhere else.
+function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,notifyDirty=null){
   const {counts,tot}=replies(games,seq);
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
@@ -3579,7 +3633,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
     /* nested tables get an "Add Opponent Move" item in their owning row's
        three-dot menu instead (wired in that row's expandWith closure); only
        the absolute root table (depth 0, no owning row) needs this fallback */
-    if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
+    if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
     return {completeToMove};
   }
 
@@ -3604,9 +3658,9 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
   if(compactMode && !withinExpansion){
     const run = computeCompactRun(games,seq,depth,flip);
     if(run){
-      const sub = renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel);
+      const sub = renderCompactRunRow(tb,games,seq,depth,flip,run,indentLevel,parent,noCompactUntil);
       completeToMove = Math.min(completeToMove, sub.completeToMove);
-      if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
+      if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
       return {completeToMove};
     }
   }
@@ -3764,6 +3818,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
       refreshMeta();
       refreshHidden();
       refreshRowMenuLabels(rowMenu, currentSaved());
+      notifyDirty?.();   // e.g. hidden/mnemonic can change an ancestor compact-run's own shape/label
     }
 
     /* group of rows belonging to this entry: the data row, its meta row,
@@ -3807,6 +3862,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
         savePrefField(roomSeq, 'note', v.note);
         refreshBranchName(nameSpan, roomSaved());
         refreshMeta();
+        notifyDirty?.();   // note/castleName/isCastleRoot can change an ancestor compact-run's eligibility/shape
       }, lineSeq);
     }
 
@@ -3821,10 +3877,12 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
       childrenSeq = [...lineSeq,reply];
       branchDiv = div;
-      // carry noCompactUntil forward so a single-line expansion keeps rendering
-      // the run's own forced moves in full (the prefix test self-limits it to
-      // the run's extent; null in the normal tree, so this is a no-op there).
-      const sub = renderBranch(div,games,childrenSeq,depth+1,flip,noCompactUntil);
+      // carry noCompactUntil/notifyDirty forward so a single-line expansion
+      // keeps rendering the run's own forced moves in full (the prefix test
+      // self-limits it to the run's extent) and any edit within them can still
+      // reach the compact-run row's own summary; both null in the normal
+      // tree, so this is a no-op there.
+      const sub = renderBranch(div,games,childrenSeq,depth+1,flip,noCompactUntil,notifyDirty);
       updateCompleteBadge(completeSpan, sub.completeToMove);
       // a hidden row's own badge still reflects its subtree, but it doesn't
       // count toward the OWNING seq's aggregate -- matches visibleForComplete
@@ -3847,6 +3905,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
       refreshBranchStats(statsSpan, games, childrenSeq);
       refreshSystemStats();
       queueChildrenForAnalysis(childrenSeq, branchDiv); // fill in sibling evals via the background analysis queue now that this branch is newly visible
+      notifyDirty?.();   // the new reply text can change an ancestor compact-run's own displayed label
     }
 
     /* restore reply from the preloaded PREFS map */
@@ -3956,8 +4015,13 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
       openFieldModal('addMove', '', v=>{
         addManualReply(childrenSeq,v);
         branchDiv.innerHTML='';
-        const sub = renderBranch(branchDiv,games,childrenSeq,depth+1,flip);
+        // pass noCompactUntil/notifyDirty through: adding an opponent try here
+        // can add a 2nd visible opp, breaking a forced chain further down --
+        // must stay un-compacted if this is still inside an expansion, and an
+        // ancestor compact-run's own summary may need to reflect the new move.
+        const sub = renderBranch(branchDiv,games,childrenSeq,depth+1,flip,noCompactUntil,notifyDirty);
         updateCompleteBadge(completeSpan, sub.completeToMove);
+        notifyDirty?.();
       }, v=>{
         if(!v) return {ok:false, error:'enter a move'};
         v = canonicalizeMoveCase(v);
@@ -3980,7 +4044,13 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
         rowMenu.classList.remove('show');
         removeManualReply(seq,opp);
         parent.innerHTML='';
-        renderBranch(parent,games,seq,depth,flip);
+        // pass noCompactUntil/notifyDirty through -- same reasoning as
+        // addMove's handler just above: this position stays un-compacted if
+        // still inside an expansion, and removing a move (this IS "delete a
+        // move from a compacted line") can shorten or dissolve an ancestor
+        // compact-run, which needs to hear about it.
+        renderBranch(parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
+        notifyDirty?.();
       };
     }
 
@@ -3999,7 +4069,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
     };
   });
 
-  if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip);
+  if(depth===0) appendAddMoveControl(tb,parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
   return {completeToMove};
 }
 
@@ -4009,7 +4079,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null){
    Appended as a row in the same table as the data rows (rather than a
    separate element) so its move column lines up with theirs — both share
    that table's column widths, regardless of the (empty) resp cell here. */
-function appendAddMoveControl(tb,parent,games,seq,depth,flip){
+function appendAddMoveControl(tb,parent,games,seq,depth,flip,noCompactUntil=null,notifyDirty=null){
   const tr=document.createElement('tr');
   tr.className='add-move';
   tr.innerHTML=
@@ -4023,7 +4093,11 @@ function appendAddMoveControl(tb,parent,games,seq,depth,flip){
     openFieldModal('addMove', '', v=>{
       addManualReply(seq,v);
       parent.innerHTML='';
-      renderBranch(parent,games,seq,depth,flip);
+      // this control (depth 0 only) can be reached while INSIDE a root-level
+      // compact run's own expansion -- thread noCompactUntil/notifyDirty
+      // through the same as every other mutation site in the expanded view.
+      renderBranch(parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
+      notifyDirty?.();
     }, v=>{
       if(!v) return {ok:false, error:'enter a move'};
       v = canonicalizeMoveCase(v);
