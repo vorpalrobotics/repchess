@@ -1505,7 +1505,16 @@ function setSlotXformLive(roomKey, slotId, xform){
     applySpriteContentScale(obj);
   } else {
     const asset = slotAssetFor(roomKey, slotId);
-    if(asset) applyAccessoryTransform(obj, room, slot, asset, xform);
+    if(asset){
+      applyAccessoryTransform(obj, room, slot, asset, xform);
+    } else {
+      // a word-only plaque (no image asset bound yet) -- reposition/rescale it
+      // directly, mirroring buildMoveObjectWordLabel's own placement formula.
+      const p = moveObjectWordLabelPos(slot, xform);
+      const s = xform.scale || 1;
+      obj.position.set(p.x, p.y, p.z);
+      obj.scale.set(1.1 * s, 0.55 * s, 1);
+    }
     // an image-backed move-object (hints on) has a decorative word caption that
     // isn't the 'accessory' mesh above; drag it along so it doesn't lag the
     // picture during a live nudge (it otherwise only catches up on a rebuild).
@@ -2769,11 +2778,15 @@ function buildMoveObjectPlaceholder(slot, xform){
 
 // Phase 2: a move-object slot driven by a wall list but whose list item has no
 // image asset yet shows the item's WORD (e.g. "Oven") as a solid plaque — the
-// stand-in object until an image is bound. Like the placeholder it routes an
-// edit-mode click to the asset picker (which sets a per-slot override), and it
-// stays visible with hints off (the word is the memory hook, not the move).
+// stand-in object until an image is bound. Unlike the ghostly placeholder
+// (nothing assigned at all) this IS a real, decorated stand-in, so it's
+// selectable/movable exactly like an image accessory (kind 'accessory') --
+// clicking selects it for nudging, and the gear icon (not a direct click)
+// opens the asset picker to swap in an image or edit the word. Stays visible
+// with hints off (the word is the memory hook, not the move).
 function buildMoveObjectWordLabel(slot, word, xform){
   xform = xform || {};
+  const scale = xform.scale || 1;
   const W = 512, H = 256;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -2807,10 +2820,18 @@ function buildMoveObjectWordLabel(slot, word, xform){
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
   // 2:1 canvas -> keep aspect; ~1.1 m wide plaque hovering at the object spot
-  sprite.scale.set(1.1, 0.55, 1);
-  sprite.position.set(slot.x + (xform.dx || 0), slot.y + 0.15 + (xform.dy || 0), slot.z + (xform.dz || 0));
-  sprite.userData = { kind: 'slot', slotId: slot.id, allow: PROP_TYPES };
+  sprite.scale.set(1.1 * scale, 0.55 * scale, 1);
+  const p = moveObjectWordLabelPos(slot, xform);
+  sprite.position.set(p.x, p.y, p.z);
+  sprite.userData = { kind: 'accessory', slotId: slot.id };
   return sprite;
+}
+// Word-plaque position, shared by the builder and the live nudge path
+// (setSlotXformLive) so the two never drift -- mirrors moveObjectSubtitlePos's
+// own split for the same reason.
+function moveObjectWordLabelPos(slot, xform){
+  xform = xform || {};
+  return { x: slot.x + (xform.dx || 0), y: slot.y + 0.15 + (xform.dy || 0), z: slot.z + (xform.dz || 0) };
 }
 
 // Phase 3: a small caption sprite with the list item's word, sat at the base of
@@ -8182,6 +8203,15 @@ export async function openThreeTest(containerEl, opts){
         const wp = new THREE.Vector3();
         found.getWorldPosition(wp);
         return { x: +wp.x.toFixed(3), y: +wp.y.toFixed(3), z: +wp.z.toFixed(3) };
+      },
+      // userData.kind of whichever scene object carries this slotId -- for
+      // testing that a word-only plaque (buildMoveObjectWordLabel) is really
+      // tagged 'accessory' (selectable/movable) and not 'slot' (opens the
+      // picker directly on click, correct only for a genuinely empty slot).
+      kindOf: (slotId) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
+        return found ? found.userData.kind : null;
       },
       // the canvas pixel size of a Sprite's texture (mnemonic pair billboards
       // aren't Meshes, so meshes() can't see them) -- for testing that a

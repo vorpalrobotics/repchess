@@ -11314,5 +11314,78 @@ try {
 } catch(e){ bad('Phase CK: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CL: a move-object slot given only a placeholder WORD label (no
+//     image) is selectable/movable just like an image-backed accessory --
+//     clicking it selects for nudging instead of always reopening "pick an
+//     asset". Reported: a named-only object had no way to be moved because
+//     every click on it went straight back to the asset picker. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+  const appCL = await launchApp();
+  try {
+    await seedBackup(appCL.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      ]}],
+      games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    }, { defaultPlayerColor: 'white' });
+    await openVR(appCL.page);
+    const roomKey = await appCL.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await appCL.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appCL.page.waitForTimeout(200);
+    await appCL.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appCL.page.waitForTimeout(60);
+    const slotIds = await appCL.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+    const slotId = slotIds.find(id => id !== 'obj-C1');
+    assert(slotId, `test setup issue: expected a non-center move-object slot, got ${JSON.stringify(slotIds)}`);
+
+    // assign a placeholder WORD label (no image) via the real picker UI --
+    // same flow a user takes from an empty slot (mirrors Phase AR's test 139).
+    await appCL.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+    await appCL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appCL.page.fill('#pickerWordInput', 'Grandfather Clock');
+    await appCL.page.click('#pickerWordApplyBtn');
+    await appCL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appCL.page.waitForTimeout(150);
+
+    // 224. The word plaque's scene object is tagged 'accessory' now, not
+    //      'slot' -- a real click on it selects for movement instead of
+    //      reopening the asset picker.
+    try {
+      const kind = await appCL.page.evaluate((sid) => window.__threeTestEdit.kindOf(sid), slotId);
+      assert(kind === 'accessory', `expected the word plaque tagged 'accessory' (selectable), got '${kind}'`);
+      ok('move-object word label: the built plaque is selectable ("accessory"), not a direct picker trip ("slot")');
+    } catch(e){ bad('move-object word label: plaque is tagged accessory, not slot', e); }
+
+    // 225. Selecting it via the real edit-target flow and arrow-key nudging
+    //      moves the plaque live -- same as an image-backed accessory. The
+    //      gear icon (not exercised here, covered by openPropManager's
+    //      existing allowWord wiring) is what re-opens the picker now.
+    try {
+      const before = await appCL.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), slotId);
+      await appCL.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), slotId);
+      const sel = await appCL.page.evaluate(() => window.__threeTestEdit.selected());
+      assert(sel && sel.slotId === slotId, `expected the word plaque selected, got ${JSON.stringify(sel)}`);
+
+      for(let i = 0; i < 5; i++){
+        await appCL.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+        await appCL.page.waitForTimeout(30);
+      }
+      await appCL.page.waitForTimeout(100);
+      const after = await appCL.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), slotId);
+      assert(after && Math.abs(after.x - before.x) > 0.05, `expected the plaque to move live on nudge, before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
+      ok('move-object word label: arrow-key nudge moves the plaque live, same as an image accessory');
+    } catch(e){ bad('move-object word label: real select+nudge flow moves the plaque', e); }
+  } finally {
+    await appCL.close();
+  }
+} catch(e){ bad('Phase CL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
