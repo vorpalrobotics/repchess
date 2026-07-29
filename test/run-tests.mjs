@@ -11059,5 +11059,86 @@ try {
 } catch(e){ bad('Phase CI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CI2: editing a move INSIDE an expanded compacted line refreshes
+//     the ancestor compact-run row's own summary live -- no reload needed.
+//     Reported bug: expanding a line, then deleting one of its own moves,
+//     left the still-visible compact summary showing the deleted move until
+//     the page was refreshed. Fixed via renderBranch's new notifyDirty param
+//     (threaded alongside noCompactUntil), called by every mutation that can
+//     change a compact run's shape/label; renderCompactRunRow's rebuildSelf
+//     re-derives the run fresh and patches its own label/end-seq in place. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appCI2 = await launchApp();
+try {
+  // pair1 (Nf6/c4) and pair2 (e6/Nc3) are real-game-backed; pair3 (Bb4/e3) is
+  // PURELY manual (no game reaches it -- the one seeded game stops right at
+  // Nc3) so it's deletable via "Remove This Move", the exact reported action.
+  await seedBackup(appCI2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3'], manualReplies: ['Bb4'] },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appCI2.page.click('.line-row');
+  await appCI2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appCI2.page.click('#compactModeBtn');
+  await appCI2.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+
+  const labelText = () => appCI2.page.evaluate(() =>
+    document.querySelector('tr.compact-run .compact-run-label').textContent);
+
+  // 219. Baseline: the compact row's label covers all 3 pairs (6 chips)
+  //      before any edit.
+  try {
+    const before = await appCI2.page.evaluate(() =>
+      document.querySelector('tr.compact-run .compact-run-label').querySelectorAll('.pv-move').length);
+    assert(before === 6, `expected 6 chips (3 pairs) before any edit, got ${before}`);
+    ok('compact mode: baseline label covers all 3 forced pairs, including the manual one');
+  } catch(e){ bad('compact mode notifyDirty: baseline label', e); }
+
+  // 220. Expand the line, delete its own manual move (Bb4) via "Remove This
+  //      Move" from WITHIN the expanded view, and confirm the still-visible
+  //      compact-run row's summary shrinks to 2 pairs immediately -- no
+  //      reload, no re-collapsing first.
+  try {
+    await appCI2.page.evaluate(() => document.querySelector('tr.compact-run button.toggle').click());
+    await appCI2.page.waitForSelector('tr.data-row[data-opp="Bb4"]', { timeout: 5000 });
+
+    await appCI2.page.evaluate(() => {
+      const tr = document.querySelector('tr.data-row[data-opp="Bb4"]');
+      tr.querySelector('.rowMenuBtn').click();
+      tr.querySelector('[data-act="removeManual"]').click();
+    });
+    await appCI2.page.waitForFunction(() =>
+      document.querySelector('tr.compact-run .compact-run-label').querySelectorAll('.pv-move').length === 4,
+      { timeout: 5000 });
+
+    const chipTexts = await appCI2.page.evaluate(() =>
+      [...document.querySelector('tr.compact-run .compact-run-label').querySelectorAll('.pv-move')].map(c => c.textContent));
+    assert(!chipTexts.includes('Bb4') && !chipTexts.includes('e3'),
+      `expected the deleted pair gone from the LIVE compact summary (no reload), got ${JSON.stringify(chipTexts)}`);
+    assert(chipTexts.includes('Nf6') && chipTexts.includes('c4') && chipTexts.includes('e6') && chipTexts.includes('Nc3'),
+      `expected the remaining 2 pairs still in the summary, got ${JSON.stringify(chipTexts)}`);
+
+    const newDataSeq = await appCI2.page.evaluate(() => document.querySelector('tr.compact-run').dataset.seq);
+    assert(newDataSeq === 'd4,Nf6,c4,e6,Nc3', `expected the compact row's own seq identity shortened to the new end, got ${newDataSeq}`);
+
+    const stillCompact = await appCI2.page.evaluate(() => !!document.querySelector('tr.compact-run'));
+    assert(stillCompact, 'expected the row to remain a valid (now-2-pair) compact row, not dissolve');
+    ok('compact mode: deleting a move from an expanded line live-updates the ancestor compact summary');
+  } catch(e){ bad('compact mode notifyDirty: live label update on delete', e); }
+} finally {
+  await appCI2.close();
+}
+} catch(e){ bad('Phase CI2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
