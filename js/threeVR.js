@@ -5109,8 +5109,36 @@ function showToast(msg){
 // up exactly where a manual nudge to the same spot would have put it. Returns
 // the number of items it corrected (0 = nothing needed fixing).
 function reconcileRoomBounds(roomKey){
-  const room = mergedRoom(roomKey);
+  let room = mergedRoom(roomKey);
   if(!room || room.outdoor) return 0;   // streets/lawns aren't resizable "rooms"
+  // Size self-heal (before the per-item checks below, so they run against the
+  // corrected size). A stored size override (LAYOUT[roomKey].geom) that's
+  // smaller than the room's own content minimum would trap move-pair
+  // billboards and doors in the walls -- and the per-item nudge fixes below
+  // can only cram them against a too-small wall, not actually make room. This
+  // happens when an override outlives the content it was sized for: saved when
+  // the room held fewer pairs/doors, or -- the case that motivated this -- kept
+  // under a room's key after the phantom-en-passant canonicalization MERGED
+  // another transposing path into it, folding in that path's onward doors.
+  // Grow the saved geometry up to relaxedContentMin (the exact floor the Room
+  // Geometry dialog clamps to on Apply), so the room self-heals on the next
+  // walk-in instead of needing a manual Reset. Only ever GROWS, and only a
+  // sub-floor override, so a legitimate size (always >= the floor, since the
+  // dialog enforces it) is never touched. relaxedContentMin returns null for
+  // elevator cars and outdoor rooms -- those size themselves and a car
+  // legitimately shrinks below this, so they're left alone.
+  if(LAYOUT[roomKey] && LAYOUT[roomKey].geom){
+    const floor = relaxedContentMin(room, roomKey);
+    if(floor){
+      const g = LAYOUT[roomKey].geom;
+      const nw = Math.max(g.w, floor.w), nd = Math.max(g.d, floor.d);
+      if(nw > g.w + 1e-6 || nd > g.d + 1e-6){
+        LAYOUT[roomKey].geom = { ...g, w: nw, d: nd };
+        persistLayout();
+        room = mergedRoom(roomKey);   // re-read so the item checks below see the grown size
+      }
+    }
+  }
   const layoutRoom = LAYOUT[roomKey];
   const xforms = (layoutRoom && layoutRoom.slotXform) || {};
   let fixed = 0;
