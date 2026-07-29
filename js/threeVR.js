@@ -6574,6 +6574,11 @@ function makeIconBtn(faClass, title, onTap){
 // empty middle clicking through.
 function buildTopToolbar(){
   const bar = document.createElement('div');
+  // marks the toolbar so tests can scope icon-order assertions to it alone --
+  // the VR pane also holds the Help overlay, whose text documents each button
+  // with the same inline Font Awesome icons, which a bare pane-wide selector
+  // would otherwise count as extra "toolbar" icons.
+  bar.dataset.threeToolbar = '1';
   bar.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;display:flex;'
     + 'justify-content:space-between;align-items:flex-start;z-index:6;pointer-events:none;';
   const left = document.createElement('div');
