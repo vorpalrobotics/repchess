@@ -6786,6 +6786,51 @@ try {
     assert(accept === '*/*', `expected #backupImport's accept to be the explicit wildcard "*/*", got ${JSON.stringify(accept)}`);
     ok('#backupImport uses an explicit "*/*" accept, so cloud-picked files (Drive, Dropbox) are always offered and selectable');
   } catch(e){ bad('#backupImport accept is an explicit wildcard', e); }
+
+  // 86. A round trip through import THEN export must preserve every field a
+  //     backup claims to carry -- specifically the ones a prior review found
+  //     silently dropped: the per-node `compareGames` toggle, and the
+  //     graphLayout/decoratedRooms/memorizedShapes meta blobs (all three
+  //     documented as persisted "the same way" as threeLayout/memorizedRooms,
+  //     which WERE already covered). Seed a backup carrying all four, restore
+  //     it through the real #backupImport path, confirm each lands in IDB via
+  //     getPref/getMeta, then rebuild a fresh export (buildBackupData, the
+  //     download-free half of exportBackup) and confirm it still has them --
+  //     proving the fields survive both directions, not just storage.
+  try {
+    const roundTripBackup = {
+      version: 6, user: 'tester',
+      lines: [{
+        id: 'L-RT', name: 'RoundTrip', color: 'white', openingMoves: ['d4'],
+        prefs: [{ seq: ['d4'], reply: 'Nf6', compareGames: true }],
+      }],
+      games: [],
+      graphLayout: JSON.stringify({ 'L-RT|root': { 'd4': {dx:5,dy:7} } }),
+      decoratedRooms: JSON.stringify({ 'cas:L-RT:root': 1700000000000 }),
+      memorizedShapes: JSON.stringify({ 'cas:L-RT:root': { kind:'corridor', exitPosKeys:['d4'] } }),
+    };
+    await seedBackup(appBH.page, roundTripBackup);
+
+    const restoredPref = await appBH.page.evaluate(() => window.__aqTestHooks.getPref('L-RT', ['d4']));
+    assert(restoredPref?.compareGames === true, `expected compareGames:true to survive the restore, got ${JSON.stringify(restoredPref)}`);
+
+    const restoredMeta = await appBH.page.evaluate(() => Promise.all([
+      window.__backupTestHooks.getMeta('graphLayout'),
+      window.__backupTestHooks.getMeta('threeDecoratedRooms'),
+      window.__backupTestHooks.getMeta('threeMemorizedShapes'),
+    ]));
+    assert(restoredMeta[0] === roundTripBackup.graphLayout, `expected graphLayout meta to survive the restore, got ${restoredMeta[0]}`);
+    assert(restoredMeta[1] === roundTripBackup.decoratedRooms, `expected threeDecoratedRooms meta to survive the restore, got ${restoredMeta[1]}`);
+    assert(restoredMeta[2] === roundTripBackup.memorizedShapes, `expected threeMemorizedShapes meta to survive the restore, got ${restoredMeta[2]}`);
+
+    const rebuilt = await appBH.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    const rebuiltPref = rebuilt.lines.find(l => l.id === 'L-RT')?.prefs.find(p => p.seq.join(',') === 'd4');
+    assert(rebuiltPref?.compareGames === true, `expected a fresh export to still carry compareGames:true, got ${JSON.stringify(rebuiltPref)}`);
+    assert(rebuilt.graphLayout === roundTripBackup.graphLayout, `expected a fresh export to still carry graphLayout, got ${rebuilt.graphLayout}`);
+    assert(rebuilt.decoratedRooms === roundTripBackup.decoratedRooms, `expected a fresh export to still carry decoratedRooms, got ${rebuilt.decoratedRooms}`);
+    assert(rebuilt.memorizedShapes === roundTripBackup.memorizedShapes, `expected a fresh export to still carry memorizedShapes, got ${rebuilt.memorizedShapes}`);
+    ok('backup round trip: compareGames + graphLayout/decoratedRooms/memorizedShapes survive both restore and a fresh re-export');
+  } catch(e){ bad('backup round trip: previously-dropped fields now survive', e); }
 } finally {
   await appBH.close();
 }

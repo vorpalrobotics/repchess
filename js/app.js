@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-251';
+const BUILD_TAG = '-252';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5100,12 +5100,15 @@ async function downloadJsonBackup(obj, baseName){
    Lichess user id) so that importing it into a brand-new browser/profile
    reproduces the exact prior state with no other setup required.
 */
-async function exportBackup(){
-  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
+// Builds the full backup object without touching the download machinery --
+// split out (same rationale as buildMnemonicsExportData) so a test can
+// inspect exactly what a backup would contain without capturing a real
+// file download.
+async function buildBackupData(){
   const lines = await getLines(CURRENT_USER);
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);
-  const data = {
+  return {
     version: 6,   // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
@@ -5116,7 +5119,7 @@ async function exportBackup(){
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
-        collapsed:p.collapsed, moveQuality:p.moveQuality,
+        collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
         castleStreetNumber:p.castleStreetNumber
       }))
@@ -5134,13 +5137,20 @@ async function exportBackup(){
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
+    decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
+    memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
+    graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     assets: await getAllAssets(),
     objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
+}
+async function exportBackup(){
+  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
+  const data = await buildBackupData();
   const stamp = new Date().toISOString().slice(0,10);
   const size = await downloadJsonBackup(data, `repchess-backup-${CURRENT_USER}-${stamp}`);
   const mb = (size/1048576).toFixed(1);
-  log(`exported ${lines.length} opening system(s), ${games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
+  log(`exported ${data.lines.length} opening system(s), ${data.games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
 }
 
 // test-only generation counter, bumped at the very end of importBackup (see
@@ -5196,7 +5206,7 @@ async function importBackup(data, onMnemProgress){
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
         eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
-        moveQuality:pref.moveQuality||'',
+        moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
         castleStreetNumber:pref.castleStreetNumber??''
       });
@@ -5225,6 +5235,9 @@ async function importBackup(data, onMnemProgress){
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
   if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
+  if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+  if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
+  if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
   log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
@@ -8674,6 +8687,18 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__linesTestHooks = {
     updateLine: (id, patch) => updateLine(id, patch),
+  };
+}
+
+// test-only hook for the full-backup export/import round trip -- buildBackupData
+// is the pure data-assembly half of exportBackup (no download involved), so a
+// test can inspect exactly what a backup would contain after seeding one
+// through the real importBackup path (seedBackup drives the actual file-input
+// change handler), closing the loop on whether a field survives both directions.
+if(localStorage.getItem('threeTestDebug')){
+  window.__backupTestHooks = {
+    buildBackupData: () => buildBackupData(),
+    getMeta: (key) => getMeta(key),
   };
 }
 
