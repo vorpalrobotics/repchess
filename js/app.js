@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-250';
+const BUILD_TAG = '-251';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4478,6 +4478,13 @@ async function renderHome(){
         e.stopPropagation();
         if(!confirm(`Delete opening system "${line.name}"?`)) return;
         await deleteLine(line.id);
+        // deleteLine already dropped this line's rows from the analysisQueue
+        // store -- prune the in-memory mirror too so a background loop
+        // in-flight against this tab can't keep processing/saving against a
+        // lineId that no longer exists (same reasoning as importBackup's
+        // post-clearAllData reset).
+        ANALYSIS_QUEUE = ANALYSIS_QUEUE.filter(it => it.lineId !== line.id);
+        renderAnalysisQueueModalIfOpen();
         renderHome();
       };
       list.appendChild(row);
@@ -8657,6 +8664,16 @@ if(localStorage.getItem('threeTestDebug')){
     normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
     putGames: (user, games) => putGames(user, games),
     getGames: (user) => getGames(user),
+  };
+}
+
+// test-only hook for db.js's line CRUD -- plain IDB manipulation, works fine
+// in the offline harness. updateLine resolves `true`/`false` depending on
+// whether `id` actually matched a stored line, so a test can check that
+// signal directly instead of only inferring it from a re-fetch.
+if(localStorage.getItem('threeTestDebug')){
+  window.__linesTestHooks = {
+    updateLine: (id, patch) => updateLine(id, patch),
   };
 }
 
