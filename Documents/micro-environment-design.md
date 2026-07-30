@@ -270,22 +270,29 @@ those only requires handling "there's a door at the far end":
 The Study-room investigation earlier in this session showed that adding a
 branch mid-way through a linear room causes the room to split into two
 pieces, with only one half keeping the original identity/name/decorations —
-the other half becomes a fresh, undecorated room. A terminal-only
-micro-environment would inherit that exact same fragility: shrinking a
-7-locus run down, then later adding a branch at locus 3, would split the
-underlying run and leave the micro-environment's shrunk rendering stale or
-partially orphaned in the same way. The extended (de-shrinker) version
-doesn't eliminate this — the underlying room-splitting mechanics are
+the other half becomes a fresh, undecorated room. **Update: for a room
+marked `MEMORIZED`, this no longer happens** — the "memorized-room-stability"
+feature (Phase 3, `buildFrozenAdjacency` in `js/app.js` / `MEMORIZED_SHAPES`
+in `js/threeVR.js`, shipped since this section was written) now diverts the
+new edge into a side-door instead of splitting the room, specifically to
+prevent this. The risk below is therefore narrowed to **unmemorized** linear
+rooms, where re-flow (and the splitting it can cause) is still the expected,
+intentional default. A terminal-only micro-environment built on an
+unmemorized run would inherit that fragility: shrinking a 7-locus run down,
+then later adding a branch at locus 3, would split the underlying run and
+leave the micro-environment's shrunk rendering stale or partially orphaned.
+The extended (de-shrinker) version doesn't eliminate this for the
+unmemorized case — the underlying room-splitting mechanics there are
 unchanged — but because a micro-environment is now valid for *any*
 single-run shape (not just terminal ones), a post-split remainder that is
 still a qualifying single run (which, per the earlier enumeration, is the
 common outcome — the peeled-off two-track piece is usually what's new, while
 the original corridor's surviving prefix stays a run) keeps being a valid
 micro-environment target and simply gains a de-shrinker at its new, shorter
-tail. This narrows the staleness gap to the same content-drift case that
-already exists for ordinary decorated rooms today (the stale-memorized
-question raised separately, and explicitly deferred), rather than adding an
-extra, micro-environment-specific failure mode on top of it.
+tail. This narrows the staleness gap, for the unmemorized case, to the same
+content-drift risk ordinary decorated rooms already carry before they're
+memorized, rather than adding an extra, micro-environment-specific failure
+mode on top of it.
 
 ### Remaining open items for this slice specifically
 
