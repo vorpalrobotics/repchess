@@ -5,7 +5,7 @@ network-blocked. There is a committed offline harness that fixes this. Use it to
 *actually run* VR/app changes instead of only syntax-checking them.
 
 ```sh
-cd test && npm install && npm test        # 150+ tests, phases A.. onward
+cd test && npm install && npm test        # 280+ tests, phases A.. onward
 ```
 
 This document is the "why and how"; [`test/README.md`](../test/README.md) is the
@@ -14,11 +14,12 @@ claim it works** — a green `node --check` says nothing about whether the world
 renders.
 
 **Before deciding how much of the suite to run for a given change**, read
-[`../test/TESTING_POLICY.md`](../test/TESTING_POLICY.md) — a tiered policy
-scoped to the size/risk of the change (a constant tweak needs no run at all;
-a shared/core change may justify two full runs). Don't default to a full
-run + revert + rerun + reapply + rerun cycle for every change regardless of
-size; that's the exact pattern the policy exists to retire.
+[`../CLAUDE.md`](../CLAUDE.md)'s "Testing the VR / app headlessly" section —
+the tiered policy scoped to the size/risk of a change (don't run `npm test`
+on your own initiative; write/update targeted tests as normal; ask before a
+full run; and don't default to a run + revert + rerun + reapply + rerun
+cycle for every change regardless of size — that's the exact pattern the
+policy exists to retire).
 
 ---
 

@@ -27,13 +27,23 @@ section by section:
   identity is a stable position key (`posKeyByGid` → `castleRoomKey`),
   independent of the `R#` numbering, so decorations survive regeneration;
   detection is derived/advisory the way this section anticipates.
-- **§4 Maintenance when a run breaks** — the **detection half is built**
-  (adding a reply that splits a run re-boxes automatically on next
-  regenerate). The **"pin-and-annex" half is not**: there's no way to lock
-  an already-memorized room against being reshaped by a future
-  regeneration. Today every regeneration is unconditional "re-flow"; the
-  `MEMORIZED` 🧠 flag is a manual progress marker only, with no effect on
-  structure. See `CastleDataModel.md`'s "Explicitly deferred" section.
+- **§4 Maintenance when a run breaks** — **built**, both halves. Detection
+  still re-boxes automatically on next regenerate. Pin-and-annex also
+  shipped, as the "memorized-room-stability" feature (Phases 1–3):
+  toggling `MEMORIZED` 🧠 on a **linear** room (corridor/two-track)
+  snapshots its shape (`MEMORIZED_SHAPES`, threeVR.js); the next
+  regeneration reads that snapshot via `buildFrozenAdjacency` (js/app.js)
+  and keeps the room's *original* chain-forming edges treated as chain
+  links even once a passed-through node gains a new live edge — the new
+  edge falls out as an ordinary side-door instead of splitting/reshaping
+  the memorized walls, exactly the "attach new branches via a new door,
+  leave memorized walls intact" behavior this section asked for. A
+  memorized **non-linear** (branch) room has no such restructuring risk in
+  the first place (a new edge there just becomes another ordinary door),
+  so it only gets a "dirty" badge (Phase 2, `isRoomDirty`) as a manual
+  heads-up, not a structural change. There is still no separate per-castle
+  "locked" flag or re-flow/pin-and-annex *choice* — protection is implicit
+  and automatic, driven entirely by whether a room is marked memorized.
 - **§5 Move-pair ↔ object association** — **built**: numbered placeholder
   slots (`obj-L1`, `obj-R1`, …), the Choose Asset picker to fill them,
   clear-to-restore-placeholder, and the hints-toggle hiding placeholders
@@ -275,6 +285,7 @@ billboard), with no data link. Make it real.
 - Leash radius tuning; soft vs. hard clamp — still open, blocked on the
   leash itself not being built yet (see §5's status above).
 - Whether two converging runs should ever share a single exit door — still open.
-- Re-flow vs. pin-and-annex selection (per-castle "locked" flag, or implicit via
-  stable decoration keys) — still open; today there is only re-flow (see §4's
-  status above).
+- ~~Re-flow vs. pin-and-annex selection~~ — **resolved, implicitly**: there's no
+  separate per-castle "locked" flag or explicit mode choice; a memorized linear
+  room is automatically pin-and-annexed on regeneration (frozen adjacency, see
+  §4's status above), an unmemorized one always re-flows.

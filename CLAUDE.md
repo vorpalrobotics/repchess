@@ -65,3 +65,30 @@ Keep these in lockstep so the visible build tag confirms exactly what deployed.
 
 Feature branch → PR → merge (do not commit straight to `main`). Only open a PR
 when asked. GitHub Pages serves from `main`.
+
+### Known issue: the local workspace can silently revert to a stale commit
+
+In this remote/CI environment, the local git working directory has repeatedly
+been observed to snap back to an old commit mid-session — e.g. `git log`
+suddenly shows a commit from many merges ago, `js/app.js`'s `BUILD_TAG`
+doesn't match what you last set, and `git status` may look clean (no diff)
+because the revert is clean, not a merge conflict. This has only ever
+affected the **local working copy**; nothing has been lost from git history
+itself, since work only becomes durable once committed, pushed, and merged
+into `main` on GitHub. The one loss risk is **uncommitted edits** at the
+moment of a revert — commit and push promptly rather than sitting on a large
+uncommitted diff, so a workspace snap-back has little to lose.
+
+**Don't trust local git state at face value if something looks off.**
+Recovery:
+
+```sh
+git fetch origin main
+git checkout -f -B <your-branch> origin/main
+```
+
+Then re-verify you're actually caught up: `grep -n "const BUILD_TAG" js/app.js`
+should match the last value you set, and `git log --oneline -3` should show
+your most recent merge. If still in doubt, cross-check the true branch tip
+via the GitHub API/MCP tools (e.g. `list_commits`) rather than trusting local
+refs alone — local tracking refs have sometimes been stale too.

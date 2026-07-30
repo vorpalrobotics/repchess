@@ -290,8 +290,13 @@ for the user-facing behavior.
   them to move-object slots — **done**. UI for overriding `classification`
   — still not built, and given the automatic detection above, may not be
   needed.
-- Still open: a room-level "pin" against a future regeneration reshuffling
-  an already-memorized room's structure (`LinearSequencesAndRoomObjects.md`
-  section 4's "pin-and-annex" idea) — regeneration is always full re-flow
-  today. The `MEMORIZED` 🧠 flag is purely a manual progress marker; it has
-  no effect on regeneration.
+- ~~Still open: a room-level "pin" against a future regeneration reshuffling
+  an already-memorized room's structure~~ — **done**, as the
+  "memorized-room-stability" feature (`buildFrozenAdjacency` in `js/app.js`,
+  `MEMORIZED_SHAPES` in `js/threeVR.js`): marking a linear (corridor/
+  two-track) room memorized snapshots its shape, and a later regeneration
+  keeps that room's original chain-forming edges intact, diverting any new
+  edge into a side-door instead of reshaping the room. See
+  `LinearSequencesAndRoomObjects.md` section 4 for the full behavior. The
+  `MEMORIZED` 🧠 flag is no longer *just* a progress marker — it now also
+  gates this protection.
