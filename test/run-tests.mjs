@@ -6831,6 +6831,100 @@ try {
     assert(rebuilt.memorizedShapes === roundTripBackup.memorizedShapes, `expected a fresh export to still carry memorizedShapes, got ${rebuilt.memorizedShapes}`);
     ok('backup round trip: compareGames + graphLayout/decoratedRooms/memorizedShapes survive both restore and a fresh re-export');
   } catch(e){ bad('backup round trip: previously-dropped fields now survive', e); }
+
+  // 87. If applyBackupData throws partway through the write phase (a record
+  //     malformed in a way the shallow top-level validation -- data.lines is
+  //     an array, data.user is truthy -- can't catch up front), importBackup
+  //     must automatically roll back to a snapshot of whatever was there
+  //     before, so a bad file can't leave the browser with neither the old
+  //     nor a complete new copy. Covers the in-session case (tab stays alive
+  //     to run the catch block); test 88 covers the crash-survives case.
+  try {
+    const goodBackup = {
+      version: 6, user: 'goodUser',
+      lines: [{ id: 'L-GOOD', name: 'Good', color: 'white', openingMoves: ['e4'], prefs: [{ seq: ['e4'], reply: 'e5' }] }],
+      games: [],
+    };
+    await seedBackup(appBH.page, goodBackup);
+
+    const badBackup = {
+      version: 6, user: 'badUser',
+      // seq:null throws inside setPref's prefKey (seq.join is not a function
+      // on null) -- deep enough that the shallow top-level checks pass it through.
+      lines: [{ id: 'L-BAD', name: 'Bad', color: 'white', openingMoves: ['d4'], prefs: [{ seq: null, reply: 'd5' }] }],
+      games: [],
+    };
+    const genBefore = await appBH.page.evaluate(() => window.__importBackupGen());
+    await appBH.page.setInputFiles('#backupImport', {
+      name: 'bad.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(badBackup)),
+    });
+    // the rollback's own applyBackupData call reaches the same trailing
+    // _importBackupGen++ a clean restore would -- so this settles even
+    // though the FIRST (failing) attempt never got that far.
+    await appBH.page.waitForFunction((n) => window.__importBackupGen() > n, genBefore, { timeout: 15000 });
+
+    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    assert(userId === 'goodUser', `expected the failed import to roll back CURRENT_USER to "goodUser", got ${userId}`);
+
+    const [goodLines, badLines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines('goodUser'),
+      window.__linesTestHooks.getLines('badUser'),
+      window.__aqTestHooks.getPref('L-GOOD', ['e4']),
+      window.__backupTestHooks.hasSafetyBackup(),
+    ]));
+    assert(goodLines.length === 1 && goodLines[0].id === 'L-GOOD', `expected the pre-restore line to survive the rollback, got ${JSON.stringify(goodLines)}`);
+    assert(badLines.length === 0, `expected the failed import's own data to NOT be present after rollback, got ${JSON.stringify(badLines)}`);
+    assert(goodPref?.reply === 'e5', `expected the pre-restore pref to survive the rollback, got ${JSON.stringify(goodPref)}`);
+    assert(hasSafety === false, `expected the safety-backup row to be cleared once the rollback succeeded, got hasSafetyBackup=${hasSafety}`);
+    ok('importBackup: a mid-restore failure automatically rolls back to the pre-restore snapshot (in-session)');
+  } catch(e){ bad('importBackup: automatic in-session rollback on failure', e); }
+
+  // 88. The safety snapshot is persisted to IDB (not just held in memory), so
+  //     it survives the TAB dying mid-restore, not just a thrown JS error.
+  //     Simulate that: leave one user's data live, but plant a DIFFERENT
+  //     snapshot in the safetyBackup store (as importBackup would have, right
+  //     before wiping, had a "restore" to that state been interrupted before
+  //     ever confirming completion) -- then reload the page and confirm the
+  //     real boot sequence (maybeRecoverFromInterruptedRestore, wired in
+  //     right before the first renderHome()) replays it automatically.
+  try {
+    const staleBackup = {
+      version: 6, user: 'staleUser',
+      lines: [{ id: 'L-STALE', name: 'Stale', color: 'white', openingMoves: ['c4'], prefs: [] }],
+      games: [],
+    };
+    await seedBackup(appBH.page, staleBackup);
+
+    const recoverSnapshot = {
+      version: 6, user: 'recoverUser', exportedAt: new Date().toISOString(),
+      lines: [{ id: 'L-RECOVER', name: 'Recover', color: 'white', openingMoves: ['e4'], prefs: [{ seq: ['e4'], reply: 'e5' }] }],
+      games: [], mnemonics: [],
+    };
+    await appBH.page.evaluate((snap) => window.__backupTestHooks.persistSafetyBackup(snap), recoverSnapshot);
+
+    await appBH.page.reload({ waitUntil: 'domcontentloaded' });
+    await appBH.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appBH.page.waitForFunction(() => window.__importBackupGen && window.__importBackupGen() > 0, { timeout: 15000 });
+
+    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    assert(userId === 'recoverUser', `expected boot-time recovery to restore CURRENT_USER to "recoverUser", got ${userId}`);
+
+    const [recoveredLines, staleLines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines('recoverUser'),
+      window.__linesTestHooks.getLines('staleUser'),
+      window.__aqTestHooks.getPref('L-RECOVER', ['e4']),
+      window.__backupTestHooks.hasSafetyBackup(),
+    ]));
+    assert(recoveredLines.length === 1 && recoveredLines[0].id === 'L-RECOVER', `expected the orphaned safety snapshot to be restored on boot, got ${JSON.stringify(recoveredLines)}`);
+    assert(staleLines.length === 0, `expected the pre-crash live data to be replaced by the recovered snapshot, got ${JSON.stringify(staleLines)}`);
+    assert(recoveredPref?.reply === 'e5', `expected the recovered snapshot's pref data to be present, got ${JSON.stringify(recoveredPref)}`);
+    assert(hasSafety === false, `expected the safety-backup row to be cleared once boot-time recovery succeeded, got hasSafetyBackup=${hasSafety}`);
+    ok('boot-time recovery: an orphaned safety snapshot (simulating a crash mid-restore) is replayed automatically on the next page load');
+  } catch(e){ bad('boot-time recovery from an orphaned safety snapshot', e); }
 } finally {
   await appBH.close();
 }
