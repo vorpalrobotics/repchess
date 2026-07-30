@@ -10393,7 +10393,10 @@ try {
 //     strategy gap (a short 2-move corridor has no half-wall divider the
 //     way a two-track room does, so nothing distinguished it from "two
 //     moves, two separate doors"). A two-track room gets its own divider
-//     instead and must NOT also get a chain. ---
+//     PLUS its own chain per lane (each lane is its own forced sequence too,
+//     same gap, just two of them side by side) -- see Phase CM for the
+//     fuller two-track chain fan-out/isolation coverage; this phase's own
+//     two-track case (test 203) just confirms the basic per-lane count. ---
 if(shouldRunPhase(['vr-decorating'])){
 try {
 const appCE = await launchApp();
@@ -10475,14 +10478,29 @@ try {
     ok('memorization-aid: a plain corridor gets a floor chain linking consecutive move-object slots');
   } catch(e){ bad('memorization-aid: corridor chain segment count and placement', e); }
 
-  // 203. The two-track room (its own divider instead) gets NO chain segments.
+  // 203. The two-track room ALSO gets a chain -- one per lane (2 members
+  //      each here, both lanes' own tails are unbuilt leaves, not real
+  //      doors, so 1 internal segment each -- entry-L1/L1-L2 and
+  //      entry-R1/R1-R2 -- 4 total, on top of its own divider).
   try {
     await appCE.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.fork);
     await appCE.page.waitForTimeout(200);
+    const slots = await appCE.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
     const segs = await appCE.page.evaluate(() => window.__threeTestEdit.chainSegments());
-    assert(segs.length === 0, `expected no chain segments in a two-track room, got ${segs.length}: ${JSON.stringify(segs)}`);
-    ok('memorization-aid: a two-track room does not also get a chain (has its own divider)');
-  } catch(e){ bad('memorization-aid: two-track room excluded from the chain', e); }
+    const entryPos = await appCE.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
+    assert(segs.length === 4, `expected 4 chain segments (2 lanes x 2 members - 1 each), got ${segs.length}: ${JSON.stringify(segs)}`);
+    for(const side of ['left', 'right']){
+      const s1 = slots.find(s => s.side === side && s.order === 1);
+      const s2 = slots.find(s => s.side === side && s.order === 2);
+      assert(s1 && s2, `expected 2 members on the ${side} lane, got ${JSON.stringify(slots)}`);
+      for(const [a, b] of [[entryPos, s1], [s1, s2]]){
+        const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+        const hit = segs.some(s => Math.abs(s.x - mx) < 0.01 && Math.abs(s.z - mz) < 0.01);
+        assert(hit, `expected a ${side}-lane chain segment at (${mx},${mz}), got ${JSON.stringify(segs)}`);
+      }
+    }
+    ok('memorization-aid: a two-track room gets its own chain per lane, in addition to its divider');
+  } catch(e){ bad('memorization-aid: two-track room gets per-lane chains', e); }
 
   // 204. Nudging a slot moves the chain's endpoint with it -- the chain
   //      follows the object's ACTUAL (possibly manually repositioned)
@@ -11385,6 +11403,214 @@ try {
     await appCL.close();
   }
 } catch(e){ bad('Phase CL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CM: a two-track room's two lanes each get their OWN floor chain
+//     (mirroring a plain corridor's single chain), both fanning out from the
+//     shared entrance, each fanning to only ITS OWN lane's forward door(s) --
+//     not the other lane's. Reported: for consistency with corridors, a
+//     two-track room's lanes should be chained the same way a corridor's
+//     items are. Root branches after c4 into a 2-member left lane (L1, L2)
+//     whose tail (L2's own reply) itself branches into 2 forward doors, and
+//     a 2-member right lane (R1, R2) that genuinely dead-ends (no forward
+//     door, no unbuilt reply) -- one fixture covering both the fan-out and
+//     the "only this lane's own doors" isolation in one room. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+  const appCM = await launchApp();
+  try {
+    await seedBackup(appCM.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','Qc2','O-O'], reply: 'a3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','Qc2','a6'], reply: 'e4' },
+        { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O a3', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 a6 e4', white: 'a', black: 'b', result: '*' },
+        { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+      ],
+      assets: [
+        { id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
+      ],
+    }, { defaultPlayerColor: 'white' });
+    await openVR(appCM.page);
+    const roomKey = await appCM.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await appCM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appCM.page.waitForTimeout(200);
+
+    // 226. Left lane (L1, L2, 2 forward doors off L2) gets 4 segments
+    //      (entry-L1, L1-L2, L2-door1, L2-door2); right lane (R1, R2, no
+    //      forward door) gets exactly 2 (entry-R1, R1-R2) -- 6 total.
+    let slots, targets, l1, l2, r1, r2;
+    try {
+      slots = await appCM.page.evaluate(() => window.__threeTestEdit.moveObjectSlotsFull());
+      l1 = slots.find(s => s.side === 'left' && s.order === 1);
+      l2 = slots.find(s => s.side === 'left' && s.order === 2);
+      r1 = slots.find(s => s.side === 'right' && s.order === 1);
+      r2 = slots.find(s => s.side === 'right' && s.order === 2);
+      assert(l1 && l2 && r1 && r2, `expected L1/L2/R1/R2 slots, got ${JSON.stringify(slots)}`);
+
+      const exits = await appCM.page.evaluate((k) => window.__threeTestEdit.exits(k), roomKey);
+      targets = exits.filter(e => !e.back).map(e => e.target);
+      assert(targets.length === 2, `expected 2 forward doors (both off the left lane), got ${JSON.stringify(exits)}`);
+
+      const segs = await appCM.page.evaluate(() => window.__threeTestEdit.chainSegments());
+      assert(segs.length === 6, `expected 6 chain segments (4 left + 2 right), got ${segs.length}: ${JSON.stringify(segs)}`);
+
+      const entryPos = await appCM.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
+      const mid = (a, b) => ({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 });
+      const hasSeg = (p) => segs.some(s => Math.abs(s.x - p.x) < 0.01 && Math.abs(s.z - p.z) < 0.01);
+
+      assert(hasSeg(mid(entryPos, l1)), `expected entry-L1 segment, got ${JSON.stringify(segs)}`);
+      assert(hasSeg(mid(l1, l2)), `expected L1-L2 segment, got ${JSON.stringify(segs)}`);
+      assert(hasSeg(mid(entryPos, r1)), `expected entry-R1 segment, got ${JSON.stringify(segs)}`);
+      assert(hasSeg(mid(r1, r2)), `expected R1-R2 segment, got ${JSON.stringify(segs)}`);
+      for(const target of targets){
+        const doorPos = await appCM.page.evaluate((args) => window.__threeTestEdit.doorObjBasePos(args.k, args.target), { k: roomKey, target });
+        assert(hasSeg(mid(l2, doorPos)), `expected an L2-door segment to ${target}, got ${JSON.stringify(segs)}`);
+      }
+      // no segment fans out from R2 (right lane has no forward door)
+      assert(!segs.some(s => Math.abs(s.z - r2.z) < 0.01 && Math.abs(s.x - r2.x) > 0.01),
+        `expected no door-link segment off R2 (right lane has no forward door), got ${JSON.stringify(segs)}`);
+      ok('two-track: each lane gets its own chain, fanning to only its own forward door(s)');
+    } catch(e){ bad('two-track: per-lane chains with correct fan-out and isolation', e); }
+
+    // 227. Nudging LEFT lane's L1 live-updates only left-lane segments
+    //      (entry-L1, L1-L2); right-lane segments are untouched.
+    try {
+      await appCM.page.evaluate((args) => window.__threeTestEdit.setSlotAsset(args.rk, 'obj-L1', 'testProp1'), { rk: roomKey });
+      await appCM.page.waitForTimeout(150);
+      await appCM.page.evaluate(async () => {
+        const dbg = window.__threeTestEdit;
+        dbg.toggle();
+        await new Promise(r => setTimeout(r, 60));
+        dbg.target({ kind: 'accessory', slotId: 'obj-L1' });
+        await new Promise(r => setTimeout(r, 60));
+      });
+      const sel = await appCM.page.evaluate(() => window.__threeTestEdit.selected());
+      assert(sel && sel.slotId === 'obj-L1', `test setup issue: expected obj-L1 selected, got ${JSON.stringify(sel)}`);
+
+      for(let i = 0; i < 5; i++){
+        await appCM.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+        await appCM.page.waitForTimeout(30);
+      }
+      await appCM.page.waitForTimeout(100);
+
+      const l1After = await appCM.page.evaluate(() => window.__threeTestEdit.posOf('obj-L1'));
+      assert(l1After && Math.abs(l1After.x - l1.x) > 0.05, `nudge didn't move L1 far enough to test with, got ${JSON.stringify(l1After)}`);
+
+      const entryPos = await appCM.page.evaluate(() => window.__threeTestEdit.chainEntryPos());
+      const segsAfter = await appCM.page.evaluate(() => window.__threeTestEdit.chainSegments());
+      const mid = (a, b) => ({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 });
+      const hasSeg = (p) => segsAfter.some(s => Math.abs(s.x - p.x) < 0.01 && Math.abs(s.z - p.z) < 0.01);
+
+      assert(hasSeg(mid(entryPos, l1After)), `expected entry-L1 to follow the nudge, got ${JSON.stringify(segsAfter)}`);
+      assert(hasSeg(mid(l1After, l2)), `expected L1-L2 to follow the nudge, got ${JSON.stringify(segsAfter)}`);
+      // right lane's own segments are untouched by a left-lane nudge
+      assert(hasSeg(mid(entryPos, r1)), `expected entry-R1 unchanged after a left-lane nudge, got ${JSON.stringify(segsAfter)}`);
+      assert(hasSeg(mid(r1, r2)), `expected R1-R2 unchanged after a left-lane nudge, got ${JSON.stringify(segsAfter)}`);
+      assert(segsAfter.length === 6, `expected still 6 segments total after the nudge, got ${segsAfter.length}: ${JSON.stringify(segsAfter)}`);
+      ok('two-track: nudging one lane\'s slot live-updates only that lane\'s chain, the other lane\'s is untouched');
+    } catch(e){ bad('two-track: live nudge updates only the nudged lane\'s chain', e); }
+  } finally {
+    await appCM.close();
+  }
+} catch(e){ bad('Phase CM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CN: a two-track room's two lanes dead-end INDEPENDENTLY -- a
+//     lane with no forward door and no unbuilt reply gets its own skinnable
+//     "no entry" sign, centered in its own half of the north wall, while a
+//     lane with a real forward door gets none. Reuses Phase CM's exact
+//     fixture (left lane has 2 forward doors; right lane genuinely
+//     dead-ends). ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+  const appCN = await launchApp();
+  try {
+    await seedBackup(appCN.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','Qc2','O-O'], reply: 'a3' },
+        { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','Qc2','a6'], reply: 'e4' },
+        { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 O-O a3', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2 a6 e4', white: 'a', black: 'b', result: '*' },
+        { id: 'g3', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+      ],
+      assets: [
+        { id: 'doorSkin1', type: 'door', image: 'data:image/png;base64,iVBORw0KGgo=' },
+      ],
+    }, { defaultPlayerColor: 'white' });
+    await openVR(appCN.page);
+    const roomKey = await appCN.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await appCN.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appCN.page.waitForTimeout(200);
+
+    // 228. Exactly one no-continuation icon, on the RIGHT half of the north
+    //      wall (positive x, quarter-width offset) -- the dead-ending lane.
+    //      Nothing on the left half (real forward doors there).
+    try {
+      const size = await appCN.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
+      const quarter = size.w / 4;
+      const meshes = await appCN.page.evaluate(() => window.__threeTestEdit.meshes());
+      const icons = meshes.filter(m => m.kind === 'no-continuation-icon');
+      assert(icons.length === 1, `expected exactly 1 no-entry icon (right lane only), got ${icons.length}: ${JSON.stringify(icons)}`);
+      assert(Math.abs(icons[0].x - quarter) < 0.01, `expected the icon centered in the RIGHT half (x=${quarter}), got x=${icons[0].x}`);
+      assert(icons[0].wall === 'north', `expected the icon on the north wall, got ${icons[0].wall}`);
+      ok('two-track: the dead-ending lane gets its own no-entry sign, centered in its own half');
+    } catch(e){ bad('two-track: per-lane no-entry sign presence and position', e); }
+
+    // 229. Skinning the right lane's sign through the real picker (edit mode
+    //      + the marker's own click target, tagged track:'right') applies
+    //      ONLY to that lane -- the whole-room (untracked) and left-lane
+    //      overrides stay null.
+    try {
+      await appCN.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+      await appCN.page.waitForTimeout(60);
+      await appCN.page.evaluate((k) => window.__threeTestEdit.target({ kind: 'dead-end', roomKey: k, track: 'right' }), roomKey);
+      await appCN.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+      await appCN.page.evaluate(() => {
+        const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
+          .find(c => !c.classList.contains('asset-card-color') && c.textContent.includes('doorSkin1'));
+        card.click();
+      });
+      await appCN.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+      await appCN.page.waitForTimeout(150);
+
+      const rightOverride = await appCN.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k, 'right'), roomKey);
+      assert(rightOverride === 'doorSkin1', `expected the right lane's override to be doorSkin1, got ${rightOverride}`);
+      const leftOverride = await appCN.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k, 'left'), roomKey);
+      assert(!leftOverride, `expected the left lane's own override untouched, got ${leftOverride}`);
+      const wholeRoomOverride = await appCN.page.evaluate((k) => window.__threeTestEdit.deadEndOverrideId(k), roomKey);
+      assert(!wholeRoomOverride, `expected the whole-room (untracked) override untouched, got ${wholeRoomOverride}`);
+
+      const meshes = await appCN.page.evaluate(() => window.__threeTestEdit.meshes());
+      assert(!meshes.some(m => m.kind === 'no-continuation-icon'), `expected the built-in icon replaced by the custom panel, got ${JSON.stringify(meshes.filter(m => m.kind === 'no-continuation-icon'))}`);
+      ok('two-track: a lane\'s dead-end sign is independently skinnable, without affecting the other lane or the whole-room override');
+    } catch(e){ bad('two-track: per-lane dead-end sign skinning is independent', e); }
+  } finally {
+    await appCN.close();
+  }
+} catch(e){ bad('Phase CN: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
