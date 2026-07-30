@@ -4,6 +4,10 @@ Chess opening-repertoire trainer with a VR "memory palace" walkthrough.
 Static site (HTML + ES modules), **no build step**; libraries load from CDNs.
 Deployed via GitHub Pages.
 
+If `HANDOFF.md` exists at the repo root, read it first — it's a snapshot of
+where a previous session left off. It's transient (delete it once its
+content is stale or fully acted on), unlike this file.
+
 ## Testing the VR / app headlessly (important)
 
 The app imports three.js, cytoscape, cytoscape-dagre and chess.js from public
