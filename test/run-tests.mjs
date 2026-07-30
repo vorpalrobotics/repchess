@@ -2420,7 +2420,12 @@ try {
     const beforeCount = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
     assert(beforeCount > 0, `expected the queue seeded earlier in this phase to still be non-empty before deleting its line, got ${beforeCount}`);
 
-    await app23.page.click('.line-delete');   // harness auto-accepts the confirm() dialog
+    // .line-delete is an icon-only button (Font Awesome glyph, unloaded in
+    // this offline harness) that Playwright's strict actionability check
+    // can treat as zero-size/"not visible" -- dispatch the click directly,
+    // same as the backBtn/analysisQueueCloseBtn calls just above. The
+    // harness's global dialog listener still auto-accepts the confirm().
+    await app23.page.evaluate(() => document.querySelector('.line-delete').click());
     await app23.page.waitForSelector('.line-row', { state: 'detached', timeout: 10000 });
 
     const afterMemory = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
