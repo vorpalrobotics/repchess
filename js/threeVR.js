@@ -497,7 +497,12 @@ function registerOneCastle(castle, instanceId, opts = {}){
                                                  // use it directly instead of forging THIS instance's prefix.
                                                  target: dp.ex.foreignKey || keyOf(dp.ex.toKey),
                                                  label: dp.ex.opp, pair: dp.ex.pair,
-                                                 occurrence: dp.ex.occurrence });
+                                                 occurrence: dp.ex.occurrence,
+                                                 // which two-track lane this door belongs to (undefined
+                                                 // outside a two-track room) -- lets a two-track room's
+                                                 // per-lane chain (buildMoveObjectChain) fan out to only
+                                                 // ITS OWN lane's doors, not the other lane's.
+                                                 track: dp.ex.track });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -509,8 +514,16 @@ function registerOneCastle(castle, instanceId, opts = {}){
       .concat((r.walls.right || []).map(m => '⟹ ' + m));
     const doors = fwd.map(ex => `${ex.opp} → ${ex.to || (ex.foreignCastle ? `⟨${ex.foreignCastle}⟩` : '?')}`);
     const unbuilt = r.exits.filter(ex => !ex.to && !ex.foreignKey).map(ex => ex.opp);
+    // per-lane "genuinely nothing beyond it" check for a two-track room's own
+    // dead-end sign (buildRoom): true when that lane has NEITHER a real
+    // forward door NOR an unbuilt (leaf, no-reply-yet) exit -- computed here,
+    // not re-derived in buildRoom, since an unbuilt exit never makes it into
+    // this room's own `exits` array below (only `fwd` ones do).
+    const deadTracks = isTwoTrack
+      ? { left: !r.exits.some(ex => ex.track !== 'right'), right: !r.exits.some(ex => ex.track === 'right') }
+      : null;
     ROOMS[key] = {
-      size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack,
+      size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack, deadTracks,
       // the node's "Room Name" attribute (r.name), the same value edited in the
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
@@ -843,14 +856,23 @@ function doorAssetFor(roomKey, dKey){
 // -- a separate storage field from r.doors (not a doorKey lookup) so a stale
 // override can't silently reappear as a real door's skin if the room later
 // gains an actual continuation and a real door lands on that same wall spot.
-function deadEndAssetFor(roomKey){
-  const id = LAYOUT[roomKey] && LAYOUT[roomKey].deadEnd;
+// A two-track room can dead-end independently on EITHER lane, so it needs two
+// independent overrides -- `track` ('left'/'right') routes to r.deadEndTracks
+// instead of the single-lane r.deadEnd a corridor/plain room uses. Omitting
+// track keeps the original single-value behavior untouched.
+function deadEndAssetFor(roomKey, track){
+  const r = LAYOUT[roomKey];
+  const id = track ? (r && r.deadEndTracks && r.deadEndTracks[track]) : (r && r.deadEnd);
   return id ? ASSET_BY_ID[id] : null;
 }
-function setDeadEndOverride(roomKey, assetId){
+function setDeadEndOverride(roomKey, assetId, track){
   applyEdit(() => {
     const r = ensureRoomLayout(roomKey);
-    if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
+    if(track){
+      r.deadEndTracks = r.deadEndTracks || {};
+      if(assetId) r.deadEndTracks[track] = assetId; else delete r.deadEndTracks[track];
+      if(!Object.keys(r.deadEndTracks).length) delete r.deadEndTracks;
+    } else if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
   });
 }
 // the static ROOMS table with any LAYOUT[roomKey].geom (w/d/h) override and
@@ -1044,7 +1066,7 @@ function clearRoomStyles(roomKey){
   applyEdit(() => {
     const r = LAYOUT[roomKey];
     if(!r) return;
-    delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom; delete r.deadEnd;
+    delete r.floor; delete r.ceiling; delete r.stairSurface; delete r.geom; delete r.deadEnd; delete r.deadEndTracks;
     r.walls = {}; r.doors = {}; r.slots = {}; r.slotWords = {}; r.slotXform = {}; r.exits = {}; r.wallLists = {};
     r.buildings = {}; r.signs = {}; r.signPos = {}; r.yards = {};   // outdoor maps; no-ops indoors
   });
@@ -4405,8 +4427,10 @@ function buildNoContinuationIcon(size, wall, offset){
   return mesh;
 }
 // editor-only click target for the dead-end sign, same hotspot convention as
-// buildDoorMarker (a real door's own click target).
-function buildDeadEndMarker(size, wall, offset, roomKey){
+// buildDoorMarker (a real door's own click target). track ('left'/'right'),
+// when given, tags which two-track lane this sign belongs to so a click
+// routes to that lane's own override (see deadEndAssetFor/setDeadEndOverride).
+function buildDeadEndMarker(size, wall, offset, roomKey, track){
   const { fixed } = wallSpan(size, wall);
   const marker = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * 0.9, DOOR_H * 0.9), doorMarkerMaterial());
   const y = DOOR_H / 2;
@@ -4415,7 +4439,7 @@ function buildDeadEndMarker(size, wall, offset, roomKey){
   if(wall === 'south'){ marker.position.set(offset, y, fixed - clearance); marker.rotation.y = Math.PI; }
   if(wall === 'west'){  marker.position.set(fixed + clearance, y, offset); marker.rotation.y = Math.PI/2; }
   if(wall === 'east'){  marker.position.set(fixed - clearance, y, offset); marker.rotation.y = -Math.PI/2; }
-  marker.userData = { kind: 'dead-end', roomKey };
+  marker.userData = { kind: 'dead-end', roomKey, track: track || null };
   return marker;
 }
 function drawSignBase(ctx, w, h){
@@ -5082,7 +5106,11 @@ function addChainSegment(group, a, b){
   mesh.userData = { kind: 'moveObjectChain' };
   group.add(mesh);
 }
-function buildMoveObjectChain(room, roomKey){
+// track ('left'/'right'), when given, builds just THAT two-track lane's own
+// chain -- its own slots in order, fanning out to its own forward door(s)
+// only -- instead of the whole room. Omit it for a plain corridor (all
+// slots, one shared sequence), which is the original/default behavior.
+function buildMoveObjectChain(room, roomKey, track){
   // resolve each slot's ACTUAL position, not just its default computed one --
   // a moveObject slot can be individually nudged in edit mode (slotXformFor,
   // applied the same way applyAccessoryTransform places the real prop: base
@@ -5092,8 +5120,15 @@ function buildMoveObjectChain(room, roomKey){
     const xf = slotXformFor(roomKey, s.id);
     return { x: s.x + (xf?.dx || 0), z: s.z + (xf?.dz || 0) };
   };
-  const ordered = moveObjectSlots(roomKey).slice().sort((a, b) =>
-    ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
+  // a lane's own slots already exclude the shared center/anchor pair (it has
+  // side 'left'/'right', never 'center'), so no slice(1) needed there; the
+  // whole-room (track omitted) case still walks center-then-left-then-right
+  // in SIDE_WALK_RANK order and drops the first (center) entry the same way
+  // it always has.
+  const ordered = track
+    ? moveObjectSlots(roomKey).filter(s => s.side === track).sort((a, b) => (a.order || 0) - (b.order || 0))
+    : moveObjectSlots(roomKey).slice().sort((a, b) =>
+        ((SIDE_WALK_RANK[a.side] ?? 3) - (SIDE_WALK_RANK[b.side] ?? 3)) || ((a.order || 0) - (b.order || 0)));
   if(!ordered.length) return null;
   const group = new THREE.Group();
   // the walk starts at the room's own name floor-label spot near the entrance,
@@ -5101,8 +5136,11 @@ function buildMoveObjectChain(room, roomKey){
   // that slot is often bare (its move is already shown via the previous room's
   // door pair) so anchoring the chain there pointed at nothing memorable; the
   // name label is an always-present, meaningful floor marker to start from.
+  // Also the natural shared starting point for a two-track room's own pair of
+  // lane chains -- both lanes fan out from the same entrance, same as their
+  // real doors do.
   const entryPos = roomNameFloorPos(room.size, entranceWall(room));
-  const path = [entryPos, ...ordered.slice(1).map(resolved)];
+  const path = [entryPos, ...(track ? ordered.map(resolved) : ordered.slice(1).map(resolved))];
   for(let i = 0; i < path.length - 1; i++) addChainSegment(group, path[i], path[i + 1]);
   // final link(s): every forward door carries its OWN pair/object preview of
   // the room beyond (buildDoorPair, keyed 'dobj-<target>' in this room's
@@ -5115,8 +5153,9 @@ function buildMoveObjectChain(room, roomKey){
   // branch into more than one forward door (a branch that didn't qualify as a
   // two-track) -- every one of them is a real possible continuation from the
   // same last slot, so each gets its own link fanning out from there, not
-  // just the first.
-  const allFwd = room.exits ? room.exits.filter(e => !e.back) : [];
+  // just the first. A two-track lane only fans out to ITS OWN doors (ex.track),
+  // never the other lane's -- each lane's own exits array already carries that.
+  const allFwd = room.exits ? room.exits.filter(e => !e.back && (!track || e.track === track)) : [];
   for(const fwd of allFwd){
     const sideSign = fwd.wall === 'east' ? 1 : -1;
     const base = doorSideXZ(room, fwd.wall, fwd.offset, sideSign);
@@ -5127,7 +5166,9 @@ function buildMoveObjectChain(room, roomKey){
   if(!group.children.length) return null;
   // tagged so a live nudge (setSlotXformLive) can find and rebuild just this
   // group in place, without a full buildRoom -- see rebuildMoveObjectChainLive.
-  group.userData = { kind: 'moveObjectChainGroup' };
+  // track carried along too so a two-track lane's chain can be told apart
+  // from its sibling lane's when both exist in the scene at once.
+  group.userData = { kind: 'moveObjectChainGroup', track: track || null };
   return group;
 }
 // A move-object or door-object nudge (setSlotXformLive) moves the real prop
@@ -5137,16 +5178,26 @@ function buildMoveObjectChain(room, roomKey){
 // the room was next entered. The chain is cheap to rebuild (a handful of
 // synchronous plane meshes sharing one cached texture, no async asset loads),
 // so just swap it out in place on every relevant nudge instead. A no-op if
-// this room has no chain at all (not a corridor, or nothing to link).
+// this room has no chain at all (not a corridor/two-track, or nothing to
+// link). A two-track room carries TWO chain groups (one per lane) -- both are
+// removed and rebuilt together since either lane's nudge should leave the
+// other lane's chain untouched but still correctly redrawn in place.
 function rebuildMoveObjectChainLive(roomKey){
   if(!scene) return;
   const room = mergedRoom(roomKey);
   if(!room) return;
-  let old = null;
-  scene.traverse(o => { if(!old && o.userData && o.userData.kind === 'moveObjectChainGroup') old = o; });
-  if(old){ disposeSceneContents(old); scene.remove(old); }
-  const chain = buildMoveObjectChain(room, roomKey);
-  if(chain) scene.add(chain);
+  const old = [];
+  scene.traverse(o => { if(o.userData && o.userData.kind === 'moveObjectChainGroup') old.push(o); });
+  for(const o of old){ disposeSceneContents(o); scene.remove(o); }
+  if(room.twoTrack){
+    for(const track of ['left', 'right']){
+      const chain = buildMoveObjectChain(room, roomKey, track);
+      if(chain) scene.add(chain);
+    }
+  } else {
+    const chain = buildMoveObjectChain(room, roomKey);
+    if(chain) scene.add(chain);
+  }
 }
 // briefly shows a status message top-center (e.g. the bounds-auto-fix notice)
 // so a silent data correction isn't invisible to the user; fades after ~3.5s.
@@ -5374,12 +5425,18 @@ function buildRoom(roomKey){
 
   const carMode = isElevatorCar(roomKey);
 
-  // two-track castle rooms get a half-wall dividing the left and right lanes;
-  // a plain corridor's move-object slots get a floor chain linking them
-  // instead (see buildMoveObjectChain) -- the two are mutually exclusive by
-  // room kind, never both.
-  if(room.twoTrack) scene.add(buildTwoTrackDivider(room));
-  else if((room.castleSign && room.castleSign.type) === 'corridor'){
+  // two-track castle rooms get a half-wall dividing the left and right lanes
+  // PLUS a floor chain per lane (each is its own forced sequence, same as a
+  // corridor's single chain, just two of them fanning out from the shared
+  // entrance); a plain corridor's move-object slots get the one shared chain
+  // instead (see buildMoveObjectChain).
+  if(room.twoTrack){
+    scene.add(buildTwoTrackDivider(room));
+    for(const track of ['left', 'right']){
+      const chain = buildMoveObjectChain(room, roomKey, track);
+      if(chain) scene.add(chain);
+    }
+  } else if((room.castleSign && room.castleSign.type) === 'corridor'){
     const chain = buildMoveObjectChain(room, roomKey);
     if(chain) scene.add(chain);
   }
@@ -5388,11 +5445,8 @@ function buildRoom(roomKey){
   // as opposed to a locked door (a real, if unbuilt, reply) -- gets a
   // skinnable "no entry" sign where a forward door would have gone, so its
   // absence reads as intentional rather than "not built yet" (see
-  // deadEndAssetFor/buildNoContinuationIcon). Per-track dead ends within a
-  // two-track room aren't handled here (room.twoTrack excluded) -- each
-  // track would need its own member-anchored sign position, not this
-  // single-slot convention. Also skipped when castleSign.unbuilt is
-  // non-empty: those are opponent replies actually seen in the user's
+  // deadEndAssetFor/buildNoContinuationIcon). Skipped when castleSign.unbuilt
+  // is non-empty: those are opponent replies actually seen in the user's
   // games with no prepared response yet (registerOneCastle's leaf exits,
   // shown on the room's own sign as "unbuilt: ..."), which is exactly the
   // "known opponent move, no reply built" case a locked door already
@@ -5405,6 +5459,23 @@ function buildRoom(roomKey){
     const deadEndAsset = deadEndAssetFor(roomKey);
     scene.add(deadEndAsset ? buildDoorPanel(room.size, deadEndWall, 0, deadEndAsset) : buildNoContinuationIcon(room.size, deadEndWall, 0));
     if(editMode) scene.add(buildDeadEndMarker(room.size, deadEndWall, 0, roomKey));
+  }
+  // a two-track room's two lanes dead-end independently -- each gets its OWN
+  // sign, centered in its own half of the north wall (the same quarter-width
+  // spot registerOneCastle placed that lane's real doors around), when THAT
+  // lane (not the room as a whole) has neither a real door nor an unbuilt
+  // leaf exit (see registerOneCastle's deadTracks). Recomputed from the
+  // room's CURRENT size (not the generation-time value) so a later resize
+  // keeps each sign centered in its half.
+  if(room.twoTrack && room.deadTracks){
+    const quarter = room.size.w / 4;
+    for(const track of ['left', 'right']){
+      if(!room.deadTracks[track]) continue;
+      const offset = track === 'right' ? quarter : -quarter;
+      const deadEndAsset = deadEndAssetFor(roomKey, track);
+      scene.add(deadEndAsset ? buildDoorPanel(room.size, 'north', offset, deadEndAsset) : buildNoContinuationIcon(room.size, 'north', offset));
+      if(editMode) scene.add(buildDeadEndMarker(room.size, 'north', offset, roomKey, track));
+    }
   }
 
   currentStairCorridors = {};
@@ -6482,14 +6553,14 @@ function handleEditTarget(ud){
     // see deadEndAssetFor. No building-level default tier (unlike ordinary/
     // locked doors): this is meant for occasional per-room custom skins to
     // make a specific dead end more memorable, not a castle-wide restyle.
-    const override = deadEndAssetFor(ud.roomKey);
+    const override = deadEndAssetFor(ud.roomKey, ud.track);
     openAssetPicker({
       allow: ['door'], onClose,
       allowRemove: !!override,
       currentId: (override && override.id) || null,
       currentSource: override ? 'room' : null,
-      onPick: id => setDeadEndOverride(ud.roomKey, id),
-      onRemove: () => setDeadEndOverride(ud.roomKey, null)
+      onPick: id => setDeadEndOverride(ud.roomKey, id, ud.track),
+      onRemove: () => setDeadEndOverride(ud.roomKey, null, ud.track)
     });
   }
 }
@@ -8170,7 +8241,9 @@ export async function openThreeTest(containerEl, opts){
       // -- for testing entrance->exit door-skin sync (setDoorOverride)
       // without scraping the door panel mesh's texture out of the scene.
       doorOverrideId: (roomKey, dKey) => (LAYOUT[roomKey] && LAYOUT[roomKey].doors && LAYOUT[roomKey].doors[dKey]) || null,
-      deadEndOverrideId: (roomKey) => (LAYOUT[roomKey] && LAYOUT[roomKey].deadEnd) || null,
+      deadEndOverrideId: (roomKey, track) => track
+        ? (LAYOUT[roomKey] && LAYOUT[roomKey].deadEndTracks && LAYOUT[roomKey].deadEndTracks[track]) || null
+        : (LAYOUT[roomKey] && LAYOUT[roomKey].deadEnd) || null,
       // drives the real "make default" capture the Room Geometry dialog's
       // Apply button does (captureBuildingDefaults), persisted + rebuilt the
       // same way that flow's commitRoomGeomDialog does right after -- for
@@ -8330,9 +8403,12 @@ export async function openThreeTest(containerEl, opts){
       // AWAITED end-to-end (setDeadEndOverride itself fires its applyEdit
       // and returns immediately, same reason setSlotAsset above doesn't
       // reuse setSlotOverride) so a test isn't racing refreshAssetMap.
-      setDeadEndAsset: async (roomKey, assetId) => {
+      setDeadEndAsset: async (roomKey, assetId, track) => {
         const r = ensureRoomLayout(roomKey);
-        if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
+        if(track){
+          r.deadEndTracks = r.deadEndTracks || {};
+          if(assetId) r.deadEndTracks[track] = assetId; else delete r.deadEndTracks[track];
+        } else if(assetId) r.deadEnd = assetId; else delete r.deadEnd;
         persistLayout();
         await refreshAssetMap();
         buildRoom(currentRoomKey);
