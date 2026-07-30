@@ -71,8 +71,22 @@ function openDB(){
         aq.createIndex('user','user');
       }
     };
-    req.onsuccess = () => { console.log('[db] opened', DB_NAME); resolve(req.result); };
+    req.onsuccess = () => {
+      const db = req.result;
+      // If a later tab (e.g. after a deploy bumps DB_VERSION) needs to upgrade
+      // the schema, it blocks until every open connection closes. Without this,
+      // this tab would sit on the old connection forever and the other tab's
+      // open request would hang with no visible cause.
+      db.onversionchange = () => {
+        console.warn('[db] newer version requested elsewhere -- closing this connection');
+        db.close();
+        dbPromise = null;
+      };
+      console.log('[db] opened', DB_NAME);
+      resolve(db);
+    };
     req.onerror   = () => { console.error('[db] open failed',req.error); reject(req.error); };
+    req.onblocked = () => console.warn('[db] open blocked by another open connection (likely another tab) -- it will proceed once that tab closes or reloads');
   }));
   return dbPromise;
 }
@@ -93,7 +107,7 @@ async function putGames(user, games){
     const store = txn.objectStore('games');
     for(const g of games){
       const gameId = g.id || hashStr(JSON.stringify(g));
-      store.put({ id:`${user}:${gameId}`, user, gameId, moves:g.moves, raw:g });
+      store.put({ id:`${user}:${gameId}`, user, gameId, raw:g });
     }
     txn.oncomplete = () => { console.log(`[db] wrote ${games.length} games for ${user}`); resolve(); };
     txn.onerror    = () => { console.error('[db] putGames failed',txn.error); reject(txn.error); };
@@ -137,17 +151,22 @@ async function getLines(user){
   });
 }
 
+// Resolves `true` if the patch was actually applied, `false` if `id` didn't
+// match any stored line (a silent no-op otherwise -- callers that don't care
+// can ignore the return value, same as before).
 async function updateLine(id, patch){
   const db = await openDB();
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('lines','readwrite');
     const store = txn.objectStore('lines');
+    let applied = false;
     const getReq = store.get(id);
     getReq.onsuccess = () => {
-      if(!getReq.result) return;
+      if(!getReq.result){ console.warn(`[db] updateLine: no line found for id ${id}`); return; }
       store.put({...getReq.result, ...patch});
+      applied = true;
     };
-    txn.oncomplete = () => resolve();
+    txn.oncomplete = () => resolve(applied);
     txn.onerror    = () => reject(txn.error);
   });
 }
@@ -155,11 +174,23 @@ async function updateLine(id, patch){
 async function deleteLine(id){
   const db = await openDB();
   return new Promise((resolve,reject)=>{
-    const txn = db.transaction(['lines','prefs'],'readwrite');
+    const txn = db.transaction(['lines','prefs','analysisQueue'],'readwrite');
     txn.objectStore('lines').delete(id);
     const prefStore = txn.objectStore('prefs');
     const idxReq = prefStore.index('lineId').getAllKeys(id);
     idxReq.onsuccess = () => { for(const k of idxReq.result) prefStore.delete(k); };
+    // analysisQueue rows aren't indexed by lineId (it's a small to-do list, not
+    // worth a schema bump for) -- a cursor sweep drops any queued/processing
+    // items for this line so they don't keep running against a deleted line
+    // and resurrecting orphaned prefs rows after the fact.
+    const aqStore = txn.objectStore('analysisQueue');
+    const aqCursorReq = aqStore.openCursor();
+    aqCursorReq.onsuccess = () => {
+      const cursor = aqCursorReq.result;
+      if(!cursor) return;
+      if(cursor.value.lineId === id) cursor.delete();
+      cursor.continue();
+    };
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });

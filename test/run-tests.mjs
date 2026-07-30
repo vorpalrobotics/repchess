@@ -2406,6 +2406,40 @@ try {
       `expected jumping index 0 or an already-at-target item to be a no-op, got ${JSON.stringify(after)} (was ${JSON.stringify(before)})`);
     ok('analysis queue: jumping index 0 or an item already at its target end is a safe no-op');
   } catch(e){ bad('analysis queue: jump no-op safety', e); }
+
+  // 69. Deleting a repertoire line also drops any of ITS rows from the
+  //     analysis queue store -- not just the in-memory ANALYSIS_QUEUE mirror.
+  //     Confirmed by reloading straight from IDB via refreshAnalysisQueue(),
+  //     which bypasses the delete handler's own in-memory prune entirely, so
+  //     a leftover row would only show up after this reload.
+  try {
+    await app23.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+    await app23.page.evaluate(() => document.getElementById('backBtn').click());
+    await app23.page.waitForSelector('.line-row', { timeout: 10000 });
+
+    const beforeCount = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(beforeCount > 0, `expected the queue seeded earlier in this phase to still be non-empty before deleting its line, got ${beforeCount}`);
+
+    await app23.page.click('.line-delete');   // harness auto-accepts the confirm() dialog
+    await app23.page.waitForSelector('.line-row', { state: 'detached', timeout: 10000 });
+
+    const afterMemory = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(afterMemory === 0, `expected deleting the only line to prune every one of its items from the in-memory queue mirror, got ${afterMemory} left`);
+
+    await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
+    const afterReload = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(afterReload === 0, `expected the deleted line's queue rows to also be gone from IDB (not just the in-memory mirror), got ${afterReload} left after reloading from IDB`);
+    ok('deleting a line also drops its rows from the analysis queue store, not just the in-memory mirror');
+  } catch(e){ bad('analysis queue: deleteLine purges matching queue rows from IDB', e); }
+
+  // 70. updateLine resolves `false` (a detectable no-op) instead of silently
+  //     resolving as if it had succeeded, when `id` no longer matches any
+  //     stored line -- L1 was just deleted by test 69.
+  try {
+    const result = await app23.page.evaluate(() => window.__linesTestHooks.updateLine('L1', {name:'should not stick'}));
+    assert(result === false, `expected updateLine on a deleted line id to resolve false, got ${result}`);
+    ok('updateLine resolves false (not a silent no-op success) when the target line id no longer exists');
+  } catch(e){ bad('updateLine: false on a nonexistent id', e); }
 } finally {
   await app23.close();
 }
