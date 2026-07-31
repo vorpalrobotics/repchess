@@ -427,6 +427,12 @@
   .objlist-rowtools{white-space:nowrap;width:1%}
   .objlist-mini{font-size:.72rem;padding:.12rem .4rem;cursor:pointer}
   .objlist-del{color:#c62828}
+  .objlist-grab{display:inline-flex;align-items:center;justify-content:center;width:1.4em;height:1.4em;color:#555;cursor:grab;touch-action:none}
+  .objlist-grab:hover{color:#1565c0}
+  .objlist-grab:active{cursor:grabbing}
+  .objlist-row.objlist-dragging{opacity:.4}
+  .objlist-drop-indicator td{border:none;padding:2px .5rem}
+  .objlist-drop-bar{height:3px;background:#1565c0;border-radius:2px}
   .objlist-additem{display:flex;gap:.5rem;margin:.5rem 0;max-width:48em}
   .objlist-additem input{flex:1 1 auto;padding:.3rem .4rem;font-size:.9rem}
   #ol_delete{background:#c62828;color:#fff}
@@ -1401,6 +1407,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260731-255"></script>
+<script type="module" src="js/app.js?v=20260731-256"></script>
 </body>
 </html>
