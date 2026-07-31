@@ -2273,12 +2273,13 @@ try {
 
 } catch(e){ bad("phase @ line 2159 (tags: ['engine'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase VA: analysis queue up/down reordering -- index 0 (the item
-//     currently being, or about to be, searched) can never be touched by
-//     either arrow; the highest anything else can be raised to is index 1
-//     (the second row), matching "never waste in-progress work". No engine
-//     needed -- this is plain array/IDB manipulation, same as Phase T's
-//     cancel/resume tests. ---
+// --- Phase VA: analysis queue drag-to-reorder -- index 0 (the item
+//     currently being, or about to be, searched) can never be dragged, nor
+//     be a valid drop target (the lowest anything else can land is index 1),
+//     matching "never waste in-progress work". Most of this is plain
+//     array/IDB manipulation, same as Phase T's cancel/resume tests; one
+//     test drives a real pointer drag to check the visual drop-indicator
+//     feedback too. ---
 if(shouldRunPhase(['analysis-queue'])){
 try {
 const app23 = await launchApp();
@@ -2298,114 +2299,106 @@ try {
   await app23.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
   await app23.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
 
-  // 64. Row 0 has none of the four reorder buttons (never touchable); row 1
-  //     has only a down/bottom pair (already at the raise ceiling); rows
-  //     2..N-2 have all four; the last row has no down/bottom pair (nothing
-  //     below it). The double-arrow (top/bottom) buttons follow exactly the
-  //     same visibility rule as their single-step counterparts.
+  // 64. Row 0 (the processing item) has no grab handle -- it can never be
+  //     dragged. Every other row does.
   try {
-    const rows = await app23.page.evaluate(() => [...document.querySelectorAll('#analysisQueueBody tr')].map(tr => ({
-      top: !!tr.querySelector('.aq-top'), up: !!tr.querySelector('.aq-up'),
-      down: !!tr.querySelector('.aq-down'), bottom: !!tr.querySelector('.aq-bottom'),
-    })));
-    assert(JSON.stringify(rows) === JSON.stringify([
-      { top:false, up:false, down:false, bottom:false },
-      { top:false, up:false, down:true,  bottom:true  },
-      { top:true,  up:true,  down:true,  bottom:true  },
-      { top:true,  up:true,  down:false, bottom:false },
-    ]), `unexpected reorder button visibility per row: ${JSON.stringify(rows)}`);
-    ok('analysis queue: up/down/top/bottom reorder buttons are hidden exactly where they would be a no-op or displace the processing item');
-  } catch(e){ bad('analysis queue: reorder arrow visibility', e); }
+    const grabs = await app23.page.evaluate(() => [...document.querySelectorAll('#analysisQueueBody tr')].map(tr => !!tr.querySelector('.aq-grab')));
+    assert(JSON.stringify(grabs) === JSON.stringify([false, true, true, true]),
+      `expected a grab handle on every row except index 0, got ${JSON.stringify(grabs)}`);
+    ok('analysis queue: drag handle is hidden on index 0 (the processing item), shown on every other row');
+  } catch(e){ bad('analysis queue: grab handle visibility', e); }
 
-  // 65. Raising the last item all the way up stops at index 1, never
-  //     reaching (or swapping with) index 0 -- and the new order survives a
-  //     reload from IDB, proving it was actually persisted, not just
-  //     swapped in the in-memory array.
+  // 65. reorderAnalysisQueue moves an item to an arbitrary target index and
+  //     persists it -- the new order survives a reload from IDB, proving it
+  //     was actually written, not just spliced in memory -- and a target
+  //     below 1 clamps there instead of reaching (or displacing) index 0.
   try {
     const idAt = (i) => app23.page.evaluate((i) => window.__aqTestHooks.getQueue()[i].id, i);
-    // raise d4,e5 (index 3) up twice: 3->2, then 2->1.
-    await app23.page.evaluate((id) => window.__aqTestHooks.moveAnalysisQueueItem(id, -1), await idAt(3));
-    await app23.page.evaluate((id) => window.__aqTestHooks.moveAnalysisQueueItem(id, -1), await idAt(2));
-    // a third raise attempt (now at index 1) must be a no-op -- it would
-    // otherwise displace index 0.
-    await app23.page.evaluate((id) => window.__aqTestHooks.moveAnalysisQueueItem(id, -1), await idAt(1));
-
+    // queue starts ['d4,Nf6','d4,d5','d4,c5','d4,e5']; drag the last item
+    // (d4,e5, index 3) to land right after index 0.
+    await app23.page.evaluate((id) => window.__aqTestHooks.reorderAnalysisQueue(id, 1), await idAt(3));
     const order1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
     assert(JSON.stringify(order1) === JSON.stringify(['d4,Nf6','d4,e5','d4,d5','d4,c5']),
-      `expected d4,e5 raised to (and stuck at) index 1, index 0 untouched, got ${JSON.stringify(order1)}`);
+      `expected d4,e5 moved to index 1, index 0 untouched, got ${JSON.stringify(order1)}`);
 
-    // the rendered table (re-rendered by every moveAnalysisQueueItem call)
-    // must also show no up-arrow at index 1 -- the DOM agrees there's
-    // nowhere higher to go.
-    const upAtIndex1 = await app23.page.evaluate(() => !!document.querySelectorAll('#analysisQueueBody tr')[1].querySelector('.aq-up'));
-    assert(upAtIndex1 === false, 'expected no up-arrow rendered at index 1 (the ceiling)');
+    // a target of 0 (or anything below 1) clamps to 1 -- it can never land
+    // before, or swap with, index 0.
+    await app23.page.evaluate((id) => window.__aqTestHooks.reorderAnalysisQueue(id, 0), await idAt(2));
+    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(order2[0] === 'd4,Nf6', `expected index 0 to stay put even when the drop target clamps to 1, got ${JSON.stringify(order2)}`);
 
     // reload straight from IDB (bypassing the in-memory ANALYSIS_QUEUE array
-    // entirely) -- confirms moveAnalysisQueueItem's putAnalysisQueueItem
-    // calls actually persisted the new `order`, not just mutated memory.
+    // entirely) -- confirms reorderAnalysisQueue's renumbered `order` fields
+    // actually persisted for every item, not just the moved one.
     await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
-    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
-    assert(JSON.stringify(order2) === JSON.stringify(order1), `expected the reordered queue to survive a reload from IDB, got ${JSON.stringify(order2)}`);
-    ok('analysis queue: raising an item persists to IDB and stops at index 1');
-  } catch(e){ bad('analysis queue: reorder persists and respects the ceiling', e); }
+    const order3 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
+    assert(JSON.stringify(order3) === JSON.stringify(order2), `expected the reordered queue to survive a reload from IDB, got ${JSON.stringify(order3)}`);
+    ok('analysis queue: reorderAnalysisQueue persists to IDB and clamps its target to index 1');
+  } catch(e){ bad('analysis queue: reorderAnalysisQueue persists and respects the floor', e); }
 
-  // 66. jumpAnalysisQueueItem(id, -1) ("move to top") lands the last item at
-  //     index 1 in ONE call -- not one step at a time like moveAnalysisQueueItem
-  //     -- while still never touching index 0, and persists to IDB.
-  try {
-    const idAt = (i) => app23.page.evaluate((i) => window.__aqTestHooks.getQueue()[i].id, i);
-    // queue is currently ['d4,Nf6','d4,e5','d4,d5','d4,c5'] (from test 65).
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), await idAt(3));
-
-    const order1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
-    assert(JSON.stringify(order1) === JSON.stringify(['d4,Nf6','d4,c5','d4,e5','d4,d5']),
-      `expected d4,c5 jumped straight from the bottom to index 1 in one call, got ${JSON.stringify(order1)}`);
-
-    await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
-    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
-    assert(JSON.stringify(order2) === JSON.stringify(order1),
-      `expected the "move to top" jump to survive a reload from IDB (proving the midpoint order value sorted correctly), got ${JSON.stringify(order2)}`);
-    ok('analysis queue: "move to top" jumps an item straight to index 1 in one call and persists');
-  } catch(e){ bad('analysis queue: jump to top', e); }
-
-  // 67. jumpAnalysisQueueItem(id, +1) ("move to bottom") lands an item at
-  //     the last index in one call, and persists to IDB.
-  try {
-    const idAt = (i) => app23.page.evaluate((i) => window.__aqTestHooks.getQueue()[i].id, i);
-    // queue is currently ['d4,Nf6','d4,c5','d4,e5','d4,d5'] (from test 66).
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), await idAt(2));
-
-    const order1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
-    assert(JSON.stringify(order1) === JSON.stringify(['d4,Nf6','d4,c5','d4,d5','d4,e5']),
-      `expected d4,e5 jumped straight to the last index in one call, got ${JSON.stringify(order1)}`);
-
-    await app23.page.evaluate(() => window.__aqTestHooks.refreshAnalysisQueue());
-    const order2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
-    assert(JSON.stringify(order2) === JSON.stringify(order1),
-      `expected the "move to bottom" jump to survive a reload from IDB, got ${JSON.stringify(order2)}`);
-    ok('analysis queue: "move to bottom" jumps an item straight to the last index in one call and persists');
-  } catch(e){ bad('analysis queue: jump to bottom', e); }
-
-  // 68. jumpAnalysisQueueItem is a safe no-op both for index 0 (the
-  //     currently-processing item, never displaceable) and for an item
-  //     already sitting at its target end.
+  // 66. reorderAnalysisQueue is a safe no-op for index 0 regardless of
+  //     target, and for dropping an item back at its own current index.
   try {
     const before = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
     const id0 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue()[0].id);
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), id0);
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), id0);
-    // index 1 is already the "top" target -- jumping it further is a no-op.
-    const id1 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue()[1].id);
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, -1), id1);
-    // the last index is already the "bottom" target -- likewise a no-op.
-    const idLast = await app23.page.evaluate(() => { const q = window.__aqTestHooks.getQueue(); return q[q.length-1].id; });
-    await app23.page.evaluate((id) => window.__aqTestHooks.jumpAnalysisQueueItem(id, 1), idLast);
-
+    await app23.page.evaluate((id) => window.__aqTestHooks.reorderAnalysisQueue(id, 3), id0);
+    const id2 = await app23.page.evaluate(() => window.__aqTestHooks.getQueue()[2].id);
+    await app23.page.evaluate((id) => window.__aqTestHooks.reorderAnalysisQueue(id, 2), id2);
     const after = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(',')));
     assert(JSON.stringify(after) === JSON.stringify(before),
-      `expected jumping index 0 or an already-at-target item to be a no-op, got ${JSON.stringify(after)} (was ${JSON.stringify(before)})`);
-    ok('analysis queue: jumping index 0 or an item already at its target end is a safe no-op');
-  } catch(e){ bad('analysis queue: jump no-op safety', e); }
+      `expected moving index 0 or dropping an item at its own current index to be a no-op, got ${JSON.stringify(after)} (was ${JSON.stringify(before)})`);
+    ok('analysis queue: reorderAnalysisQueue is a safe no-op for index 0 and a same-index drop');
+  } catch(e){ bad('analysis queue: reorder no-op safety', e); }
+
+  // 67. A real pointer drag (mouse down on the grab handle, move, mouse up)
+  //     shows the drop-indicator bar and dims the dragged row while held,
+  //     then commits the move and clears both on release -- checks the
+  //     actual DnD interaction end to end, not just the underlying
+  //     reorderAnalysisQueue call the handlers above already cover.
+  try {
+    // queue is currently ['d4,Nf6','d4,d5','d4,e5','d4,c5'] (from test 65/66).
+    const grabPoint = await app23.page.evaluate(() => {
+      const grab = document.querySelectorAll('#analysisQueueBody tr')[1].querySelector('.aq-grab');
+      const r = grab.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    const dropY = await app23.page.evaluate(() => {
+      const r = document.querySelectorAll('#analysisQueueBody tr')[3].getBoundingClientRect();
+      return r.bottom - 2;   // past the last row's midpoint -- drop at the end
+    });
+
+    await app23.page.mouse.move(grabPoint.x, grabPoint.y);
+    await app23.page.mouse.down();
+    await app23.page.mouse.move(grabPoint.x, dropY, { steps: 5 });
+
+    const duringDrag = await app23.page.evaluate(() => ({
+      indicatorPresent: !!document.querySelector('.aq-drop-indicator'),
+      draggedRowDimmed: !!document.querySelector('#analysisQueueBody tr.aq-dragging'),
+    }));
+    assert(duringDrag.indicatorPresent, 'expected the drop-indicator bar to appear while dragging');
+    assert(duringDrag.draggedRowDimmed, 'expected the dragged row to be visually dimmed while dragging');
+
+    await app23.page.mouse.up();
+    // the actual splice/renumber/persist/re-render in reorderAnalysisQueue
+    // happens after an IDB write, asynchronously past pointerup itself --
+    // wait for it rather than assuming it's already settled by the time the
+    // next evaluate() round-trips.
+    await app23.page.waitForFunction(
+      () => window.__aqTestHooks.getQueue()[3]?.seq.join(',') === 'd4,d5',
+      { timeout: 5000 }
+    );
+
+    const after = await app23.page.evaluate(() => ({
+      order: window.__aqTestHooks.getQueue().map(it => it.seq.join(',')),
+      indicatorGone: !document.querySelector('.aq-drop-indicator'),
+      noneDimmed: !document.querySelector('#analysisQueueBody tr.aq-dragging'),
+    }));
+    assert(JSON.stringify(after.order) === JSON.stringify(['d4,Nf6','d4,e5','d4,c5','d4,d5']),
+      `expected d4,d5 dragged from index 1 to the end, got ${JSON.stringify(after.order)}`);
+    assert(after.indicatorGone, 'expected the drop-indicator bar to be removed after releasing');
+    assert(after.noneDimmed, 'expected no row to still be dimmed after releasing');
+    ok('analysis queue: a real pointer drag shows the drop-indicator bar and commits the move on release');
+  } catch(e){ bad('analysis queue: pointer-drag end to end', e); }
 
   // 69. Deleting a repertoire line also drops any of ITS rows from the
   //     analysis queue store -- not just the in-memory ANALYSIS_QUEUE mirror.

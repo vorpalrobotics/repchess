@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-254';
+const BUILD_TAG = '-255';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8101,51 +8101,99 @@ function aqProgressHtml(item){
 }
 
 function aqModalOpen(){ return $('analysisQueueOverlay').style.display === 'flex'; }
-function renderAnalysisQueueModalIfOpen(){ if(aqModalOpen()) renderAnalysisQueueModal(); }
+// suppressed while a drag is in progress (AQ_DRAG truthy) -- a background
+// progress update rebuilding the table mid-drag would blow away the drag's
+// indicator row and the dragged row's own DOM node out from under the
+// pointer handlers still tracking them. reorderAnalysisQueue re-renders once
+// the drag actually ends, so nothing is lost, just deferred.
+function renderAnalysisQueueModalIfOpen(){ if(aqModalOpen() && !AQ_DRAG) renderAnalysisQueueModal(); }
 
-/* swaps the ORDER (see getAnalysisQueue's sort in db.js) of ANALYSIS_QUEUE[i]
-   and its neighbor at i+dir, persists both, and re-renders. Index 0 is never
-   touched either way -- it's the item currently being (or about to be)
-   searched, so displacing it would waste in-progress engine work; the
-   highest anything else can be raised to is index 1 (the second row). */
-async function moveAnalysisQueueItem(id, dir){
+/* Moves ANALYSIS_QUEUE[i] (found by id) to `targetIndex`, expressed as its
+   index in the array AFTER it's been removed -- exactly what
+   Array.prototype.splice's own insertion index means, which is also exactly
+   what the drag handler below already computes. Index 0 can never be the
+   source (it's the item currently being, or about to be, searched, so
+   displacing it would waste in-progress engine work) nor a valid
+   destination (the lowest a dragged item can land is index 1, right after
+   it). Renumbers EVERY item's `order` field to match the new array order and
+   persists all of them, rather than trying to compute a minimal-diff order
+   value for just the moved item (as the old up/down/top/bottom buttons
+   did) -- an arbitrary drop position can land anywhere, so there's no
+   single neighbor-swap or midpoint/max+1 formula that covers every case;
+   queues are small enough that a full rewrite per drag is cheap. */
+async function reorderAnalysisQueue(id, targetIndex){
   const i = ANALYSIS_QUEUE.findIndex(it => it.id === id);
-  if(i === -1) return;
-  const j = i + dir;
-  if(i === 0 || j <= 0 || j >= ANALYSIS_QUEUE.length) return;
-  const a = ANALYSIS_QUEUE[i], b = ANALYSIS_QUEUE[j];
-  const orderOf = it => it.order ?? it.createdAt;
-  const tmp = orderOf(a);
-  a.order = orderOf(b);
-  b.order = tmp;
-  ANALYSIS_QUEUE[i] = b; ANALYSIS_QUEUE[j] = a;
-  await Promise.all([putAnalysisQueueItem(a), putAnalysisQueueItem(b)]);
+  if(i <= 0) return;
+  const dest = Math.max(1, Math.min(targetIndex, ANALYSIS_QUEUE.length - 1));
+  if(dest === i) return;
+  const [item] = ANALYSIS_QUEUE.splice(i, 1);
+  ANALYSIS_QUEUE.splice(dest, 0, item);
+  ANALYSIS_QUEUE.forEach((it, idx) => { it.order = idx; });
+  await Promise.all(ANALYSIS_QUEUE.map(it => putAnalysisQueueItem(it)));
   renderAnalysisQueueModalIfOpen();
 }
 
-/* Jumps ANALYSIS_QUEUE[i] all the way to the top movable slot (index 1,
-   dir<0) or all the way to the bottom (the last index, dir>0) -- same
-   index-0 protection as moveAnalysisQueueItem. Only the moved item's own
-   `order` changes (nobody else's is touched): moving to "top" sets it to
-   the MIDPOINT between index 0's and index 1's order, rather than just
-   index 1's order minus a fixed step, so it can never accidentally sort
-   ahead of index 0 on a fresh IDB fetch even if the two were created only
-   moments apart; moving to "bottom" just needs to clear the last item's
-   order, so a fixed +1 step is safe there. */
-async function jumpAnalysisQueueItem(id, dir){
-  const i = ANALYSIS_QUEUE.findIndex(it => it.id === id);
-  if(i === -1 || i === 0) return;
-  const targetIndex = dir < 0 ? 1 : ANALYSIS_QUEUE.length - 1;
-  if(i === targetIndex) return;
-  const orderOf = it => it.order ?? it.createdAt;
-  const item = ANALYSIS_QUEUE[i];
-  item.order = dir < 0
-    ? (orderOf(ANALYSIS_QUEUE[0]) + orderOf(ANALYSIS_QUEUE[1])) / 2
-    : orderOf(ANALYSIS_QUEUE[ANALYSIS_QUEUE.length - 1]) + 1;
-  ANALYSIS_QUEUE.splice(i, 1);
-  ANALYSIS_QUEUE.splice(dir < 0 ? 1 : ANALYSIS_QUEUE.length, 0, item);
-  await putAnalysisQueueItem(item);
-  renderAnalysisQueueModalIfOpen();
+// drag state while a grab handle is held: { id, indicator } -- targetIndex
+// (below) is folded into this same object once a drag starts, tracked
+// separately here only for clarity of what's read vs. written where.
+let AQ_DRAG = null;
+
+/* Pointer-based (mouse + touch, via Pointer Events) drag-to-reorder, driven
+   from the grab handle's pointerdown. Deliberately not HTML5 drag-and-drop:
+   that API has no touch support and gives much coarser control over the
+   drop-line feedback than tracking pointer position against each row's own
+   bounding rect. */
+function aqGrabPointerDown(e){
+  e.preventDefault();
+  const tr = e.currentTarget.closest('tr');
+  const id = tr.dataset.id;
+  if(ANALYSIS_QUEUE.findIndex(it => it.id === id) <= 0) return;   // belt-and-suspenders; index 0 has no grab handle anyway
+  const body = $('analysisQueueBody');
+  const indicator = document.createElement('tr');
+  indicator.className = 'aq-drop-indicator';
+  indicator.innerHTML = `<td colspan="4"><div class="aq-drop-bar"></div></td>`;
+  tr.classList.add('aq-dragging');
+  body.insertBefore(indicator, tr.nextSibling);
+  AQ_DRAG = { id, indicator, targetIndex: null };
+  document.addEventListener('pointermove', aqGrabPointerMove);
+  document.addEventListener('pointerup', aqGrabPointerUp, { once: true });
+}
+
+// Every row except the one being dragged, in their current (undisturbed)
+// DOM order -- gap `k` (0-based) sits right before rows[k], so gap 0 is
+// "before the first remaining row," which is always the processing item
+// (index 0 is never the one being dragged) and is exactly the gap
+// reorderAnalysisQueue also refuses as a destination. rows[target] doubles
+// as the indicator's insertion reference: undefined (past the last row)
+// correctly means "insertBefore(indicator, undefined)", i.e. append.
+function aqGrabPointerMove(e){
+  if(!AQ_DRAG) return;
+  const body = $('analysisQueueBody');
+  const rows = [...body.querySelectorAll('tr.aq-row')].filter(r => r.dataset.id !== AQ_DRAG.id);
+  let target = 0;
+  for(let k = 0; k < rows.length; k++){
+    const rect = rows[k].getBoundingClientRect();
+    if(e.clientY > rect.top + rect.height / 2) target = k + 1;
+  }
+  target = Math.max(1, Math.min(target, rows.length));
+  if(target !== AQ_DRAG.targetIndex){
+    AQ_DRAG.targetIndex = target;
+    body.insertBefore(AQ_DRAG.indicator, rows[target] || null);
+  }
+}
+
+async function aqGrabPointerUp(){
+  document.removeEventListener('pointermove', aqGrabPointerMove);
+  if(!AQ_DRAG) return;
+  const { id, indicator, targetIndex } = AQ_DRAG;
+  // clear the drag visuals synchronously, rather than waiting on
+  // reorderAnalysisQueue's eventual re-render (an IDB write away) to do it
+  // implicitly -- otherwise the dimmed row and drop bar can visibly linger
+  // for a beat after the pointer is released.
+  indicator.remove();
+  $('analysisQueueBody').querySelector('tr.aq-dragging')?.classList.remove('aq-dragging');
+  AQ_DRAG = null;
+  if(targetIndex != null) await reorderAnalysisQueue(id, targetIndex);
 }
 
 function renderAnalysisQueueModal(){
@@ -8155,14 +8203,10 @@ function renderAnalysisQueueModal(){
     return;
   }
   empty.style.display='none'; table.style.display='';
-  const last = ANALYSIS_QUEUE.length - 1;
   body.innerHTML = ANALYSIS_QUEUE.map((item,i) => `
-    <tr data-id="${escapeHtml(item.id)}">
+    <tr class="aq-row" data-id="${escapeHtml(item.id)}">
       <td class="aq-reorder">
-        ${i >= 2 ? `<button type="button" class="aq-top" title="Move to top"><i class="fa-solid fa-angles-up"></i></button>` : ''}
-        ${i >= 2 ? `<button type="button" class="aq-up" title="Raise priority"><i class="fa-solid fa-arrow-up"></i></button>` : ''}
-        ${i >= 1 && i < last ? `<button type="button" class="aq-down" title="Lower priority"><i class="fa-solid fa-arrow-down"></i></button>` : ''}
-        ${i >= 1 && i < last ? `<button type="button" class="aq-bottom" title="Move to bottom"><i class="fa-solid fa-angles-down"></i></button>` : ''}
+        ${i >= 1 ? `<span class="aq-grab" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
         <button type="button" class="aq-del" title="Cancel"><i class="fa-solid fa-trash"></i></button>
       </td>
       <td>${aqPositionLabel(item)}</td>
@@ -8172,17 +8216,8 @@ function renderAnalysisQueueModal(){
   body.querySelectorAll('.aq-del').forEach(btn => {
     btn.onclick = () => cancelAnalysisQueueItem(btn.closest('tr').dataset.id);
   });
-  body.querySelectorAll('.aq-up').forEach(btn => {
-    btn.onclick = () => moveAnalysisQueueItem(btn.closest('tr').dataset.id, -1);
-  });
-  body.querySelectorAll('.aq-down').forEach(btn => {
-    btn.onclick = () => moveAnalysisQueueItem(btn.closest('tr').dataset.id, 1);
-  });
-  body.querySelectorAll('.aq-top').forEach(btn => {
-    btn.onclick = () => jumpAnalysisQueueItem(btn.closest('tr').dataset.id, -1);
-  });
-  body.querySelectorAll('.aq-bottom').forEach(btn => {
-    btn.onclick = () => jumpAnalysisQueueItem(btn.closest('tr').dataset.id, 1);
+  body.querySelectorAll('.aq-grab').forEach(handle => {
+    handle.addEventListener('pointerdown', aqGrabPointerDown);
   });
 }
 
@@ -8611,8 +8646,7 @@ if(localStorage.getItem('threeTestDebug')){
     addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
-    moveAnalysisQueueItem: (id, dir) => moveAnalysisQueueItem(id, dir),
-    jumpAnalysisQueueItem: (id, dir) => jumpAnalysisQueueItem(id, dir),
+    reorderAnalysisQueue: (id, targetIndex) => reorderAnalysisQueue(id, targetIndex),
     maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
     // drives the real live-analysis state machine (setEngineUI) so a test can
     // simulate "live analysis started" / "explicitly stopped" without needing
