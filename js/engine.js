@@ -45,9 +45,29 @@ export class Engine {
                              // cores-1, uncapped, so a caller can deliberately go past
                              // the conservative default when they want it to go faster
     this._currentThreads = 1;   // whatever Threads value is actually configured right now
+    this._initPromise = null;   // in-flight init() call, if any -- see init()
   }
 
-  async init() {
+  // Callers don't coordinate: app.js calls this unconditionally at boot AND
+  // (guarded by `if(!engine.ready)`) from runEngine() on any live-analysis
+  // request, which can easily fire while the cold WASM fetch/compile from
+  // the FIRST call is still in flight (that's exactly why INIT_TIMEOUT_MS is
+  // as generous as it is). Without this guard, two concurrent calls would
+  // each create their own Worker and both read/write the same _worker/
+  // _listener fields with no locking -- if the slower one times out because
+  // the faster one reassigned _listener out from under it, its cleanup path
+  // would call _teardownWorker(), terminating whichever Worker _worker
+  // currently points to, which by then could be the OTHER call's already-
+  // working one. A concurrent second caller instead just awaits this same
+  // in-flight attempt; the promise is cleared once it settles so a later,
+  // non-concurrent call can still retry after a genuine failure.
+  init() {
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInit().finally(() => { this._initPromise = null; });
+    return this._initPromise;
+  }
+
+  async _doInit() {
     const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated === true
       && typeof SharedArrayBuffer !== 'undefined';
     if (isolated) {
@@ -106,8 +126,16 @@ export class Engine {
     this._worker = new Worker(blobUrl);
     this._worker.onmessage = ({ data }) => this._listener?.(data);
 
-    await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
-    await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
+    // The URL is only ever needed to construct the Worker above; hang onto
+    // it just long enough to know whether that actually took (success or
+    // failure), then revoke it -- otherwise it leaks the underlying Blob for
+    // the rest of the page's life.
+    try {
+      await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
+      await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
     this.multithreaded = false;
     this.threads = 1;
     this.maxThreads = 1;
@@ -124,27 +152,14 @@ export class Engine {
     this._worker?.postMessage(cmd);
   }
 
-  _command(cmd, isDone) {
-    return new Promise(resolve => {
-      this._listener = line => {
-        if (isDone(line)) {
-          this._listener = null;
-          resolve(line);
-        }
-      };
-      this._send(cmd);
-    });
-  }
-
-  // Like _command, but used only for the init handshakes (uci/uciok,
-  // isready/readyok on a freshly-constructed worker) where there's no
-  // fallback path yet if the worker never responds. Unlike _command, this
-  // can actually fail: it rejects if the worker fires its 'error' event
-  // (a real runtime failure -- bad script, wasm load failure, etc. -- as
-  // opposed to a fetch()-level failure, which _initSingle's CDN loop
-  // already handles before a worker even exists) or if timeoutMs elapses
-  // with no response, instead of leaving the caller awaiting a promise
-  // that can hang forever with no error and no console diagnostic.
+  // Sends `cmd` and resolves once a response line matches `isDone`, or
+  // rejects if the worker fires its 'error' event (a real runtime failure --
+  // bad script, wasm load failure, etc. -- as opposed to a fetch()-level
+  // failure, which _initSingle's CDN loop already handles before a worker
+  // even exists) or if timeoutMs elapses with no response. Every settle path
+  // (resolve, error, timeout) clears _listener itself, so a caller can never
+  // leave a stale listener installed behind a losing race the way a bare
+  // Promise.race over an unclearable listener would.
   _commandWithTimeout(cmd, isDone, timeoutMs) {
     return new Promise((resolve, reject) => {
       const worker = this._worker;
@@ -252,14 +267,38 @@ export class Engine {
     if (this.multithreaded) {
       const clampedThreads = Math.max(1, Math.min(threads, this.maxThreads));
       if (clampedThreads !== this._currentThreads) {
-        // race a timeout too (like _stopCurrent's) so a missing/late readyok
-        // can't wedge the app forever -- worst case we search a beat early.
-        const trySetThreads = async n => {
+        // Times out its own wait (like _stopCurrent's) so a missing/late
+        // readyok can't wedge the app forever -- worst case we search a beat
+        // early -- but unlike a bare Promise.race over _command(), the
+        // timeout branch here clears _listener itself. A plain race can't do
+        // that: nothing cancels the loser, it's just ignored, so a doubly-
+        // timed-out Threads change used to leave _command's listener
+        // installed. The NEXT analyze() call's _stopCurrent() would then see
+        // that stale listener, assume a real search was running, and burn
+        // its own ~4s timeout waiting for a bestmove that was never coming --
+        // the exact "occasional 4s stall" this was reported as. (Deliberately
+        // not _commandWithTimeout here -- that also needs a real `_worker` to
+        // listen for its 'error' event, which this path doesn't otherwise
+        // depend on and which the engine.js tests don't fake.)
+        const trySetThreads = n => {
           this._send(`setoption name Threads value ${n}`);
-          return await Promise.race([
-            this._command('isready', line => line === 'readyok').then(() => true),
-            new Promise(resolve => setTimeout(() => resolve(false), 4000)),
-          ]);
+          return new Promise(resolve => {
+            let settled = false;
+            const timer = setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              this._listener = null;
+              resolve(false);
+            }, 4000);
+            this._listener = line => {
+              if (line !== 'readyok' || settled) return;
+              settled = true;
+              clearTimeout(timer);
+              this._listener = null;
+              resolve(true);
+            };
+            this._send('isready');
+          });
         };
         const ack = await trySetThreads(clampedThreads);
         if (ack) {

@@ -6668,6 +6668,60 @@ try {
       `expected analyze() to reject with an "unresponsive" error, got ${JSON.stringify(rejected)}`);
     ok('engine.analyze rejects loudly when even the fallback thread count never acks');
   } catch(e){ bad('engine Threads-change total wedge', e); }
+
+  // 83. init() re-entrancy: app.js calls engine.init() unconditionally at
+  //     boot AND (guarded by `if(!engine.ready)`) from any live-analysis
+  //     request, which can easily race the boot call while Stockfish is
+  //     still cold-loading. Two concurrent init() calls must share one
+  //     in-flight attempt (not each start their own _doInit(), which used to
+  //     risk one call's cleanup path terminating the OTHER call's already-
+  //     working Worker) -- but a LATER, non-concurrent call after that
+  //     attempt settles should still get a fresh try. Drives _doInit()
+  //     directly (a real Worker/Stockfish handshake isn't needed to test
+  //     the guard around it).
+  try {
+    const result = await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      let doInitCalls = 0;
+      engine._doInit = () => {
+        doInitCalls++;
+        return new Promise(resolve => setTimeout(resolve, 30));
+      };
+      await Promise.all([engine.init(), engine.init()]);
+      const callsAfterConcurrent = doInitCalls;
+      await engine.init();   // after settling, a later call should retry
+      return { callsAfterConcurrent, callsAfterLater: doInitCalls };
+    });
+    assert(result.callsAfterConcurrent === 1, `expected two concurrent init() calls to share one _doInit() run, got ${result.callsAfterConcurrent}`);
+    assert(result.callsAfterLater === 2, `expected a later, non-concurrent init() call to retry (not be permanently wedged), got ${result.callsAfterLater}`);
+    ok('engine.init(): concurrent calls share one in-flight attempt; a later call after it settles still retries');
+  } catch(e){ bad('engine init() re-entrancy guard', e); }
+
+  // 84. A failed init() attempt must still let a later call retry (the
+  //     cleared-on-settle promise shouldn't only clear on success), and
+  //     every caller that raced the SAME failed attempt should see that
+  //     same failure rather than one succeeding and one hanging.
+  try {
+    const result = await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      let doInitCalls = 0;
+      engine._doInit = () => {
+        doInitCalls++;
+        return doInitCalls === 1 ? Promise.reject(new Error('boom')) : Promise.resolve();
+      };
+      const settled = await Promise.allSettled([engine.init(), engine.init()]);
+      const bothRejected = settled.every(r => r.status === 'rejected' && r.reason.message === 'boom');
+      let retrySucceeded = false;
+      try { await engine.init(); retrySucceeded = true; } catch {}
+      return { bothRejected, doInitCalls, retrySucceeded };
+    });
+    assert(result.bothRejected, 'expected both concurrent callers racing the same failed attempt to see the same rejection');
+    assert(result.doInitCalls === 2, `expected a later call after a failure to retry with a fresh _doInit(), got ${result.doInitCalls} total calls`);
+    assert(result.retrySucceeded === true, 'expected the retry to succeed since the second _doInit() resolves');
+    ok('engine.init(): a failed attempt still lets a later call retry, and concurrent callers share the same failure');
+  } catch(e){ bad('engine init() re-entrancy guard: failure + retry', e); }
 } finally {
   await appBF.close();
 }
