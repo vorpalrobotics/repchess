@@ -740,6 +740,32 @@ const NUDGE_STEP = 0.1;
 const SCALE_STEP = 1.02;
 const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 
+/* ---------- in-world layout editor: translate gizmo (mouse/touch drag) ----------
+   A drag-to-move alternative to arrow-key nudging: three draggable arrows
+   (right/forward -- camera-relative, same convention as nudgeSelected's own
+   horizontal vectors -- and up, true vertical) appear on a selected prop;
+   grabbing one and dragging moves the prop along just that axis, writing
+   through the exact same setSlotXformLive path the keyboard already uses, so
+   both input methods stay interchangeable moment to moment.
+   Phase 1 only: floor/moveObject/mnemonic props (the free-floating,
+   camera-relative kinds arrow keys already fully cover). Wall props (slide
+   along the wall + height only) and signs (lawn-clamped) keep keyboard-only
+   nudging for now -- their movement is already lower-DOF, so a generic
+   3-arrow gizmo isn't an obvious win there yet; ceiling slots never nudge at
+   all (scale only), gizmo or not. */
+const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic']);
+const GIZMO_LEN = 0.5, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
+const GIZMO_COLORS = { right: 0xe53935, forward: 0x1e88e5, up: 0x43a047 };
+let selectionGizmo = [];   // the arrow Groups currently shown, or [] when none (see attachSelectionVisuals)
+// { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin,
+//   plane } while an arrow is being dragged; null otherwise.
+let gizmoDrag = null;
+// set the instant a gizmo drag starts, so the native 'click' that follows
+// the eventual mouseup doesn't ALSO fall through to onCanvasClick's own
+// raycast (which would otherwise reselect/deselect based on whatever is
+// behind the arrow).
+let suppressNextCanvasClick = false;
+
 // a surface slot (LAYOUT[roomKey].floor/ceiling/stairSurface/walls[w], and the
 // same fields inside a building default/preset) holds one of three shapes:
 // a real asset id, a flat "#rrggbb" color (colors can't collide with an asset
@@ -6072,6 +6098,31 @@ function buildGearSprite(){
   return sprite;
 }
 
+// One draggable translate-gizmo arrow from `origin` along `dir` (a
+// normalized world-space Vector3), tagged so onGizmoPointerDown recognizes
+// it and knows which axis to drag along. Builds fresh geometry/material
+// every call, same as the selection outline just below -- NOT cached/shared
+// the way gearMat is (via tagShared): disposeSceneContents disposes every
+// object's geometry unconditionally on a full room rebuild (tagShared only
+// exempts materials), so a cached geometry instance still attached to a
+// scene child when that runs would be left pointing at disposed GPU
+// resources the next time a prop gets selected.
+function buildGizmoArrow(origin, dir, axis){
+  const mat = new THREE.MeshBasicMaterial({ color: GIZMO_COLORS[axis], depthTest: false });
+  const group = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(GIZMO_SHAFT_R, GIZMO_SHAFT_R, GIZMO_LEN - GIZMO_HEAD_LEN, 8), mat);
+  shaft.position.y = (GIZMO_LEN - GIZMO_HEAD_LEN) / 2;
+  const head = new THREE.Mesh(new THREE.ConeGeometry(GIZMO_HEAD_R, GIZMO_HEAD_LEN, 10), mat);
+  head.position.y = GIZMO_LEN - GIZMO_HEAD_LEN / 2;
+  shaft.renderOrder = head.renderOrder = 999;   // draw on top, matching the outline/gear's depthTest:false
+  group.add(shaft, head);
+  // the geometry above is built pointing along +Y; rotate the group to point along `dir` instead
+  group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  group.position.copy(origin);
+  group.userData = { kind: 'xform-gizmo', axis, origin: origin.clone(), dir: dir.clone() };
+  return group;
+}
+
 // finds the freshly-built accessory mesh for the current selection (buildRoom
 // rebuilds the whole scene from scratch on every edit) and (re)adds its
 // highlight outline + gear icon. Clears the selection if the prop is gone
@@ -6118,6 +6169,27 @@ function attachSelectionVisuals(){
     selectionGear = gear;
     selectionAnchor = { center: center.clone(), halfW: size.x/2, halfH: size.y/2 };
   }
+
+  // phase-1 translate gizmo -- only the free-floating kinds (see GIZMO_KINDS'
+  // own comment). Recomputed from the CURRENT camera yaw every time this
+  // runs (selection, or a live re-nudge via refreshSelectionVisuals), same
+  // as nudgeSelected's own cameraForwardVec/cameraRightVec calls -- "right"
+  // and "forward" always mean the player's current facing, not a fixed
+  // compass direction.
+  if(GIZMO_KINDS.has(selectedProp.kind)){
+    const right = cameraRightVec(), fwd = cameraForwardVec();
+    const arrows = [
+      buildGizmoArrow(center, new THREE.Vector3(right.x, 0, right.z).normalize(), 'right'),
+      buildGizmoArrow(center, new THREE.Vector3(fwd.x, 0, fwd.z).normalize(), 'forward'),
+    ];
+    // 'floor' props have no vertical lift at all (see onKeyDown's own
+    // h/l/PageUp/PageDown guard) -- keep the gizmo's degrees of freedom
+    // exactly matching the keyboard's, rather than offering a drag the
+    // keyboard can't do too.
+    if(selectedProp.kind !== 'floor') arrows.push(buildGizmoArrow(center, new THREE.Vector3(0, 1, 0), 'up'));
+    arrows.forEach(a => scene.add(a));
+    selectionGizmo = arrows;
+  }
 }
 
 // explicit teardown for deselecting without a full room rebuild (buildRoom's
@@ -6125,6 +6197,8 @@ function attachSelectionVisuals(){
 function removeSelectionVisuals(){
   if(selectionOutline){ scene.remove(selectionOutline); selectionOutline = null; }
   if(selectionGear){ scene.remove(selectionGear); selectionGear = null; }
+  selectionGizmo.forEach(a => scene.remove(a));
+  selectionGizmo = [];
   selectionAnchor = null;
 }
 
@@ -6292,6 +6366,111 @@ function nudgeSelected(key){
   setSlotXformLive(roomKey, slotId, xform);
 }
 
+// ---------- translate gizmo: mouse/touch drag along one axis ----------
+// The plane a drag along `axisDir` (through `origin`) projects the mouse
+// onto: contains the axis line, oriented to face the camera as directly as
+// possible (normal = the camera-to-origin vector with its along-axis
+// component removed). Facing the camera keeps the camera's ray as far from
+// parallel-to-the-plane as the geometry allows, which matters because a
+// *purely horizontal* plane (the naive choice for the right/forward axes)
+// degenerates whenever the camera's eye height happens to match the plane's
+// height exactly -- edit-mode walking keeps the camera level and props are
+// routinely placed at that same eye height, so that coincidence is common,
+// not rare, and it isn't just "no intersection": THREE.Ray.intersectPlane's
+// zero-denominator branch returns distance 0 (the ray already lies in the
+// plane), which silently pins the drag to the camera's own position every
+// frame regardless of mouse movement. A camera-facing plane sidesteps this
+// for any axis, including the vertical one the old vertical-only version of
+// this function handled.
+function axisDragPlane(origin, axisDir){
+  const eye = camera.position.clone().sub(origin);
+  const normal = eye.sub(axisDir.clone().multiplyScalar(eye.dot(axisDir)));
+  if(normal.lengthSq() < 1e-6){
+    // camera sits (almost) exactly on the axis line through origin -- any
+    // plane containing the axis works equally badly/well, so just pick one
+    // via an arbitrary companion vector not parallel to the axis.
+    const helper = Math.abs(axisDir.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    normal.copy(helper).sub(axisDir.clone().multiplyScalar(helper.dot(axisDir)));
+  }
+  normal.normalize();
+  return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+}
+
+// Starts a drag if the pointerdown landed on one of the current selection's
+// gizmo arrows. Captures everything nudgeSelected would also need (room,
+// slot, starting xform) plus the axis/plane the drag will project the mouse
+// onto, so onGizmoPointerMove never has to re-resolve any of it mid-drag.
+function onGizmoPointerDown(e){
+  if(inputLocked || !raycaster || !editMode || !selectedProp || !selectionGizmo.length) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(selectionGizmo, true);
+  if(!hits.length) return;
+  const ud = findInteractive(hits[0].object);
+  if(!ud || ud.kind !== 'xform-gizmo') return;
+  e.preventDefault();
+  e.stopPropagation();
+  // whatever mouseup eventually follows this must NOT also reach
+  // onCanvasClick's own raycast -- it would reselect/deselect based on
+  // whatever's behind the arrow the user actually meant to grab.
+  suppressNextCanvasClick = true;
+
+  const { roomKey, slotId, kind } = selectedProp;
+  const room = mergedRoom(roomKey);
+  const slot = (selectedProp.doorObj || selectedProp.doorBill)
+    ? { x: selectedProp.base.x, z: selectedProp.base.z }
+    : slotById(room, roomKey, slotId);
+  if(!room || !slot) return;
+  const cur = slotXformFor(roomKey, slotId) || {};
+  const startXform = { dx: cur.dx || 0, dz: cur.dz || 0, dy: cur.dy || 0 };
+  const axisDir = ud.dir.clone();
+  const axisOrigin = ud.origin.clone();
+  const plane = axisDragPlane(axisOrigin, axisDir);
+
+  gizmoDrag = { axis: ud.axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin, plane };
+  window.addEventListener('pointermove', onGizmoPointerMove);
+  window.addEventListener('pointerup', onGizmoPointerUp, { once: true });
+}
+
+// Re-raycasts the CURRENT mouse position against the axis's plane (captured
+// at drag start) and reads off how far the intersection has moved along the
+// axis from where the drag began -- i.e. the object's new position is
+// wherever the axis line comes closest to the cursor, the same "attached to
+// the cursor" feel a real gizmo drag is supposed to have, not an incremental
+// delta that could drift from the pointer over a long drag.
+function onGizmoPointerMove(e){
+  if(!gizmoDrag) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin, plane } = gizmoDrag;
+  const hitPoint = new THREE.Vector3();
+  if(!raycaster.ray.intersectPlane(plane, hitPoint)) return;   // ray parallel to the plane this frame -- leave position as-is
+  const t = hitPoint.clone().sub(axisOrigin).dot(axisDir);
+
+  const xform = Object.assign({}, slotXformFor(roomKey, slotId));
+  if(axis === 'up'){
+    let dy = startXform.dy + t;
+    if(kind === 'moveObject') dy = Math.max(0, dy);   // can't sink below the floor -- same rule as nudgeSelected's PageDown
+    xform.dy = dy;
+  } else {
+    const dx = startXform.dx + axisDir.x * t, dz = startXform.dz + axisDir.z * t;
+    const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
+    xform.dx = clamped.x - slot.x;
+    xform.dz = clamped.z - slot.z;
+  }
+  setSlotXformLive(roomKey, slotId, xform);
+}
+
+function onGizmoPointerUp(){
+  window.removeEventListener('pointermove', onGizmoPointerMove);
+  gizmoDrag = null;
+}
+
 // the selected prop's current resize as a whole-number percent of its default
 // size (100%), or null for signs (fixed-size, no scaling).
 function selectionScalePct(){
@@ -6382,6 +6561,10 @@ function selectElevatorFloor(panelUd, uv){
 }
 
 function onCanvasClick(e){
+  // a click that just finished a gizmo-arrow drag (or a plain click on one
+  // with no movement) already did its job in onGizmoPointerDown/Up -- don't
+  // also reselect/deselect based on whatever's behind the arrow.
+  if(suppressNextCanvasClick){ suppressNextCanvasClick = false; return; }
   if(inputLocked || !raycaster) return;
   if(!editMode){ handleWalkClick(e); return; }
   const rect = renderer.domElement.getBoundingClientRect();
@@ -7961,6 +8144,7 @@ export async function openThreeTest(containerEl, opts){
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   renderer.domElement.addEventListener('click', onCanvasClick);
+  renderer.domElement.addEventListener('pointerdown', onGizmoPointerDown);
 
   // linked castles: any OTHER castle the previewed one has a redirected door
   // into (see gatherLinkedCastles in app.js) -- registered so those doors
@@ -7994,6 +8178,22 @@ export async function openThreeTest(containerEl, opts){
       // the currently selected prop (null if none) -- for testing that a
       // room transition clears it instead of carrying it over (see enterRoom).
       selected: () => selectedProp,
+      // translate gizmo (phase 1): which axes are currently shown (e.g.
+      // asserting a 'floor' prop gets only right/forward, no 'up'), and a
+      // screen-space point on a given arrow so a test can dispatch REAL
+      // pointerdown/pointermove/pointerup at that spot -- exercising the
+      // actual raycast/plane-projection math onGizmoPointerDown/Move use,
+      // rather than bypassing it with a hook that just calls
+      // setSlotXformLive directly.
+      gizmoAxes: () => selectionGizmo.map(a => a.userData.axis),
+      gizmoArrowScreenPoint: (axis) => {
+        const arrow = selectionGizmo.find(a => a.userData.axis === axis);
+        if(!arrow || !renderer) return null;
+        const tip = arrow.userData.origin.clone().addScaledVector(arrow.userData.dir, GIZMO_LEN * 0.85);
+        tip.project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + (tip.x + 1) / 2 * rect.width, y: rect.top + (1 - tip.y) / 2 * rect.height };
+      },
       // edit-mode undo/redo (see snapshotLayoutForUndo/snapshotForXformEdit):
       // stack depths for asserting availability, plus direct triggers so a
       // test can invoke them without needing real key focus, and a snapshot
