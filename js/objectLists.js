@@ -291,7 +291,7 @@ function renderEditor(){
     </div>
 
     <h3 class="objlist-h3">Items (in order — each anchors one move-pair)</h3>
-    <p class="objlist-hint">Item names are immutable binding keys: to “rename”, remove and re-add (the image binding is dropped on purpose). Reorder with the arrows.</p>
+    <p class="objlist-hint">Item names are immutable binding keys: to “rename”, remove and re-add (the image binding is dropped on purpose). Drag the grip icon to reorder.</p>
     <table class="objlist-items">
       <thead><tr><th>#</th><th>Object</th><th>Image asset</th><th></th></tr></thead>
       <tbody id="ol_items"></tbody>
@@ -362,6 +362,8 @@ function renderItems(){
   items.forEach((it, i) => {
     const a = assetById(it.assetId);
     const tr = document.createElement('tr');
+    tr.className = 'objlist-row';
+    tr.dataset.name = it.name;   // stable drag identity -- item names are already enforced unique
     tr.innerHTML = `
       <td class="objlist-num">${i+1}</td>
       <td class="objlist-name">${esc(it.name)}</td>
@@ -374,8 +376,7 @@ function renderItems(){
         </div>
       </td>
       <td class="objlist-rowtools">
-        <button class="objlist-mini" data-up="${i}" ${i===0?'disabled':''}>↑</button>
-        <button class="objlist-mini" data-down="${i}" ${i===items.length-1?'disabled':''}>↓</button>
+        <span class="objlist-grab" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></span>
         <button class="objlist-mini objlist-del" data-remove="${i}">✕</button>
       </td>
     `;
@@ -383,9 +384,8 @@ function renderItems(){
   });
   tb.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => openPicker(+b.dataset.pick));
   tb.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { EDIT.items[+b.dataset.clear].assetId = null; renderItems(); });
-  tb.querySelectorAll('[data-up]').forEach(b => b.onclick = () => moveItem(+b.dataset.up, -1));
-  tb.querySelectorAll('[data-down]').forEach(b => b.onclick = () => moveItem(+b.dataset.down, +1));
   tb.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { EDIT.items.splice(+b.dataset.remove,1); renderItems(); });
+  tb.querySelectorAll('.objlist-grab').forEach(handle => handle.addEventListener('pointerdown', olGrabPointerDown));
 }
 
 function addItem(){
@@ -403,11 +403,74 @@ function addItem(){
   inp.focus();
 }
 
-function moveItem(i, dir){
-  const j = i + dir;
-  if(j < 0 || j >= EDIT.items.length) return;
-  const t = EDIT.items[i]; EDIT.items[i] = EDIT.items[j]; EDIT.items[j] = t;
+/* Moves the item named `name` to `targetIndex` (splice-insertion-index
+   semantics, same convention as the analysis queue's reorderAnalysisQueue).
+   No persistence here -- items live only in the working EDIT copy until
+   Save writes the whole record. Unlike the analysis queue, every index is a
+   valid source/destination: there's no "currently processing" item to
+   protect, so nothing is ever off-limits. */
+function reorderItems(name, targetIndex){
+  const i = EDIT.items.findIndex(it => it.name === name);
+  if(i === -1) return;
+  const dest = Math.max(0, Math.min(targetIndex, EDIT.items.length - 1));
+  if(dest === i) return;
+  const [item] = EDIT.items.splice(i, 1);
+  EDIT.items.splice(dest, 0, item);
   renderItems();
+}
+
+// Pointer-based (mouse + touch) drag-to-reorder -- same strategy as the
+// analysis queue's grab handle (js/app.js's aqGrabPointerDown and friends):
+// a horizontal indicator row tracks which gap the pointer is currently over,
+// and release commits the move via reorderItems.
+let OL_DRAG = null;   // { name, indicator, targetIndex } while a drag is in progress
+
+function olGrabPointerDown(e){
+  e.preventDefault();
+  const tr = e.currentTarget.closest('tr');
+  const name = tr.dataset.name;
+  const tb = $('ol_items');
+  const indicator = document.createElement('tr');
+  indicator.className = 'objlist-drop-indicator';
+  indicator.innerHTML = `<td colspan="4"><div class="objlist-drop-bar"></div></td>`;
+  tr.classList.add('objlist-dragging');
+  tb.insertBefore(indicator, tr.nextSibling);
+  OL_DRAG = { name, indicator, targetIndex: null };
+  document.addEventListener('pointermove', olGrabPointerMove);
+  document.addEventListener('pointerup', olGrabPointerUp, { once: true });
+}
+
+// Every row except the one being dragged, in current DOM order -- gap `k`
+// (0-based) sits right before rows[k]. rows[target] doubles as the
+// indicator's insertion reference: undefined (past the last row) correctly
+// means "insertBefore(indicator, undefined)", i.e. append.
+function olGrabPointerMove(e){
+  if(!OL_DRAG) return;
+  const tb = $('ol_items');
+  const rows = [...tb.querySelectorAll('tr.objlist-row')].filter(r => r.dataset.name !== OL_DRAG.name);
+  let target = 0;
+  for(let k = 0; k < rows.length; k++){
+    const rect = rows[k].getBoundingClientRect();
+    if(e.clientY > rect.top + rect.height / 2) target = k + 1;
+  }
+  target = Math.max(0, Math.min(target, rows.length));
+  if(target !== OL_DRAG.targetIndex){
+    OL_DRAG.targetIndex = target;
+    tb.insertBefore(OL_DRAG.indicator, rows[target] || null);
+  }
+}
+
+function olGrabPointerUp(){
+  document.removeEventListener('pointermove', olGrabPointerMove);
+  if(!OL_DRAG) return;
+  const { name, indicator, targetIndex } = OL_DRAG;
+  // clear the drag visuals synchronously rather than relying on
+  // reorderItems' re-render to do it implicitly (matches the analysis
+  // queue's own fix for the same "state visibly lingers for a beat" issue).
+  indicator.remove();
+  $('ol_items').querySelector('tr.objlist-dragging')?.classList.remove('objlist-dragging');
+  OL_DRAG = null;
+  if(targetIndex != null) reorderItems(name, targetIndex);
 }
 
 /* ---------- asset picker (sub-overlay) ---------- */
