@@ -624,6 +624,121 @@ try {
 
 } catch(e){ bad('Phase E: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase F: translate gizmo drag (phase 1: floor/moveObject/mnemonic props) ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appGZ = await launchApp();
+try {
+  await seedBackup(appGZ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
+  }, { defaultPlayerColor: 'white' });
+  await appGZ.page.click('.line-row');
+  await appGZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
+  await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
+  await appGZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
+  await appGZ.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appGZ.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
+  await appGZ.page.evaluate(() => document.getElementById('castleWalkBtn').click());
+  await appGZ.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
+  await appGZ.page.waitForTimeout(400);
+  // mnem-C1 (the entry room's own move-pair billboard) is always present,
+  // unlike a move-object prop which needs an asset assigned first -- same
+  // shortcut Phase E's keyboard-nudge test above relies on. It's a
+  // 'mnemonic' kind, one of the three GIZMO_KINDS.
+  await appGZ.page.evaluate(() => {
+    window.__threeTestEdit.toggle();
+    window.__threeTestEdit.target({ kind: 'accessory', slotId: 'mnem-C1' });
+  });
+  await appGZ.page.waitForTimeout(100);
+
+  // 11b. A mnemonic (free-floating: horizontal + vertical) selection gets
+  //      all three gizmo arrows. (A kind with no vertical lift, e.g. a
+  //      floor prop, wouldn't get "up" -- see GIZMO_KINDS/onKeyDown's own
+  //      h/l guard -- not separately exercised here since reaching a
+  //      move-object/floor prop needs an asset-bound slot, more setup than
+  //      this phase's always-present entry-room billboard needs.)
+  try {
+    const axes = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
+    assert(JSON.stringify([...axes].sort()) === JSON.stringify(['forward','right','up']),
+      `expected a mnemonic selection to show all three gizmo arrows, got ${JSON.stringify(axes)}`);
+    ok('translate gizmo: a free-floating (mnemonic) selection shows right/forward/up arrows');
+  } catch(e){ bad('translate gizmo: arrow set for a mnemonic selection', e); }
+
+  // 11c. Dragging the "right" arrow (world +X at this room's default spawn
+  //      yaw=0 -- the same assumption Phase E's own ArrowRight-nudge test
+  //      relies on) via a REAL pointer sequence (not a hook bypassing the
+  //      raycast/plane-projection math) moves the billboard along that
+  //      axis with height unchanged, coalesces the whole drag into exactly
+  //      one undo entry (same rule a held arrow key follows), and undo
+  //      reverts it.
+  try {
+    const before = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    const undoBefore = await appGZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
+    const pt = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('right'));
+    assert(pt, 'expected a screen point for the "right" gizmo arrow');
+
+    await appGZ.page.mouse.move(pt.x, pt.y);
+    await appGZ.page.mouse.down();
+    await appGZ.page.mouse.move(pt.x + 70, pt.y, { steps: 6 });
+    await appGZ.page.mouse.up();
+    await appGZ.page.waitForTimeout(100);
+
+    const after = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    const dx = after.x - before.x, dz = after.z - before.z, dy = after.y - before.y;
+    assert(dx > 0.15, `expected the "right" drag to move the billboard along +X, got dx=${dx}`);
+    assert(Math.abs(dz) < 0.05, `expected the "right" drag to leave Z essentially unchanged, got dz=${dz}`);
+    assert(Math.abs(dy) < 0.05, `expected a horizontal drag to leave height unchanged, got dy=${dy}`);
+
+    const undoAfter = await appGZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
+    assert(undoAfter === undoBefore + 1, `expected the whole drag to coalesce into exactly one undo entry, got ${undoBefore} -> ${undoAfter}`);
+    await appGZ.page.evaluate(() => window.__threeTestEdit.undo());
+    await appGZ.page.waitForTimeout(200);   // undo rebuilds the room asynchronously (refreshAssetMap().then(buildRoom)) -- posOf reads the live scene
+    const reverted = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(Math.abs(reverted.x - before.x) < 0.02, `expected undo to put the billboard back where it started, got ${JSON.stringify(reverted)} vs ${JSON.stringify(before)}`);
+    ok('translate gizmo: dragging the "right" arrow moves along that axis, coalesces to one undo step, and undo reverts it');
+  } catch(e){ bad('translate gizmo: "right" arrow drag', e); }
+
+  // 11d. Dragging the "up" arrow moves height only, and arrow-key nudging
+  //      still works immediately afterward -- the gizmo is an alternative
+  //      input method for the exact same selectedProp/setSlotXformLive
+  //      path, not a replacement that disables the keyboard one.
+  try {
+    // mnem-C1 is still selected from 11c (undo doesn't clear selection, and
+    // re-targeting an already-selected slot would just toggle it off -- see
+    // handleEditTarget's accessory-kind branch).
+    const before = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    const pt = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('up'));
+    assert(pt, 'expected a screen point for the "up" gizmo arrow');
+
+    await appGZ.page.mouse.move(pt.x, pt.y);
+    await appGZ.page.mouse.down();
+    await appGZ.page.mouse.move(pt.x, pt.y - 60, { steps: 6 });
+    await appGZ.page.mouse.up();
+    await appGZ.page.waitForTimeout(100);
+
+    const afterUp = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(afterUp.y - before.y > 0.1, `expected dragging "up" to raise the billboard, got dy=${afterUp.y - before.y}`);
+    assert(Math.abs(afterUp.x - before.x) < 0.05 && Math.abs(afterUp.z - before.z) < 0.05,
+      `expected a vertical drag to leave the horizontal position unchanged, got ${JSON.stringify({before, afterUp})}`);
+
+    await appGZ.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+    await appGZ.page.waitForTimeout(80);
+    const afterKey = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(afterKey.x - afterUp.x > 0.05, `expected ArrowRight to still nudge the billboard after a gizmo drag, got dx=${afterKey.x - afterUp.x}`);
+    ok('translate gizmo: dragging "up" moves height only, and keyboard nudging still works right after');
+  } catch(e){ bad('translate gizmo: "up" arrow drag + keyboard coexistence', e); }
+} finally {
+  await appGZ.close();
+}
+
+} catch(e){ bad('Phase F: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase G: mnemonic quiz "Restrict to Opening Coverage" scoped to a castle ---
 if(shouldRunPhase(['quiz'])){
 try {
