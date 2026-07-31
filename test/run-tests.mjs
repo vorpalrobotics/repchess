@@ -8968,6 +8968,81 @@ try {
     await appAY3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
     ok('object lists: New Asset\'s duplicate-id check works even when Manage VR Assets was never opened this session');
   } catch(e){ bad('object lists: duplicate-id guard reaches a fresh ASSETS cache from this path', e); }
+
+  // 168. Drag-to-reorder (grip icon + pointer drag, same strategy as the
+  //      analysis queue's) replaces the old up/down arrows: a real pointer
+  //      drag shows the drop-indicator bar and dims the dragged row while
+  //      held, both clear immediately on release, the move commits to the
+  //      working EDIT.items array, and Save persists the new order to IDB.
+  try {
+    // test 167 leaves the item picker open underneath its own New Asset
+    // modal (only that inner modal was cancelled) -- close it first so it
+    // doesn't intercept clicks meant for the grid/editor below.
+    await appAY3.page.evaluate(() => {
+      document.getElementById('objlistPickCancel')?.click();
+      document.getElementById('ol_cancel')?.click();
+    });
+    await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistNewBtn');
+    await appAY3.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+    await appAY3.page.fill('#ol_id', 'drag_test_list');
+    await appAY3.page.fill('#ol_name', 'Drag Test');
+    for(const name of ['Alpha', 'Bravo', 'Charlie', 'Delta']){
+      await appAY3.page.fill('#ol_newitem', name);
+      await appAY3.page.click('#ol_additembtn');
+    }
+    const namesBefore = await appAY3.page.evaluate(() => [...document.querySelectorAll('#ol_items tr')].map(tr => tr.dataset.name));
+    assert(JSON.stringify(namesBefore) === JSON.stringify(['Alpha','Bravo','Charlie','Delta']),
+      `expected the four items added in order, got ${JSON.stringify(namesBefore)}`);
+
+    // drag Delta (last, index 3) all the way up to land at index 0.
+    const grabPoint = await appAY3.page.evaluate(() => {
+      const grab = document.querySelectorAll('#ol_items tr')[3].querySelector('.objlist-grab');
+      const r = grab.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    const topY = await appAY3.page.evaluate(() => {
+      const r = document.querySelectorAll('#ol_items tr')[0].getBoundingClientRect();
+      return r.top + 2;   // just inside the first row's top -- well above its midpoint
+    });
+
+    await appAY3.page.mouse.move(grabPoint.x, grabPoint.y);
+    await appAY3.page.mouse.down();
+    await appAY3.page.mouse.move(grabPoint.x, topY, { steps: 6 });
+
+    const duringDrag = await appAY3.page.evaluate(() => ({
+      indicatorPresent: !!document.querySelector('.objlist-drop-indicator'),
+      draggedRowDimmed: !!document.querySelector('#ol_items tr.objlist-dragging'),
+    }));
+    assert(duringDrag.indicatorPresent, 'expected the drop-indicator bar to appear while dragging');
+    assert(duringDrag.draggedRowDimmed, 'expected the dragged row to be visually dimmed while dragging');
+
+    await appAY3.page.mouse.up();
+    await appAY3.page.waitForFunction(() =>
+      [...document.querySelectorAll('#ol_items tr')].map(tr => tr.dataset.name)[0] === 'Delta',
+      { timeout: 5000 });
+
+    const after = await appAY3.page.evaluate(() => ({
+      names: [...document.querySelectorAll('#ol_items tr')].map(tr => tr.dataset.name),
+      indicatorGone: !document.querySelector('.objlist-drop-indicator'),
+      noneDimmed: !document.querySelector('#ol_items tr.objlist-dragging'),
+    }));
+    assert(JSON.stringify(after.names) === JSON.stringify(['Delta','Alpha','Bravo','Charlie']),
+      `expected Delta dragged from index 3 to index 0, got ${JSON.stringify(after.names)}`);
+    assert(after.indicatorGone, 'expected the drop-indicator bar to be removed after releasing');
+    assert(after.noneDimmed, 'expected no row to still be dimmed after releasing');
+
+    await appAY3.page.click('#ol_save');
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    const saved = await appAY3.page.evaluate(async () => {
+      const lists = await getAllObjectLists();
+      return lists.find(l => l.id === 'drag_test_list')?.items.map(it => it.name);
+    });
+    assert(JSON.stringify(saved) === JSON.stringify(['Delta','Alpha','Bravo','Charlie']),
+      `expected the dragged order to survive Save (persisted to IDB), got ${JSON.stringify(saved)}`);
+    ok('object lists: drag-to-reorder shows the drop-indicator bar, commits on release, and persists on Save');
+  } catch(e){ bad('object lists: drag-to-reorder end to end', e); }
 } finally {
   await appAY3.close();
 }
