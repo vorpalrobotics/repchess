@@ -647,6 +647,9 @@ try {
   await appGZ.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appGZ.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
   await appGZ.page.waitForTimeout(400);
+  // baseline camera pose (level, no gizmo lift) -- captured before any
+  // selection exists, for 11e to compare the tilted/lifted pose against.
+  const camBaseline = await appGZ.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
   // mnem-C1 (the entry room's own move-pair billboard) is always present,
   // unlike a move-object prop which needs an asset assigned first -- same
   // shortcut Phase E's keyboard-nudge test above relies on. It's a
@@ -665,14 +668,14 @@ try {
   //      this phase's always-present entry-room billboard needs.)
   try {
     const axes = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
-    assert(JSON.stringify([...axes].sort()) === JSON.stringify(['forward','right','up']),
+    assert(JSON.stringify([...axes].sort()) === JSON.stringify(['up','x','z']),
       `expected a mnemonic selection to show all three gizmo arrows, got ${JSON.stringify(axes)}`);
-    ok('translate gizmo: a free-floating (mnemonic) selection shows right/forward/up arrows');
+    ok('translate gizmo: a free-floating (mnemonic) selection shows x/z/up arrows');
   } catch(e){ bad('translate gizmo: arrow set for a mnemonic selection', e); }
 
-  // 11c. Dragging the "right" arrow (world +X at this room's default spawn
-  //      yaw=0 -- the same assumption Phase E's own ArrowRight-nudge test
-  //      relies on) via a REAL pointer sequence (not a hook bypassing the
+  // 11c. Dragging the "x" arrow (wall-relative -- always world +X in every
+  //      room, regardless of which way the player is facing, see AXIS_X's
+  //      own comment) via a REAL pointer sequence (not a hook bypassing the
   //      raycast/plane-projection math) moves the billboard along that
   //      axis with height unchanged, coalesces the whole drag into exactly
   //      one undo entry (same rule a held arrow key follows), and undo
@@ -680,8 +683,8 @@ try {
   try {
     const before = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
     const undoBefore = await appGZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
-    const pt = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('right'));
-    assert(pt, 'expected a screen point for the "right" gizmo arrow');
+    const pt = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('x'));
+    assert(pt, 'expected a screen point for the "x" gizmo arrow');
 
     await appGZ.page.mouse.move(pt.x, pt.y);
     await appGZ.page.mouse.down();
@@ -691,8 +694,8 @@ try {
 
     const after = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
     const dx = after.x - before.x, dz = after.z - before.z, dy = after.y - before.y;
-    assert(dx > 0.15, `expected the "right" drag to move the billboard along +X, got dx=${dx}`);
-    assert(Math.abs(dz) < 0.05, `expected the "right" drag to leave Z essentially unchanged, got dz=${dz}`);
+    assert(dx > 0.15, `expected the "x" drag to move the billboard along +X, got dx=${dx}`);
+    assert(Math.abs(dz) < 0.05, `expected the "x" drag to leave Z essentially unchanged, got dz=${dz}`);
     assert(Math.abs(dy) < 0.05, `expected a horizontal drag to leave height unchanged, got dy=${dy}`);
 
     const undoAfter = await appGZ.page.evaluate(() => window.__threeTestEdit.undoDepth());
@@ -701,8 +704,8 @@ try {
     await appGZ.page.waitForTimeout(200);   // undo rebuilds the room asynchronously (refreshAssetMap().then(buildRoom)) -- posOf reads the live scene
     const reverted = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
     assert(Math.abs(reverted.x - before.x) < 0.02, `expected undo to put the billboard back where it started, got ${JSON.stringify(reverted)} vs ${JSON.stringify(before)}`);
-    ok('translate gizmo: dragging the "right" arrow moves along that axis, coalesces to one undo step, and undo reverts it');
-  } catch(e){ bad('translate gizmo: "right" arrow drag', e); }
+    ok('translate gizmo: dragging the "x" arrow moves along that axis, coalesces to one undo step, and undo reverts it');
+  } catch(e){ bad('translate gizmo: "x" arrow drag', e); }
 
   // 11d. Dragging the "up" arrow moves height only, and arrow-key nudging
   //      still works immediately afterward -- the gizmo is an alternative
@@ -733,6 +736,25 @@ try {
     assert(afterKey.x - afterUp.x > 0.05, `expected ArrowRight to still nudge the billboard after a gizmo drag, got dx=${afterKey.x - afterUp.x}`);
     ok('translate gizmo: dragging "up" moves height only, and keyboard nudging still works right after');
   } catch(e){ bad('translate gizmo: "up" arrow drag + keyboard coexistence', e); }
+
+  // 11e. Selecting a gizmo-eligible prop eases the camera up and tilts it
+  //      down (EDIT_TILT_LIFT/EDIT_TILT_PITCH) so the two horizontal arrows
+  //      are never viewed edge-on; deselecting eases it back to level. Only
+  //      needs to observe __threeTestState's y/pitch -- mnem-C1 is already
+  //      selected from 11c/11d.
+  try {
+    await appGZ.page.waitForTimeout(400);   // let the eased tilt/lift converge
+    const tilted = await appGZ.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+    assert(tilted.y - camBaseline.y > 0.5, `expected selecting a gizmo-eligible prop to lift the camera, got ${camBaseline.y} -> ${tilted.y}`);
+    assert(tilted.pitch < camBaseline.pitch - 0.1, `expected selecting a gizmo-eligible prop to tilt the camera down, got ${camBaseline.pitch} -> ${tilted.pitch}`);
+
+    await appGZ.page.evaluate(() => window.__threeTestEdit.target({ kind: 'accessory', slotId: 'mnem-C1' }));   // toggle off (already selected)
+    await appGZ.page.waitForTimeout(400);
+    const level = await appGZ.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+    assert(Math.abs(level.y - camBaseline.y) < 0.05, `expected deselecting to ease the camera back down, got ${camBaseline.y} vs ${level.y}`);
+    assert(Math.abs(level.pitch - camBaseline.pitch) < 0.02, `expected deselecting to ease the camera pitch back level, got ${camBaseline.pitch} vs ${level.pitch}`);
+    ok('translate gizmo: selecting eases the camera up/down-tilted, deselecting eases it back to level');
+  } catch(e){ bad('translate gizmo: camera tilt/lift on selection', e); }
 } finally {
   await appGZ.close();
 }
