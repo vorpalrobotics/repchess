@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 6;
+const DB_VERSION = 7;   // v7 adds safetyBackup (crash-surviving pre-restore snapshot)
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -69,6 +69,12 @@ function openDB(){
         const aq = db.createObjectStore('analysisQueue', {keyPath:'id'});
         aq.createIndex('status','status');
         aq.createIndex('user','user');
+      }
+      // Deliberately NOT in clearAllData()'s store list -- its whole purpose
+      // is a pre-restore snapshot that survives the exact wipe that store
+      // list performs. See setSafetyBackup/getSafetyBackup/clearSafetyBackup.
+      if(!db.objectStoreNames.contains('safetyBackup')){
+        db.createObjectStore('safetyBackup', {keyPath:'id'});
       }
     };
     req.onsuccess = () => {
@@ -489,6 +495,44 @@ async function clearAllData(){
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+/* ---------- safety backup (crash-surviving pre-restore snapshot) ----------
+   A single row (fixed id 'current') holding whatever a caller wants to
+   recover if a destructive operation is interrupted -- app.js's importBackup
+   writes a full pre-restore snapshot here right before wiping everything via
+   clearAllData(), and clears this row again once the restore (or its own
+   in-session rollback) completes. If the row is still here on next boot,
+   nothing ever confirmed completion -- the tab was closed/crashed mid-restore
+   -- so app.js's boot-time check replays it. The payload shape (plain object
+   vs. gzip Blob) is entirely app.js's business; this is just a mechanical
+   single-row store, deliberately excluded from clearAllData()'s store list
+   above so it survives the exact wipe it exists to recover from. */
+async function getSafetyBackup(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('safetyBackup','readonly').objectStore('safetyBackup').get('current');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror   = () => reject(req.error);
+  });
+}
+async function setSafetyBackup(payload){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('safetyBackup','readwrite');
+    txn.objectStore('safetyBackup').put({ id:'current', payload, createdAt: Date.now() });
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+async function clearSafetyBackup(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('safetyBackup','readwrite');
+    txn.objectStore('safetyBackup').delete('current');
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });

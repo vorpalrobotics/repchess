@@ -6668,6 +6668,60 @@ try {
       `expected analyze() to reject with an "unresponsive" error, got ${JSON.stringify(rejected)}`);
     ok('engine.analyze rejects loudly when even the fallback thread count never acks');
   } catch(e){ bad('engine Threads-change total wedge', e); }
+
+  // 83. init() re-entrancy: app.js calls engine.init() unconditionally at
+  //     boot AND (guarded by `if(!engine.ready)`) from any live-analysis
+  //     request, which can easily race the boot call while Stockfish is
+  //     still cold-loading. Two concurrent init() calls must share one
+  //     in-flight attempt (not each start their own _doInit(), which used to
+  //     risk one call's cleanup path terminating the OTHER call's already-
+  //     working Worker) -- but a LATER, non-concurrent call after that
+  //     attempt settles should still get a fresh try. Drives _doInit()
+  //     directly (a real Worker/Stockfish handshake isn't needed to test
+  //     the guard around it).
+  try {
+    const result = await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      let doInitCalls = 0;
+      engine._doInit = () => {
+        doInitCalls++;
+        return new Promise(resolve => setTimeout(resolve, 30));
+      };
+      await Promise.all([engine.init(), engine.init()]);
+      const callsAfterConcurrent = doInitCalls;
+      await engine.init();   // after settling, a later call should retry
+      return { callsAfterConcurrent, callsAfterLater: doInitCalls };
+    });
+    assert(result.callsAfterConcurrent === 1, `expected two concurrent init() calls to share one _doInit() run, got ${result.callsAfterConcurrent}`);
+    assert(result.callsAfterLater === 2, `expected a later, non-concurrent init() call to retry (not be permanently wedged), got ${result.callsAfterLater}`);
+    ok('engine.init(): concurrent calls share one in-flight attempt; a later call after it settles still retries');
+  } catch(e){ bad('engine init() re-entrancy guard', e); }
+
+  // 84. A failed init() attempt must still let a later call retry (the
+  //     cleared-on-settle promise shouldn't only clear on success), and
+  //     every caller that raced the SAME failed attempt should see that
+  //     same failure rather than one succeeding and one hanging.
+  try {
+    const result = await appBF.page.evaluate(async () => {
+      const { Engine } = await import('/js/engine.js');
+      const engine = new Engine();
+      let doInitCalls = 0;
+      engine._doInit = () => {
+        doInitCalls++;
+        return doInitCalls === 1 ? Promise.reject(new Error('boom')) : Promise.resolve();
+      };
+      const settled = await Promise.allSettled([engine.init(), engine.init()]);
+      const bothRejected = settled.every(r => r.status === 'rejected' && r.reason.message === 'boom');
+      let retrySucceeded = false;
+      try { await engine.init(); retrySucceeded = true; } catch {}
+      return { bothRejected, doInitCalls, retrySucceeded };
+    });
+    assert(result.bothRejected, 'expected both concurrent callers racing the same failed attempt to see the same rejection');
+    assert(result.doInitCalls === 2, `expected a later call after a failure to retry with a fresh _doInit(), got ${result.doInitCalls} total calls`);
+    assert(result.retrySucceeded === true, 'expected the retry to succeed since the second _doInit() resolves');
+    ok('engine.init(): a failed attempt still lets a later call retry, and concurrent callers share the same failure');
+  } catch(e){ bad('engine init() re-entrancy guard: failure + retry', e); }
 } finally {
   await appBF.close();
 }
@@ -6786,6 +6840,145 @@ try {
     assert(accept === '*/*', `expected #backupImport's accept to be the explicit wildcard "*/*", got ${JSON.stringify(accept)}`);
     ok('#backupImport uses an explicit "*/*" accept, so cloud-picked files (Drive, Dropbox) are always offered and selectable');
   } catch(e){ bad('#backupImport accept is an explicit wildcard', e); }
+
+  // 86. A round trip through import THEN export must preserve every field a
+  //     backup claims to carry -- specifically the ones a prior review found
+  //     silently dropped: the per-node `compareGames` toggle, and the
+  //     graphLayout/decoratedRooms/memorizedShapes meta blobs (all three
+  //     documented as persisted "the same way" as threeLayout/memorizedRooms,
+  //     which WERE already covered). Seed a backup carrying all four, restore
+  //     it through the real #backupImport path, confirm each lands in IDB via
+  //     getPref/getMeta, then rebuild a fresh export (buildBackupData, the
+  //     download-free half of exportBackup) and confirm it still has them --
+  //     proving the fields survive both directions, not just storage.
+  try {
+    const roundTripBackup = {
+      version: 6, user: 'tester',
+      lines: [{
+        id: 'L-RT', name: 'RoundTrip', color: 'white', openingMoves: ['d4'],
+        prefs: [{ seq: ['d4'], reply: 'Nf6', compareGames: true }],
+      }],
+      games: [],
+      graphLayout: JSON.stringify({ 'L-RT|root': { 'd4': {dx:5,dy:7} } }),
+      decoratedRooms: JSON.stringify({ 'cas:L-RT:root': 1700000000000 }),
+      memorizedShapes: JSON.stringify({ 'cas:L-RT:root': { kind:'corridor', exitPosKeys:['d4'] } }),
+    };
+    await seedBackup(appBH.page, roundTripBackup);
+
+    const restoredPref = await appBH.page.evaluate(() => window.__aqTestHooks.getPref('L-RT', ['d4']));
+    assert(restoredPref?.compareGames === true, `expected compareGames:true to survive the restore, got ${JSON.stringify(restoredPref)}`);
+
+    const restoredMeta = await appBH.page.evaluate(() => Promise.all([
+      window.__backupTestHooks.getMeta('graphLayout'),
+      window.__backupTestHooks.getMeta('threeDecoratedRooms'),
+      window.__backupTestHooks.getMeta('threeMemorizedShapes'),
+    ]));
+    assert(restoredMeta[0] === roundTripBackup.graphLayout, `expected graphLayout meta to survive the restore, got ${restoredMeta[0]}`);
+    assert(restoredMeta[1] === roundTripBackup.decoratedRooms, `expected threeDecoratedRooms meta to survive the restore, got ${restoredMeta[1]}`);
+    assert(restoredMeta[2] === roundTripBackup.memorizedShapes, `expected threeMemorizedShapes meta to survive the restore, got ${restoredMeta[2]}`);
+
+    const rebuilt = await appBH.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    const rebuiltPref = rebuilt.lines.find(l => l.id === 'L-RT')?.prefs.find(p => p.seq.join(',') === 'd4');
+    assert(rebuiltPref?.compareGames === true, `expected a fresh export to still carry compareGames:true, got ${JSON.stringify(rebuiltPref)}`);
+    assert(rebuilt.graphLayout === roundTripBackup.graphLayout, `expected a fresh export to still carry graphLayout, got ${rebuilt.graphLayout}`);
+    assert(rebuilt.decoratedRooms === roundTripBackup.decoratedRooms, `expected a fresh export to still carry decoratedRooms, got ${rebuilt.decoratedRooms}`);
+    assert(rebuilt.memorizedShapes === roundTripBackup.memorizedShapes, `expected a fresh export to still carry memorizedShapes, got ${rebuilt.memorizedShapes}`);
+    ok('backup round trip: compareGames + graphLayout/decoratedRooms/memorizedShapes survive both restore and a fresh re-export');
+  } catch(e){ bad('backup round trip: previously-dropped fields now survive', e); }
+
+  // 87. If applyBackupData throws partway through the write phase (a record
+  //     malformed in a way the shallow top-level validation -- data.lines is
+  //     an array, data.user is truthy -- can't catch up front), importBackup
+  //     must automatically roll back to a snapshot of whatever was there
+  //     before, so a bad file can't leave the browser with neither the old
+  //     nor a complete new copy. Covers the in-session case (tab stays alive
+  //     to run the catch block); test 88 covers the crash-survives case.
+  try {
+    const goodBackup = {
+      version: 6, user: 'goodUser',
+      lines: [{ id: 'L-GOOD', name: 'Good', color: 'white', openingMoves: ['e4'], prefs: [{ seq: ['e4'], reply: 'e5' }] }],
+      games: [],
+    };
+    await seedBackup(appBH.page, goodBackup);
+
+    const badBackup = {
+      version: 6, user: 'badUser',
+      // seq:null throws inside setPref's prefKey (seq.join is not a function
+      // on null) -- deep enough that the shallow top-level checks pass it through.
+      lines: [{ id: 'L-BAD', name: 'Bad', color: 'white', openingMoves: ['d4'], prefs: [{ seq: null, reply: 'd5' }] }],
+      games: [],
+    };
+    const genBefore = await appBH.page.evaluate(() => window.__importBackupGen());
+    await appBH.page.setInputFiles('#backupImport', {
+      name: 'bad.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(badBackup)),
+    });
+    // the rollback's own applyBackupData call reaches the same trailing
+    // _importBackupGen++ a clean restore would -- so this settles even
+    // though the FIRST (failing) attempt never got that far.
+    await appBH.page.waitForFunction((n) => window.__importBackupGen() > n, genBefore, { timeout: 15000 });
+
+    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    assert(userId === 'goodUser', `expected the failed import to roll back CURRENT_USER to "goodUser", got ${userId}`);
+
+    const [goodLines, badLines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines('goodUser'),
+      window.__linesTestHooks.getLines('badUser'),
+      window.__aqTestHooks.getPref('L-GOOD', ['e4']),
+      window.__backupTestHooks.hasSafetyBackup(),
+    ]));
+    assert(goodLines.length === 1 && goodLines[0].id === 'L-GOOD', `expected the pre-restore line to survive the rollback, got ${JSON.stringify(goodLines)}`);
+    assert(badLines.length === 0, `expected the failed import's own data to NOT be present after rollback, got ${JSON.stringify(badLines)}`);
+    assert(goodPref?.reply === 'e5', `expected the pre-restore pref to survive the rollback, got ${JSON.stringify(goodPref)}`);
+    assert(hasSafety === false, `expected the safety-backup row to be cleared once the rollback succeeded, got hasSafetyBackup=${hasSafety}`);
+    ok('importBackup: a mid-restore failure automatically rolls back to the pre-restore snapshot (in-session)');
+  } catch(e){ bad('importBackup: automatic in-session rollback on failure', e); }
+
+  // 88. The safety snapshot is persisted to IDB (not just held in memory), so
+  //     it survives the TAB dying mid-restore, not just a thrown JS error.
+  //     Simulate that: leave one user's data live, but plant a DIFFERENT
+  //     snapshot in the safetyBackup store (as importBackup would have, right
+  //     before wiping, had a "restore" to that state been interrupted before
+  //     ever confirming completion) -- then reload the page and confirm the
+  //     real boot sequence (maybeRecoverFromInterruptedRestore, wired in
+  //     right before the first renderHome()) replays it automatically.
+  try {
+    const staleBackup = {
+      version: 6, user: 'staleUser',
+      lines: [{ id: 'L-STALE', name: 'Stale', color: 'white', openingMoves: ['c4'], prefs: [] }],
+      games: [],
+    };
+    await seedBackup(appBH.page, staleBackup);
+
+    const recoverSnapshot = {
+      version: 6, user: 'recoverUser', exportedAt: new Date().toISOString(),
+      lines: [{ id: 'L-RECOVER', name: 'Recover', color: 'white', openingMoves: ['e4'], prefs: [{ seq: ['e4'], reply: 'e5' }] }],
+      games: [], mnemonics: [],
+    };
+    await appBH.page.evaluate((snap) => window.__backupTestHooks.persistSafetyBackup(snap), recoverSnapshot);
+
+    await appBH.page.reload({ waitUntil: 'domcontentloaded' });
+    await appBH.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appBH.page.waitForFunction(() => window.__importBackupGen && window.__importBackupGen() > 0, { timeout: 15000 });
+
+    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    assert(userId === 'recoverUser', `expected boot-time recovery to restore CURRENT_USER to "recoverUser", got ${userId}`);
+
+    const [recoveredLines, staleLines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines('recoverUser'),
+      window.__linesTestHooks.getLines('staleUser'),
+      window.__aqTestHooks.getPref('L-RECOVER', ['e4']),
+      window.__backupTestHooks.hasSafetyBackup(),
+    ]));
+    assert(recoveredLines.length === 1 && recoveredLines[0].id === 'L-RECOVER', `expected the orphaned safety snapshot to be restored on boot, got ${JSON.stringify(recoveredLines)}`);
+    assert(staleLines.length === 0, `expected the pre-crash live data to be replaced by the recovered snapshot, got ${JSON.stringify(staleLines)}`);
+    assert(recoveredPref?.reply === 'e5', `expected the recovered snapshot's pref data to be present, got ${JSON.stringify(recoveredPref)}`);
+    assert(hasSafety === false, `expected the safety-backup row to be cleared once boot-time recovery succeeded, got hasSafetyBackup=${hasSafety}`);
+    ok('boot-time recovery: an orphaned safety snapshot (simulating a crash mid-restore) is replayed automatically on the next page load');
+  } catch(e){ bad('boot-time recovery from an orphaned safety snapshot', e); }
 } finally {
   await appBH.close();
 }

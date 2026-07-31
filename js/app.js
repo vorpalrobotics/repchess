@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260724-5';
+import { Engine } from './engine.js?v=20260731-6';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260730-250';
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-251';
+const BUILD_TAG = '-254';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4986,7 +4986,14 @@ $('dlBtn').onclick = async ()=>{
   }catch(e){ console.error('[dlBtn] import failed',e); logDl(e.message,true); }
 };
 
-renderHome();
+// Recover from any restore an earlier (now-closed/crashed) session never
+// finished confirming, before the first Home render -- see
+// maybeRecoverFromInterruptedRestore's own doc comment. Deliberately NOT a
+// top-level `await`: that would pause every remaining top-level statement in
+// this module (including the __xTestHooks registrations much further down)
+// until the recovery check's own IndexedDB round trip resolves, same
+// fire-and-forget-via-.then() reasoning as refreshAnalysisQueue() below.
+maybeRecoverFromInterruptedRestore().then(() => renderHome());
 
 // auto-start the background analysis queue: load whatever's left over from a
 // prior session and let it start chugging as soon as the engine is ready (see
@@ -5100,12 +5107,15 @@ async function downloadJsonBackup(obj, baseName){
    Lichess user id) so that importing it into a brand-new browser/profile
    reproduces the exact prior state with no other setup required.
 */
-async function exportBackup(){
-  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
+// Builds the full backup object without touching the download machinery --
+// split out (same rationale as buildMnemonicsExportData) so a test can
+// inspect exactly what a backup would contain without capturing a real
+// file download.
+async function buildBackupData(){
   const lines = await getLines(CURRENT_USER);
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(CURRENT_USER);
-  const data = {
+  return {
     version: 6,   // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists
     user: CURRENT_USER,
     exportedAt: new Date().toISOString(),
@@ -5116,7 +5126,7 @@ async function exportBackup(){
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
-        collapsed:p.collapsed, moveQuality:p.moveQuality,
+        collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
         castleStreetNumber:p.castleStreetNumber
       }))
@@ -5134,38 +5144,49 @@ async function exportBackup(){
     moveDisambiguator: await getMeta(MNEM_DISAMBIG_KEY),
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
+    decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
+    memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
+    graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     assets: await getAllAssets(),
     objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
+}
+async function exportBackup(){
+  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
+  const data = await buildBackupData();
   const stamp = new Date().toISOString().slice(0,10);
   const size = await downloadJsonBackup(data, `repchess-backup-${CURRENT_USER}-${stamp}`);
   const mb = (size/1048576).toFixed(1);
-  log(`exported ${lines.length} opening system(s), ${games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
+  log(`exported ${data.lines.length} opening system(s), ${data.games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
 }
 
-// test-only generation counter, bumped at the very end of importBackup (see
-// below) -- CURRENT_USER/$('userId').value are set very early in the
+// test-only generation counter, bumped at the very end of applyBackupData
+// (see below) -- CURRENT_USER/$('userId').value are set very early in that
 // function, well before games/lines/mnemonics are actually written, so the
 // test harness's seedBackup() polls this instead of userId to avoid racing
-// a still-in-flight restore under load.
+// a still-in-flight restore under load. Also ticks at the end of a rollback
+// or boot-time recovery replay (both call applyBackupData too), which is
+// exactly the "restore settled" signal a test waiting on either wants.
 let _importBackupGen = 0;
 if(localStorage.getItem('threeTestDebug')){
   window.__importBackupGen = () => _importBackupGen;
 }
 
-/* full restore: wipes every local store first, so the result matches the
-   backup exactly rather than merging with (and possibly duplicating)
-   whatever is already there. Caller is responsible for confirming with
-   the user before calling this, since it is destructive. */
+/* The actual wipe+write sequence: wipes every local store first, so the
+   result matches `data` exactly rather than merging with (and possibly
+   duplicating) whatever is already there. Reused for three different
+   callers -- a real restore, an in-session rollback to a pre-restore
+   snapshot, and a boot-time replay of a snapshot orphaned by a crash --
+   since all three are "make the DB match this object" and nothing else.
+   Deliberately does NO validation of `data` (that's importBackup's job,
+   run once on the untrusted input file); a snapshot produced by
+   buildBackupData() is always trusted shape by construction. */
 // `onMnemProgress`, if given, is called with the running count of mnemonic
 // squares written so far -- restoring hundreds of squares (each its own
 // get-then-put IndexedDB round trip) is slow enough that a caller showing a
 // spinner wants to update its label, same as buildMnemonicsExportData's own
 // onProgress on the export side.
-async function importBackup(data, onMnemProgress){
-  if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
-  if(!data.user) throw new Error('backup file has no user id');
-
+async function applyBackupData(data, onMnemProgress){
   await clearAllData();
   // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
   // mirror so a lingering background loop can't keep processing/saving
@@ -5178,14 +5199,14 @@ async function importBackup(data, onMnemProgress){
   invalidateBuiltCastlesCache();
   invalidatePositionIndexCache();
 
-  CURRENT_USER = data.user;
+  CURRENT_USER = data.user || '';
   localStorage.setItem(LS_ID, CURRENT_USER);
   $('userId').value = CURRENT_USER;
 
   if(Array.isArray(data.games) && data.games.length) await putGames(CURRENT_USER, data.games);
   GAMES = data.games || [];
 
-  for(const lineData of data.lines){
+  for(const lineData of (data.lines||[])){
     // reuse the original line id when present (older backups omit it) so VR
     // decoration keys that embed it — castle rooms, building facades/signs —
     // still resolve against the restored threeLayout.
@@ -5196,7 +5217,7 @@ async function importBackup(data, onMnemProgress){
         reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
         hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
         eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
-        moveQuality:pref.moveQuality||'',
+        moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
         castleStreetNumber:pref.castleStreetNumber??''
       });
@@ -5225,11 +5246,109 @@ async function importBackup(data, onMnemProgress){
   if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
   if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
   if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
+  if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+  if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
+  if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
   for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
   for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
-  log(`restored ${data.lines.length} opening system(s), ${(data.games||[]).length} game(s)`);
+  log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
   await renderHome();
   _importBackupGen++;
+}
+
+/* ---------- safety backup (crash-surviving pre-restore snapshot) ----------
+   Wraps a buildBackupData()-shaped snapshot the same way a real backup file
+   is (gzip via CompressionStream when available, same as downloadJsonBackup)
+   before handing it to db.js's single-row safetyBackup store -- keeps the
+   extra storage/latency this adds to every restore down, without db.js
+   needing to know anything about JSON or compression. */
+async function persistSafetyBackup(snapshot){
+  const json = JSON.stringify(snapshot);
+  if(GZIP_OK) await setSafetyBackup({ compressed:true, blob: await gzipString(json) });
+  else await setSafetyBackup({ compressed:false, json });
+}
+async function readSafetyBackup(){
+  const row = await getSafetyBackup();
+  if(!row) return null;
+  const json = row.payload.compressed ? await gunzipToText(row.payload.blob) : row.payload.json;
+  return JSON.parse(json);
+}
+
+/* full restore, with an automatic safety net: snapshots whatever's currently
+   here (via buildBackupData) BEFORE wiping anything, persisting that
+   snapshot to IDB so it survives even the tab being closed/crashing
+   mid-restore, then applies the new data. A failure mid-apply triggers an
+   immediate in-session rollback to the snapshot using the exact same apply
+   logic; the persisted copy is cleared only once we're sure the DB actually
+   matches either the new data or the rolled-back old data -- if even the
+   rollback fails, it's deliberately left in place for
+   maybeRecoverFromInterruptedRestore to retry on next boot.
+   Caller is responsible for confirming with the user before calling this,
+   since it is destructive. `onMnemProgress`, if given, is passed through to
+   applyBackupData (see its own doc comment). */
+async function importBackup(data, onMnemProgress){
+  if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
+  if(!data.user) throw new Error('backup file has no user id');
+
+  const before = await buildBackupData();
+  await persistSafetyBackup(before);
+  try {
+    await applyBackupData(data, onMnemProgress);
+    await clearSafetyBackup();
+  } catch(err){
+    console.error('[import] restore failed, rolling back to the pre-restore snapshot', err);
+    try {
+      await applyBackupData(before);
+      await clearSafetyBackup();
+      log(`import failed (${err.message}) — automatically restored your previous data, nothing was lost`, true);
+    } catch(rollbackErr){
+      // Leave the persisted snapshot in place -- we can't be sure the DB
+      // matches either `data` or `before` right now, so the boot-time
+      // recovery check is the last resort, not a redundant safety net.
+      console.error('[import] rollback ALSO failed', rollbackErr);
+      alert(
+        'Import failed, AND the automatic safety rollback also failed.\n\n' +
+        'Your data may now be incomplete or inconsistent.\n\n' +
+        `Original error: ${err.message}\n` +
+        `Rollback error: ${rollbackErr.message}\n\n` +
+        'A safety copy of your pre-restore data is still saved locally -- reloading ' +
+        'the app should recover it automatically. If that also fails, please ' +
+        're-import a backup file if you have one.'
+      );
+    }
+    throw err;
+  }
+}
+
+/* Boot-time recovery: if a safety-backup row is still here, the last restore
+   attempt (in this tab or one that's since closed/crashed) never confirmed
+   completion -- neither the real restore nor its own in-session rollback got
+   as far as clearing it. Replays that same snapshot with the exact apply
+   logic a live rollback would use, before the app renders anything
+   data-dependent, so a crash mid-restore leaves the user back where they
+   started instead of stuck on a half-written repertoire. Silent+automatic on
+   success (consistent with the in-session rollback), matching this feature's
+   whole point -- the app should recover itself, not make the user diagnose
+   IndexedDB state before they can use it again. */
+async function maybeRecoverFromInterruptedRestore(){
+  let snapshot;
+  try { snapshot = await readSafetyBackup(); }
+  catch(err){ console.error('[import] failed to read safety backup at boot', err); return; }
+  if(!snapshot) return;
+
+  console.warn('[import] found data from an interrupted restore -- recovering automatically');
+  try {
+    await applyBackupData(snapshot);
+    await clearSafetyBackup();
+    log('recovered from an interrupted backup restore (a previous session ended mid-restore) — your data from just before that attempt has been restored', true);
+  } catch(err){
+    console.error('[import] boot-time recovery failed', err);
+    alert(
+      'REPchess found data from an interrupted backup restore, but automatic recovery failed.\n\n' +
+      `Error: ${err.message}\n\n` +
+      'Your data may be incomplete or inconsistent. If you have a backup file, please re-import it now.'
+    );
+  }
 }
 
 /* A standalone asset bundle (from the asset manager's "Export All as JSON"),
@@ -8674,6 +8793,26 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__linesTestHooks = {
     updateLine: (id, patch) => updateLine(id, patch),
+    getLines: (user) => getLines(user),
+  };
+}
+
+// test-only hook for the full-backup export/import round trip -- buildBackupData
+// is the pure data-assembly half of exportBackup (no download involved), so a
+// test can inspect exactly what a backup would contain after seeding one
+// through the real importBackup path (seedBackup drives the actual file-input
+// change handler), closing the loop on whether a field survives both directions.
+if(localStorage.getItem('threeTestDebug')){
+  window.__backupTestHooks = {
+    buildBackupData: () => buildBackupData(),
+    getMeta: (key) => getMeta(key),
+    // Seeds a pending safety-backup row directly, without a real restore --
+    // simulates "a previous session crashed mid-restore" so a test can drive
+    // maybeRecoverFromInterruptedRestore (normally only run once, at boot)
+    // by calling it again rather than needing an actual page reload.
+    persistSafetyBackup: (snapshot) => persistSafetyBackup(snapshot),
+    hasSafetyBackup: async () => !!(await getSafetyBackup()),
+    maybeRecoverFromInterruptedRestore: () => maybeRecoverFromInterruptedRestore(),
   };
 }
 
