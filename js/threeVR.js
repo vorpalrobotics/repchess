@@ -763,8 +763,16 @@ const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
    an obvious win there yet; ceiling slots never nudge at all (scale only),
    gizmo or not. */
 const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic']);
-const GIZMO_LEN = 0.5, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
+const GIZMO_LEN = 0.75, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
 const GIZMO_COLORS = { x: 0xe53935, z: 0x1e88e5, up: 0x43a047 };
+// how far the gizmo's shared origin is pulled from the object's own center
+// toward the camera (horizontally) -- a mnemonic/floor prop is often a
+// camera-facing billboard occupying most of the space right around its own
+// center, which otherwise puts the arrows' near portion (where you're most
+// likely to grab them) right where the billboard's own body is. Pulling the
+// whole gizmo toward the viewer keeps it in the clear space between the
+// camera and the object instead.
+const GIZMO_CAMERA_OFFSET = 1.0;
 let selectionGizmo = [];   // the arrow Groups currently shown, or [] when none (see attachSelectionVisuals)
 // { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin,
 //   plane } while an arrow is being dragged; null otherwise.
@@ -6209,17 +6217,22 @@ function attachSelectionVisuals(){
   // phase-1 translate gizmo -- only the free-floating kinds (see GIZMO_KINDS'
   // own comment). Wall-relative (AXIS_X/AXIS_Z), not camera-relative, so the
   // arrows don't move as you turn to look at the object from a different
-  // angle -- see AXIS_X's own comment for why.
+  // angle -- see AXIS_X's own comment for why. The whole gizmo is pulled
+  // GIZMO_CAMERA_OFFSET toward the camera (see that constant's own comment)
+  // so the object itself doesn't sit on top of the arrows.
   if(GIZMO_KINDS.has(selectedProp.kind)){
+    const towardCam = new THREE.Vector3(camera.position.x - center.x, 0, camera.position.z - center.z);
+    if(towardCam.lengthSq() < 1e-6) towardCam.set(0, 0, 1);   // camera directly overhead -- arbitrary direction, just needs to be *a* direction
+    const origin = center.clone().addScaledVector(towardCam.normalize(), GIZMO_CAMERA_OFFSET);
     const arrows = [
-      buildGizmoArrow(center, new THREE.Vector3(AXIS_X.x, 0, AXIS_X.z), 'x'),
-      buildGizmoArrow(center, new THREE.Vector3(AXIS_Z.x, 0, AXIS_Z.z), 'z'),
+      buildGizmoArrow(origin, new THREE.Vector3(AXIS_X.x, 0, AXIS_X.z), 'x'),
+      buildGizmoArrow(origin, new THREE.Vector3(AXIS_Z.x, 0, AXIS_Z.z), 'z'),
     ];
     // 'floor' props have no vertical lift at all (see onKeyDown's own
     // h/l/PageUp/PageDown guard) -- keep the gizmo's degrees of freedom
     // exactly matching the keyboard's, rather than offering a drag the
     // keyboard can't do too.
-    if(selectedProp.kind !== 'floor') arrows.push(buildGizmoArrow(center, new THREE.Vector3(0, 1, 0), 'up'));
+    if(selectedProp.kind !== 'floor') arrows.push(buildGizmoArrow(origin, new THREE.Vector3(0, 1, 0), 'up'));
     arrows.forEach(a => scene.add(a));
     selectionGizmo = arrows;
   }
