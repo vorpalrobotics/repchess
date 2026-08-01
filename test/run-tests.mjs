@@ -833,6 +833,16 @@ try {
     return 'cas:L1_Fan:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
   await appGZ2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey2);
+  // enter() always spawns at the fixed local (0,0) -- fine for tests that
+  // don't care where the player stands, but this room's own ceiling
+  // hang-point (ceilingSlots) is ALSO always at local (0,0), so (0,0) plants
+  // the camera directly beneath it: an edge case real play never produces
+  // (walking in normally lands you at the room's own entrance, well off to
+  // one side of center -- see entrySpawnFor) but that made a later gizmo
+  // screen-point genuinely fall outside the canvas. Stand at the room's own
+  // real entry spawn instead, same as actually walking in would.
+  const spawn2 = await appGZ2.page.evaluate((k) => window.__threeTestEdit.entrySpawnFor(k), roomKey2);
+  await appGZ2.page.evaluate(({ x, z, yaw }) => window.__threeTestEdit.teleport(x, z, yaw), spawn2);
   await appGZ2.page.waitForTimeout(400);
   const camBaseline2 = await appGZ2.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
   await appGZ2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
@@ -12078,6 +12088,52 @@ try {
     await appCK.close();
   }
 } catch(e){ bad('Phase CK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CK2: a room with exactly ONE forward door places it opposite
+//     the entrance (north, since every generated room's back door is always
+//     south -- see registerOneCastle) instead of the hash (doorWallFor) that
+//     spreads MULTIPLE doors across walls to avoid collisions -- nothing to
+//     spread with just one, and straight ahead as you walk in is simplest to
+//     navigate. ---
+if(shouldRunPhase(['castle-generation', 'vr-decorating'])){
+try {
+  const appCK2 = await launchApp();
+  try {
+    // A single, UNBRANCHED continuation would just merge into the SAME room
+    // (a corridor -- see analyzeCastleStructure's chainNext/runs) rather
+    // than create a door at all, so a genuine one-door room needs its lone
+    // continuation to be a nested castle's own root: a foreign-castle
+    // redirect never merges (buildCastleGraph/analyzeCastleStructure's own
+    // `roomIds.has(e.target)` check skips it), so it's a real door, and with
+    // no OTHER branch here there's exactly one of them.
+    await seedBackup(appCK2.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Single', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'SingleNested', castleStreetNumber: 2 },
+      ]}],
+      games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    }, { defaultPlayerColor: 'white' });
+    await openVR(appCK2.page);
+    const roomKey = await appCK2.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+      return 'cas:L1_Single:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+
+    // 225. The single forward door lands on north, not wherever the hash
+    //      happens to send it.
+    try {
+      const exits = await appCK2.page.evaluate((k) => window.__threeTestEdit.exits(k), roomKey);
+      const forward = exits.filter(e => !e.back);
+      assert(forward.length === 1, `test setup issue: expected exactly one forward door, got ${JSON.stringify(exits)}`);
+      assert(forward[0].wall === 'north', `expected the sole forward door opposite the entrance (north), got ${forward[0].wall}`);
+      ok('castle generation: a room with exactly one forward door places it opposite the entrance (north)');
+    } catch(e){ bad('castle generation: single forward door lands opposite the entrance', e); }
+  } finally {
+    await appCK2.close();
+  }
+} catch(e){ bad('Phase CK2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase CL: a move-object slot given only a placeholder WORD label (no

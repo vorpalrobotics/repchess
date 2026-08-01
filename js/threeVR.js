@@ -137,7 +137,7 @@ const STAIR_DOWN_PEEK_DIST = 1.0;   // meters from the doorway
 const STAIR_DOWN_PEEK_PITCH = -Math.PI/6;   // 30 degrees down
 // When a gizmo-eligible prop (see GIZMO_KINDS) is selected in edit mode, the
 // camera eases up and tilts (down, or up for a ceiling prop -- see tick())
-// slightly. This keeps the horizontal drag arrows (see AXIS_X's own comment)
+// slightly. This keeps the horizontal drag arrows (see roomAxes' own comment)
 // from ever appearing edge-on: edit mode otherwise holds pitch dead level,
 // and a purely horizontal arrow viewed from a purely horizontal line of
 // sight foreshortens to a sliver right where the arrows already share their
@@ -418,6 +418,14 @@ function registerOneCastle(castle, instanceId, opts = {}){
       for(const ex of fwd){
         if((ex.fromSide === 'left' || ex.fromSide === 'right') && typeof ex.fromOrder === 'number'){
           memberAnchored.push({ wall: ex.fromSide === 'left' ? 'west' : 'east', ex });
+        } else if(fwd.length === 1){
+          // the room's only forward door -- opposite the entrance (south,
+          // see this room's own back-door push below), same as a two-track's
+          // pair always does. The hash exists to spread MULTIPLE doors
+          // across walls without collisions; with only one door there's
+          // nothing to spread, and landing it straight ahead as you walk in
+          // is simplest to navigate.
+          byWall.north.push(ex);
         } else {
           byWall[doorWallFor(ex.toKey || ex.foreignKey || ex.opp)].push(ex);
         }
@@ -757,7 +765,7 @@ const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 
 /* ---------- in-world layout editor: translate gizmo (mouse/touch drag) ----------
    A drag-to-move alternative to arrow-key nudging: draggable arrows (x/z --
-   wall-relative, see AXIS_X/AXIS_Z below -- and up, true vertical) appear on
+   wall-relative, see roomAxes below -- and up, true vertical) appear on
    a selected prop; grabbing one and dragging moves the prop along just that
    axis, writing through the exact same setSlotXformLive path the keyboard
    already uses, so both input methods stay interchangeable moment to moment.
@@ -774,21 +782,24 @@ const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic', 'wall', 'ceiling
 const GIZMO_LEN = 0.75, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
 const GIZMO_COLORS = { x: 0xe53935, z: 0x1e88e5, up: 0x43a047 };
 // how far the gizmo's shared origin is pulled from the object's own center,
-// to the camera's right (GIZMO_SIDE_OFFSET) and down (GIZMO_DROP) -- a
+// toward the entrance (GIZMO_FRONT_OFFSET) and down (GIZMO_DROP) -- a
 // mnemonic/floor/moveObject prop is often a camera-facing billboard
 // occupying most of the screen space right around its own center, which
 // otherwise puts the arrows right where the billboard's own body is.
-// Pulling straight toward the camera does NOT fix this: a billboard, by
-// definition, always turns to face whoever's looking at it, so it's
-// centered on your view axis exactly when you're selecting/dragging it --
-// and a point moved along that same axis still projects to the same screen
-// spot, just closer (and depthTest:false on the gizmo material already made
-// it draw on top regardless, so occlusion was never the real problem; not
-// being able to SEE which pixels are the arrows was). cameraRightVec() is
-// perpendicular to the view direction by construction, so it can't degenerate
-// the same way; the added drop guarantees separation even from an object
-// that happens to be offset to the exact side already.
-const GIZMO_SIDE_OFFSET = 1.0, GIZMO_DROP = 0.5;
+// "In front of" the object means between the entrance and the object (the
+// direction most editing actually happens from, walking a room in from its
+// own door) -- i.e. toward the entrance from the object's own position, the
+// reverse of roomAxes' own "z" (which points away from the entrance, into
+// the room). The added drop still matters here even though this is a fixed
+// room direction rather than a camera-relative one: standing right at the
+// entrance facing the object -- exactly the vantage roomAxes is oriented
+// around -- puts this offset directly along the view axis, which (see the
+// gizmo's own history: this was the original bug with a plain
+// toward-the-camera offset) doesn't create any screen-space separation by
+// itself; the drop's vertical separation doesn't depend on viewing angle
+// the way a horizontal offset does, so it still gets the arrows clear of
+// the object's own silhouette even from that exact spot.
+const GIZMO_FRONT_OFFSET = 1.0, GIZMO_DROP = 0.5;
 let selectionGizmo = [];   // the arrow Groups currently shown, or [] when none (see attachSelectionVisuals)
 // { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin,
 //   plane } while an arrow is being dragged; null otherwise.
@@ -798,23 +809,34 @@ let gizmoDrag = null;
 // raycast (which would otherwise reselect/deselect based on whatever is
 // behind the arrow).
 let suppressNextCanvasClick = false;
-// Wall-relative horizontal nudge/drag axes -- fixed room-local directions,
-// NOT tied to the camera's current facing. Every room's own geometry (walls,
-// clampFloorXZ's size.w/size.d) is built directly in this same (x,z) frame
-// with no rotation (see enterRoom/buildRoom: pos.x/pos.z ARE the room-local
-// coordinates), so "AXIS_X" really is parallel to one wall pair and
-// "AXIS_Z" the orthogonal pair, for every room. This used to be
-// camera-relative (recomputed from yaw, via cameraForwardVec/
-// cameraRightVec) so "right"/"forward" always matched the player's current
-// view -- but that meant the SAME key press or drag direction moved a prop
-// a different way depending on which way you'd wandered in facing, and
-// (see the gizmo's own design notes) made the horizontal arrows visually
-// collide whenever yaw pointed straight at the object, which happens
-// often since edit mode holds pitch level. Fixed axes trade "matches your
-// current view" for "always means the same thing," and structurally can't
-// coincide with the view direction once edit mode also tilts the camera
-// when a gizmo-eligible prop is selected (see tick()'s EDIT_TILT_PITCH).
-const AXIS_X = { x: 1, z: 0 }, AXIS_Z = { x: 0, z: 1 };
+// Wall-relative horizontal nudge/drag axes -- fixed per-room directions, NOT
+// tied to the camera's current facing (a key press or drag direction used
+// to move a prop a different way depending on which way you'd wandered in
+// facing, and made the horizontal arrows visually collide whenever yaw
+// pointed straight at the object -- see the gizmo's own design notes). But
+// also not a single fixed world direction either: oriented to each room's
+// OWN entrance (its back:true exit -- the door you walked in through) --
+// "z" points away from it (into the room), "x" points right from the
+// perspective of STANDING AT the entrance facing in, since that's the
+// vantage most editing happens from (laying a room out member by member,
+// starting at the door you enter through). Every room's own geometry
+// (walls, clampFloorXZ's size.w/size.d) is built directly in the same
+// (x,z) frame with no rotation (see enterRoom/buildRoom: pos.x/pos.z ARE
+// the room-local coordinates), so these two vectors are always exactly
+// parallel to one wall pair each, for every room -- just which PHYSICAL
+// wall pair "x" vs "z" resolves to varies by the room's own entrance wall.
+// Structurally can't coincide with the view direction once edit mode also
+// tilts the camera when a gizmo-eligible prop is selected (see tick()'s
+// EDIT_TILT_PITCH).
+function roomAxes(room){
+  const out = WALL_OUT_NORMAL[entranceWall(room)];
+  const z = { x: -out.x, z: -out.z };   // away from the entrance, into the room (ArrowUp)
+  // "right" as seen facing `z` -- same -90-degree rotation cameraRightVec
+  // derives from cameraForwardVec, just applied to this fixed room
+  // direction instead of the live camera yaw (ArrowRight).
+  const x = { x: -z.z, z: z.x };
+  return { x, z };
+}
 
 // a surface slot (LAYOUT[roomKey].floor/ceiling/stairSurface/walls[w], and the
 // same fields inside a building default/preset) holds one of three shapes:
@@ -6305,29 +6327,29 @@ function attachSelectionVisuals(){
   }
 
   // phase-1 translate gizmo -- only the free-floating kinds (see GIZMO_KINDS'
-  // own comment). Wall-relative (AXIS_X/AXIS_Z), not camera-relative, so the
+  // own comment). Wall-relative (roomAxes), not camera-relative, so the
   // arrows don't move as you turn to look at the object from a different
-  // angle -- see AXIS_X's own comment for why. The whole gizmo is offset to
-  // the camera's right and down (see GIZMO_SIDE_OFFSET/GIZMO_DROP's own
+  // angle -- see roomAxes' own comment for why. The whole gizmo is offset
+  // toward the entrance and down (see GIZMO_FRONT_OFFSET/GIZMO_DROP's own
   // comment) so the object itself doesn't sit on top of the arrows.
   if(GIZMO_KINDS.has(selectedProp.kind)){
-    const camRight = cameraRightVec();
+    const room = mergedRoom(selectedProp.roomKey);
+    const { x: AX, z: AZ } = roomAxes(room);
     const origin = center.clone()
-      .addScaledVector(new THREE.Vector3(camRight.x, 0, camRight.z), GIZMO_SIDE_OFFSET)
+      .addScaledVector(new THREE.Vector3(-AZ.x, 0, -AZ.z), GIZMO_FRONT_OFFSET)
       .add(new THREE.Vector3(0, -GIZMO_DROP, 0));
     const arrows = [];
     if(selectedProp.kind === 'wall'){
       // exactly one horizontal DOF -- along the wall itself, whichever of
-      // AXIS_X/AXIS_Z that wall's own span runs on (wallSpan), matching
+      // roomAxes' x/z that wall's own span runs on (wallSpan), matching
       // nudgeSelected's ArrowRight/Left exactly, no separate wall-facing
       // math needed. Tagged 'x'/'z' (not a distinct name) so
       // onGizmoPointerMove's generic axis math needs no wall-specific case
       // beyond branching on `kind` for dOffset vs dx/dz.
-      const wallRoom = mergedRoom(selectedProp.roomKey);
-      const wallSlot = slotById(wallRoom, selectedProp.roomKey, selectedProp.slotId);
+      const wallSlot = slotById(room, selectedProp.roomKey, selectedProp.slotId);
       if(wallSlot){
-        const { axis } = wallSpan(wallRoom.size, wallSlot.wall);
-        const dir = axis === 'x' ? new THREE.Vector3(AXIS_X.x, 0, AXIS_X.z) : new THREE.Vector3(AXIS_Z.x, 0, AXIS_Z.z);
+        const { axis } = wallSpan(room.size, wallSlot.wall);
+        const dir = axis === 'x' ? new THREE.Vector3(AX.x, 0, AX.z) : new THREE.Vector3(AZ.x, 0, AZ.z);
         arrows.push(buildGizmoArrow(origin, dir, axis));
         // a "ground" wall piece (floor-standing, back against the wall) has
         // its height pinned at 0 -- see nudgeSelected's own `if(!ground)`
@@ -6336,8 +6358,8 @@ function attachSelectionVisuals(){
       }
     } else {
       arrows.push(
-        buildGizmoArrow(origin, new THREE.Vector3(AXIS_X.x, 0, AXIS_X.z), 'x'),
-        buildGizmoArrow(origin, new THREE.Vector3(AXIS_Z.x, 0, AXIS_Z.z), 'z'),
+        buildGizmoArrow(origin, new THREE.Vector3(AX.x, 0, AX.z), 'x'),
+        buildGizmoArrow(origin, new THREE.Vector3(AZ.x, 0, AZ.z), 'z'),
       );
       // 'floor'/'ceiling' props have no vertical lift at all (see onKeyDown's
       // own h/l/PageUp/PageDown guard, and nudgeSelected's ceiling branch)
@@ -6435,16 +6457,17 @@ function openManagerForSelection(){
 }
 
 // arrows nudge the selected prop 0.1m per press. Floor/mnemonic/sign props
-// move along the room's own fixed AXIS_X/AXIS_Z (wall-relative -- see
-// AXIS_X's own comment: ArrowRight/Left always means the same physical
-// direction in a given room, regardless of which way you're facing); wall
-// props move along the wall's own axes instead, since you're normally
-// facing the wall you're editing -- up/down is true vertical either way,
-// and ground (low) wall props only get left/right.
+// move along the room's own roomAxes (wall-relative, entrance-oriented --
+// see roomAxes' own comment: ArrowRight/Left/Up/Down always mean the same
+// physical direction relative to the room's entrance, regardless of which
+// way you're facing); wall props move along the wall's own axes instead,
+// since you're normally facing the wall you're editing -- up/down is true
+// vertical either way, and ground (low) wall props only get left/right.
 function nudgeSelected(key){
   if(!selectedProp) return;
   const { roomKey, slotId, kind, ground, buildingKey } = selectedProp;
   const room = mergedRoom(roomKey);
+  const { x: AX, z: AZ } = roomAxes(room);
 
   // A building sign moves freely on the lawn (wall-relative, same convention
   // as floor props), clamped to the room bounds. Its offset persists in
@@ -6452,10 +6475,10 @@ function nudgeSelected(key){
   if(kind === 'sign'){
     const cur = signPosFor(roomKey, buildingKey) || {};
     let dx = cur.dx || 0, dz = cur.dz || 0;
-    if(key === 'ArrowRight'){ dx += AXIS_X.x * NUDGE_STEP; dz += AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowLeft'){  dx -= AXIS_X.x * NUDGE_STEP; dz -= AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowUp'){    dx += AXIS_Z.x * NUDGE_STEP; dz += AXIS_Z.z * NUDGE_STEP; }
-    if(key === 'ArrowDown'){  dx -= AXIS_Z.x * NUDGE_STEP; dz -= AXIS_Z.z * NUDGE_STEP; }
+    if(key === 'ArrowRight'){ dx += AX.x * NUDGE_STEP; dz += AX.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= AX.x * NUDGE_STEP; dz -= AX.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += AZ.x * NUDGE_STEP; dz += AZ.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= AZ.x * NUDGE_STEP; dz -= AZ.z * NUDGE_STEP; }
     setSignPosLive(roomKey, buildingKey, { dx, dz });
     return;
   }
@@ -6477,10 +6500,10 @@ function nudgeSelected(key){
     // A move-object can also be lifted off the floor with h/l (or PageUp/PageDown)
     // -- same vertical convention as a mnemonic billboard.
     let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
-    if(key === 'ArrowRight'){ dx += AXIS_X.x * NUDGE_STEP; dz += AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowLeft'){  dx -= AXIS_X.x * NUDGE_STEP; dz -= AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowUp'){    dx += AXIS_Z.x * NUDGE_STEP; dz += AXIS_Z.z * NUDGE_STEP; }
-    if(key === 'ArrowDown'){  dx -= AXIS_Z.x * NUDGE_STEP; dz -= AXIS_Z.z * NUDGE_STEP; }
+    if(key === 'ArrowRight'){ dx += AX.x * NUDGE_STEP; dz += AX.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= AX.x * NUDGE_STEP; dz -= AX.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += AZ.x * NUDGE_STEP; dz += AZ.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= AZ.x * NUDGE_STEP; dz -= AZ.z * NUDGE_STEP; }
     if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
     if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
     const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
@@ -6509,10 +6532,10 @@ function nudgeSelected(key){
     // it can't be nudged out through a wall -- same bound reconcileRoomBounds
     // enforces on room entry, kept consistent here too.
     let dx = xform.dx || 0, dz = xform.dz || 0, dy = xform.dy || 0;
-    if(key === 'ArrowRight'){ dx += AXIS_X.x * NUDGE_STEP; dz += AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowLeft'){  dx -= AXIS_X.x * NUDGE_STEP; dz -= AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowUp'){    dx += AXIS_Z.x * NUDGE_STEP; dz += AXIS_Z.z * NUDGE_STEP; }
-    if(key === 'ArrowDown'){  dx -= AXIS_Z.x * NUDGE_STEP; dz -= AXIS_Z.z * NUDGE_STEP; }
+    if(key === 'ArrowRight'){ dx += AX.x * NUDGE_STEP; dz += AX.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= AX.x * NUDGE_STEP; dz -= AX.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += AZ.x * NUDGE_STEP; dz += AZ.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= AZ.x * NUDGE_STEP; dz -= AZ.z * NUDGE_STEP; }
     if(key === 'PageUp'   || key === 'h' || key === 'H') dy += NUDGE_STEP;
     if(key === 'PageDown' || key === 'l' || key === 'L') dy -= NUDGE_STEP;
     const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
@@ -6524,10 +6547,10 @@ function nudgeSelected(key){
     // (height is always room.size.h-derived) -- but slides in the ceiling's
     // own horizontal plane just like a floor prop (wall-relative).
     let dx = xform.dx || 0, dz = xform.dz || 0;
-    if(key === 'ArrowRight'){ dx += AXIS_X.x * NUDGE_STEP; dz += AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowLeft'){  dx -= AXIS_X.x * NUDGE_STEP; dz -= AXIS_X.z * NUDGE_STEP; }
-    if(key === 'ArrowUp'){    dx += AXIS_Z.x * NUDGE_STEP; dz += AXIS_Z.z * NUDGE_STEP; }
-    if(key === 'ArrowDown'){  dx -= AXIS_Z.x * NUDGE_STEP; dz -= AXIS_Z.z * NUDGE_STEP; }
+    if(key === 'ArrowRight'){ dx += AX.x * NUDGE_STEP; dz += AX.z * NUDGE_STEP; }
+    if(key === 'ArrowLeft'){  dx -= AX.x * NUDGE_STEP; dz -= AX.z * NUDGE_STEP; }
+    if(key === 'ArrowUp'){    dx += AZ.x * NUDGE_STEP; dz += AZ.z * NUDGE_STEP; }
+    if(key === 'ArrowDown'){  dx -= AZ.x * NUDGE_STEP; dz -= AZ.z * NUDGE_STEP; }
     const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
     xform.dx = clamped.x - slot.x;
     xform.dz = clamped.z - slot.z;
