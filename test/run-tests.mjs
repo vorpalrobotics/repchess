@@ -10880,6 +10880,99 @@ try {
 }
 } catch(e){ bad('Phase CB2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase CB2b: the "Wall object lists" dialog's own "+ New..." button --
+//     both the empty-state ("no lists yet") variant and each bucket's own
+//     shortcut -- opens objectLists.js's standalone New List modal (same
+//     "escape out and create, then get auto-assigned" pattern as the asset
+//     picker's "+ New Asset" button) without leaving the wall-lists dialog,
+//     and a list created from a bucket's own button lands assigned to that
+//     bucket immediately, no reopen needed. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appCB2b = await launchApp();
+try {
+  // same "Seq" 3-slot corridor fixture as Phase CB2, but with NO object
+  // lists seeded at all -- the dialog's empty state is exactly what needs
+  // its own "+ New List..." entry point.
+  await seedBackup(appCB2b.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Seq', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appCB2b.page);
+  const roomKey = await appCB2b.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Seq:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appCB2b.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appCB2b.page.waitForTimeout(200);
+  await appCB2b.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on -- wallListsBtn only shows in edit mode
+  await appCB2b.page.waitForTimeout(100);
+  await appCB2b.page.evaluate(() => document.querySelector('[title="Wall object lists"]').click());
+  await appCB2b.page.waitForSelector('#wallListsOverlay', { state: 'visible', timeout: 5000 });
+
+  // 195b. Empty state: no lists yet, so there's a "+ New List..." button
+  //       (not just a dead-end message pointing at the menu) -- creating one
+  //       there has no single bucket to assign to, so it just gets created
+  //       and the dialog re-renders with real bucket rows now that a list exists.
+  try {
+    const emptyBtnVisible = await appCB2b.page.evaluate(() => !!document.getElementById('wlEmptyNewBtn'));
+    assert(emptyBtnVisible, 'expected a "+ New List..." button in the empty-state wall-lists dialog');
+    await appCB2b.page.evaluate(() => document.getElementById('wlEmptyNewBtn').click());
+    await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
+    await appCB2b.page.fill('#ol_id', 'test_list_1');
+    await appCB2b.page.fill('#ol_name', 'Test List One');
+    await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
+    await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appCB2b.page.waitForSelector('#wallListsOverlay .wl-bucket', { timeout: 5000 });
+    const optionsHtml = await appCB2b.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-select').innerHTML);
+    assert(/Test List One/.test(optionsHtml), `expected the freshly-created list as an option, got ${optionsHtml}`);
+    ok('VR wall-lists dialog: empty state offers a "+ New List..." button that creates a list and reveals the bucket rows');
+  } catch(e){ bad('VR wall-lists dialog: empty-state "+ New List..." button', e); }
+
+  // 195c. A bucket's own "+ New..." button creates a list AND assigns it to
+  //       that exact bucket immediately -- confirmed by the bucket's <select>
+  //       showing the new list selected right after the modal closes, with
+  //       no manual pick needed (same "nothing left to decide" reasoning as
+  //       the asset picker's own "+ New Asset" auto-assign).
+  try {
+    const bucket = await appCB2b.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-bucket').dataset.bucket);
+    await appCB2b.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-newlist').click());
+    await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
+    await appCB2b.page.fill('#ol_id', 'test_list_2');
+    await appCB2b.page.fill('#ol_name', 'Test List Two');
+    await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
+    await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appCB2b.page.waitForTimeout(150);
+    const selectedVal = await appCB2b.page.evaluate((b) => {
+      const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
+      return sel ? sel.value : null;
+    }, bucket);
+    assert(selectedVal === 'test_list_2', `expected the bucket's own new list to be auto-selected, got ${selectedVal}`);
+    // persists past a rebuild -- close and reopen the dialog on a fresh room build.
+    await appCB2b.page.evaluate(() => document.getElementById('wlCloseBtn').click());
+    await appCB2b.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appCB2b.page.waitForTimeout(200);
+    await appCB2b.page.evaluate(() => document.querySelector('[title="Wall object lists"]').click());
+    await appCB2b.page.waitForSelector('#wallListsOverlay .wl-bucket', { timeout: 5000 });
+    const persistedVal = await appCB2b.page.evaluate((b) => {
+      const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
+      return sel ? sel.value : null;
+    }, bucket);
+    assert(persistedVal === 'test_list_2', `expected the auto-assignment to persist across a room rebuild, got ${persistedVal}`);
+    ok('VR wall-lists dialog: a bucket\'s own "+ New..." button creates and auto-assigns a list to that bucket, and it persists');
+  } catch(e){ bad('VR wall-lists dialog: per-bucket "+ New..." auto-assign', e); }
+} finally {
+  await appCB2b.close();
+}
+} catch(e){ bad('Phase CB2b: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase CB3: the entryNoStreet exception -- a castle's own entry room,
 //     walked via the report preview (no street building to show its own
 //     entry pair on instead), has nowhere else that pair is shown at all,

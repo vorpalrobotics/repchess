@@ -5,7 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260723-72';
+import { openAssetPicker } from './assets.js?v=20260801-76';
+import { openNewObjectListModal } from './objectLists.js?v=20260801-48';
 
 let THREE = null;
 
@@ -7549,9 +7550,12 @@ function renderWallListsDialog(ov, roomKey){
           <strong>${WALL_BUCKET_LABEL[bucket] || bucket}</strong>
           <span style="font-size:.78rem;color:#666">${need} move-pair slot${need === 1 ? '' : 's'}</span>
         </div>
-        <select class="wl-select" data-bucket="${bucket}" style="margin-top:.4rem;width:100%;font-size:.85rem;padding:.3rem">
-          ${wallListOptionsHtml(roomKey, bucket)}
-        </select>
+        <div style="display:flex;gap:.4rem;align-items:center;margin-top:.4rem">
+          <select class="wl-select" data-bucket="${bucket}" style="flex:1;font-size:.85rem;padding:.3rem">
+            ${wallListOptionsHtml(roomKey, bucket)}
+          </select>
+          <button class="wl-newlist" data-bucket="${bucket}" style="font-size:.78rem;white-space:nowrap" title="Create a new object list and assign it here">+ New…</button>
+        </div>
         <div class="wl-preview" data-bucket="${bucket}" style="margin-top:.45rem;font-size:.8rem;line-height:1.5">
           ${wallListPreviewHtml(roomKey, bucket)}
         </div>
@@ -7568,7 +7572,8 @@ function renderWallListsDialog(ov, roomKey){
         move-pair in order; items with no image show their word until you assign one.
       </p>
       ${nLists === 0
-        ? `<p style="color:#c62828;font-size:.85rem">No object lists yet. Create them in the menu → <em>Manage Object Lists</em>, then reopen the tour.</p>`
+        ? `<p style="color:#c62828;font-size:.85rem">No object lists yet.</p>
+           <button id="wlEmptyNewBtn">+ New List…</button>`
         : bucketBlocks}
     </div>`;
   ov.querySelector('#wlCloseBtn').onclick = closeWallListsDialog;
@@ -7588,6 +7593,30 @@ function renderWallListsDialog(ov, roomKey){
       buildRoom(currentRoomKey);
     };
   });
+  // "+ New..." (per bucket, and the empty-state "+ New List…") -- same
+  // "escape out to the standalone create-and-assign editor without leaving
+  // this dialog first" pattern as the asset picker's own "+ New Asset"
+  // button (see objectLists.js's openNewObjectListModal doc comment). A
+  // freshly-created list is auto-assigned to the bucket that spawned it
+  // (there's nothing left to decide, same reasoning as the asset picker);
+  // the empty-state button has no bucket to assign to, so it just gets the
+  // list created and reopens the dialog with the now-populated bucket rows.
+  const afterNewList = async (bucket) => {
+    const newId = await openNewObjectListModal();
+    if(!newId) return;
+    await refreshObjectLists();
+    if(bucket){
+      const r = ensureRoomLayout(roomKey);
+      if(!r.wallLists) r.wallLists = {};
+      r.wallLists[bucket] = { listId: newId };
+      persistLayout();
+      buildRoom(currentRoomKey);
+    }
+    renderWallListsDialog(ov, roomKey);   // full re-render: the new list is now an option everywhere
+  };
+  ov.querySelectorAll('.wl-newlist').forEach(btn => { btn.onclick = () => afterNewList(btn.dataset.bucket); });
+  const emptyBtn = ov.querySelector('#wlEmptyNewBtn');
+  if(emptyBtn) emptyBtn.onclick = () => afterNewList(null);
 }
 
 const ROOM_GEOM_MIN = 2;

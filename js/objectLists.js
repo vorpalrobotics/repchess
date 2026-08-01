@@ -21,7 +21,7 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal } from './assets.js?v=20260729-75';
+import { openNewAssetModal } from './assets.js?v=20260801-76';
 
 const ORDERING_TYPES = {
   'canonical_sequence': 'Canonical sequence (culturally fixed — planets, scale, HOMES)',
@@ -124,7 +124,9 @@ async function refresh(){
 }
 
 function showIndex(){
-  $('objlistGrid').style.display = '';
+  const grid = $('objlistGrid');
+  if(!grid) return;   // standalone (grid-less) editor context, e.g. the New List modal -- nothing to show
+  grid.style.display = '';
   $('objlistEditor').style.display = 'none';
   renderGrid();
 }
@@ -144,6 +146,7 @@ function categoryOf(l){ return l.category || '(Uncategorized)'; }
 
 function renderGrid(){
   const grid = $('objlistGrid');
+  if(!grid) return;   // standalone (grid-less) editor context -- nothing to render
   const crumb = $('objlistBreadcrumb');
   if(FILTER_TEXT){
     crumb.style.display = 'none';
@@ -254,7 +257,8 @@ function openEditor(id){
   // text "undefined"/"null" in the field here, and throws an uncaught
   // TypeError from .trim() the moment Save is clicked.
   for(const f of ['id','name','roomName','category','orderingRule']) EDIT[f] = EDIT[f] || '';
-  $('objlistGrid').style.display = 'none';
+  const grid = $('objlistGrid');
+  if(grid) grid.style.display = 'none';
   $('objlistEditor').style.display = '';
   renderEditor();
 }
@@ -545,8 +549,10 @@ async function saveEditor(){
       source: (l.mnemonic.source||'').trim()
     }
   });
+  const savedId = l.id;
   EDIT = null;
   await refresh();
+  return savedId;   // lets a standalone caller (e.g. openNewObjectListModal) know the save succeeded
 }
 
 async function deleteEditor(){
@@ -555,6 +561,95 @@ async function deleteEditor(){
   await deleteObjectList(EDIT.id);
   EDIT = null;
   await refresh();
+}
+
+/* Standalone "New List" modal: the same id/name/room/category/ordering/items/
+   mnemonic editor as the full Object List Manager, but in its own focused
+   overlay with no grid alongside it -- for callers (the VR "Wall object
+   lists" dialog's own "+ New List" button) that just need to create one list
+   and get back its id, without detouring through the full manager. Mirrors
+   assets.js's openNewAssetModal: reuses openEditor/renderEditor/saveEditor
+   unchanged by temporarily repointing containerEl (and thus every $() lookup
+   they make) at this overlay's own #objlistEditor host; showIndex()/
+   renderGrid() are guarded to no-op when there's no #objlistGrid in the
+   current container, so saveEditor's normal post-save calls stay harmless
+   here. The item editor's own "pick an image" sub-flow needs its own copy of
+   the picker overlay's markup (same as buildShell's), since it's a sibling
+   of #objlistEditor rather than something renderEditor builds itself.
+   Resolves the new list's id on Save, or null on Cancel. */
+export async function openNewObjectListModal(){
+  // saveEditor's duplicate-id check reads the module-level LISTS cache, which
+  // is only populated by openObjectListManager -- a caller reaching this
+  // modal without the full manager having been opened this session (e.g.
+  // straight from the VR wall-lists dialog) would otherwise check against a
+  // stale/empty cache and let a typed-in id that already exists silently
+  // overwrite that list via setObjectList.
+  [LISTS, ASSETS] = await Promise.all([getAllObjectLists(), getAllAssets()]);
+  return new Promise((resolve) => {
+    const prevContainer = containerEl;
+    let ov = document.getElementById('objlistNewOverlay');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'objlistNewOverlay';
+      ov.className = 'overlay';
+      // above the wall-lists dialog (70) that opens it; below the item
+      // picker's own overlay (80), which can be opened from within this editor.
+      ov.style.zIndex = '72';
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = `
+      <div class="modal" style="width:min(42em,92vw);max-height:90vh;overflow:auto">
+        <div class="assets-header">
+          <h2>New Object List</h2>
+          <button id="objlistNewCloseBtn">Cancel</button>
+        </div>
+        <div id="objlistEditor" class="assets-editor"></div>
+      </div>
+      <div id="objlistPickOverlay" class="objlist-pick-overlay" style="display:none">
+        <div class="objlist-pick-modal">
+          <div class="objlist-pick-head">
+            <strong>Pick an image asset</strong>
+            <input type="text" id="objlistPickFilter" class="assets-search" placeholder="Search assets…">
+            <button id="objlistPickNewAsset"><i class="fa-solid fa-plus"></i> New Asset…</button>
+            <button id="objlistPickNone">Use word only (no image)</button>
+            <button id="objlistPickCancel">Cancel</button>
+          </div>
+          <div class="assets-grid" id="objlistPickGrid"></div>
+        </div>
+      </div>`;
+    ov.style.display = 'flex';
+    containerEl = ov;
+
+    $('objlistPickCancel').onclick = () => closePicker(undefined);
+    $('objlistPickNone').onclick = () => closePicker(null);
+    $('objlistPickFilter').oninput = () => renderPickGrid($('objlistPickFilter').value.trim().toLowerCase());
+    $('objlistPickNewAsset').onclick = async () => {
+      const newId = await openNewAssetModal();
+      if(newId){ ASSETS = await getAllAssets(); closePicker(newId); }
+    };
+
+    let settled = false;
+    const finish = (id) => {
+      if(settled) return;
+      settled = true;
+      ov.style.display = 'none';
+      ov.innerHTML = '';
+      containerEl = prevContainer;
+      resolve(id || null);
+    };
+
+    openEditor(null);
+    // renderEditor (inside openEditor) already wired Save/Cancel to
+    // saveEditor()/showIndex() for the full-manager flow -- rewire both here
+    // so this standalone modal resolves instead of just sitting there.
+    ov.querySelector('#ol_save').onclick = async () => {
+      const id = await saveEditor();
+      if(id) finish(id);
+    };
+    ov.querySelector('#ol_cancel').onclick = () => finish(null);
+    ov.querySelector('#objlistNewCloseBtn').onclick = () => finish(null);
+    ov.onclick = e => { if(e.target === ov) finish(null); };
+  });
 }
 
 /* ---------- JSON import ----------

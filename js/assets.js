@@ -813,7 +813,7 @@ function openGenerateModal(){
   if(!ov){
     ov = document.createElement('div');
     ov.id = 'assetGenOverlay';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:130;display:flex;align-items:center;'
+    ov.style.cssText = 'position:fixed;inset:0;z-index:230;display:flex;align-items:center;'
       + 'justify-content:center;background:rgba(0,0,0,.6)';
     document.body.appendChild(ov);
   }
@@ -1407,9 +1407,13 @@ export async function openNewAssetModal(initialType, allowTypes){
       ov = document.createElement('div');
       ov.id = 'assetNewOverlay';
       ov.className = 'overlay';
-      // above the asset picker (60) that opens it; below Crop/Erase (70) and
-      // Generate… (130), both of which can be opened from within this editor.
-      ov.style.zIndex = '62';
+      // Above every picker that can open it: the main asset picker (60), and
+      // (via the Object List Manager's item editor, including its standalone
+      // "New List" modal reused from a VR dialog -- see objectLists.js's
+      // openNewObjectListModal) that manager's own image-pick sub-overlay
+      // (.objlist-pick-overlay, 80). Below Crop/Erase (170) and Generate…
+      // (230), both of which can be opened from within this editor.
+      ov.style.zIndex = '162';
       document.body.appendChild(ov);
     }
     ov.innerHTML = `
