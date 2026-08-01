@@ -5274,7 +5274,15 @@ function rebuildMoveObjectChainLive(roomKey){
       const chain = buildMoveObjectChain(room, roomKey, track);
       if(chain) scene.add(chain);
     }
-  } else {
+  } else if((room.castleSign && room.castleSign.type) === 'corridor'){
+    // matches buildRoom's own gate exactly (see its "two-track castle rooms
+    // get..." comment) -- a room that's neither two-track nor a corridor
+    // (e.g. a junction with no forced sequence at all) gets no chain on a
+    // full build, but this function had no such check: nudging a
+    // move-object there would spuriously conjure one into the live scene
+    // (gone again on the next full rebuild, e.g. leaving edit mode) since
+    // buildMoveObjectChain itself doesn't know or care what kind of room
+    // it's being asked to chain.
     const chain = buildMoveObjectChain(room, roomKey);
     if(chain) scene.add(chain);
   }
@@ -6197,13 +6205,22 @@ function buildGearSprite(){
 // scene child when that runs would be left pointing at disposed GPU
 // resources the next time a prop gets selected.
 function buildGizmoArrow(origin, dir, axis){
-  const mat = new THREE.MeshBasicMaterial({ color: GIZMO_COLORS[axis], depthTest: false });
+  // transparent:true (even though fully opaque-colored) is required for
+  // depthTest:false/renderOrder to actually win against something like a
+  // door skin: three.js renders the ENTIRE opaque queue before the ENTIRE
+  // transparent queue, regardless of renderOrder, and a door skin's own
+  // material (makeDoorPanelMesh) IS transparent -- so an arrow left in the
+  // (default) opaque bucket, even at renderOrder 999, still drew before the
+  // door skin and was then painted over by it. Moving the arrow into the
+  // transparent bucket too is what lets renderOrder actually decide who
+  // draws last within it.
+  const mat = new THREE.MeshBasicMaterial({ color: GIZMO_COLORS[axis], depthTest: false, transparent: true });
   const group = new THREE.Group();
   const shaft = new THREE.Mesh(new THREE.CylinderGeometry(GIZMO_SHAFT_R, GIZMO_SHAFT_R, GIZMO_LEN - GIZMO_HEAD_LEN, 8), mat);
   shaft.position.y = (GIZMO_LEN - GIZMO_HEAD_LEN) / 2;
   const head = new THREE.Mesh(new THREE.ConeGeometry(GIZMO_HEAD_R, GIZMO_HEAD_LEN, 10), mat);
   head.position.y = GIZMO_LEN - GIZMO_HEAD_LEN / 2;
-  shaft.renderOrder = head.renderOrder = 999;   // draw on top, matching the outline/gear's depthTest:false
+  shaft.renderOrder = head.renderOrder = 999;   // draw last among transparent objects too, not just opaque ones
   group.add(shaft, head);
   // the geometry above is built pointing along +Y; rotate the group to point along `dir` instead
   group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
@@ -6261,8 +6278,14 @@ function attachSelectionVisuals(){
 
   const outline = new THREE.Mesh(
     new THREE.BoxGeometry(size.x + 0.04, size.y + 0.04, size.z + 0.04),
-    new THREE.MeshBasicMaterial({ color: 0xffd400, wireframe: true, depthTest: false })
+    // transparent:true so this competes in the transparent render queue
+    // (where renderOrder actually applies) rather than the opaque one, which
+    // three.js always draws first regardless of renderOrder -- see
+    // buildGizmoArrow's own comment; a door skin's material is transparent,
+    // so without this the outline could end up painted over by one too.
+    new THREE.MeshBasicMaterial({ color: 0xffd400, wireframe: true, depthTest: false, transparent: true })
   );
+  outline.renderOrder = 999;
   outline.position.copy(center);
   scene.add(outline);
   selectionOutline = outline;
@@ -8350,6 +8373,19 @@ export async function openThreeTest(containerEl, opts){
       // rather than bypassing it with a hook that just calls
       // setSlotXformLive directly.
       gizmoAxes: () => selectionGizmo.map(a => a.userData.axis),
+      // render-queue info for the outline/gizmo materials -- a door skin's
+      // own material is transparent, and three.js always draws the WHOLE
+      // opaque queue before the WHOLE transparent queue regardless of
+      // renderOrder, so both need transparent:true too (see buildGizmoArrow's
+      // own comment) or a door skin drawn later just paints over them.
+      selectionRenderInfo: () => ({
+        outline: selectionOutline
+          ? { transparent: selectionOutline.material.transparent, depthTest: selectionOutline.material.depthTest, renderOrder: selectionOutline.renderOrder }
+          : null,
+        gizmo: selectionGizmo.length
+          ? (() => { const shaft = selectionGizmo[0].children[0]; return { transparent: shaft.material.transparent, depthTest: shaft.material.depthTest, renderOrder: shaft.renderOrder }; })()
+          : null,
+      }),
       gizmoArrowScreenPoint: (axis) => {
         const arrow = selectionGizmo.find(a => a.userData.axis === axis);
         if(!arrow || !renderer) return null;

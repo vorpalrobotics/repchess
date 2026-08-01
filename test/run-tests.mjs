@@ -673,6 +673,23 @@ try {
     ok('translate gizmo: a free-floating (mnemonic) selection shows x/z/up arrows');
   } catch(e){ bad('translate gizmo: arrow set for a mnemonic selection', e); }
 
+  // 11b2. The outline/gizmo materials are transparent (not just
+  //       depthTest:false) so they compete in three.js's transparent render
+  //       queue, not the opaque one -- the opaque queue always draws
+  //       entirely before the transparent queue regardless of renderOrder,
+  //       and a door skin's own material IS transparent, so an
+  //       opaque-but-depthTest:false arrow at even a very high renderOrder
+  //       still drew BEFORE a door skin and was then painted over by it.
+  //       Reported bug: arrows rendering underneath door skins.
+  try {
+    const info = await appGZ.page.evaluate(() => window.__threeTestEdit.selectionRenderInfo());
+    assert(info.outline && info.outline.transparent && info.outline.depthTest === false && info.outline.renderOrder > 0,
+      `expected the selection outline material to be transparent+depthTest:false+high renderOrder, got ${JSON.stringify(info.outline)}`);
+    assert(info.gizmo && info.gizmo.transparent && info.gizmo.depthTest === false && info.gizmo.renderOrder > 0,
+      `expected the gizmo arrow material to be transparent+depthTest:false+high renderOrder, got ${JSON.stringify(info.gizmo)}`);
+    ok('translate gizmo: outline/arrow materials are transparent so they draw on top of transparent things like a door skin, not just opaque ones');
+  } catch(e){ bad('translate gizmo: outline/arrow render queue (transparent+depthTest+renderOrder)', e); }
+
   // 11c. Dragging the "x" arrow (wall-relative -- always world +X in every
   //      room, regardless of which way the player is facing, see AXIS_X's
   //      own comment) via a REAL pointer sequence (not a hook bypassing the
@@ -780,11 +797,26 @@ try {
       { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
       { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
       { seq: ['d4','Nf6','c4','e6','Nc3','d5'], reply: 'cxd5' },
+      // a SEPARATE "Solo" castle whose root forks 3 ways immediately, with
+      // NO preceding forced chain -- unlike "Fan" above (whose branch sits
+      // at the TAIL of an otherwise-linear run, which is still classified
+      // 'corridor' end to end, see analyzeCastleStructure's own `run.length
+      // >= 2` requirement), a node that forks from move 1 never joins any
+      // run OR a clean two-track (that needs exactly 2 children), so it
+      // falls to the 'solo:'+id fallback -- castleSign.type stays unset.
+      // This is the actual "no linear sequence" room 11n needs.
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Solo', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','c6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','dxc4'], reply: 'e4' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 d5 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 d5 c4 c6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'd4 d5 c4 dxc4 e4', white: 'a', black: 'b', result: '*' },
     ],
     // billboard-cylindrical (not extruded): its mesh geometry is real and
     // synchronous (a plain PlaneGeometry) -- an extruded asset instead traces
@@ -998,6 +1030,43 @@ try {
       ok('translate gizmo: ground wall prop test skipped (no wl-* slot in this room\'s door layout)');
     }
   } catch(e){ bad('translate gizmo: arrow set for a ground wall prop', e); }
+
+  // 11n. The "Solo" castle's own root (forks 3 ways from move 1, no
+  //      preceding forced chain -- neither a 'corridor' run nor a clean
+  //      two-track, see its own seed comment above) gets no floor chain at
+  //      all on a full build; nudging a move-object there must not
+  //      spuriously conjure one into the live scene either. Reported bug:
+  //      rebuildMoveObjectChainLive (the live-nudge path) never checked
+  //      castleSign.type the way buildRoom's full build does, so any
+  //      move-object edit in a non-corridor/non-two-track room briefly grew
+  //      a chain that vanished again only on the next full rebuild (e.g.
+  //      leaving edit mode).
+  try {
+    const soloRoomKey = await appGZ2.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','d5','c4']) c.move(m,{sloppy:true});
+      return 'cas:L1_Solo:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await appGZ2.page.evaluate((k) => window.__threeTestEdit.enter(k), soloRoomKey);
+    await appGZ2.page.waitForTimeout(200);
+
+    const before = await appGZ2.page.evaluate(() =>
+      window.__threeTestEdit.scan().some(o => o.kind === 'moveObjectChainGroup'));
+    assert(!before, 'test setup issue: expected no chain in this non-corridor, non-two-track room before any edit');
+
+    const slotIds = await appGZ2.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), soloRoomKey);
+    const slotId = slotIds.find(id => id !== 'obj-C1') || slotIds[0];
+    assert(slotId, 'test setup issue: expected at least one move-object slot in the Solo room');
+    await assignPropA(slotId);
+    await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), slotId);
+    await appGZ2.page.waitForTimeout(150);
+    await appGZ2.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+    await appGZ2.page.waitForTimeout(80);
+
+    const after = await appGZ2.page.evaluate(() =>
+      window.__threeTestEdit.scan().some(o => o.kind === 'moveObjectChainGroup'));
+    assert(!after, 'expected nudging a move-object in a non-corridor, non-two-track room to NOT spawn a floor chain');
+    ok('memorization-aid: nudging a move-object in a non-corridor, non-two-track room does not spuriously add a chain');
+  } catch(e){ bad('memorization-aid: no spurious chain outside corridor/two-track rooms', e); }
 } finally {
   await appGZ2.close();
 }
