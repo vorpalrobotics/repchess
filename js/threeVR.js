@@ -6602,6 +6602,11 @@ function axisDragPlane(origin, axisDir){
 // onto, so onGizmoPointerMove never has to re-resolve any of it mid-drag.
 function onGizmoPointerDown(e){
   if(inputLocked || !raycaster || !editMode || !selectedProp || !selectionGizmo.length) return;
+  // belt-and-braces: a previous drag should always have ended itself via
+  // onGizmoPointerEnd (pointerup or pointercancel), but force it closed here
+  // too rather than let a fresh drag start on top of stale state if it
+  // somehow didn't.
+  if(gizmoDrag) onGizmoPointerEnd({ pointerId: gizmoDrag.pointerId });
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -6643,9 +6648,25 @@ function onGizmoPointerDown(e){
   const axisOrigin = ud.origin.clone();
   const plane = axisDragPlane(axisOrigin, axisDir);
 
-  gizmoDrag = { axis: ud.axis, roomKey, slotId, kind, buildingKey, room, slot, startXform, axisDir, axisOrigin, plane };
+  // pointer capture pins this pointer's future events to the canvas (and thus
+  // still bubbling up to these window listeners) even if the finger drifts
+  // off the canvas mid-drag -- without it, a touch drag can lose tracking
+  // partway through with no pointerup ever firing at all. pointerId is kept
+  // so a second, unrelated touch (e.g. a stray finger) during the drag can't
+  // be mistaken for this one's move/end.
+  try { renderer.domElement.setPointerCapture(e.pointerId); } catch(_){}
+  gizmoDrag = { axis: ud.axis, roomKey, slotId, kind, buildingKey, room, slot, startXform, axisDir, axisOrigin, plane, pointerId: e.pointerId };
   window.addEventListener('pointermove', onGizmoPointerMove);
-  window.addEventListener('pointerup', onGizmoPointerUp, { once: true });
+  window.addEventListener('pointerup', onGizmoPointerEnd);
+  // a touch drag that the OS decides to interrupt (e.g. an incoming
+  // notification, or -- pre touch-action:none -- a scroll takeover) fires
+  // pointercancel instead of pointerup; without also ending the drag here,
+  // gizmoDrag is left stuck non-null and the still-registered pointermove
+  // listener keeps applying every subsequent pointer move anywhere on the
+  // page (window-level) to this now-stale room/slot, including after
+  // walking away to a different room -- the reported "arrows throw me clean
+  // out of VR" bug traced back to exactly this leak.
+  window.addEventListener('pointercancel', onGizmoPointerEnd);
 }
 
 // Re-raycasts the CURRENT mouse position against the axis's plane (captured
@@ -6655,7 +6676,7 @@ function onGizmoPointerDown(e){
 // the cursor" feel a real gizmo drag is supposed to have, not an incremental
 // delta that could drift from the pointer over a long drag.
 function onGizmoPointerMove(e){
-  if(!gizmoDrag) return;
+  if(!gizmoDrag || e.pointerId !== gizmoDrag.pointerId) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -6703,8 +6724,19 @@ function onGizmoPointerMove(e){
   setSlotXformLive(roomKey, slotId, xform);
 }
 
-function onGizmoPointerUp(){
+// Shared cleanup for both a normal release (pointerup) and an OS-interrupted
+// drag (pointercancel, e.g. an incoming touch gesture the browser decides to
+// take over despite touch-action:none) -- either one must fully end the drag
+// so gizmoDrag never outlives its pointer (see onGizmoPointerDown's own
+// comment on the leak that caused).
+function onGizmoPointerEnd(e){
+  if(gizmoDrag && e.pointerId !== gizmoDrag.pointerId) return;
   window.removeEventListener('pointermove', onGizmoPointerMove);
+  window.removeEventListener('pointerup', onGizmoPointerEnd);
+  window.removeEventListener('pointercancel', onGizmoPointerEnd);
+  if(gizmoDrag){
+    try { renderer.domElement.releasePointerCapture(gizmoDrag.pointerId); } catch(_){}
+  }
   gizmoDrag = null;
 }
 
@@ -6799,7 +6831,7 @@ function selectElevatorFloor(panelUd, uv){
 
 function onCanvasClick(e){
   // a click that just finished a gizmo-arrow drag (or a plain click on one
-  // with no movement) already did its job in onGizmoPointerDown/Up -- don't
+  // with no movement) already did its job in onGizmoPointerDown/End -- don't
   // also reselect/deselect based on whatever's behind the arrow.
   if(suppressNextCanvasClick){ suppressNextCanvasClick = false; return; }
   if(inputLocked || !raycaster) return;
@@ -8362,6 +8394,13 @@ export async function openThreeTest(containerEl, opts){
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
+  // without this, the OS can decide mid-gesture that a touch-drag on the
+  // gizmo arrows (onGizmoPointerDown/Move below) is actually a page scroll
+  // and hand off to native scrolling, firing pointercancel a few pixels in --
+  // the exact "drag stops working after a short distance" mobile bug this
+  // was added for. Same fix already applied to the room-geometry dialog's
+  // own door-drag canvas -- see its "touch-action:none" comment.
+  renderer.domElement.style.touchAction = 'none';
   container.appendChild(renderer.domElement);
 
   // editor HUD overlay (hidden until edit mode is on)
@@ -8472,6 +8511,12 @@ export async function openThreeTest(containerEl, opts){
         const rect = renderer.domElement.getBoundingClientRect();
         return { x: rect.left + (tip.x + 1) / 2 * rect.width, y: rect.top + (1 - tip.y) / 2 * rect.height };
       },
+      // whether a gizmo-arrow drag is currently in progress (onGizmoPointerDown
+      // set gizmoDrag, no matching pointerup/pointercancel/new-drag has ended
+      // it yet) -- for testing that an OS-interrupted touch drag (pointercancel,
+      // simulated here since Playwright's mouse API has no touch-cancel of its
+      // own) actually clears this rather than leaking it forever.
+      gizmoDragActive: () => !!gizmoDrag,
       // edit-mode undo/redo (see snapshotLayoutForUndo/snapshotForXformEdit):
       // stack depths for asserting availability, plus direct triggers so a
       // test can invoke them without needing real key focus, and a snapshot
