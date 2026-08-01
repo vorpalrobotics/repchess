@@ -724,6 +724,65 @@ try {
     ok('translate gizmo: dragging the "x" arrow moves along that axis, coalesces to one undo step, and undo reverts it');
   } catch(e){ bad('translate gizmo: "x" arrow drag', e); }
 
+  // 11c2. Reported mobile bug: a gizmo-arrow drag would "stop working after a
+  //       short distance," and once threw the user clean out of VR entirely.
+  //       Root cause -- the OS can decide mid-touch-drag that it's actually a
+  //       page scroll and hand off to native scrolling, which fires
+  //       pointercancel instead of pointerup; onGizmoPointerUp only ever
+  //       listened for pointerup, so gizmoDrag was left stuck non-null with
+  //       its pointermove listener still live on window, applying every
+  //       later pointer move anywhere on the page to this now-stale
+  //       room/slot. Fixed with touch-action:none (stops the takeover before
+  //       it starts) plus an actual pointercancel handler as a safety net.
+  //       Playwright's mouse API can't simulate a real touch-cancel, so this
+  //       drives the same real pointerdown/pointermove path as 11c via
+  //       page.mouse, then dispatches a synthetic pointercancel (matching
+  //       pointerId) the way the OS would -- proving the drag stops
+  //       immediately, doesn't leak, and a fresh drag afterward still works.
+  try {
+    const before = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    const pt = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('x'));
+    assert(pt, 'expected a screen point for the "x" gizmo arrow');
+
+    await appGZ.page.mouse.move(pt.x, pt.y);
+    await appGZ.page.mouse.down();
+    await appGZ.page.mouse.move(pt.x + 40, pt.y, { steps: 4 });
+    const active = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoDragActive());
+    assert(active, 'expected a gizmo drag to be in progress mid-move');
+    const midway = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(midway.x - before.x > 0.05, `expected the partial drag to have already moved the billboard, got dx=${midway.x - before.x}`);
+
+    // real mouse pointerdown/move in Chromium use pointerId 1 -- match it so
+    // the cancel is recognized as ending THIS drag (see onGizmoPointerEnd's
+    // own pointerId check).
+    await appGZ.page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1, bubbles: true })));
+    const activeAfterCancel = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoDragActive());
+    assert(!activeAfterCancel, 'expected pointercancel to immediately end the drag (gizmoDrag cleared)');
+
+    // further pointer movement with no drag active must NOT keep nudging the
+    // object -- this is exactly the leak that let a stray later pointermove
+    // (e.g. from walking around, or just lifting the finger elsewhere) keep
+    // silently mutating a stale room/slot.
+    await appGZ.page.mouse.move(pt.x + 120, pt.y, { steps: 4 });
+    await appGZ.page.mouse.up();
+    await appGZ.page.waitForTimeout(80);
+    const afterStrayMove = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(Math.abs(afterStrayMove.x - midway.x) < 0.02,
+      `expected no further movement after pointercancel, got ${JSON.stringify(midway)} -> ${JSON.stringify(afterStrayMove)}`);
+
+    // a fresh drag right afterward still works -- the cancel path didn't
+    // leave any listener stuck/removed in a way that breaks the next one.
+    const pt2 = await appGZ.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('x'));
+    await appGZ.page.mouse.move(pt2.x, pt2.y);
+    await appGZ.page.mouse.down();
+    await appGZ.page.mouse.move(pt2.x + 60, pt2.y, { steps: 6 });
+    await appGZ.page.mouse.up();
+    await appGZ.page.waitForTimeout(100);
+    const finalPos = await appGZ.page.evaluate(() => window.__threeTestEdit.posOf('mnem-C1'));
+    assert(finalPos.x - afterStrayMove.x > 0.15, `expected a fresh drag after the cancel to still move the billboard, got dx=${finalPos.x - afterStrayMove.x}`);
+    ok('translate gizmo: a pointercancel (OS-interrupted touch drag) ends the drag cleanly with no leak, and a fresh drag afterward still works');
+  } catch(e){ bad('translate gizmo: pointercancel mid-drag does not leak/stick', e); }
+
   // 11d. Dragging the "up" arrow moves height only, and arrow-key nudging
   //      still works immediately afterward -- the gizmo is an alternative
   //      input method for the exact same selectedProp/setSlotXformLive
