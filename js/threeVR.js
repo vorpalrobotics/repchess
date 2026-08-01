@@ -770,16 +770,20 @@ const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
    axis, writing through the exact same setSlotXformLive path the keyboard
    already uses, so both input methods stay interchangeable moment to moment.
    Which axes show up matches each kind's actual degrees of freedom (see
-   attachSelectionVisuals): floor gets x/z only (no vertical lift at all);
-   moveObject/mnemonic get all three (free-floating); ceiling gets x/z only
-   (slides in the ceiling's own plane, but its height is always
+   attachSelectionVisuals): floor/sign get x/z only (no vertical lift at
+   all); moveObject/mnemonic get all three (free-floating); ceiling gets x/z
+   only (slides in the ceiling's own plane, but its height is always
    room.size.h-derived, never nudgeable); wall gets exactly ONE horizontal
    arrow (along the wall -- whichever of x/z that wall runs on, see
    wallSpan) plus up, unless `ground` (a floor-standing wall piece, height
-   fixed at 0). Signs (lawn-clamped, kind 'sign') keep keyboard-only nudging
-   for now -- not one of GIZMO_KINDS. */
-const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic', 'wall', 'ceiling']);
-const GIZMO_LEN = 0.75, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
+   fixed at 0). This covers every kind nudgeSelected itself handles --
+   see its own kind branches -- so every keyboard-nudgeable kind also has a
+   drag gizmo. */
+const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic', 'wall', 'ceiling', 'sign']);
+// sized to stand out against a noisy/colorful room -- thicker and a bit
+// longer than a "minimal" gizmo would need, since these compete visually
+// with real scenery, not a neutral CAD viewport.
+const GIZMO_LEN = 1.0, GIZMO_SHAFT_R = 0.035, GIZMO_HEAD_R = 0.11, GIZMO_HEAD_LEN = 0.22;
 const GIZMO_COLORS = { x: 0xe53935, z: 0x1e88e5, up: 0x43a047 };
 // how far the gizmo's shared origin is pulled from the object's own center,
 // toward the entrance (GIZMO_FRONT_OFFSET) and down (GIZMO_DROP) -- a
@@ -6361,11 +6365,12 @@ function attachSelectionVisuals(){
         buildGizmoArrow(origin, new THREE.Vector3(AX.x, 0, AX.z), 'x'),
         buildGizmoArrow(origin, new THREE.Vector3(AZ.x, 0, AZ.z), 'z'),
       );
-      // 'floor'/'ceiling' props have no vertical lift at all (see onKeyDown's
-      // own h/l/PageUp/PageDown guard, and nudgeSelected's ceiling branch)
-      // -- keep the gizmo's degrees of freedom exactly matching the
-      // keyboard's, rather than offering a drag the keyboard can't do too.
-      if(selectedProp.kind !== 'floor' && selectedProp.kind !== 'ceiling'){
+      // 'floor'/'ceiling'/'sign' props have no vertical lift at all (see
+      // onKeyDown's own h/l/PageUp/PageDown guard, and nudgeSelected's
+      // ceiling/sign branches) -- keep the gizmo's degrees of freedom
+      // exactly matching the keyboard's, rather than offering a drag the
+      // keyboard can't do too.
+      if(!['floor', 'ceiling', 'sign'].includes(selectedProp.kind)){
         arrows.push(buildGizmoArrow(origin, new THREE.Vector3(0, 1, 0), 'up'));
       }
     }
@@ -6611,13 +6616,23 @@ function onGizmoPointerDown(e){
   // whatever's behind the arrow the user actually meant to grab.
   suppressNextCanvasClick = true;
 
-  const { roomKey, slotId, kind } = selectedProp;
+  const { roomKey, slotId, kind, buildingKey } = selectedProp;
   const room = mergedRoom(roomKey);
-  const slot = (selectedProp.doorObj || selectedProp.doorBill)
-    ? { x: selectedProp.base.x, z: selectedProp.base.z }
-    : slotById(room, roomKey, slotId);
+  let slot;
+  if(kind === 'sign'){
+    // a sign has no roomSlots entry at all -- its base pos rides on the
+    // built mesh's own userData (see selectSign/setSignPosLive), keyed by
+    // buildingKey rather than a slotId.
+    let signObj = null;
+    scene.traverse(o => { if(!signObj && o.userData && o.userData.kind === 'sign' && o.userData.buildingKey === buildingKey) signObj = o; });
+    slot = (signObj && signObj.userData.basePos) ? { x: signObj.userData.basePos.x, z: signObj.userData.basePos.z } : null;
+  } else {
+    slot = (selectedProp.doorObj || selectedProp.doorBill)
+      ? { x: selectedProp.base.x, z: selectedProp.base.z }
+      : slotById(room, roomKey, slotId);
+  }
   if(!room || !slot) return;
-  const cur = slotXformFor(roomKey, slotId) || {};
+  const cur = (kind === 'sign' ? signPosFor(roomKey, buildingKey) : slotXformFor(roomKey, slotId)) || {};
   // a wall prop's position is dOffset (along the wall)/dY (height), not
   // dx/dz/dy -- see nudgeSelected's own 'wall' branch.
   const startXform = kind === 'wall'
@@ -6627,7 +6642,7 @@ function onGizmoPointerDown(e){
   const axisOrigin = ud.origin.clone();
   const plane = axisDragPlane(axisOrigin, axisDir);
 
-  gizmoDrag = { axis: ud.axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin, plane };
+  gizmoDrag = { axis: ud.axis, roomKey, slotId, kind, buildingKey, room, slot, startXform, axisDir, axisOrigin, plane };
   window.addEventListener('pointermove', onGizmoPointerMove);
   window.addEventListener('pointerup', onGizmoPointerUp, { once: true });
 }
@@ -6645,10 +6660,21 @@ function onGizmoPointerMove(e){
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
-  const { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin, plane } = gizmoDrag;
+  const { axis, roomKey, slotId, kind, buildingKey, room, slot, startXform, axisDir, axisOrigin, plane } = gizmoDrag;
   const hitPoint = new THREE.Vector3();
   if(!raycaster.ray.intersectPlane(plane, hitPoint)) return;   // ray parallel to the plane this frame -- leave position as-is
   const t = hitPoint.clone().sub(axisOrigin).dot(axisDir);
+
+  if(kind === 'sign'){
+    // signs persist via signPosFor/setSignPosLive (dx/dz only, keyed by
+    // buildingKey), not the slotXform store -- see nudgeSelected's own
+    // 'sign' branch. No 'up' arrow ever exists for a sign (see
+    // attachSelectionVisuals), so axis is always 'x' or 'z' here.
+    const dx = startXform.dx + axisDir.x * t, dz = startXform.dz + axisDir.z * t;
+    const clamped = clampFloorXZ(room.size, slot.x + dx, slot.z + dz);
+    setSignPosLive(roomKey, buildingKey, { dx: clamped.x - slot.x, dz: clamped.z - slot.z });
+    return;
+  }
 
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   if(kind === 'wall'){
@@ -8695,6 +8721,18 @@ export async function openThreeTest(containerEl, opts){
       posOf: (slotId) => {
         let found = null;
         scene.traverse(o => { if(!found && o.userData && o.userData.slotId === slotId) found = o; });
+        if(!found) return null;
+        const wp = new THREE.Vector3();
+        found.getWorldPosition(wp);
+        return { x: +wp.x.toFixed(3), y: +wp.y.toFixed(3), z: +wp.z.toFixed(3) };
+      },
+      // a sign (street or building lawn) has no slotId at all -- it's keyed
+      // by buildingKey instead (see selectSign/setSignPosLive) -- so posOf
+      // can't find it. Same world-position lookup, keyed the way a sign
+      // actually is.
+      signWorldPos: (buildingKey) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.kind === 'sign' && o.userData.buildingKey === buildingKey) found = o; });
         if(!found) return null;
         const wp = new THREE.Vector3();
         found.getWorldPosition(wp);
