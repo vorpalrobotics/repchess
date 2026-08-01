@@ -761,6 +761,248 @@ try {
 
 } catch(e){ bad('Phase F: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase F2: translate gizmo drag, extended to wall and ceiling props ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appGZ2 = await launchApp();
+try {
+  // reuses Phase CK's exact "Fan" fixture (3 forward doors branching off the
+  // same merged room, from where the opponent's Nc3 reply could go 3 ways)
+  // -- a plain single-line castle (Phase F's own fixture) never branches at
+  // all, so it has no real doors anywhere (room.exits stays empty and there's
+  // no wh-*/eye-level wall slot to test at all -- everything nudgeable is
+  // either a move-object/mnemonic pair or a ground-level wall/ceiling spot).
+  await seedBackup(appGZ2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Fan', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Be7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
+    // billboard-cylindrical (not extruded): its mesh geometry is real and
+    // synchronous (a plain PlaneGeometry) -- an extruded asset instead traces
+    // its shape from the loaded image asynchronously, and this placeholder
+    // 1x1 PNG never produces one, leaving an empty Group that Box3 measures
+    // as a degenerate (0,0,0) box (which is exactly what broke the very
+    // first version of the tests below: the ceiling gizmo's origin came out
+    // at the room's floor instead of its ceiling).
+    assets: [{ id: 'propA', name: 'propA', type: 'billboard-cylindrical', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.6, h: 0.6 } }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appGZ2.page);
+  const roomKey2 = await appGZ2.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
+    return 'cas:L1_Fan:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appGZ2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey2);
+  await appGZ2.page.waitForTimeout(400);
+  const camBaseline2 = await appGZ2.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+  await appGZ2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+  await appGZ2.page.waitForTimeout(60);
+
+  // assigns asset 'propA' to slotId via the real picker (allowWord/allow are
+  // generic to any empty-slot marker, wall/ceiling included -- see
+  // handleEditTarget's own 'slot' branch).
+  async function assignPropA(slotId){
+    await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+    await appGZ2.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appGZ2.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#pickerGrid .asset-card')].find(c => c.textContent.includes('propA'));
+      card.click();
+    });
+    await appGZ2.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appGZ2.page.waitForTimeout(150);
+  }
+
+  // 11f. Ceiling: the always-present hang-point (ceilingSlots -- 'ceil-c')
+  //      gets x/z (its own horizontal plane) but no vertical arrow at all --
+  //      its height is always room.size.h-derived, never nudgeable (see
+  //      nudgeSelected's own 'ceiling' branch).
+  try {
+    await assignPropA('ceil-c');
+    await appGZ2.page.evaluate(() => window.__threeTestEdit.target({ kind: 'accessory', slotId: 'ceil-c' }));
+    await appGZ2.page.waitForTimeout(500);   // let the (upward, for ceiling) tilt/lift converge
+    const axes = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
+    assert(JSON.stringify([...axes].sort()) === JSON.stringify(['x','z']),
+      `expected a ceiling selection to show only x/z (no up), got ${JSON.stringify(axes)}`);
+    ok('translate gizmo: a ceiling prop shows x/z arrows only, no vertical');
+  } catch(e){ bad('translate gizmo: arrow set for a ceiling prop', e); }
+
+  // 11g. Dragging the ceiling prop's "x" arrow moves it in the ceiling's own
+  //      plane, height unchanged -- same drag math as a floor/mnemonic prop,
+  //      just anchored at the ceiling. ceil-c sits at the room's own centre
+  //      (x=0,z=0), the same camera-facing geometry Phase F's mnem-C1 test
+  //      already relies on for a reliable, non-degenerate screen-space drag.
+  try {
+    const before = await appGZ2.page.evaluate(() => window.__threeTestEdit.posOf('ceil-c'));
+    const pt = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('x'));
+    assert(pt, 'expected a screen point for the ceiling\'s "x" gizmo arrow');
+
+    await appGZ2.page.mouse.move(pt.x, pt.y);
+    await appGZ2.page.mouse.down();
+    await appGZ2.page.mouse.move(pt.x + 70, pt.y, { steps: 6 });
+    await appGZ2.page.mouse.up();
+    await appGZ2.page.waitForTimeout(100);
+
+    const after = await appGZ2.page.evaluate(() => window.__threeTestEdit.posOf('ceil-c'));
+    assert(after.x - before.x > 0.15, `expected the "x" drag to move the ceiling prop along +X, got dx=${after.x - before.x}`);
+    assert(Math.abs(after.z - before.z) < 0.05, `expected the "x" drag to leave Z essentially unchanged, got dz=${after.z - before.z}`);
+    assert(Math.abs(after.y - before.y) < 0.02, `expected a ceiling drag to leave height unchanged (no vertical DOF), got dy=${after.y - before.y}`);
+    ok('translate gizmo: dragging a ceiling prop\'s "x" arrow slides it in the ceiling plane, height fixed');
+  } catch(e){ bad('translate gizmo: ceiling "x" arrow drag', e); }
+
+  // 11h. Selecting the ceiling prop tilts the camera UP (not down) and still
+  //      lifts it, since its arrows sit overhead rather than at eye level;
+  //      deselecting eases back to level.
+  try {
+    const tilted = await appGZ2.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+    assert(tilted.y - camBaseline2.y > 0.5, `expected selecting the ceiling prop to lift the camera, got ${camBaseline2.y} -> ${tilted.y}`);
+    assert(tilted.pitch > camBaseline2.pitch + 0.1, `expected selecting the ceiling prop to tilt the camera UP, got ${camBaseline2.pitch} -> ${tilted.pitch}`);
+
+    await appGZ2.page.evaluate(() => window.__threeTestEdit.target({ kind: 'accessory', slotId: 'ceil-c' }));   // toggle off
+    // the ceiling's up-tilt can be much steeper than the fixed 10-degree
+    // down-tilt (see EDIT_TILT_UP_MIN/MAX) -- easing is exponential decay, so
+    // unwinding a bigger swing to within the same absolute tolerance takes
+    // more real time; Phase F's 400ms (tuned for the always-10-degree case)
+    // isn't always enough here.
+    await appGZ2.page.waitForTimeout(700);
+    const level = await appGZ2.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+    assert(Math.abs(level.y - camBaseline2.y) < 0.05, `expected deselecting the ceiling prop to ease the camera back down, got ${camBaseline2.y} vs ${level.y}`);
+    assert(Math.abs(level.pitch - camBaseline2.pitch) < 0.02, `expected deselecting the ceiling prop to ease the camera pitch back level, got ${camBaseline2.pitch} vs ${level.pitch}`);
+    ok('translate gizmo: selecting a ceiling prop tilts the camera UP (not down) and lifts it, deselecting eases back to level');
+  } catch(e){ bad('translate gizmo: camera tilt/lift for a ceiling prop', e); }
+
+  // wall props: discover real slot ids from whatever the generator actually
+  // built for this room (lowWallSlots/doorFlankSlots depend on where its
+  // doors landed) rather than assuming a specific wall. doorFlankSlots keys
+  // its id only on wall+side, so multiple forward doors sharing a wall (this
+  // fixture's whole point, see Phase CK) collide onto the SAME id, each
+  // instance a real marker at its own door's offset -- picking a duplicated
+  // id would land on an arbitrary one of them, so only IDs appearing exactly
+  // once are usable here.
+  const wallSlotIds = await appGZ2.page.evaluate(() =>
+    window.__threeTestEdit.scan().filter(o => o.kind === 'slot' && o.slotId).map(o => o.slotId));
+  const counts = wallSlotIds.reduce((m, id) => (m.set(id, (m.get(id) || 0) + 1), m), new Map());
+  const unique = (prefix) => wallSlotIds.find(id => id.startsWith(prefix) && counts.get(id) === 1);
+  const eyeLevelWallId = unique('wh-');
+  const groundWallId = unique('wl-');
+  // the wall name is embedded in the id itself (wh-<wall>-l/r, wl-<wall>) --
+  // north/south run along world X, east/west along world Z (wallSpan).
+  const axisForWallId = (id) => (['north','south'].includes(id.split('-')[1]) ? 'x' : 'z');
+
+  // 11i. An eye-level wall prop (not `ground`) gets exactly ONE horizontal
+  //      arrow -- along the wall itself, whichever world axis that wall
+  //      actually runs on -- plus "up" (it can still be raised/lowered on
+  //      the wall). Two horizontal arrows would be redundant/misleading:
+  //      a wall piece has only one horizontal DOF to begin with.
+  try {
+    assert(eyeLevelWallId, 'test setup issue: expected an eye-level (wh-*) wall slot in this room');
+    await assignPropA(eyeLevelWallId);
+    await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), eyeLevelWallId);
+    await appGZ2.page.waitForTimeout(200);
+    // `enter()` always spawns facing a fixed compass direction (yaw 0),
+    // which has no reason to be anywhere near THIS wall (its own exit,
+    // 11i-11m's "Fan" fixture's back door, sits on a different wall
+    // entirely) -- stand a couple of meters in front of it, facing it
+    // squarely, so 11k's real mouse drag lands on-screen instead of
+    // clicking wherever an arbitrary spawn yaw happens to be looking.
+    const wallName = eyeLevelWallId.split('-')[1];
+    const outNormal = { north: { x: 0, z: -1 }, south: { x: 0, z: 1 }, west: { x: -1, z: 0 }, east: { x: 1, z: 0 } }[wallName];
+    const wallPos = await appGZ2.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), eyeLevelWallId);
+    const standoff = 2.5;
+    await appGZ2.page.evaluate(({ x, z, yaw }) => window.__threeTestEdit.teleport(x, z, yaw), {
+      x: wallPos.x - outNormal.x * standoff,
+      z: wallPos.z - outNormal.z * standoff,
+      yaw: Math.atan2(-outNormal.x, -outNormal.z),
+    });
+    await appGZ2.page.waitForTimeout(400);   // let the tilt/lift/pitch easing re-settle at the new (still level, wall-excluded) pose
+    const axes = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
+    const expectedAxis = axisForWallId(eyeLevelWallId);
+    assert(JSON.stringify([...axes].sort()) === JSON.stringify([expectedAxis, 'up'].sort()),
+      `expected an eye-level wall prop to show its own along-wall axis (${expectedAxis}) plus up, got ${JSON.stringify(axes)}`);
+    ok('translate gizmo: an eye-level wall prop shows exactly one horizontal (along-wall) arrow plus up');
+  } catch(e){ bad('translate gizmo: arrow set for an eye-level wall prop', e); }
+
+  // 11j. ArrowRight still nudges the wall prop along the wall (dOffset) --
+  //      the real keyboard path nudgeSelected's 'wall' branch always had,
+  //      exercised here since nothing else in the suite happened to. Height
+  //      stays fixed (no key pressed for it).
+  try {
+    const before = await appGZ2.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), eyeLevelWallId);
+    await appGZ2.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+    await appGZ2.page.waitForTimeout(80);
+    const after = await appGZ2.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), eyeLevelWallId);
+    const moved = axisForWallId(eyeLevelWallId) === 'x' ? Math.abs(after.x - before.x) : Math.abs(after.z - before.z);
+    assert(moved > 0.05, `expected ArrowRight to nudge the wall prop along the wall, got ${JSON.stringify({before, after})}`);
+    assert(Math.abs(after.y - before.y) < 0.02, `expected ArrowRight to leave the wall prop's height unchanged, got dy=${after.y - before.y}`);
+    ok('translate gizmo: ArrowRight still nudges an eye-level wall prop along the wall (dOffset)');
+  } catch(e){ bad('translate gizmo: keyboard nudge on an eye-level wall prop', e); }
+
+  // 11k. Dragging the wall prop's "up" arrow raises it, horizontal position
+  //      unchanged -- always non-degenerate regardless of which wall this
+  //      is on (vertical is orthogonal to every wall's own axis).
+  try {
+    const before = await appGZ2.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), eyeLevelWallId);
+    const pt = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('up'));
+    assert(pt, 'expected a screen point for the wall prop\'s "up" gizmo arrow');
+
+    await appGZ2.page.mouse.move(pt.x, pt.y);
+    await appGZ2.page.mouse.down();
+    await appGZ2.page.mouse.move(pt.x, pt.y - 60, { steps: 6 });
+    await appGZ2.page.mouse.up();
+    await appGZ2.page.waitForTimeout(100);
+
+    const after = await appGZ2.page.evaluate((sid) => window.__threeTestEdit.posOf(sid), eyeLevelWallId);
+    assert(after.y - before.y > 0.1, `expected dragging "up" to raise the wall prop, got dy=${after.y - before.y}`);
+    assert(Math.abs(after.x - before.x) < 0.05 && Math.abs(after.z - before.z) < 0.05,
+      `expected a vertical drag to leave the wall prop's horizontal position unchanged, got ${JSON.stringify({before, after})}`);
+    ok('translate gizmo: dragging a wall prop\'s "up" arrow raises it, horizontal position unchanged');
+  } catch(e){ bad('translate gizmo: "up" arrow drag on an eye-level wall prop', e); }
+
+  // 11l. Unlike floor/moveObject/mnemonic/ceiling, selecting a wall prop
+  //      does NOT tilt or lift the camera -- facing a wall to select
+  //      something on it already keeps its one horizontal arrow
+  //      perpendicular to the sightline (see tick()'s own gizmoTiltActive
+  //      comment), so the degenerate-edge-on case the tilt exists for
+  //      doesn't arise here.
+  try {
+    const state = await appGZ2.page.evaluate(() => ({ y: window.__threeTestState.y, pitch: window.__threeTestState.pitch }));
+    assert(Math.abs(state.y - camBaseline2.y) < 0.05, `expected no camera lift while a wall prop is selected, got ${camBaseline2.y} -> ${state.y}`);
+    assert(Math.abs(state.pitch - camBaseline2.pitch) < 0.02, `expected no camera tilt while a wall prop is selected, got ${camBaseline2.pitch} -> ${state.pitch}`);
+    ok('translate gizmo: selecting a wall prop does not tilt or lift the camera');
+  } catch(e){ bad('translate gizmo: camera stays level for a wall prop', e); }
+
+  // 11m. A "ground" wall prop (floor-standing, back against the wall -- see
+  //      lowWallSlots) has its height pinned at 0 and gets NO "up" arrow at
+  //      all, just its one along-wall axis.
+  try {
+    if(groundWallId){
+      // deselect the eye-level prop (still selected from 11k/11l) before
+      // touching a different slot -- re-targeting it toggles it off.
+      await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), eyeLevelWallId);
+      await assignPropA(groundWallId);
+      await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), groundWallId);
+      await appGZ2.page.waitForTimeout(200);
+      const axes = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
+      const expectedAxis = axisForWallId(groundWallId);
+      assert(JSON.stringify([...axes].sort()) === JSON.stringify([expectedAxis]),
+        `expected a ground wall prop to show only its along-wall axis (${expectedAxis}), no up, got ${JSON.stringify(axes)}`);
+      ok('translate gizmo: a ground (floor-standing) wall prop shows only its along-wall axis, no up');
+    } else {
+      ok('translate gizmo: ground wall prop test skipped (no wl-* slot in this room\'s door layout)');
+    }
+  } catch(e){ bad('translate gizmo: arrow set for a ground wall prop', e); }
+} finally {
+  await appGZ2.close();
+}
+} catch(e){ bad('Phase F2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase G: mnemonic quiz "Restrict to Opening Coverage" scoped to a castle ---
 if(shouldRunPhase(['quiz'])){
 try {
