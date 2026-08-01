@@ -832,6 +832,52 @@ try {
     const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m,{sloppy:true});
     return 'cas:L1_Fan:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
+
+  // 11e2. Still on Main Street (before walking into the castle below): the
+  //       "Fan" building's own lawn sign (kind 'sign', no slotId at all --
+  //       keyed by buildingKey instead, see selectSign/setSignPosLive) is the
+  //       only place this fixture puts a 'sign'-kind object, and its
+  //       buildingKey is that castle's entry room key -- the very roomKey2
+  //       just computed above (generateMainStreet sets `target: c.entryKey`
+  //       as the buildingKey, and that entryKey is what enter(roomKey2)
+  //       below relies on being the Fan castle's real room). Confirms 'sign'
+  //       gets x/z arrows only (ground-clamped, no vertical) and a real drag
+  //       moves it via setSignPosLive, not the slotXform store.
+  try {
+    const before = await appGZ2.page.evaluate((bk) => window.__threeTestEdit.signWorldPos(bk), roomKey2);
+    assert(before, 'test setup issue: expected to find the "Fan" building\'s lawn sign in the scene');
+    // stand a few meters back facing it squarely -- Main Street's own default
+    // spawn has no reason to already be looking at any one building's sign.
+    await appGZ2.page.evaluate((p) => window.__threeTestEdit.teleport(p.x, p.z + 4, 0), before);
+    await appGZ2.page.waitForTimeout(100);
+
+    await appGZ2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appGZ2.page.waitForTimeout(60);
+    await appGZ2.page.evaluate((bk) => window.__threeTestEdit.target({ kind: 'sign', roomKey: 'mainStreet', buildingKey: bk }), roomKey2);
+    await appGZ2.page.waitForTimeout(150);
+    const axes = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoAxes());
+    assert(JSON.stringify([...axes].sort()) === JSON.stringify(['x','z']),
+      `expected a sign selection to show x/z arrows only, no vertical, got ${JSON.stringify(axes)}`);
+
+    const pt = await appGZ2.page.evaluate(() => window.__threeTestEdit.gizmoArrowScreenPoint('x'));
+    assert(pt, 'expected a screen point for the sign\'s "x" gizmo arrow');
+
+    await appGZ2.page.mouse.move(pt.x, pt.y);
+    await appGZ2.page.mouse.down();
+    await appGZ2.page.mouse.move(pt.x + 70, pt.y, { steps: 6 });
+    await appGZ2.page.mouse.up();
+    await appGZ2.page.waitForTimeout(100);
+
+    const after = await appGZ2.page.evaluate((bk) => window.__threeTestEdit.signWorldPos(bk), roomKey2);
+    assert(Math.abs(after.x - before.x) + Math.abs(after.z - before.z) > 0.15,
+      `expected the "x" drag to move the sign, got before=${JSON.stringify(before)} after=${JSON.stringify(after)}`);
+    assert(Math.abs(after.y - before.y) < 0.02, `expected a sign drag to leave height unchanged, got dy=${after.y - before.y}`);
+    ok('translate gizmo: a building lawn sign shows x/z arrows only, and a real drag moves it (setSignPosLive)');
+
+    await appGZ2.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode back off, restoring state for the tests below
+    await appGZ2.page.waitForTimeout(60);
+  } catch(e){ bad('translate gizmo: sign gizmo (arrow set + drag)', e); }
+
   await appGZ2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey2);
   // enter() always spawns at the fixed local (0,0) -- fine for tests that
   // don't care where the player stands, but this room's own ceiling
