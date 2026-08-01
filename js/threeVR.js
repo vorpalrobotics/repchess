@@ -765,14 +765,22 @@ const SCALE_MIN = 0.4, SCALE_MAX = 2.5;
 const GIZMO_KINDS = new Set(['floor', 'moveObject', 'mnemonic']);
 const GIZMO_LEN = 0.75, GIZMO_SHAFT_R = 0.018, GIZMO_HEAD_R = 0.06, GIZMO_HEAD_LEN = 0.15;
 const GIZMO_COLORS = { x: 0xe53935, z: 0x1e88e5, up: 0x43a047 };
-// how far the gizmo's shared origin is pulled from the object's own center
-// toward the camera (horizontally) -- a mnemonic/floor prop is often a
-// camera-facing billboard occupying most of the space right around its own
-// center, which otherwise puts the arrows' near portion (where you're most
-// likely to grab them) right where the billboard's own body is. Pulling the
-// whole gizmo toward the viewer keeps it in the clear space between the
-// camera and the object instead.
-const GIZMO_CAMERA_OFFSET = 1.0;
+// how far the gizmo's shared origin is pulled from the object's own center,
+// to the camera's right (GIZMO_SIDE_OFFSET) and down (GIZMO_DROP) -- a
+// mnemonic/floor/moveObject prop is often a camera-facing billboard
+// occupying most of the screen space right around its own center, which
+// otherwise puts the arrows right where the billboard's own body is.
+// Pulling straight toward the camera does NOT fix this: a billboard, by
+// definition, always turns to face whoever's looking at it, so it's
+// centered on your view axis exactly when you're selecting/dragging it --
+// and a point moved along that same axis still projects to the same screen
+// spot, just closer (and depthTest:false on the gizmo material already made
+// it draw on top regardless, so occlusion was never the real problem; not
+// being able to SEE which pixels are the arrows was). cameraRightVec() is
+// perpendicular to the view direction by construction, so it can't degenerate
+// the same way; the added drop guarantees separation even from an object
+// that happens to be offset to the exact side already.
+const GIZMO_SIDE_OFFSET = 1.0, GIZMO_DROP = 0.5;
 let selectionGizmo = [];   // the arrow Groups currently shown, or [] when none (see attachSelectionVisuals)
 // { axis, roomKey, slotId, kind, room, slot, startXform, axisDir, axisOrigin,
 //   plane } while an arrow is being dragged; null otherwise.
@@ -6188,7 +6196,29 @@ function attachSelectionVisuals(){
   // in sync so rotation and re-placement use the current values.
   if(found.userData.doorObj){ selectedProp.base = found.userData.base; selectedProp.asset = found.userData.asset; }
   else if(found.userData.doorBill){ selectedProp.base = found.userData.base; }
-  const box = new THREE.Box3().setFromObject(found);
+  // a cylindrical billboard's mesh has its rotation.y driven every frame by
+  // tick()'s own billboards loop (to face whichever way the camera currently
+  // is), independent of the editor -- measuring its box AS-ROTATED gives a
+  // diagonal, viewing-angle-dependent AABB (both x and z sides puffed out to
+  // cover the rotated plane) instead of the card's own true w x h footprint,
+  // which is what made the outline look "rotated wrong" from most angles.
+  // Measuring with rotation zeroed (its stable, never-authored resting
+  // orientation -- applyAccessoryTransform deliberately never sets rotation.y
+  // on a billboard) gives the true footprint instead; a Sprite (mnemonic,
+  // billboard-sprite) never has its own rotation touched at all, so this is a
+  // no-op for those.
+  const isCylBillboard = billboards.includes(found);
+  let box;
+  if(isCylBillboard){
+    const savedRotY = found.rotation.y;
+    found.rotation.y = 0;
+    found.updateMatrixWorld(true);
+    box = new THREE.Box3().setFromObject(found);
+    found.rotation.y = savedRotY;
+    found.updateMatrixWorld(true);
+  } else {
+    box = new THREE.Box3().setFromObject(found);
+  }
   const size = new THREE.Vector3(); box.getSize(size);
   const center = new THREE.Vector3(); box.getCenter(center);
 
@@ -6217,13 +6247,14 @@ function attachSelectionVisuals(){
   // phase-1 translate gizmo -- only the free-floating kinds (see GIZMO_KINDS'
   // own comment). Wall-relative (AXIS_X/AXIS_Z), not camera-relative, so the
   // arrows don't move as you turn to look at the object from a different
-  // angle -- see AXIS_X's own comment for why. The whole gizmo is pulled
-  // GIZMO_CAMERA_OFFSET toward the camera (see that constant's own comment)
-  // so the object itself doesn't sit on top of the arrows.
+  // angle -- see AXIS_X's own comment for why. The whole gizmo is offset to
+  // the camera's right and down (see GIZMO_SIDE_OFFSET/GIZMO_DROP's own
+  // comment) so the object itself doesn't sit on top of the arrows.
   if(GIZMO_KINDS.has(selectedProp.kind)){
-    const towardCam = new THREE.Vector3(camera.position.x - center.x, 0, camera.position.z - center.z);
-    if(towardCam.lengthSq() < 1e-6) towardCam.set(0, 0, 1);   // camera directly overhead -- arbitrary direction, just needs to be *a* direction
-    const origin = center.clone().addScaledVector(towardCam.normalize(), GIZMO_CAMERA_OFFSET);
+    const camRight = cameraRightVec();
+    const origin = center.clone()
+      .addScaledVector(new THREE.Vector3(camRight.x, 0, camRight.z), GIZMO_SIDE_OFFSET)
+      .add(new THREE.Vector3(0, -GIZMO_DROP, 0));
     const arrows = [
       buildGizmoArrow(origin, new THREE.Vector3(AXIS_X.x, 0, AXIS_X.z), 'x'),
       buildGizmoArrow(origin, new THREE.Vector3(AXIS_Z.x, 0, AXIS_Z.z), 'z'),
