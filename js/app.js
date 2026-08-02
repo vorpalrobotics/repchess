@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-268';
+const BUILD_TAG = '-269';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3239,6 +3239,7 @@ function clearFocus(){
   FOCUSED_SEQ = null;
   FOCUSED_ROW_KEY = null;
   $('unfocusBtn').style.display='none';
+  syncTableCastleSelect();
 }
 function rowGroup(tbody, dataRow){
   const rows = Array.from(tbody.children);
@@ -3267,8 +3268,51 @@ function focusOnLine(dataRow, seq=null){
     node = metaRow ? metaRow.previousElementSibling : null;
   }
   $('unfocusBtn').style.display='inline-block';
+  syncTableCastleSelect();
 }
 $('unfocusBtn').onclick = clearFocus;
+
+/* "Show Castle:" dropdown on the move-table toolbar -- same fast-focus
+   shortcut as the digraph's own (see populateGraphCastleSelect), so the
+   common "find a castle by name, then look for unfilled sub-branches"
+   workflow is a single select instead of hunting through the tree for the
+   right row's three-dot menu. Hidden entirely when no castles are defined. */
+function populateTableCastleSelect(){
+  const wrap = $('tableCastleWrap'), sel = $('tableCastleSelect');
+  const castles = definedCastles();
+  if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
+  wrap.style.display = '';
+  sel.innerHTML = '<option value="">All</option>' +
+    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  syncTableCastleSelect();
+}
+// keeps the dropdown's own value in sync with whatever focus is actually
+// active, however it got there -- picking it here (onchange below), or the
+// old-fashioned way via a row's "Focus on this Variation" menu (focusOnLine)
+// or "Unfocus" (clearFocus). Reading focusedCastleName() (rather than just
+// remembering our own last selection) is what makes the old-fashioned path
+// detected automatically: it resolves whatever FOCUSED_SEQ actually is back
+// to a castle name, with no special-casing of how it got set.
+function syncTableCastleSelect(){
+  const sel = $('tableCastleSelect');
+  if(sel && sel.options.length) sel.value = focusedCastleName() || '';
+}
+$('tableCastleSelect').onchange = () => {
+  const name = $('tableCastleSelect').value;
+  if(!name){ clearFocus(); return; }
+  const roomSeq = castleRootRoomSeq(name);
+  if(!roomSeq){ clearFocus(); return; }
+  // the castle root's isCastleRoot pref lives on the opponent-move row one
+  // ply back from the room itself (see castleRootRoomSeq's own comment) --
+  // that row's data-seq is the stable identity focusOnLine/reapplyFocus key
+  // off of. isCastleRoot rows are never folded into a compact run (see
+  // computeCompactRun's own annotated-position check), so they always have
+  // their own row here, expanded or not (collapsed just means display:none,
+  // not absent -- see makeToggle).
+  const rowSeq = roomSeq.slice(0, -1);
+  const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === rowSeq.join(','));
+  if(row) focusOnLine(row, roomSeq); else clearFocus();
+};
 
 /* ---------- hidden-branch visibility toggle ----------
    showAllBranches=true (open eye): everything shown, hidden branches in red.
@@ -4610,6 +4654,7 @@ function renderTreeBody(line){
   // the Unfocus button in sync across compact/visibility rebuilds).
   const keepFocusKey = FOCUSED_ROW_KEY, keepFocusSeq = FOCUSED_SEQ;
   clearFocus();
+  populateTableCastleSelect();
 
   $('tree').innerHTML='';
   const triggers = line.openingMoves || [];

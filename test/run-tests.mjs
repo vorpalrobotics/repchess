@@ -2508,6 +2508,112 @@ try {
 
 } catch(e){ bad('Phase S: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase S2: the move table's own "Show Castle" dropdown (next to Expand
+//     All) -- the common "find a castle by name, then look for unfilled
+//     sub-branches" workflow as a single select, instead of hunting through
+//     the tree for the right row's three-dot menu. Mirrors the digraph's own
+//     dropdown (Phase BM), including the adjunct: focusing the old-fashioned
+//     way (a row's own "Focus on this Variation") is detected and reflected
+//     back into the dropdown automatically. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appS2 = await launchApp();
+try {
+  // same minimal two-castle fixture as Phase BM's digraph test: Alpha (a
+  // leaf root, one opponent reply) and Beta (a genuine branch: two distinct
+  // opponent replies, e6/c6, so its own root row can't corridor-collapse
+  // away) on two different first moves off d4, so focusing one leaves the
+  // other's root row genuinely present and hideable elsewhere in the tree.
+  await seedBackup(appS2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6 Nc3 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 d5 c4 c6', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appS2.page.click('.line-row');
+  await appS2.page.waitForSelector('.data-row', { timeout: 10000 });
+
+  // 56b. The dropdown appears once castles are defined, offering "All" plus
+  //      each castle name.
+  try {
+    const info = await appS2.page.evaluate(() => ({
+      visible: getComputedStyle(document.getElementById('tableCastleWrap')).display !== 'none',
+      options: [...document.getElementById('tableCastleSelect').options].map(o => o.value),
+    }));
+    assert(info.visible, 'expected the "Show Castle" dropdown to be visible once castles are defined');
+    assert(JSON.stringify(info.options) === JSON.stringify(['', 'Alpha', 'Beta']),
+      `expected options All/Alpha/Beta, got ${JSON.stringify(info.options)}`);
+    ok('move table: "Show Castle" dropdown appears next to Expand All, listing every defined castle');
+  } catch(e){ bad('move table: "Show Castle" dropdown presence/options', e); }
+
+  // 56c. Picking a castle focuses the tree on it exactly like the row-level
+  //      "Focus on this Variation" would -- Unfocus appears, and the OTHER
+  //      castle's own root row is hidden as a sibling branch.
+  try {
+    await appS2.page.selectOption('#tableCastleSelect', 'Alpha');
+    await appS2.page.waitForTimeout(50);
+    const state = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      betaHidden: document.querySelector('tr.data-row[data-seq="d4,d5"]').classList.contains('focus-hidden'),
+    }));
+    assert(state.unfocusShown, 'expected picking a castle to engage focus (Unfocus button shown)');
+    assert(state.betaHidden, 'expected Beta\'s own root row to be hidden as a sibling branch while Alpha is focused');
+    ok('move table: picking a castle from the dropdown focuses the tree on it, hiding sibling branches');
+  } catch(e){ bad('move table: "Show Castle" selection engages real focus', e); }
+
+  // 56d. Picking "All" clears focus again.
+  try {
+    await appS2.page.selectOption('#tableCastleSelect', '');
+    await appS2.page.waitForTimeout(50);
+    const state = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      betaHidden: document.querySelector('tr.data-row[data-seq="d4,d5"]').classList.contains('focus-hidden'),
+    }));
+    assert(!state.unfocusShown, 'expected "All" to clear focus (Unfocus button hidden)');
+    assert(!state.betaHidden, 'expected Beta\'s root row to be visible again once focus is cleared');
+    ok('move table: "Show Castle" → All clears focus');
+  } catch(e){ bad('move table: "Show Castle" → All clears focus', e); }
+
+  // 56e. Adjunct: focusing the OLD way (a row's own three-dot "Focus on this
+  //      Variation") is detected automatically and reflected back into the
+  //      dropdown -- no need to also use the dropdown for it to notice.
+  try {
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="focus"]').click());
+    const value = await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').value);
+    assert(value === 'Alpha', `expected focusing Alpha's root row the old way to auto-select it in the dropdown, got ${JSON.stringify(value)}`);
+    ok('move table: focusing a castle root the old-fashioned way (row menu) auto-selects it in "Show Castle"');
+  } catch(e){ bad('move table: old-fashioned row-menu focus syncs the dropdown', e); }
+
+  // 56f. Focusing on a row that ISN'T a castle root leaves the dropdown on
+  //      "All" -- it only ever reflects a genuine castle-root focus, not
+  //      focus in general.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+    // "d4,d5,c4,e6" is Beta's own child branch point (two games diverge here,
+    // e6 vs c6, so it's a real row) but carries no isCastleRoot of its own.
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,e6"] .rowMenuBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,e6"] [data-act="focus"]').click());
+    const state = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      value: document.getElementById('tableCastleSelect').value,
+    }));
+    assert(state.unfocusShown, 'setup: expected the row-menu focus to have engaged');
+    assert(state.value === '', `expected the dropdown to stay on "All" for a non-castle-root focus, got ${JSON.stringify(state.value)}`);
+    ok('move table: focusing a non-castle-root row leaves "Show Castle" on All');
+  } catch(e){ bad('move table: non-castle focus does not falsely select a castle', e); }
+} finally {
+  await appS2.close();
+}
+} catch(e){ bad('Phase S2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase T: cancelling the CURRENTLY PROCESSING analysis-queue item must
 //     stop its in-flight search immediately and move straight on to the next
 //     item -- not stall the whole queue waiting for the abandoned search to
