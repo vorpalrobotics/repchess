@@ -237,6 +237,66 @@ try {
     ok('import-variation writes standard responses into the tree (engine-import core)');
   } catch(e){ bad('import-variation core', e); }
 
+  // 7a. Importing's writes actually commit to IndexedDB, not just the
+  //     in-memory PREFS cache -- the whole point of batching every write
+  //     from an import into ONE transaction (see db.js's setPrefsBatch,
+  //     which importLine now uses instead of one setPref() round-trip per
+  //     move) is to make it fast, and it would be a bad trade if that meant
+  //     the write only "looked" done because PREFS was already updated in
+  //     memory while the real commit hadn't landed. Reload and reopen.
+  try {
+    await app2.page.reload({ waitUntil: 'domcontentloaded' });
+    await app2.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await app2.page.click('.line-row');
+    await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+    const reply = (await app2.page.textContent('tr.data-row[data-opp="Nf6"] .ourReply')).trim();
+    assert(reply === 'c4', `expected the imported reply to survive a reload, got '${reply}'`);
+    ok('import-variation: the batched write actually commits to IndexedDB (survives a reload), not just PREFS in memory');
+  } catch(e){ bad('import-variation persists across reload', e); }
+
+  // 7b0. Importing shows a spinner for the duration of the write, then hides
+  //      it -- even though batching makes a typical import fast now, a
+  //      large paste is still real synchronous parsing plus one real
+  //      IndexedDB commit, and there was previously no feedback at all that
+  //      anything was happening until the dialog closed.
+  try {
+    await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await app2.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
+    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    // showSpinner() runs synchronously as the very first line of importLine,
+    // before its first await -- by the time the click's own evaluate()
+    // resolves, the overlay is already showing.
+    const shownRightAway = await app2.page.evaluate(() =>
+      getComputedStyle(document.getElementById('spinnerOverlay')).display !== 'none');
+    assert(shownRightAway, 'expected the spinner to appear immediately on Import');
+    await app2.page.waitForFunction(() =>
+      getComputedStyle(document.getElementById('spinnerOverlay')).display === 'none', { timeout: 10000 });
+    ok('import-variation: a spinner shows for the duration of the import, then hides');
+  } catch(e){ bad('import-variation spinner', e); }
+
+  // 7b1. Two variations pasted TOGETHER that both add a manual opponent try
+  //      at the exact same position (sharing everything but their final
+  //      move) both survive -- the shared batch (keyed by pref key, see
+  //      importParsedLine's own comment) must fold both writes into one
+  //      combined manualReplies list, not let the second one clobber the
+  //      first from a stale read.
+  try {
+    await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await app2.page.fill('#importLineInput',
+      '1. d4 Nf6 2. c4 e6 3. Nc3 Bb4\n1. d4 Nf6 2. c4 e6 3. Nc3 g6');
+    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    const rows = await app2.page.evaluate(() => [
+      !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,Bb4"]'),
+      !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,g6"]'),
+    ]);
+    assert(rows[0] && rows[1], `expected BOTH manual tries (Bb4 and g6) to survive the combined paste, got ${JSON.stringify(rows)}`);
+    ok('import-variation: two variations pasted together that both add a manual try at the same position both survive');
+  } catch(e){ bad('import-variation: same-position manual tries from one paste do not clobber each other', e); }
+
   // 7b. The move table's own rows (not just Compare Games) are clickable
   //     mini-board chips too: the opponent move and the standard reply both
   //     carry .pv-move + data-fen, and clicking either opens the mini board

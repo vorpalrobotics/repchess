@@ -245,6 +245,40 @@ async function setPref(lineId, seq, patch){
   });
 }
 
+/* Writes many pref patches (each { seq, patch }) in ONE transaction instead
+   of one setPref() round-trip per entry. Importing even a modest pasted
+   variation (app.js's importLine/importEngineVariation) means one
+   manualReplies write plus one reply write per "our" move -- each setPref()
+   call pays IndexedDB's full transaction-commit cost on its own (a real
+   disk flush in most browsers), which is what made a multi-move import
+   visibly slow (several seconds). Batching every write from the whole
+   import into one transaction/commit fixes that at the root, independent of
+   variation length.
+   REQUIRES `entries` to carry at most one entry per seq (the caller merges
+   any same-seq writes into one combined patch first -- see importLine's own
+   batch, a Map keyed by seq). Two entries for the same seq here would race:
+   each issues its own store.get() before either's callback can run, so the
+   second would build its merge from a get() that doesn't yet reflect the
+   first's still-in-flight put() and clobber it. */
+async function setPrefsBatch(lineId, entries){
+  if(!entries.length) return;
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('prefs','readwrite');
+    const store = txn.objectStore('prefs');
+    for(const {seq, patch} of entries){
+      const key = prefKey(lineId,seq);
+      const getReq = store.get(key);
+      getReq.onsuccess = () => {
+        const existing = getReq.result || {key,lineId,seq,reply:'',note:'',mnemonic:''};
+        store.put({...existing, ...patch});
+      };
+    }
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
 /* ---------- mnemonics (memory-palace words, per destination square per piece) ---------- */
 const BLANK_MNEMONIC_SQUARE = {
   pawn:'', pawnDesc:'', pawnImg:'', knight:'', knightDesc:'', knightImg:'',

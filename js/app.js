@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-271';
+const BUILD_TAG = '-272';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4781,14 +4781,40 @@ function parseAlgebraicMoveList(text){
 }
 
 /* imports one already-parsed move list (one variation, i.e. one line of the
-   textarea) into the currently open opening system's tree, returning the
+   textarea) into the currently open opening system's tree: updates the
+   in-memory PREFS cache immediately (same shape/defaults savePrefField's own
+   in-memory update uses, so a render right after already has everything it
+   needs) and folds every pref write it needs into `batch` (a Map keyed by
+   pref key, shared across every variation in one import) rather than
+   writing to IndexedDB itself. The caller commits the whole import's writes
+   in one transaction (see db.js's setPrefsBatch) instead of one setPref()
+   round-trip per move -- each of those pays IndexedDB's full transaction-
+   commit cost on its own (a real disk flush in most browsers), which is
+   what made importing even a modest variation take several seconds.
+   Keying `batch` by pref key (rather than just appending) is what keeps
+   setPrefsBatch safe to call with no per-key ordering risk: two variations
+   that both touch the same position (a shared prefix, or -- rarer -- two
+   distinct opponent tries recorded into the same manualReplies list) fold
+   into ONE combined patch per key here, reading the always-up-to-date
+   in-memory PREFS (already updated by any earlier variation in this same
+   import) rather than something setPrefsBatch would have to reconcile
+   against stale IndexedDB reads mid-transaction.
+   Synchronous now (no IDB round-trips happen here at all); returns the
    number of "our" moves set. */
-async function importParsedLine(moves){
+function importParsedLine(moves, batch){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
     throw new Error(`this variation is for 1. ${triggers.join(' / ')}, but the pasted variation starts with 1. ${moves[0]}`);
   }
+
+  const queue = (seq, field, value) => {
+    const key = prefKey(CURRENT_LINE.id, seq);
+    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = value;
+    const entry = batch.get(key) || { seq, patch: {} };
+    entry.patch[field] = value;
+    batch.set(key, entry);
+  };
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
      at odd indices (0=our trigger, 1=their reply, 2=our reply, ...); for a
@@ -4800,11 +4826,14 @@ async function importParsedLine(moves){
     const opp = moves[k];
     /* k===0 for a Black line is the line's own fixed trigger row, which isn't
        data-enumerated (no counts/manualReplies lookup happens there) */
-    if(!(color==='black' && k===0)) await addManualReply(seq,opp);
+    if(!(color==='black' && k===0)){
+      const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+      if(!existing.includes(opp)) queue(seq,'manualReplies',[...existing,opp]);
+    }
     if(k+1 < moves.length){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
-      await savePrefField(lineSeq,'reply',reply);
+      queue(lineSeq,'reply',reply);
       // deliberately NOT touching 'collapsed' here (unlike an earlier version
       // of this code, which force-collapsed every step) -- this can run over
       // an EXISTING path the user was already looking at (re-importing, or
@@ -4824,32 +4853,45 @@ async function importLine(text){
   const rawLines = text.split('\n').map(l=>l.trim()).filter(Boolean);
   if(!rawLines.length){ $('importLineError').textContent = 'paste at least one variation to import'; return; }
 
-  const errors = [];
-  let totalCount = 0, importedLines = 0;
-  for(let i=0;i<rawLines.length;i++){
-    try{
-      const moves = parseAlgebraicMoveList(rawLines[i]);
-      if(!moves.length) continue;
-      totalCount += await importParsedLine(moves);
-      importedLines++;
-    }catch(err){
-      errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
+  // a big paste (many variations, or long ones) can still take a visible
+  // moment even with the batched single-commit write below -- parsing every
+  // line is itself synchronous chess.js work, and even one IndexedDB commit
+  // isn't instant for a large batch. nextPaint() lets the spinner actually
+  // paint before that blocking work starts.
+  const spinner = showSpinner('Importing…');
+  await nextPaint();
+  try {
+    const errors = [];
+    let totalCount = 0, importedLines = 0;
+    const batch = new Map();   // pref key -> {seq,patch}, merged across every parsed variation, committed in ONE IndexedDB transaction below
+    for(let i=0;i<rawLines.length;i++){
+      try{
+        const moves = parseAlgebraicMoveList(rawLines[i]);
+        if(!moves.length) continue;
+        totalCount += importParsedLine(moves, batch);
+        importedLines++;
+      }catch(err){
+        errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
+      }
     }
-  }
 
-  if(importedLines){
-    invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
-    $('importLineOverlay').style.display='none';
-    log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
-      + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
-    if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
-    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
-    // the freshly-imported PREFS (already updated in memory by
-    // importParsedLine); openLine would also call clearFocus(), silently
-    // discarding whatever variation the user had focused before importing.
-    renderTreeBody(CURRENT_LINE);
-  } else {
-    $('importLineError').textContent = errors.join('\n');
+    if(importedLines){
+      await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
+      invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
+      $('importLineOverlay').style.display='none';
+      log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
+        + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
+      if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
+      // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
+      // the freshly-imported PREFS (already updated in memory by
+      // importParsedLine); openLine would also call clearFocus(), silently
+      // discarding whatever variation the user had focused before importing.
+      renderTreeBody(CURRENT_LINE);
+    } else {
+      $('importLineError').textContent = errors.join('\n');
+    }
+  } finally {
+    hideSpinner(spinner);
   }
 }
 
@@ -8552,8 +8594,12 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   const pv = pvSanFromUci(startFen, uciMoves, maxPlies);
   if(!pv.length){ log('nothing to import from that engine line', true); return; }
   try {
-    const count = await importParsedLine([...startSeq, ...pv]);
-    if(count) invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
+    const batch = new Map();
+    const count = importParsedLine([...startSeq, ...pv], batch);
+    if(count){
+      await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
+      invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
+    }
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
     // the freshly-imported PREFS (already updated in memory by
