@@ -2514,7 +2514,8 @@ try {
 //     the tree for the right row's three-dot menu. Mirrors the digraph's own
 //     dropdown (Phase BM), including the adjunct: focusing the old-fashioned
 //     way (a row's own "Focus on this Variation") is detected and reflected
-//     back into the dropdown automatically. ---
+//     back into the dropdown automatically -- for a castle root AND for a
+//     named room, each of which resolve to their own option value. ---
 if(shouldRunPhase(['move-table'])){
 try {
 const appS2 = await launchApp();
@@ -2524,12 +2525,15 @@ try {
   // opponent replies, e6/c6, so its own root row can't corridor-collapse
   // away) on two different first moves off d4, so focusing one leaves the
   // other's root row genuinely present and hideable elsewhere in the tree.
+  // Beta's own e6 child is additionally named "Vault" -- a room with a name
+  // but no isCastleRoot of its own, the case the dropdown's room-listing is
+  // for; its sibling c6 stays deliberately unnamed as the true-negative case.
   await seedBackup(appS2.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
       { seq: ['d4','d5'], reply: 'c4', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
-      { seq: ['d4','d5','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','d5','c4','e6'], reply: 'Nc3', name: 'Vault' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
@@ -2540,24 +2544,36 @@ try {
   await appS2.page.click('.line-row');
   await appS2.page.waitForSelector('.data-row', { timeout: 10000 });
 
-  // 56b. The dropdown appears once castles are defined, offering "All" plus
-  //      each castle name.
+  // 56b. The dropdown appears once castles are defined: each castle is its
+  //      own <optgroup> (so its rooms render indented, for free, under a
+  //      bold, non-selectable header), with a "(whole castle)" entry plus
+  //      any of its NAMED rooms -- Alpha has none, Beta has "Vault".
   try {
-    const info = await appS2.page.evaluate(() => ({
-      visible: getComputedStyle(document.getElementById('tableCastleWrap')).display !== 'none',
-      options: [...document.getElementById('tableCastleSelect').options].map(o => o.value),
-    }));
+    const info = await appS2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      return {
+        visible: getComputedStyle(document.getElementById('tableCastleWrap')).display !== 'none',
+        values: [...sel.options].map(o => o.value),
+        groupLabels: [...sel.querySelectorAll('optgroup')].map(g => g.label),
+        vaultText: sel.querySelector('option[value="room:0"]')?.textContent,
+        vaultGroup: sel.querySelector('option[value="room:0"]')?.closest('optgroup')?.label,
+      };
+    });
     assert(info.visible, 'expected the "Show Castle" dropdown to be visible once castles are defined');
-    assert(JSON.stringify(info.options) === JSON.stringify(['', 'Alpha', 'Beta']),
-      `expected options All/Alpha/Beta, got ${JSON.stringify(info.options)}`);
-    ok('move table: "Show Castle" dropdown appears next to Expand All, listing every defined castle');
+    assert(JSON.stringify(info.values) === JSON.stringify(['', 'castle:Alpha', 'castle:Beta', 'room:0']),
+      `expected All, Alpha's (whole castle), Beta's (whole castle), then Beta's "Vault" room, got ${JSON.stringify(info.values)}`);
+    assert(JSON.stringify(info.groupLabels) === JSON.stringify(['Alpha', 'Beta']),
+      `expected one optgroup per castle, got ${JSON.stringify(info.groupLabels)}`);
+    assert(info.vaultText === 'Vault', `expected the named room's option text to be "Vault", got ${JSON.stringify(info.vaultText)}`);
+    assert(info.vaultGroup === 'Beta', `expected "Vault" nested under Beta's own optgroup, got ${JSON.stringify(info.vaultGroup)}`);
+    ok('move table: "Show Castle" dropdown groups each castle in an optgroup, with its named rooms indented underneath');
   } catch(e){ bad('move table: "Show Castle" dropdown presence/options', e); }
 
   // 56c. Picking a castle focuses the tree on it exactly like the row-level
   //      "Focus on this Variation" would -- Unfocus appears, and the OTHER
   //      castle's own root row is hidden as a sibling branch.
   try {
-    await appS2.page.selectOption('#tableCastleSelect', 'Alpha');
+    await appS2.page.selectOption('#tableCastleSelect', 'castle:Alpha');
     await appS2.page.waitForTimeout(50);
     const state = await appS2.page.evaluate(() => ({
       unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
@@ -2581,34 +2597,58 @@ try {
     ok('move table: "Show Castle" → All clears focus');
   } catch(e){ bad('move table: "Show Castle" → All clears focus', e); }
 
-  // 56e. Adjunct: focusing the OLD way (a row's own three-dot "Focus on this
+  // 56e. Picking a named ROOM (not a whole castle) focuses the tree on that
+  //      room's own row -- hiding both its inner sibling (c6, Beta's other
+  //      branch) and its outer sibling (Alpha's own root, "d4,Nf6") exactly
+  //      like focusing any other row would.
+  try {
+    await appS2.page.selectOption('#tableCastleSelect', 'room:0');
+    await appS2.page.waitForTimeout(50);
+    const state = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      c6Hidden: document.querySelector('tr.data-row[data-seq="d4,d5,c4,c6"]').classList.contains('focus-hidden'),
+      alphaHidden: document.querySelector('tr.data-row[data-seq="d4,Nf6"]').classList.contains('focus-hidden'),
+    }));
+    assert(state.unfocusShown, 'expected picking a named room to engage focus (Unfocus button shown)');
+    assert(state.c6Hidden, 'expected Vault\'s own sibling (c6) to be hidden while Vault is focused');
+    assert(state.alphaHidden, 'expected Alpha\'s root row (an outer sibling) to be hidden while Vault is focused');
+    ok('move table: picking a named room from the dropdown focuses the tree on it, same as any other row');
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+  } catch(e){ bad('move table: "Show Castle" named-room selection engages real focus', e); }
+
+  // 56f. Adjunct: focusing the OLD way (a row's own three-dot "Focus on this
   //      Variation") is detected automatically and reflected back into the
-  //      dropdown -- no need to also use the dropdown for it to notice.
+  //      dropdown -- no need to also use the dropdown for it to notice --
+  //      for a castle root AND, separately, for a named (non-root) room.
   try {
     await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="focus"]').click());
-    const value = await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').value);
-    assert(value === 'Alpha', `expected focusing Alpha's root row the old way to auto-select it in the dropdown, got ${JSON.stringify(value)}`);
-    ok('move table: focusing a castle root the old-fashioned way (row menu) auto-selects it in "Show Castle"');
-  } catch(e){ bad('move table: old-fashioned row-menu focus syncs the dropdown', e); }
+    const castleValue = await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').value);
+    assert(castleValue === 'castle:Alpha', `expected focusing Alpha's root row the old way to auto-select it, got ${JSON.stringify(castleValue)}`);
 
-  // 56f. Focusing on a row that ISN'T a castle root leaves the dropdown on
-  //      "All" -- it only ever reflects a genuine castle-root focus, not
-  //      focus in general.
-  try {
     await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
-    // "d4,d5,c4,e6" is Beta's own child branch point (two games diverge here,
-    // e6 vs c6, so it's a real row) but carries no isCastleRoot of its own.
     await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,e6"] .rowMenuBtn').click());
     await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,e6"] [data-act="focus"]').click());
+    const roomValue = await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').value);
+    assert(roomValue === 'room:0', `expected focusing the "Vault" row the old way to auto-select it (room:0), got ${JSON.stringify(roomValue)}`);
+    ok('move table: focusing a castle root OR a named room the old-fashioned way (row menu) auto-selects it in "Show Castle"');
+  } catch(e){ bad('move table: old-fashioned row-menu focus syncs the dropdown (castle and room)', e); }
+
+  // 56g. Focusing a row that is neither a castle root nor a named room (c6,
+  //      Vault's own unnamed sibling) leaves the dropdown on "All" -- it
+  //      only ever reflects a genuine castle/room match, not focus in general.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,c6"] .rowMenuBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5,c4,c6"] [data-act="focus"]').click());
     const state = await appS2.page.evaluate(() => ({
       unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
       value: document.getElementById('tableCastleSelect').value,
     }));
     assert(state.unfocusShown, 'setup: expected the row-menu focus to have engaged');
-    assert(state.value === '', `expected the dropdown to stay on "All" for a non-castle-root focus, got ${JSON.stringify(state.value)}`);
-    ok('move table: focusing a non-castle-root row leaves "Show Castle" on All');
-  } catch(e){ bad('move table: non-castle focus does not falsely select a castle', e); }
+    assert(state.value === '', `expected the dropdown to stay on "All" for an unnamed, non-castle-root focus, got ${JSON.stringify(state.value)}`);
+    ok('move table: focusing an unnamed, non-castle-root row leaves "Show Castle" on All');
+  } catch(e){ bad('move table: non-castle, unnamed focus does not falsely select an option', e); }
 } finally {
   await appS2.close();
 }

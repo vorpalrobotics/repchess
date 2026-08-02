@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-269';
+const BUILD_TAG = '-270';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1687,7 +1687,11 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     shape.anchorPosKey = posKeyByGid.get(gid);
     shape.exitPosKeys = exits.filter(e => e.toKey).map(e => e.toKey);
     return { id: labelOf.get(gid), posKey: posKeyByGid.get(gid), type: g.kind, name: meta.name, castle: meta.castle,
-             nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs, shape };
+             // the room's own full seq (ending in OUR reply, one ply past
+             // nameSeq) -- the same identity focusOnLine/FOCUSED_SEQ uses for
+             // a row's "Focus on this Variation", so the move table's "Show
+             // Castle" dropdown can jump straight to a named room's row.
+             seq: anchor.seq, nameSeq, memberCount: g.members.length, moveCount, walls, exits, pairs, shape };
   });
 
   return { genRooms, stats: a, graph };
@@ -3276,42 +3280,89 @@ $('unfocusBtn').onclick = clearFocus;
    shortcut as the digraph's own (see populateGraphCastleSelect), so the
    common "find a castle by name, then look for unfilled sub-branches"
    workflow is a single select instead of hunting through the tree for the
-   right row's three-dot menu. Hidden entirely when no castles are defined. */
+   right row's three-dot menu. Hidden entirely when no castles are defined.
+   Each castle is an <optgroup>, indenting (for free, native <select>
+   behavior) its own NAMED rooms underneath a "(whole castle)" entry --
+   unnamed rooms are the vast majority in a typical castle and would just be
+   noise here with no better label than a bare move pair, so they're left
+   out; a named room is deliberate enough to be worth a menu entry. A room
+   reached by more than one castle/sequence (a transposition) is listed
+   under each one it belongs to -- harmless duplication, not a bug. */
+let TABLE_ROOM_OPTIONS = [];   // [{ name, seq }] -- "room:<index>" option values index into this
 function populateTableCastleSelect(){
   const wrap = $('tableCastleWrap'), sel = $('tableCastleSelect');
   const castles = definedCastles();
+  TABLE_ROOM_OPTIONS = [];
   if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
   wrap.style.display = '';
-  sel.innerHTML = '<option value="">All</option>' +
-    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  const lineGames = gamesForLineColor(GAMES, CURRENT_LINE.color);
+  sel.innerHTML = '<option value="">All</option>' + castles.map(name => {
+    const rootSeq = castleRootRoomSeq(name);
+    let roomOptions = '';
+    if(rootSeq){
+      const { genRooms } = buildGeneratedCastle(CURRENT_LINE, lineGames, rootSeq, name);
+      roomOptions = genRooms
+        .filter(r => r.name && r.name.trim() && r.seq)
+        .map(r => {
+          const idx = TABLE_ROOM_OPTIONS.push({ name: r.name.trim(), seq: r.seq }) - 1;
+          return `<option value="room:${idx}">${escapeHtml(r.name.trim())}</option>`;
+        }).join('');
+    }
+    return `<optgroup label="${escapeHtml(name)}">` +
+      `<option value="castle:${escapeHtml(name)}">(whole castle)</option>` + roomOptions +
+      `</optgroup>`;
+  }).join('');
   syncTableCastleSelect();
+}
+// resolves the currently active focus (however it got there) to the option
+// value that represents it, or '' if it doesn't match any castle/named room
+// in the current dropdown -- shared by populate (initial value) and sync
+// (kept current afterward).
+function focusedTableSelectValue(){
+  const castleName = focusedCastleName();
+  if(castleName) return 'castle:' + castleName;
+  const seq = GRAPH_FOCUS_SEQ || FOCUSED_SEQ;
+  if(!seq) return '';
+  const key = seq.join(',');
+  const idx = TABLE_ROOM_OPTIONS.findIndex(o => o.seq && o.seq.join(',') === key);
+  return idx >= 0 ? 'room:' + idx : '';
 }
 // keeps the dropdown's own value in sync with whatever focus is actually
 // active, however it got there -- picking it here (onchange below), or the
 // old-fashioned way via a row's "Focus on this Variation" menu (focusOnLine)
-// or "Unfocus" (clearFocus). Reading focusedCastleName() (rather than just
-// remembering our own last selection) is what makes the old-fashioned path
-// detected automatically: it resolves whatever FOCUSED_SEQ actually is back
-// to a castle name, with no special-casing of how it got set.
+// or "Unfocus" (clearFocus). Reading focusedTableSelectValue() (rather than
+// just remembering our own last selection) is what makes the old-fashioned
+// path detected automatically: it resolves whatever FOCUSED_SEQ actually is
+// back to a matching option, with no special-casing of how it got set.
 function syncTableCastleSelect(){
   const sel = $('tableCastleSelect');
-  if(sel && sel.options.length) sel.value = focusedCastleName() || '';
+  if(sel && sel.options.length) sel.value = focusedTableSelectValue();
+}
+// finds the data-row a given seq's own "Focus on this Variation" would have
+// been clicked on -- the OPPONENT-move row one ply back from `seq` itself
+// (see castleRootRoomSeq's/genRoomMeta's own comments on that convention) --
+// and applies focus there. Shared by both branches of the dropdown's
+// onchange, since a castle-root seq and a named room's own seq work exactly
+// the same way once you have the full seq.
+function focusOnSeqRow(seq){
+  const rowSeq = seq.slice(0, -1);
+  // isCastleRoot AND named rooms are both excluded from compact-run hoisting
+  // (see computeCompactRun's own annotated-position check), so they always
+  // have their own row here, expanded or not (collapsed just means
+  // display:none, not absent -- see makeToggle).
+  const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === rowSeq.join(','));
+  if(row) focusOnLine(row, seq); else clearFocus();
 }
 $('tableCastleSelect').onchange = () => {
-  const name = $('tableCastleSelect').value;
-  if(!name){ clearFocus(); return; }
-  const roomSeq = castleRootRoomSeq(name);
-  if(!roomSeq){ clearFocus(); return; }
-  // the castle root's isCastleRoot pref lives on the opponent-move row one
-  // ply back from the room itself (see castleRootRoomSeq's own comment) --
-  // that row's data-seq is the stable identity focusOnLine/reapplyFocus key
-  // off of. isCastleRoot rows are never folded into a compact run (see
-  // computeCompactRun's own annotated-position check), so they always have
-  // their own row here, expanded or not (collapsed just means display:none,
-  // not absent -- see makeToggle).
-  const rowSeq = roomSeq.slice(0, -1);
-  const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === rowSeq.join(','));
-  if(row) focusOnLine(row, roomSeq); else clearFocus();
+  const val = $('tableCastleSelect').value;
+  if(!val){ clearFocus(); return; }
+  if(val.startsWith('castle:')){
+    const roomSeq = castleRootRoomSeq(val.slice('castle:'.length));
+    if(roomSeq) focusOnSeqRow(roomSeq); else clearFocus();
+    return;
+  }
+  const opt = TABLE_ROOM_OPTIONS[+val.slice('room:'.length)];
+  if(opt) focusOnSeqRow(opt.seq); else clearFocus();
 };
 
 /* ---------- hidden-branch visibility toggle ----------
