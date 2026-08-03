@@ -10256,6 +10256,215 @@ try {
 } catch(e){ bad("phase @ line 8309 (tags: ['object-lists'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase AY3B: Object List Manager -- "Quiz this list", a recall drill
+//     over a list's own items (mirrors js/app.js's Opening Quiz shape:
+//     sequential questions, hit/miss tally, a summary screen with a replay
+//     option -- but tests raw list memorization instead of chess moves).
+//     Requested live as a way to actually test yourself on a list's
+//     contents, not just view them in the editor. ---
+if(shouldRunPhase(['object-lists'])){
+try {
+const appQL = await launchApp();
+try {
+  await seedBackup(appQL.page, {
+    version: 6, user: 'tester',
+    lines: [],
+    assets: [{ id: 'ovenAsset', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w:0.3,h:0.3,d:0.3 } }],
+    objectLists: [{ id: 'quiz_list', name: 'Quiz List', roomName: '', category: '',
+      orderingType: 'procedural', orderingRule: '',
+      items: [{ name: 'Oven', assetId: 'ovenAsset' }, { name: 'Sink', assetId: null }, { name: 'Fridge', assetId: null }],
+      mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } }],
+  });
+  await appQL.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appQL.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+  await appQL.page.evaluate(() => {
+    const card = [...document.querySelectorAll('#objlistGrid .objlist-card')].find(c => c.textContent.includes('Quiz List'));
+    card.click();
+  });
+  await appQL.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+
+  // 166. "Quiz this list" appears for a populated list and starts at item 1,
+  //      showing the bound IMAGE (not the room-name text) as the cue for an
+  //      illustrated item.
+  try {
+    await appQL.page.waitForSelector('#ol_quiz', { timeout: 5000 });
+    await appQL.page.click('#ol_quiz');
+    await appQL.page.waitForSelector('.objlist-quiz-card', { timeout: 5000 });
+    const progress = await appQL.page.evaluate(() => document.querySelector('.objlist-quiz-progress').textContent);
+    assert(progress.includes('Item 1 of 3'), `expected to start at item 1 of 3, got ${JSON.stringify(progress)}`);
+    const hasImg = await appQL.page.evaluate(() => !!document.querySelector('.objlist-quiz-img'));
+    assert(hasImg, 'expected the first (illustrated) item to show its bound image as the cue');
+    ok('object list quiz: starts at item 1, showing the bound image for an illustrated item');
+  } catch(e){ bad('object list quiz: opens and shows the first item', e); }
+
+  // 167. A wrong answer is marked a miss and reveals the correct name.
+  try {
+    await appQL.page.fill('#olq_answer', 'Toaster');
+    await appQL.page.click('#olq_submit');
+    const feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
+    assert(feedback.includes('Oven'), `expected the miss feedback to reveal "Oven", got ${JSON.stringify(feedback)}`);
+    assert(feedback.includes('✗') || /it was/i.test(feedback), `expected miss feedback, got ${JSON.stringify(feedback)}`);
+    ok('object list quiz: a wrong answer is marked a miss and reveals the correct item');
+  } catch(e){ bad('object list quiz: wrong answer feedback', e); }
+
+  // 168. The 2nd (un-illustrated) item shows a plain numbered slot instead of
+  //      an image, and a correct answer (case/whitespace-insensitive) is a hit.
+  try {
+    await appQL.page.click('#olq_submit');   // "Next" (relabeled after test 167's reveal)
+    const slotText = await appQL.page.evaluate(() => document.querySelector('.objlist-quiz-slot')?.textContent);
+    assert(slotText === '#2', `expected a plain "#2" slot cue for the un-illustrated 2nd item, got ${JSON.stringify(slotText)}`);
+    await appQL.page.fill('#olq_answer', '  sink  ');
+    await appQL.page.click('#olq_submit');
+    const feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
+    assert(feedback.includes('Correct') || feedback.includes('✓'), `expected a hit for a case/whitespace-different correct answer, got ${JSON.stringify(feedback)}`);
+    ok('object list quiz: an un-illustrated item shows a numbered slot, and matching is case/whitespace-insensitive');
+  } catch(e){ bad('object list quiz: numbered-slot cue and lenient matching', e); }
+
+  // 169. Skip counts as a miss too, and the last item's button reads "Finish"
+  //      -- clicking it lands on the summary with the right tally.
+  try {
+    await appQL.page.click('#olq_submit');   // "Next" into item 3
+    const finishLabel = await appQL.page.evaluate(() => document.getElementById('olq_submit').textContent);
+    // not yet answered -- still "Check" until Skip/submit reveals the answer
+    assert(finishLabel === 'Check', `expected "Check" before answering the last item, got ${JSON.stringify(finishLabel)}`);
+    await appQL.page.click('#olq_skip');
+    const revealedFinishLabel = await appQL.page.evaluate(() => document.getElementById('olq_submit').textContent);
+    assert(revealedFinishLabel === 'Finish', `expected the last item's button to read "Finish" after answering, got ${JSON.stringify(revealedFinishLabel)}`);
+    await appQL.page.click('#olq_submit');
+    await appQL.page.waitForSelector('.objlist-quiz-score', { timeout: 5000 });
+    const tally = await appQL.page.evaluate(() => document.querySelector('.objlist-quiz-card, #objlistQuiz').textContent);
+    assert(/1 hit/.test(tally) && /2 misses/.test(tally), `expected a tally of 1 hit, 2 misses, got ${JSON.stringify(tally)}`);
+    ok('object list quiz: skip counts as a miss, and the summary shows the right hit/miss tally');
+  } catch(e){ bad('object list quiz: skip and end-of-quiz summary', e); }
+
+  // 170. "Quiz again" restarts at item 1 with a reset score; "Quit quiz"
+  //      mid-run returns to the editor, not the list grid.
+  try {
+    await appQL.page.click('#olq_again');
+    const progress = await appQL.page.evaluate(() => document.querySelector('.objlist-quiz-progress').textContent);
+    assert(progress.includes('Item 1 of 3') && progress.includes('0 correct, 0 missed'),
+      `expected a fresh restart at item 1 with score reset, got ${JSON.stringify(progress)}`);
+    await appQL.page.click('#olq_quit');
+    await appQL.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+    const quizHidden = await appQL.page.evaluate(() => document.getElementById('objlistQuiz').style.display === 'none');
+    assert(quizHidden, 'expected quitting mid-quiz to hide the quiz panel and return to the editor');
+    ok('object list quiz: "Quiz again" resets the score, and "Quit quiz" returns to the editor');
+  } catch(e){ bad('object list quiz: replay and quit', e); }
+
+  // 171. A case-insensitive PREFIX of 3+ letters counts as correct (typing
+  //      "SIN" for "Sink") -- full typing rigor without making it tedious --
+  //      but a shorter prefix does not.
+  try {
+    await appQL.page.click('#ol_quiz');
+    await appQL.page.waitForSelector('.objlist-quiz-card', { timeout: 5000 });
+    await appQL.page.fill('#olq_answer', 'ov');   // 2 letters of "Oven" -- too short
+    await appQL.page.click('#olq_submit');
+    let feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
+    assert(!feedback.includes('Correct') && !feedback.includes('✓'),
+      `expected a 2-letter prefix to NOT count as correct, got ${JSON.stringify(feedback)}`);
+    await appQL.page.click('#olq_submit');   // Next -> item 2 (Sink)
+    await appQL.page.fill('#olq_answer', 'SIN');   // 3 letters, different case
+    await appQL.page.click('#olq_submit');
+    feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
+    assert(feedback.includes('Correct') || feedback.includes('✓'),
+      `expected a 3-letter case-insensitive prefix ("SIN" for "Sink") to count as correct, got ${JSON.stringify(feedback)}`);
+    ok('object list quiz: a 3+ letter case-insensitive prefix counts as correct, shorter does not');
+  } catch(e){ bad('object list quiz: partial-match answer rule', e); }
+} finally {
+  await appQL.close();
+}
+} catch(e){ bad('Phase AY3B: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase AY3C: "Quiz a Castle's Lists" (Object List Manager toolbar) --
+//     combines every object list actually assigned to any wall bucket
+//     anywhere in a chosen castle into one quiz; a castle with nothing
+//     assigned is excluded from the picker entirely. Requested live as the
+//     natural companion to "Quiz this list" -- study exactly what a given
+//     memory palace actually uses, not one list in isolation. No VR walk
+//     needed here -- the provider reads LAYOUT + the abstract castle graph
+//     directly (gatherBuiltCastles), so this is seeded via threeLayout. ---
+if(shouldRunPhase(['object-lists'])){
+try {
+const appCQ = await launchApp();
+try {
+  const rootKey = await appCQ.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await seedBackup(appCQ.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Used Castle Line', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      ]},
+      // a second, otherwise-valid castle with NO wall list assigned -- must
+      // not show up in the picker (nothing to quiz there).
+      { id: 'L2', name: 'Unused Castle Line', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+    objectLists: [{ id: 'castle_quiz_list', name: 'Castle Quiz List', roomName: '', category: '',
+      orderingType: 'procedural', orderingRule: '',
+      items: [{ name: 'Alpha Item', assetId: null }, { name: 'Beta Item', assetId: null }],
+      mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } }],
+    threeLayout: JSON.stringify({ [rootKey]: { wallLists: { all: { listId: 'castle_quiz_list' } } } }),
+  });
+  await appCQ.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appCQ.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+
+  // 172. Only the castle with a wall-list assignment appears in the picker.
+  try {
+    await appCQ.page.click('#objlistCastleQuizBtn');
+    await appCQ.page.waitForSelector('#olcq_select', { timeout: 5000 });
+    const optionLabels = await appCQ.page.evaluate(() =>
+      [...document.querySelectorAll('#olcq_select option')].map(o => o.textContent));
+    assert(JSON.stringify(optionLabels) === JSON.stringify(['Alpha']),
+      `expected only the used castle ("Alpha") in the picker, got ${JSON.stringify(optionLabels)}`);
+    ok('Quiz a Castle: only castles with an assigned wall list appear in the picker');
+  } catch(e){ bad('Quiz a Castle: picker excludes unused castles', e); }
+
+  // 173. Starting the quiz combines the castle's own assigned list's items,
+  //      with each un-illustrated item's slot labeled by its source list.
+  try {
+    await appCQ.page.click('#olcq_start');
+    await appCQ.page.waitForSelector('.objlist-quiz-card', { timeout: 5000 });
+    const title = await appCQ.page.evaluate(() => document.querySelector('#objlistQuiz .objlist-h3').textContent);
+    assert(title.includes('Used Castle Line') && title.includes('Alpha'),
+      `expected the quiz title to name the line and castle, got ${JSON.stringify(title)}`);
+    const slot = await appCQ.page.evaluate(() => document.querySelector('.objlist-quiz-slot').textContent);
+    assert(slot === 'Castle Quiz List #1', `expected the slot label to carry the source list's own name, got ${JSON.stringify(slot)}`);
+    await appCQ.page.fill('#olq_answer', 'Alpha Item');
+    await appCQ.page.click('#olq_submit');
+    await appCQ.page.click('#olq_submit');   // Next
+    await appCQ.page.fill('#olq_answer', 'bet');   // 3-letter prefix of "Beta Item"
+    await appCQ.page.click('#olq_submit');
+    await appCQ.page.click('#olq_submit');   // Finish
+    await appCQ.page.waitForSelector('.objlist-quiz-score', { timeout: 5000 });
+    const tally = await appCQ.page.evaluate(() => document.getElementById('objlistQuiz').textContent);
+    assert(/2 hits/.test(tally) && /0 misses/.test(tally), `expected 2 hits, 0 misses, got ${JSON.stringify(tally)}`);
+    ok('Quiz a Castle: combines the assigned list\'s items into one quiz, ending on the right tally');
+  } catch(e){ bad('Quiz a Castle: end-to-end quiz run', e); }
+
+  // 174. "Done" from the summary returns to the list grid, not the editor.
+  try {
+    await appCQ.page.click('#olq_done');
+    await appCQ.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    const quizHidden = await appCQ.page.evaluate(() => document.getElementById('objlistQuiz').style.display === 'none');
+    assert(quizHidden, 'expected "Done" to hide the quiz panel and return to the list grid');
+    ok('Quiz a Castle: "Done" returns to the list grid');
+  } catch(e){ bad('Quiz a Castle: returns to the grid when done', e); }
+} finally {
+  await appCQ.close();
+}
+} catch(e){ bad('Phase AY3C: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
 //     actually played from this exact line in your own games (not a modal,
 //     unlike "Browse Games"). The header row carries the node's own configured

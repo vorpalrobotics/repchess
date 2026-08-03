@@ -76,12 +76,14 @@ function buildShell(){
       <span class="assets-spacer"></span>
       <button id="objlistNewBtn"><i class="fa-solid fa-plus"></i> New List</button>
       <button id="objlistImportBtn" title="Import a room-database JSON (preserves existing image bindings by item name)"><i class="fa-solid fa-file-import"></i> Import JSON</button>
+      <button id="objlistCastleQuizBtn" title="Quiz every object list assigned anywhere in a chosen castle"><i class="fa-solid fa-graduation-cap"></i> Quiz a Castle…</button>
       <input type="file" id="objlistImportFile" accept="application/json,.json" style="display:none">
     </div>
     <div class="assets-body">
       <div id="objlistBreadcrumb" style="display:none;margin-bottom:.5rem"></div>
       <div class="assets-grid" id="objlistGrid"></div>
       <div class="assets-editor" id="objlistEditor" style="display:none"></div>
+      <div class="assets-editor" id="objlistQuiz" style="display:none"></div>
     </div>
     <div id="objlistPickOverlay" class="objlist-pick-overlay" style="display:none">
       <div class="objlist-pick-modal">
@@ -99,6 +101,7 @@ function buildShell(){
   $('objlistFilterText').oninput = e => { FILTER_TEXT = e.target.value.trim().toLowerCase(); renderGrid(); };
   $('objlistNewBtn').onclick = () => openEditor(null);
   $('objlistImportBtn').onclick = () => $('objlistImportFile').click();
+  $('objlistCastleQuizBtn').onclick = () => openCastleQuizPicker();
   $('objlistImportFile').addEventListener('change', onImportFile);
   $('objlistPickCancel').onclick = () => closePicker(undefined);
   $('objlistPickNone').onclick = () => closePicker(null);
@@ -330,6 +333,7 @@ function renderEditor(){
       <div class="left">
         <button id="ol_save">SAVE</button>
         <button id="ol_cancel">Cancel</button>
+        ${l.items.length ? '<button id="ol_quiz"><i class="fa-solid fa-graduation-cap"></i> Quiz this list</button>' : ''}
       </div>
       ${EDIT_IS_NEW ? '' : '<button id="ol_delete">Delete</button>'}
     </div>
@@ -353,6 +357,7 @@ function renderEditor(){
   $('ol_save').onclick = saveEditor;
   $('ol_cancel').onclick = () => { EDIT = null; showIndex(); };
   if(!EDIT_IS_NEW) $('ol_delete').onclick = deleteEditor;
+  if(l.items.length) $('ol_quiz').onclick = () => openListQuiz(l);
 }
 
 function renderItems(){
@@ -390,6 +395,218 @@ function renderItems(){
   tb.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { EDIT.items[+b.dataset.clear].assetId = null; renderItems(); });
   tb.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { EDIT.items.splice(+b.dataset.remove,1); renderItems(); });
   tb.querySelectorAll('.objlist-grab').forEach(handle => handle.addEventListener('pointerdown', olGrabPointerDown));
+}
+
+/* ---------- list quiz ----------
+   Recall drill over a set of items, in their own natural order (or shuffled,
+   for a harder re-test) -- mirrors js/app.js's Opening Quiz shape (sequential
+   questions, hit/miss tally, summary screen with a replay option) but tests
+   raw list memorization rather than chess moves. Generalized over `entries`
+   ({name, assetId, posLabel}) rather than one list's own items, so the SAME
+   engine serves both "Quiz this list" (one list, EDIT's own possibly-unsaved
+   working copy) and "Quiz a castle's lists" (every list actually assigned
+   somewhere in a chosen castle, see openCastleQuiz below) -- `title` and
+   `returnTo` (called on close) are the only things that differ between them.
+   Answers are matched case-insensitively/trimmed, with a 3+ letter prefix
+   also accepted (typing "hamp" for "Hamper") -- full typing rigor without
+   making a long or oddly-spelled name tedious to answer. */
+let QUIZ = null;   // { title, entries:[{name,assetId,posLabel}], order, idx, hits, misses, revealed, returnTo }
+
+function shuffledOrder(n){
+  const order = Array.from({length:n}, (_, i) => i);
+  for(let i = order.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+function startQuiz(title, entries, shuffled, returnTo){
+  if(!entries.length) return;
+  const order = shuffled ? shuffledOrder(entries.length) : entries.map((_, i) => i);
+  QUIZ = { title, entries, order, idx: 0, hits: 0, misses: 0, revealed: false, returnTo };
+  $('objlistGrid').style.display = 'none';
+  $('objlistEditor').style.display = 'none';
+  $('objlistQuiz').style.display = '';
+  renderQuizStep();
+}
+
+// "Quiz this list": quizzes EDIT's own (possibly unsaved) working copy,
+// since that's what's on screen -- each item's posLabel is just its own
+// 1-based position in the list, matching the "position N" cue an unillustrated
+// item shows.
+function openListQuiz(list, shuffled=false){
+  const entries = list.items.map((it, i) => ({ name: it.name, assetId: it.assetId, posLabel: '#' + (i + 1) }));
+  startQuiz(list.name, entries, shuffled, () => {
+    if(EDIT) $('objlistEditor').style.display = '';
+    else showIndex();
+  });
+}
+
+function closeQuiz(){
+  const returnTo = QUIZ && QUIZ.returnTo;
+  QUIZ = null;
+  $('objlistQuiz').style.display = 'none';
+  if(returnTo) returnTo(); else showIndex();
+}
+
+function renderQuizStep(){
+  if(QUIZ.idx >= QUIZ.order.length){ renderQuizSummary(); return; }
+  const entry = QUIZ.entries[QUIZ.order[QUIZ.idx]];
+  const asset = assetById(entry.assetId);
+  const el = $('objlistQuiz');
+  el.innerHTML = `
+    <h3 class="objlist-h3">Quiz: ${esc(QUIZ.title)}</h3>
+    <div class="objlist-quiz-progress">Item ${QUIZ.idx + 1} of ${QUIZ.order.length} &middot; ${QUIZ.hits} correct, ${QUIZ.misses} missed</div>
+    <div class="objlist-quiz-card">
+      ${asset && asset.image
+        ? `<img class="objlist-quiz-img" src="${esc(asset.image)}" alt="">`
+        : `<div class="objlist-quiz-slot">${esc(entry.posLabel)}</div>`}
+      <div class="objlist-quiz-prompt">${asset && asset.image ? 'What object is this?' : `What belongs at ${esc(entry.posLabel)}?`}</div>
+      <input type="text" id="olq_answer" autocomplete="off" placeholder="Type your answer…">
+      <div class="objlist-quiz-feedback" id="olq_feedback"></div>
+      <div class="assets-editor-actions">
+        <div class="left">
+          <button id="olq_submit">Check</button>
+          <button id="olq_skip">Skip</button>
+        </div>
+        <button id="olq_quit">Quit quiz</button>
+      </div>
+    </div>
+  `;
+  const input = $('olq_answer');
+  input.focus();
+  $('olq_submit').onclick = () => checkQuizAnswer(entry.name);
+  $('olq_skip').onclick = () => { QUIZ.misses++; revealAnswer(false, entry.name); };
+  $('olq_quit').onclick = closeQuiz;
+  input.onkeydown = e => {
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    if(QUIZ.revealed) advanceQuiz(); else checkQuizAnswer(entry.name);
+  };
+}
+
+// exact match always counts; a case-insensitive PREFIX of at least 3 letters
+// also counts (typing "hamp" for "Hamper", "iron" for "Ironing Board") -- full
+// typing rigor without making a long or oddly-spelled name tedious to answer.
+// Below 3 letters only an exact match counts, so a short real name (e.g. "Ox")
+// isn't trivially satisfied by an even-shorter guess.
+function quizAnswerMatches(input, correctName){
+  const val = input.trim().toLowerCase();
+  const correct = correctName.trim().toLowerCase();
+  if(!val) return false;
+  if(val === correct) return true;
+  return val.length >= 3 && correct.startsWith(val);
+}
+
+function checkQuizAnswer(correctName){
+  const val = $('olq_answer').value.trim();
+  const correct = quizAnswerMatches(val, correctName);
+  if(correct) QUIZ.hits++; else QUIZ.misses++;
+  revealAnswer(correct, correctName);
+}
+
+function revealAnswer(correct, correctName){
+  QUIZ.revealed = true;
+  $('olq_feedback').innerHTML = correct
+    ? '<span class="objlist-quiz-hit">&#10003; Correct</span>'
+    : `<span class="objlist-quiz-miss">&#10007; It was &ldquo;${esc(correctName)}&rdquo;</span>`;
+  $('olq_answer').disabled = true;
+  $('olq_skip').style.display = 'none';
+  const submitBtn = $('olq_submit');
+  submitBtn.textContent = (QUIZ.idx + 1 < QUIZ.order.length) ? 'Next' : 'Finish';
+  submitBtn.onclick = advanceQuiz;
+}
+
+function advanceQuiz(){
+  QUIZ.idx++;
+  QUIZ.revealed = false;
+  renderQuizStep();
+}
+
+function renderQuizSummary(){
+  const total = QUIZ.hits + QUIZ.misses;
+  const pct = total ? Math.round(QUIZ.hits / total * 100) : 0;
+  const { title, entries, returnTo } = QUIZ;
+  $('objlistQuiz').innerHTML = `
+    <h3 class="objlist-h3">Quiz: ${esc(title)} — Results</h3>
+    <div class="objlist-quiz-score">${pct}%</div>
+    <div>${QUIZ.hits} hit${QUIZ.hits === 1 ? '' : 's'}, ${QUIZ.misses} miss${QUIZ.misses === 1 ? '' : 'es'}</div>
+    <div class="assets-editor-actions">
+      <div class="left">
+        <button id="olq_again">Quiz again</button>
+        <button id="olq_again_shuffled">Quiz again (shuffled)</button>
+      </div>
+      <button id="olq_done">Done</button>
+    </div>
+  `;
+  $('olq_again').onclick = () => startQuiz(title, entries, false, returnTo);
+  $('olq_again_shuffled').onclick = () => startQuiz(title, entries, true, returnTo);
+  $('olq_done').onclick = closeQuiz;
+}
+
+/* ---------- castle-scoped quiz ----------
+   "Quiz a castle's lists": every DISTINCT object list actually assigned to
+   any wall bucket anywhere in a chosen castle, combined into one quiz --
+   requested live as the natural companion to "Quiz this list", for studying
+   exactly what a given memory palace actually uses instead of one list in
+   isolation. Castle/line enumeration is app.js's domain (LAYOUT persistence,
+   which castles exist, which are actually built) -- CASTLE_QUIZ_PROVIDER is
+   supplied once from there (see setCastleQuizProvider), keeping this module
+   as ignorant of "lines"/"castles" as it's ever been. Each entry's posLabel
+   is "<list name> #<position in that list>" since positions aren't
+   comparable across different lists once combined. */
+let CASTLE_QUIZ_PROVIDER = null;   // { listOptions(): Promise<{lineId,lineName,castleName}[]>, entriesForCastle(lineId,castleName): Promise<entry[]> }
+export function setCastleQuizProvider(provider){ CASTLE_QUIZ_PROVIDER = provider; }
+
+async function openCastleQuizPicker(){
+  if(!CASTLE_QUIZ_PROVIDER) return;
+  const grid = $('objlistGrid');
+  if(grid) grid.style.display = 'none';
+  $('objlistEditor').style.display = 'none';
+  const el = $('objlistQuiz');
+  el.style.display = '';
+  el.innerHTML = `<p class="objlist-hint">Loading castles…</p>`;
+  const options = await CASTLE_QUIZ_PROVIDER.listOptions();
+  if(!options.length){
+    el.innerHTML = `
+      <h3 class="objlist-h3">Quiz a Castle's Lists</h3>
+      <p class="objlist-hint">No built castle has any object list assigned to a wall yet -- assign one via a room's Wall Object Lists dialog first.</p>
+      <div class="assets-editor-actions"><div class="left"><button id="olcq_back">Back</button></div></div>
+    `;
+    $('olcq_back').onclick = () => { $('objlistQuiz').style.display = 'none'; showIndex(); };
+    return;
+  }
+  const byLine = new Map();
+  options.forEach((o, i) => { if(!byLine.has(o.lineId)) byLine.set(o.lineId, { lineName: o.lineName, castles: [] }); byLine.get(o.lineId).castles.push({ ...o, idx: i }); });
+  const optionsHtml = [...byLine.values()].map(g =>
+    `<optgroup label="${esc(g.lineName)}">${g.castles.map(c => `<option value="${c.idx}">${esc(c.castleName)}</option>`).join('')}</optgroup>`
+  ).join('');
+  el.innerHTML = `
+    <h3 class="objlist-h3">Quiz a Castle's Lists</h3>
+    <p class="objlist-hint">Combines every object list assigned anywhere in the chosen castle into one quiz.</p>
+    <div class="field">
+      <label>Castle</label>
+      <select id="olcq_select">${optionsHtml}</select>
+    </div>
+    <div class="assets-editor-actions">
+      <div class="left">
+        <button id="olcq_start">Start Quiz</button>
+        <button id="olcq_back">Back</button>
+      </div>
+    </div>
+    <div class="objlist-hint" id="olcq_error"></div>
+  `;
+  $('olcq_back').onclick = () => { $('objlistQuiz').style.display = 'none'; showIndex(); };
+  $('olcq_start').onclick = async () => {
+    const opt = options[+$('olcq_select').value];
+    const entries = await CASTLE_QUIZ_PROVIDER.entriesForCastle(opt.lineId, opt.castleName);
+    if(!entries.length){
+      $('olcq_error').textContent = 'That castle has no object lists assigned after all -- pick another.';
+      return;
+    }
+    startQuiz(`${opt.lineName} — ${opt.castleName}`, entries, false, () => { $('objlistQuiz').style.display = 'none'; showIndex(); });
+  };
 }
 
 function addItem(){
