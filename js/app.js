@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-277';
+const BUILD_TAG = '-278';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4830,13 +4830,7 @@ function renderTreeBody(line){
   // the Unfocus button in sync across compact/visibility rebuilds).
   const keepFocusKey = FOCUSED_ROW_KEY, keepFocusSeq = FOCUSED_SEQ;
   clearFocus();
-  // temporary timing breakdown -- see importLine/importEngineVariation's own
-  // console logging; a report of an 11.5s render (against a near-instant
-  // parse+commit) traced the real cost to THIS function, so it needs its own
-  // breakdown to find which phase inside it is actually slow.
-  const rt0 = performance.now();
   populateTableCastleSelect();
-  const rt1 = performance.now();
 
   $('tree').innerHTML='';
   const triggers = line.openingMoves || [];
@@ -4854,14 +4848,10 @@ function renderTreeBody(line){
       renderBranch(wrap,lineGames,[mv],0);
     }
   });
-  const rt2 = performance.now();
   refreshSystemStats();
   refreshAnalysisQueueRowMarkers();
-  const rt3 = performance.now();
 
   if(keepFocusKey) reapplyFocus(keepFocusKey, keepFocusSeq);
-  const rt4 = performance.now();
-  console.log(`[renderTreeBody] "Show Castle" populate ${(rt1-rt0).toFixed(0)}ms, tree build ${(rt2-rt1).toFixed(0)}ms, stats+queue markers ${(rt3-rt2).toFixed(0)}ms, reapplyFocus ${(rt4-rt3).toFixed(0)}ms, total ${(rt4-rt0).toFixed(0)}ms`);
 }
 
 /* find the rebuilt row matching a saved focus identity and re-focus it. If the
@@ -4995,10 +4985,6 @@ async function importLine(text){
   // paint before that blocking work starts.
   const spinner = showSpinner('Importing…');
   await nextPaint();
-  // temporary timing breakdown -- logged so a slow import can be diagnosed
-  // (parse/batch-build vs the IndexedDB commit vs the tree re-render) instead
-  // of guessed at. Remove once the reported "still slow" case is understood.
-  const t0 = performance.now();
   try {
     const errors = [];
     let totalCount = 0, importedLines = 0;
@@ -5013,11 +4999,9 @@ async function importLine(text){
         errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
       }
     }
-    const t1 = performance.now();
 
     if(importedLines){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
-      const t2 = performance.now();
       invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
       $('importLineOverlay').style.display='none';
       log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
@@ -5028,8 +5012,6 @@ async function importLine(text){
       // importParsedLine); openLine would also call clearFocus(), silently
       // discarding whatever variation the user had focused before importing.
       renderTreeBody(CURRENT_LINE);
-      const t3 = performance.now();
-      console.log(`[importLine] parse+batch-build ${(t1-t0).toFixed(0)}ms, IndexedDB commit ${(t2-t1).toFixed(0)}ms, tree re-render ${(t3-t2).toFixed(0)}ms, total ${(t3-t0).toFixed(0)}ms`);
     } else {
       $('importLineError').textContent = errors.join('\n');
     }
@@ -8736,22 +8718,19 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   if(!CURRENT_LINE){ log('open an opening system first', true); return; }
   const pv = pvSanFromUci(startFen, uciMoves, maxPlies);
   if(!pv.length){ log('nothing to import from that engine line', true); return; }
-  // same spinner + timing breakdown as importLine (the paste-import dialog)
-  // -- this is the OTHER "Import this variation" entry point (the row menu's
-  // saved-eval/PV import), which shares importParsedLine/setPrefsBatch but
-  // previously had no feedback of its own at all.
+  // same spinner as importLine (the paste-import dialog) -- this is the
+  // OTHER "Import this variation" entry point (the row menu's saved-eval/PV
+  // import), which shares importParsedLine/setPrefsBatch but previously had
+  // no feedback of its own at all.
   const spinner = showSpinner('Importing…');
   await nextPaint();
-  const t0 = performance.now();
   try {
     const batch = new Map();
     const count = importParsedLine([...startSeq, ...pv], batch);
-    const t1 = performance.now();
     if(count){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
       invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     }
-    const t2 = performance.now();
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
     // Targeted re-render (just startSeq's own subtree) instead of a full
     // renderTreeBody whenever possible -- see targetedRenderAfterImport's
@@ -8765,8 +8744,6 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
       refreshAnalysisQueueRowMarkers();
       populateTableCastleSelect();
     }
-    const t3 = performance.now();
-    console.log(`[importEngineVariation] parse+batch-build ${(t1-t0).toFixed(0)}ms, IndexedDB commit ${(t2-t1).toFixed(0)}ms, tree re-render ${(t3-t2).toFixed(0)}ms, total ${(t3-t0).toFixed(0)}ms`);
   } catch(err){
     console.error('[importEngineVariation]', err);
     log('import failed: ' + err.message, true);
