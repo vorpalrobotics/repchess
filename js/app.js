@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-276';
+const BUILD_TAG = '-277';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3491,6 +3491,91 @@ function updateCompleteBadge(span, completeToMove){
   span.style.display='';
 }
 
+/* walks UP from `dataRow` to every ANCESTOR .data-row (nearest first), the
+   same "climb via the owning branch-row's own preceding data-row" traversal
+   focusOnLine uses -- but just collecting rows here instead of hiding
+   siblings. Used by refreshAncestorCompleteBadges (a targeted re-render
+   only rebuilds one row's own subtree, via that row's own expandWith, which
+   already refreshes ITS OWN badge -- everything ABOVE it needs a separate,
+   cheap pass since nothing rebuilt their DOM). */
+function ancestorDataRows(dataRow){
+  const rows = [];
+  let node = dataRow;
+  while(node){
+    const tbody = node.parentElement;
+    const branchRow = tbody.parentElement.closest('tr.branch-row');
+    if(!branchRow) break;
+    const metaRow = branchRow.previousElementSibling;
+    node = metaRow ? metaRow.previousElementSibling : null;
+    if(node) rows.push(node);
+  }
+  return rows;
+}
+/* refreshes every ancestor's own "complete to move" badge from CURRENT
+   PREFS/games data (computeNodeStats, no DOM walk needed) after a targeted
+   subtree re-render -- that only updates the row it was called on (via its
+   own expandWith), leaving ancestors showing a stale pre-import value
+   otherwise. Silently skips a row with no own reply/badge -- a compact-run
+   summary row's own dataset.seq is ITS run's end (our-move-ending, not the
+   opponent-ending convention a plain row's seq is), so it never matches a
+   PREFS reply here and is left as a known, narrow staleness gap (compact
+   mode's own toggle already force-refreshes everything if that's ever
+   visibly wrong -- an acceptable trade for skipping a full tree rebuild on
+   every targeted import). */
+function refreshAncestorCompleteBadges(dataRow, lineGames){
+  for(const ancestorRow of ancestorDataRows(dataRow)){
+    const ancestorLineSeq = ancestorRow.dataset.seq ? ancestorRow.dataset.seq.split(',') : null;
+    if(!ancestorLineSeq || !ancestorLineSeq.length) continue;
+    const ancestorReply = PREFS[prefKey(CURRENT_LINE.id, ancestorLineSeq)]?.reply;
+    if(!ancestorReply) continue;
+    const badge = ancestorRow.querySelector('.completeBadge');
+    if(!badge) continue;
+    const stats = computeNodeStats(lineGames, [...ancestorLineSeq, ancestorReply]);
+    updateCompleteBadge(badge, stats.completeToMove);
+  }
+}
+
+/* Attempts a targeted re-render of just the subtree an import can actually
+   affect, instead of a full renderTreeBody -- for importEngineVariation's
+   own case (the row-menu "Import this variation" from a saved eval/PV),
+   startSeq is ALWAYS an existing, already-rendered position (analysis only
+   ever runs on a reachable position), and the import can only ever add
+   content AT OR BELOW it, never touch anything else in the tree. A full
+   rebuild's dominant cost turned out to be the DOM-heavy recursive tree
+   build itself (measured at several SECONDS for a large repertoire), not
+   the writes -- reusing the exact expandWith a manual "Set Standard
+   Response" already calls rebuilds only the one row's own subtree.
+   Deliberately does NOT touch focus DOM (clearFocus/reapplyFocus) -- since
+   nothing OUTSIDE the touched subtree changes, whatever focus state already
+   exists is untouched and needs no round-trip.
+   Returns true on success; the caller falls back to a full renderTreeBody
+   (still fully correct, just slower) whenever this can't find a clean
+   target -- e.g. importing from move 1 itself (no owning row to re-expand)
+   or a row hoisted somewhere renderBranch's own machinery doesn't expose an
+   expandWith for. */
+function targetedRenderAfterImport(startSeq){
+  const color = CURRENT_LINE.color;
+  // does startSeq's own last ply belong to OUR side or the opponent's? Same
+  // parity convention importParsedLine's own oppParity encodes: for white,
+  // an ODD-length seq ends in our move (ply 1,3,5.. = White); for black, an
+  // EVEN-length seq ends in our move (ply 2,4,6.. = Black).
+  const lastIsOurs = color === 'black' ? (startSeq.length % 2 === 0) : (startSeq.length % 2 === 1);
+  const anchorLineSeq = lastIsOurs ? startSeq.slice(0, -1) : startSeq;
+  if(!anchorLineSeq.length) return false;   // importing from move 1 itself -- no owning row to re-expand
+  const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === anchorLineSeq.join(','));
+  if(!row || !row.__expandWith) return false;
+  const reply = PREFS[prefKey(CURRENT_LINE.id, anchorLineSeq)]?.reply;
+  if(!reply) return false;
+  // expandWith itself only rebuilds the descendant branch -- setStandardResponse
+  // (the manual-edit path expandWith was written for) sets the row's own
+  // "our reply" text separately, right before calling it; mirror that here.
+  const replySpan = row.querySelector('.ourReply');
+  if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...anchorLineSeq, reply]));
+  row.__expandWith(reply);
+  refreshAncestorCompleteBadges(row, gamesForLineColor(GAMES, color));
+  return true;
+}
+
 /* walks forward from `seq` while every position along the way has exactly
    one visible opponent reply *and* an already-chosen standard response with
    no annotations of its own — annotated moves (note/mnemonic/name/etc) keep
@@ -4019,6 +4104,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       if(!currentSaved()?.hidden) completeToMove = Math.min(completeToMove, sub.completeToMove);
       makeToggle(toggleBtn,tr1,startExpanded,lineSeq);
     }
+    // exposed so an out-of-band write that touches only this row's own
+    // subtree (importEngineVariation's targeted re-render) can trigger the
+    // exact same expansion a manual "Set Standard Response" would, without
+    // needing a full renderTreeBody -- see importEngineVariation's own comment.
+    tr.__expandWith = expandWith;
 
     function setStandardResponse(reply){
       invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
@@ -4420,6 +4510,10 @@ function renderBlackRoot(parent,games,trigger){
     updateCompleteBadge(completeSpan, sub.completeToMove);
     makeToggle(toggleBtn,tr1,startExpanded);
   }
+  // see renderBranch's own identical comment -- importEngineVariation's
+  // targeted re-render needs this row's expand function too when the
+  // imported PV starts right at a black line's own ply-1 root.
+  tr.__expandWith = expandWith;
 
   function setStandardResponse(reply){
     invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
@@ -8659,12 +8753,18 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
     }
     const t2 = performance.now();
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
-    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
-    // the freshly-imported PREFS (already updated in memory by
-    // importParsedLine); openLine would also call clearFocus(), silently
-    // discarding whatever variation the user had focused before importing --
-    // exactly the reported bug (importing from analysis losing focus).
-    renderTreeBody(CURRENT_LINE);
+    // Targeted re-render (just startSeq's own subtree) instead of a full
+    // renderTreeBody whenever possible -- see targetedRenderAfterImport's
+    // own comment for why. Falling back to the full rebuild keeps this
+    // fully correct (and still avoids the reported focus-loss bug: neither
+    // path calls openLine, which is the one that would clearFocus()).
+    if(!targetedRenderAfterImport(startSeq)){
+      renderTreeBody(CURRENT_LINE);
+    } else {
+      refreshSystemStats();
+      refreshAnalysisQueueRowMarkers();
+      populateTableCastleSelect();
+    }
     const t3 = performance.now();
     console.log(`[importEngineVariation] parse+batch-build ${(t1-t0).toFixed(0)}ms, IndexedDB commit ${(t2-t1).toFixed(0)}ms, tree re-render ${(t3-t2).toFixed(0)}ms, total ${(t3-t0).toFixed(0)}ms`);
   } catch(err){

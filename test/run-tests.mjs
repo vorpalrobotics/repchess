@@ -7008,6 +7008,99 @@ try {
 
 } catch(e){ bad("phase @ line 5852 (tags: ['move-table'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AZ3: "Import this variation" (the row-menu saved-eval/PV import)
+//     now does a TARGETED re-render (just the imported-into row's own
+//     subtree, via the same expandWith a manual "Set Standard Response"
+//     uses) instead of a full renderTreeBody -- measured as the dominant
+//     cost of a large-repertoire import (several SECONDS), dwarfing both the
+//     batched IndexedDB write and everything else in a full render. Checks
+//     both halves of that: an UNRELATED sibling row is provably untouched
+//     (a full rebuild would destroy and recreate every row, including this
+//     one), and the target's own ancestor still gets its "complete to move"
+//     badge refreshed correctly even though its own subtree wasn't rebuilt. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appAZ3 = await launchApp();
+try {
+  // d4,Nf6,c4,e6 carries a saved eval/PV (Nc3 Bb4) to import through the row
+  // menu; d4,Nf6 is its own ancestor (badge should go from [2] -- e6 as yet
+  // unanswered -- to [3] once the import gives e6 a reply); d4,d5 is a
+  // completely unrelated sibling branch off the SAME root the import must
+  // never touch.
+  const midFen = await appAZ3.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6']) c.move(m, { sloppy: true });
+    return c.fen();
+  });
+  await seedBackup(appAZ3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], eval: { type: 'cp', value: 10, depth: 18, pv: '3.Nc3 Bb4', pvFen: midFen, pvUci: ['b1c3','f8b4'] } },
+      { seq: ['d4','d5'], reply: 'c4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appAZ3.page.click('.line-row');
+  await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 10000 });
+
+  // 168b. Before the import: the ancestor's badge is [2] (e6 unanswered
+  //       pins it there), and mark the unrelated sibling row so a later
+  //       check can prove its own DOM node specifically survived untouched
+  //       (a full rebuild would tear down and recreate every row, wiping
+  //       any property/attribute stamped onto it here).
+  let ancestorBadgeBefore;
+  try {
+    ancestorBadgeBefore = await appAZ3.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6"] .completeBadge')?.textContent);
+    assert(ancestorBadgeBefore === '[2]', `setup: expected the ancestor's starting badge to be [2], got ${JSON.stringify(ancestorBadgeBefore)}`);
+    await appAZ3.page.evaluate(() => {
+      document.querySelector('tr.data-row[data-seq="d4,d5"]').dataset.untouchedMarker = 'still-here';
+    });
+    ok('targeted re-render setup: ancestor badge starts at [2], sibling row marked for the untouched-DOM check below');
+  } catch(e){ bad('targeted re-render setup', e); }
+
+  // 168c. "Import this variation" from d4,Nf6,c4,e6's saved eval/PV.
+  try {
+    await appAZ3.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] .evaltag').click());
+    await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] + tr.meta-row .meta-pv-menu', { timeout: 5000 });
+    await appAZ3.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] + tr.meta-row .meta-pv-menu').click());
+    await appAZ3.page.waitForSelector('#graphCtxMenu', { state: 'visible', timeout: 5000 });
+    await appAZ3.page.evaluate(() => document.querySelector('#graphCtxMenu div').click());
+    await appAZ3.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]');
+      return row && row.querySelector('.ourReply')?.textContent?.trim() === 'Nc3';
+    }, { timeout: 10000 });
+    ok('targeted re-render: "Import this variation" writes the new reply into the target row');
+  } catch(e){ bad('targeted re-render: import writes the target row', e); }
+
+  // 168d. The unrelated sibling (d4,d5) is the SAME DOM node as before --
+  //       proof this was a targeted subtree update, not a full renderTreeBody
+  //       (which tears down and rebuilds literally every row in the tree).
+  try {
+    const stillMarked = await appAZ3.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,d5"]')?.dataset.untouchedMarker === 'still-here');
+    assert(stillMarked, 'expected the unrelated sibling row\'s own DOM node to survive untouched (proof of a targeted, not full, re-render)');
+    ok('targeted re-render: an unrelated sibling branch\'s own DOM node is provably untouched');
+  } catch(e){ bad('targeted re-render: unrelated branch left untouched', e); }
+
+  // 168e. The ANCESTOR's own badge (d4,Nf6, not itself rebuilt) still
+  //       refreshes correctly -- [2] -> [3] now that e6 has a reply -- even
+  //       though only d4,Nf6,c4,e6's own subtree was actually re-rendered.
+  try {
+    const ancestorBadgeAfter = await appAZ3.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6"] .completeBadge')?.textContent);
+    assert(ancestorBadgeAfter === '[3]', `expected the ancestor's badge to refresh to [3] after the import, got ${JSON.stringify(ancestorBadgeAfter)}`);
+    ok('targeted re-render: an untouched ancestor\'s own "complete to move" badge still refreshes correctly');
+  } catch(e){ bad('targeted re-render: ancestor badge refresh', e); }
+} finally {
+  await appAZ3.close();
+}
+} catch(e){ bad('Phase AZ3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase BA: the gatherBuiltCastles cache now persists to IndexedDB (not
 //     just an in-memory, refresh-loses-it cache), and "Run VR" gained a
 //     Shift+click/right-click gesture to force a fresh rebuild even when a
