@@ -6868,6 +6868,66 @@ try {
       'expected "Import this variation" from the move table to invalidate the cache');
     ok('VR cache: "Import this variation" from the move table invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by importing an engine variation', e); }
+
+  // 161. importEngineVariation can also be called with a startSeq that ends on
+  //      OUR OWN move -- the live engine panel's "Analyse" button does exactly
+  //      this once a reply is chosen (childrenSeq = [...lineSeq, reply], see
+  //      renderBranch's btnEval.onclick), so a short PV from that position can
+  //      consist of nothing but a single further opponent move with no reply
+  //      after it. importParsedLine then only queues a manualReplies update
+  //      (no 'reply' write), so importEngineVariation's persistence guard must
+  //      not key off "count" (the number of replies written) -- it must commit
+  //      the batch whenever anything was queued at all, or the manual reply
+  //      only lives in the in-memory PREFS mutation and silently vanishes on
+  //      reload (also skipping the cache invalidation below). Reached here via
+  //      the test-only hook since driving this from the live engine panel would
+  //      need a real engine, unavailable in this offline harness.
+  const newRowSel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
+  let ourMoveFen;
+  try {
+    await openVR(appAX.page);
+    await appAX.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
+    await appAX.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAX.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+
+    ourMoveFen = await appAX.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+      return c.fen();
+    });
+    await appAX.page.evaluate(({ fen }) =>
+      window.__engineImportTestHooks.importEngineVariation(['d4','Nf6','c4'], fen, ['e7e6'], 1),
+      { fen: ourMoveFen });
+
+    await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
+    ok('manual-only engine import: the new opponent try renders immediately from the in-memory PREFS mutation');
+  } catch(e){ bad('manual-only engine import: renders immediately', e); }
+
+  // 162. Same import must still invalidate the castle-generation cache, even
+  //      though no "reply" was written -- the "count" the old code guarded on
+  //      stayed 0 here since the PV was just one opponent move.
+  try {
+    assert((await appAX.page.evaluate(() => window.__vrCacheTestHooks.isCached())) === false,
+      'expected a manual-only engine import (no "reply" written) to still invalidate the cache');
+    ok('VR cache: a manual-only engine import (startSeq ending on our own move) still invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by a manual-only engine import', e); }
+
+  // 163. And it must actually be persisted to IndexedDB, not just mutated in
+  //      the in-memory PREFS object -- reload and confirm it's still there.
+  try {
+    await appAX.page.reload({ waitUntil: 'domcontentloaded' });
+    await appAX.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAX.page.click('.line-row');
+    await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+    await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
+    ok('manual-only engine import: the new opponent try survives a full reload (real IDB round-trip)');
+  } catch(e){ bad('manual-only engine import: survives reload', e); }
 } finally {
   await appAX.close();
 }

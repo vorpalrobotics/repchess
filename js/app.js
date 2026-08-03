@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-279';
+const BUILD_TAG = '-280';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8727,7 +8727,7 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   try {
     const batch = new Map();
     const count = importParsedLine([...startSeq, ...pv], batch);
-    if(count){
+    if(batch.size){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
       invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     }
@@ -8750,6 +8750,17 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   } finally {
     hideSpinner(spinner);
   }
+}
+
+// test-only hook for importEngineVariation: both its real callers (the saved-eval
+// PV menu and the live engine panel's PV menu) only reach it after a real engine
+// analysis, which the offline harness can't produce (no real Stockfish) -- exposes
+// the same function directly so a test can drive its persistence/render logic
+// against a synthetic PV, in particular the manual-only-import batch-commit case.
+if(localStorage.getItem('threeTestDebug')){
+  window.__engineImportTestHooks = {
+    importEngineVariation: (startSeq, startFen, uciMoves, maxPlies) => importEngineVariation(startSeq, startFen, uciMoves, maxPlies),
+  };
 }
 
 function renderEngineLines(fen, depth, lines, multipv){
