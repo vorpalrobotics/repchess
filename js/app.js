@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-272';
+const BUILD_TAG = '-273';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4860,6 +4860,10 @@ async function importLine(text){
   // paint before that blocking work starts.
   const spinner = showSpinner('Importing…');
   await nextPaint();
+  // temporary timing breakdown -- logged so a slow import can be diagnosed
+  // (parse/batch-build vs the IndexedDB commit vs the tree re-render) instead
+  // of guessed at. Remove once the reported "still slow" case is understood.
+  const t0 = performance.now();
   try {
     const errors = [];
     let totalCount = 0, importedLines = 0;
@@ -4874,9 +4878,11 @@ async function importLine(text){
         errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
       }
     }
+    const t1 = performance.now();
 
     if(importedLines){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
+      const t2 = performance.now();
       invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
       $('importLineOverlay').style.display='none';
       log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
@@ -4887,6 +4893,8 @@ async function importLine(text){
       // importParsedLine); openLine would also call clearFocus(), silently
       // discarding whatever variation the user had focused before importing.
       renderTreeBody(CURRENT_LINE);
+      const t3 = performance.now();
+      console.log(`[importLine] parse+batch-build ${(t1-t0).toFixed(0)}ms, IndexedDB commit ${(t2-t1).toFixed(0)}ms, tree re-render ${(t3-t2).toFixed(0)}ms, total ${(t3-t0).toFixed(0)}ms`);
     } else {
       $('importLineError').textContent = errors.join('\n');
     }
