@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-271';
+const BUILD_TAG = '-278';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3289,12 +3289,41 @@ $('unfocusBtn').onclick = clearFocus;
    reached by more than one castle/sequence (a transposition) is listed
    under each one it belongs to -- harmless duplication, not a bug. */
 let TABLE_ROOM_OPTIONS = [];   // [{ name, seq }] -- "room:<index>" option values index into this
+// whether the (expensive) named-room listing has been loaded for the
+// CURRENTLY built castle list -- see loadTableCastleRooms. Reset any time
+// populateTableCastleSelect rebuilds the castle-only list fresh.
+let tableRoomOptionsLoaded = false;
 function populateTableCastleSelect(){
   const wrap = $('tableCastleWrap'), sel = $('tableCastleSelect');
   const castles = definedCastles();
   TABLE_ROOM_OPTIONS = [];
+  tableRoomOptionsLoaded = false;
   if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
   wrap.style.display = '';
+  // cheap pass: castle names only, no rooms yet. Enumerating a castle's own
+  // rooms (buildGeneratedCastle) is real graph analysis, not a quick PREFS
+  // scan -- computing it for every castle on every renderTreeBody (i.e.
+  // every import, every compact/visibility toggle) was measured costing
+  // several SECONDS per render, for a dropdown that's opened far less often
+  // than the tree re-renders. Named rooms are filled in lazily, only once
+  // this dropdown is actually about to be opened -- see loadTableCastleRooms.
+  sel.innerHTML = '<option value="">All</option>' + castles.map(name =>
+    `<optgroup label="${escapeHtml(name)}"><option value="castle:${escapeHtml(name)}">(whole castle)</option></optgroup>`
+  ).join('');
+  syncTableCastleSelect();
+}
+// the expensive per-castle room enumeration, deferred until the dropdown is
+// actually about to be opened (see the focus/mousedown listeners below)
+// rather than paid on every tree render. Rebuilds the whole <select> (cheap
+// castle-only markup included) in one pass rather than trying to splice
+// room options into what populateTableCastleSelect already built.
+function loadTableCastleRooms(){
+  if(tableRoomOptionsLoaded) return;
+  tableRoomOptionsLoaded = true;
+  const sel = $('tableCastleSelect');
+  const castles = definedCastles();
+  if(!castles.length) return;
+  TABLE_ROOM_OPTIONS = [];
   const lineGames = gamesForLineColor(GAMES, CURRENT_LINE.color);
   sel.innerHTML = '<option value="">All</option>' + castles.map(name => {
     const rootSeq = castleRootRoomSeq(name);
@@ -3314,6 +3343,8 @@ function populateTableCastleSelect(){
   }).join('');
   syncTableCastleSelect();
 }
+$('tableCastleSelect').addEventListener('mousedown', loadTableCastleRooms);
+$('tableCastleSelect').addEventListener('focus', loadTableCastleRooms);
 // resolves the currently active focus (however it got there) to the option
 // value that represents it, or '' if it doesn't match any castle/named room
 // in the current dropdown -- shared by populate (initial value) and sync
@@ -3458,6 +3489,91 @@ function updateCompleteBadge(span, completeToMove){
   span.textContent = `[${completeToMove}]`;
   span.title = `Complete through move ${completeToMove} — every branch below this point has a chosen reply at least this deep`;
   span.style.display='';
+}
+
+/* walks UP from `dataRow` to every ANCESTOR .data-row (nearest first), the
+   same "climb via the owning branch-row's own preceding data-row" traversal
+   focusOnLine uses -- but just collecting rows here instead of hiding
+   siblings. Used by refreshAncestorCompleteBadges (a targeted re-render
+   only rebuilds one row's own subtree, via that row's own expandWith, which
+   already refreshes ITS OWN badge -- everything ABOVE it needs a separate,
+   cheap pass since nothing rebuilt their DOM). */
+function ancestorDataRows(dataRow){
+  const rows = [];
+  let node = dataRow;
+  while(node){
+    const tbody = node.parentElement;
+    const branchRow = tbody.parentElement.closest('tr.branch-row');
+    if(!branchRow) break;
+    const metaRow = branchRow.previousElementSibling;
+    node = metaRow ? metaRow.previousElementSibling : null;
+    if(node) rows.push(node);
+  }
+  return rows;
+}
+/* refreshes every ancestor's own "complete to move" badge from CURRENT
+   PREFS/games data (computeNodeStats, no DOM walk needed) after a targeted
+   subtree re-render -- that only updates the row it was called on (via its
+   own expandWith), leaving ancestors showing a stale pre-import value
+   otherwise. Silently skips a row with no own reply/badge -- a compact-run
+   summary row's own dataset.seq is ITS run's end (our-move-ending, not the
+   opponent-ending convention a plain row's seq is), so it never matches a
+   PREFS reply here and is left as a known, narrow staleness gap (compact
+   mode's own toggle already force-refreshes everything if that's ever
+   visibly wrong -- an acceptable trade for skipping a full tree rebuild on
+   every targeted import). */
+function refreshAncestorCompleteBadges(dataRow, lineGames){
+  for(const ancestorRow of ancestorDataRows(dataRow)){
+    const ancestorLineSeq = ancestorRow.dataset.seq ? ancestorRow.dataset.seq.split(',') : null;
+    if(!ancestorLineSeq || !ancestorLineSeq.length) continue;
+    const ancestorReply = PREFS[prefKey(CURRENT_LINE.id, ancestorLineSeq)]?.reply;
+    if(!ancestorReply) continue;
+    const badge = ancestorRow.querySelector('.completeBadge');
+    if(!badge) continue;
+    const stats = computeNodeStats(lineGames, [...ancestorLineSeq, ancestorReply]);
+    updateCompleteBadge(badge, stats.completeToMove);
+  }
+}
+
+/* Attempts a targeted re-render of just the subtree an import can actually
+   affect, instead of a full renderTreeBody -- for importEngineVariation's
+   own case (the row-menu "Import this variation" from a saved eval/PV),
+   startSeq is ALWAYS an existing, already-rendered position (analysis only
+   ever runs on a reachable position), and the import can only ever add
+   content AT OR BELOW it, never touch anything else in the tree. A full
+   rebuild's dominant cost turned out to be the DOM-heavy recursive tree
+   build itself (measured at several SECONDS for a large repertoire), not
+   the writes -- reusing the exact expandWith a manual "Set Standard
+   Response" already calls rebuilds only the one row's own subtree.
+   Deliberately does NOT touch focus DOM (clearFocus/reapplyFocus) -- since
+   nothing OUTSIDE the touched subtree changes, whatever focus state already
+   exists is untouched and needs no round-trip.
+   Returns true on success; the caller falls back to a full renderTreeBody
+   (still fully correct, just slower) whenever this can't find a clean
+   target -- e.g. importing from move 1 itself (no owning row to re-expand)
+   or a row hoisted somewhere renderBranch's own machinery doesn't expose an
+   expandWith for. */
+function targetedRenderAfterImport(startSeq){
+  const color = CURRENT_LINE.color;
+  // does startSeq's own last ply belong to OUR side or the opponent's? Same
+  // parity convention importParsedLine's own oppParity encodes: for white,
+  // an ODD-length seq ends in our move (ply 1,3,5.. = White); for black, an
+  // EVEN-length seq ends in our move (ply 2,4,6.. = Black).
+  const lastIsOurs = color === 'black' ? (startSeq.length % 2 === 0) : (startSeq.length % 2 === 1);
+  const anchorLineSeq = lastIsOurs ? startSeq.slice(0, -1) : startSeq;
+  if(!anchorLineSeq.length) return false;   // importing from move 1 itself -- no owning row to re-expand
+  const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === anchorLineSeq.join(','));
+  if(!row || !row.__expandWith) return false;
+  const reply = PREFS[prefKey(CURRENT_LINE.id, anchorLineSeq)]?.reply;
+  if(!reply) return false;
+  // expandWith itself only rebuilds the descendant branch -- setStandardResponse
+  // (the manual-edit path expandWith was written for) sets the row's own
+  // "our reply" text separately, right before calling it; mirror that here.
+  const replySpan = row.querySelector('.ourReply');
+  if(replySpan) replySpan.innerHTML = pvChip(reply, fenForSeq([...anchorLineSeq, reply]));
+  row.__expandWith(reply);
+  refreshAncestorCompleteBadges(row, gamesForLineColor(GAMES, color));
+  return true;
 }
 
 /* walks forward from `seq` while every position along the way has exactly
@@ -3988,6 +4104,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       if(!currentSaved()?.hidden) completeToMove = Math.min(completeToMove, sub.completeToMove);
       makeToggle(toggleBtn,tr1,startExpanded,lineSeq);
     }
+    // exposed so an out-of-band write that touches only this row's own
+    // subtree (importEngineVariation's targeted re-render) can trigger the
+    // exact same expansion a manual "Set Standard Response" would, without
+    // needing a full renderTreeBody -- see importEngineVariation's own comment.
+    tr.__expandWith = expandWith;
 
     function setStandardResponse(reply){
       invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
@@ -4389,6 +4510,10 @@ function renderBlackRoot(parent,games,trigger){
     updateCompleteBadge(completeSpan, sub.completeToMove);
     makeToggle(toggleBtn,tr1,startExpanded);
   }
+  // see renderBranch's own identical comment -- importEngineVariation's
+  // targeted re-render needs this row's expand function too when the
+  // imported PV starts right at a black line's own ply-1 root.
+  tr.__expandWith = expandWith;
 
   function setStandardResponse(reply){
     invalidateBuiltCastlesCache();   // a new/changed reply can add or move a room
@@ -4781,14 +4906,40 @@ function parseAlgebraicMoveList(text){
 }
 
 /* imports one already-parsed move list (one variation, i.e. one line of the
-   textarea) into the currently open opening system's tree, returning the
+   textarea) into the currently open opening system's tree: updates the
+   in-memory PREFS cache immediately (same shape/defaults savePrefField's own
+   in-memory update uses, so a render right after already has everything it
+   needs) and folds every pref write it needs into `batch` (a Map keyed by
+   pref key, shared across every variation in one import) rather than
+   writing to IndexedDB itself. The caller commits the whole import's writes
+   in one transaction (see db.js's setPrefsBatch) instead of one setPref()
+   round-trip per move -- each of those pays IndexedDB's full transaction-
+   commit cost on its own (a real disk flush in most browsers), which is
+   what made importing even a modest variation take several seconds.
+   Keying `batch` by pref key (rather than just appending) is what keeps
+   setPrefsBatch safe to call with no per-key ordering risk: two variations
+   that both touch the same position (a shared prefix, or -- rarer -- two
+   distinct opponent tries recorded into the same manualReplies list) fold
+   into ONE combined patch per key here, reading the always-up-to-date
+   in-memory PREFS (already updated by any earlier variation in this same
+   import) rather than something setPrefsBatch would have to reconcile
+   against stale IndexedDB reads mid-transaction.
+   Synchronous now (no IDB round-trips happen here at all); returns the
    number of "our" moves set. */
-async function importParsedLine(moves){
+function importParsedLine(moves, batch){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
     throw new Error(`this variation is for 1. ${triggers.join(' / ')}, but the pasted variation starts with 1. ${moves[0]}`);
   }
+
+  const queue = (seq, field, value) => {
+    const key = prefKey(CURRENT_LINE.id, seq);
+    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = value;
+    const entry = batch.get(key) || { seq, patch: {} };
+    entry.patch[field] = value;
+    batch.set(key, entry);
+  };
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
      at odd indices (0=our trigger, 1=their reply, 2=our reply, ...); for a
@@ -4800,11 +4951,14 @@ async function importParsedLine(moves){
     const opp = moves[k];
     /* k===0 for a Black line is the line's own fixed trigger row, which isn't
        data-enumerated (no counts/manualReplies lookup happens there) */
-    if(!(color==='black' && k===0)) await addManualReply(seq,opp);
+    if(!(color==='black' && k===0)){
+      const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
+      if(!existing.includes(opp)) queue(seq,'manualReplies',[...existing,opp]);
+    }
     if(k+1 < moves.length){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
-      await savePrefField(lineSeq,'reply',reply);
+      queue(lineSeq,'reply',reply);
       // deliberately NOT touching 'collapsed' here (unlike an earlier version
       // of this code, which force-collapsed every step) -- this can run over
       // an EXISTING path the user was already looking at (re-importing, or
@@ -4824,32 +4978,45 @@ async function importLine(text){
   const rawLines = text.split('\n').map(l=>l.trim()).filter(Boolean);
   if(!rawLines.length){ $('importLineError').textContent = 'paste at least one variation to import'; return; }
 
-  const errors = [];
-  let totalCount = 0, importedLines = 0;
-  for(let i=0;i<rawLines.length;i++){
-    try{
-      const moves = parseAlgebraicMoveList(rawLines[i]);
-      if(!moves.length) continue;
-      totalCount += await importParsedLine(moves);
-      importedLines++;
-    }catch(err){
-      errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
+  // a big paste (many variations, or long ones) can still take a visible
+  // moment even with the batched single-commit write below -- parsing every
+  // line is itself synchronous chess.js work, and even one IndexedDB commit
+  // isn't instant for a large batch. nextPaint() lets the spinner actually
+  // paint before that blocking work starts.
+  const spinner = showSpinner('Importing…');
+  await nextPaint();
+  try {
+    const errors = [];
+    let totalCount = 0, importedLines = 0;
+    const batch = new Map();   // pref key -> {seq,patch}, merged across every parsed variation, committed in ONE IndexedDB transaction below
+    for(let i=0;i<rawLines.length;i++){
+      try{
+        const moves = parseAlgebraicMoveList(rawLines[i]);
+        if(!moves.length) continue;
+        totalCount += importParsedLine(moves, batch);
+        importedLines++;
+      }catch(err){
+        errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
+      }
     }
-  }
 
-  if(importedLines){
-    invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
-    $('importLineOverlay').style.display='none';
-    log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
-      + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
-    if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
-    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
-    // the freshly-imported PREFS (already updated in memory by
-    // importParsedLine); openLine would also call clearFocus(), silently
-    // discarding whatever variation the user had focused before importing.
-    renderTreeBody(CURRENT_LINE);
-  } else {
-    $('importLineError').textContent = errors.join('\n');
+    if(importedLines){
+      await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
+      invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
+      $('importLineOverlay').style.display='none';
+      log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
+        + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
+      if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
+      // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
+      // the freshly-imported PREFS (already updated in memory by
+      // importParsedLine); openLine would also call clearFocus(), silently
+      // discarding whatever variation the user had focused before importing.
+      renderTreeBody(CURRENT_LINE);
+    } else {
+      $('importLineError').textContent = errors.join('\n');
+    }
+  } finally {
+    hideSpinner(spinner);
   }
 }
 
@@ -8551,19 +8718,37 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   if(!CURRENT_LINE){ log('open an opening system first', true); return; }
   const pv = pvSanFromUci(startFen, uciMoves, maxPlies);
   if(!pv.length){ log('nothing to import from that engine line', true); return; }
+  // same spinner as importLine (the paste-import dialog) -- this is the
+  // OTHER "Import this variation" entry point (the row menu's saved-eval/PV
+  // import), which shares importParsedLine/setPrefsBatch but previously had
+  // no feedback of its own at all.
+  const spinner = showSpinner('Importing…');
+  await nextPaint();
   try {
-    const count = await importParsedLine([...startSeq, ...pv]);
-    if(count) invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
+    const batch = new Map();
+    const count = importParsedLine([...startSeq, ...pv], batch);
+    if(count){
+      await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
+      invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
+    }
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
-    // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
-    // the freshly-imported PREFS (already updated in memory by
-    // importParsedLine); openLine would also call clearFocus(), silently
-    // discarding whatever variation the user had focused before importing --
-    // exactly the reported bug (importing from analysis losing focus).
-    renderTreeBody(CURRENT_LINE);
+    // Targeted re-render (just startSeq's own subtree) instead of a full
+    // renderTreeBody whenever possible -- see targetedRenderAfterImport's
+    // own comment for why. Falling back to the full rebuild keeps this
+    // fully correct (and still avoids the reported focus-loss bug: neither
+    // path calls openLine, which is the one that would clearFocus()).
+    if(!targetedRenderAfterImport(startSeq)){
+      renderTreeBody(CURRENT_LINE);
+    } else {
+      refreshSystemStats();
+      refreshAnalysisQueueRowMarkers();
+      populateTableCastleSelect();
+    }
   } catch(err){
     console.error('[importEngineVariation]', err);
     log('import failed: ' + err.message, true);
+  } finally {
+    hideSpinner(spinner);
   }
 }
 
