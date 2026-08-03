@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-275';
+const BUILD_TAG = '-276';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3289,12 +3289,41 @@ $('unfocusBtn').onclick = clearFocus;
    reached by more than one castle/sequence (a transposition) is listed
    under each one it belongs to -- harmless duplication, not a bug. */
 let TABLE_ROOM_OPTIONS = [];   // [{ name, seq }] -- "room:<index>" option values index into this
+// whether the (expensive) named-room listing has been loaded for the
+// CURRENTLY built castle list -- see loadTableCastleRooms. Reset any time
+// populateTableCastleSelect rebuilds the castle-only list fresh.
+let tableRoomOptionsLoaded = false;
 function populateTableCastleSelect(){
   const wrap = $('tableCastleWrap'), sel = $('tableCastleSelect');
   const castles = definedCastles();
   TABLE_ROOM_OPTIONS = [];
+  tableRoomOptionsLoaded = false;
   if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
   wrap.style.display = '';
+  // cheap pass: castle names only, no rooms yet. Enumerating a castle's own
+  // rooms (buildGeneratedCastle) is real graph analysis, not a quick PREFS
+  // scan -- computing it for every castle on every renderTreeBody (i.e.
+  // every import, every compact/visibility toggle) was measured costing
+  // several SECONDS per render, for a dropdown that's opened far less often
+  // than the tree re-renders. Named rooms are filled in lazily, only once
+  // this dropdown is actually about to be opened -- see loadTableCastleRooms.
+  sel.innerHTML = '<option value="">All</option>' + castles.map(name =>
+    `<optgroup label="${escapeHtml(name)}"><option value="castle:${escapeHtml(name)}">(whole castle)</option></optgroup>`
+  ).join('');
+  syncTableCastleSelect();
+}
+// the expensive per-castle room enumeration, deferred until the dropdown is
+// actually about to be opened (see the focus/mousedown listeners below)
+// rather than paid on every tree render. Rebuilds the whole <select> (cheap
+// castle-only markup included) in one pass rather than trying to splice
+// room options into what populateTableCastleSelect already built.
+function loadTableCastleRooms(){
+  if(tableRoomOptionsLoaded) return;
+  tableRoomOptionsLoaded = true;
+  const sel = $('tableCastleSelect');
+  const castles = definedCastles();
+  if(!castles.length) return;
+  TABLE_ROOM_OPTIONS = [];
   const lineGames = gamesForLineColor(GAMES, CURRENT_LINE.color);
   sel.innerHTML = '<option value="">All</option>' + castles.map(name => {
     const rootSeq = castleRootRoomSeq(name);
@@ -3314,6 +3343,8 @@ function populateTableCastleSelect(){
   }).join('');
   syncTableCastleSelect();
 }
+$('tableCastleSelect').addEventListener('mousedown', loadTableCastleRooms);
+$('tableCastleSelect').addEventListener('focus', loadTableCastleRooms);
 // resolves the currently active focus (however it got there) to the option
 // value that represents it, or '' if it doesn't match any castle/named room
 // in the current dropdown -- shared by populate (initial value) and sync

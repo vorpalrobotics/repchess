@@ -2604,6 +2604,36 @@ try {
   await appS2.page.click('.line-row');
   await appS2.page.waitForSelector('.data-row', { timeout: 10000 });
 
+  // 56a. Named rooms are loaded LAZILY: right after the line opens (a real
+  //      tree render, exactly like an import triggers), the dropdown already
+  //      shows its castle-only skeleton (cheap -- no graph analysis needed
+  //      to just list castle names) but has NOT yet paid for enumerating any
+  //      castle's own rooms (buildGeneratedCastle) -- that only happens once
+  //      the dropdown is actually about to be opened (focus/mousedown), so a
+  //      tree re-render never pays for a room listing nobody's looking at.
+  try {
+    const beforeFocus = await appS2.page.evaluate(() => ({
+      visible: getComputedStyle(document.getElementById('tableCastleWrap')).display !== 'none',
+      castleValues: [...document.getElementById('tableCastleSelect').options].map(o => o.value),
+      roomOptionCount: document.querySelectorAll('#tableCastleSelect option[value^="room:"]').length,
+    }));
+    assert(beforeFocus.visible, 'expected the dropdown visible as soon as castles are defined, before any room analysis');
+    assert(JSON.stringify(beforeFocus.castleValues) === JSON.stringify(['', 'castle:Alpha', 'castle:Beta']),
+      `expected the castle-only skeleton (no rooms yet), got ${JSON.stringify(beforeFocus.castleValues)}`);
+    assert(beforeFocus.roomOptionCount === 0, `expected no room options before the dropdown is opened, got ${beforeFocus.roomOptionCount}`);
+    ok('move table: "Show Castle" shows castles immediately but defers named-room enumeration until opened');
+  } catch(e){ bad('move table: "Show Castle" named rooms load lazily, not on every render', e); }
+
+  // named rooms are loaded lazily -- computing them (buildGeneratedCastle per
+  // castle) is real graph analysis, expensive enough that doing it on every
+  // tree render (every import, every compact/visibility toggle) measurably
+  // slowed the whole app down for a dropdown opened far less often than that.
+  // See loadTableCastleRooms: it only runs once this select is actually
+  // about to be opened (focus/mousedown), so tests that inspect or pick a
+  // named room need to focus it first, exactly like a real user would by
+  // clicking it open.
+  await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').focus());
+
   // 56b. The dropdown appears once castles are defined: each castle is its
   //      own <optgroup> (so its rooms render indented, for free, under a
   //      bold, non-selectable header), with a "(whole castle)" entry plus
