@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-273';
+const BUILD_TAG = '-274';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8601,13 +8601,22 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   if(!CURRENT_LINE){ log('open an opening system first', true); return; }
   const pv = pvSanFromUci(startFen, uciMoves, maxPlies);
   if(!pv.length){ log('nothing to import from that engine line', true); return; }
+  // same spinner + timing breakdown as importLine (the paste-import dialog)
+  // -- this is the OTHER "Import this variation" entry point (the row menu's
+  // saved-eval/PV import), which shares importParsedLine/setPrefsBatch but
+  // previously had no feedback of its own at all.
+  const spinner = showSpinner('Importing…');
+  await nextPaint();
+  const t0 = performance.now();
   try {
     const batch = new Map();
     const count = importParsedLine([...startSeq, ...pv], batch);
+    const t1 = performance.now();
     if(count){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
       invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     }
+    const t2 = performance.now();
     log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
     // the freshly-imported PREFS (already updated in memory by
@@ -8615,9 +8624,13 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
     // discarding whatever variation the user had focused before importing --
     // exactly the reported bug (importing from analysis losing focus).
     renderTreeBody(CURRENT_LINE);
+    const t3 = performance.now();
+    console.log(`[importEngineVariation] parse+batch-build ${(t1-t0).toFixed(0)}ms, IndexedDB commit ${(t2-t1).toFixed(0)}ms, tree re-render ${(t3-t2).toFixed(0)}ms, total ${(t3-t0).toFixed(0)}ms`);
   } catch(err){
     console.error('[importEngineVariation]', err);
     log('import failed: ' + err.message, true);
+  } finally {
+    hideSpinner(spinner);
   }
 }
 
