@@ -4301,6 +4301,43 @@ try {
     assert(survived, `expected the decorated flag to survive a reload, got ${JSON.stringify(survived)}`);
     ok('fully-decorated flag persists in IndexedDB and survives a full reload');
   } catch(e){ bad('decorated flag survives reload (real IDB round-trip)', e); }
+
+  // 84. Typing a placeholder label into the per-slot picker clears any prior
+  //     asset override (setup for the Remove test below) -- driven through
+  //     the real dialog (openPropManager), not a direct LAYOUT poke.
+  try {
+    await appAC.page.evaluate(({ rk, sid }) => window.__threeTestEdit.openPropManager(rk, sid),
+      { rk: roomKey, sid: leftSlots[0] });
+    await appAC.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAC.page.fill('#pickerWordInput', 'StaleTestLabel');
+    await appAC.page.click('#pickerWordApplyBtn');
+    await appAC.page.waitForFunction(() => document.getElementById('assetPickerOverlay').style.display === 'none', { timeout: 5000 });
+    const afterApply = await appAC.page.evaluate((rk) => window.__threeTestEdit.layoutSnapshot()[rk], roomKey);
+    assert(afterApply.slotWords && afterApply.slotWords[leftSlots[0]] === 'StaleTestLabel',
+      `test setup issue: expected the label override to apply, got ${JSON.stringify(afterApply.slotWords)}`);
+    assert(!afterApply.slots || !afterApply.slots[leftSlots[0]],
+      'test setup issue: expected the prior asset override cleared by setting a label');
+    ok('per-slot picker: typing a placeholder label clears any prior asset override');
+  } catch(e){ bad('per-slot picker: label override applies', e); }
+
+  // 85. "Remove" in the per-slot picker must also clear a manual placeholder
+  //     label, not just an asset id -- previously setSlotOverride(...,null)
+  //     only cleared the word half when SETTING a new asset, never when
+  //     REMOVING, so a label-only override could never actually be deleted
+  //     (reported live: "deleting the asset" left the stale label showing
+  //     forever, through a reload, even after reassigning a wall list).
+  try {
+    await appAC.page.evaluate(({ rk, sid }) => window.__threeTestEdit.openPropManager(rk, sid),
+      { rk: roomKey, sid: leftSlots[0] });
+    await appAC.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAC.page.waitForSelector('#pickerRemoveBtn', { state: 'visible', timeout: 5000 });
+    await appAC.page.click('#pickerRemoveBtn');
+    await appAC.page.waitForFunction(() => document.getElementById('assetPickerOverlay').style.display === 'none', { timeout: 5000 });
+    const afterRemove = await appAC.page.evaluate((rk) => window.__threeTestEdit.layoutSnapshot()[rk], roomKey);
+    assert(!afterRemove.slotWords || !afterRemove.slotWords[leftSlots[0]],
+      `expected "Remove" to also clear a label-only override, got ${JSON.stringify(afterRemove.slotWords)}`);
+    ok('per-slot picker: "Remove" clears a label-only override instead of leaving it stuck forever');
+  } catch(e){ bad('per-slot picker: Remove clears a label-only override', e); }
 } finally {
   await appAC.close();
 }
@@ -4491,6 +4528,33 @@ try {
     assert(dec, `expected the room decorated once both lanes have a (label-only) wall list assigned and the open door is named, got ${JSON.stringify(dec)}`);
     ok('fully-decorated: a wall-list item\'s own label counts as filled, even with no image bound');
   } catch(e){ bad('fully-decorated: wall-list label-only counts as filled', e); }
+
+  // 87e. A stale per-slot override (e.g. a hand-placed test prop left over
+  //      from before the wall list existed) must not keep blocking the list
+  //      forever once you (re)assign it -- reported live: assigning a wall
+  //      list to a lane didn't change what the room showed at all, because a
+  //      manual per-slot override from earlier testing still won under the
+  //      old resolution order, with no way to tell from the Wall Lists dialog
+  //      (whose preview only shows the list's own contents) that anything was
+  //      blocking it. Assigning/reassigning a bucket's list now clears that
+  //      bucket's own stale per-slot overrides so the pick actually takes
+  //      effect immediately; a deliberate override set AFTER that point still
+  //      wins, unchanged from before.
+  try {
+    await appAD2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'left', null), root);
+    await appAD2.page.evaluate(({ k, sid, w }) => window.__threeTestEdit.setSlotWord(k, sid, w),
+      { k: root, sid: 'obj-L1', w: 'OldTestLabel' });
+    const beforeReassign = await appAD2.page.evaluate((k) => window.__threeTestEdit.layoutSnapshot()[k], root);
+    assert(beforeReassign.slotWords && beforeReassign.slotWords['obj-L1'] === 'OldTestLabel',
+      `test setup issue: expected the stale override to apply, got ${JSON.stringify(beforeReassign.slotWords)}`);
+    await appAD2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'left', 'lane_list'), root);
+    const afterReassign = await appAD2.page.evaluate((k) => window.__threeTestEdit.layoutSnapshot()[k], root);
+    assert(!afterReassign.slotWords || !afterReassign.slotWords['obj-L1'],
+      `expected (re)assigning the wall list to clear the stale per-slot override, got ${JSON.stringify(afterReassign.slotWords)}`);
+    const listWord = await appAD2.page.evaluate((k) => window.__threeTestEdit.slotListWord(k, 'obj-L1'), root);
+    assert(listWord === 'First', `expected the slot to now resolve to the list's own first item, got ${JSON.stringify(listWord)}`);
+    ok('wall list assignment clears a stale per-slot override so the list actually takes effect');
+  } catch(e){ bad('wall list assignment clears stale per-slot overrides', e); }
 } finally {
   await appAD2.close();
 }
@@ -6868,6 +6932,66 @@ try {
       'expected "Import this variation" from the move table to invalidate the cache');
     ok('VR cache: "Import this variation" from the move table invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by importing an engine variation', e); }
+
+  // 161. importEngineVariation can also be called with a startSeq that ends on
+  //      OUR OWN move -- the live engine panel's "Analyse" button does exactly
+  //      this once a reply is chosen (childrenSeq = [...lineSeq, reply], see
+  //      renderBranch's btnEval.onclick), so a short PV from that position can
+  //      consist of nothing but a single further opponent move with no reply
+  //      after it. importParsedLine then only queues a manualReplies update
+  //      (no 'reply' write), so importEngineVariation's persistence guard must
+  //      not key off "count" (the number of replies written) -- it must commit
+  //      the batch whenever anything was queued at all, or the manual reply
+  //      only lives in the in-memory PREFS mutation and silently vanishes on
+  //      reload (also skipping the cache invalidation below). Reached here via
+  //      the test-only hook since driving this from the live engine panel would
+  //      need a real engine, unavailable in this offline harness.
+  const newRowSel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
+  let ourMoveFen;
+  try {
+    await openVR(appAX.page);
+    await appAX.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
+    await appAX.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appAX.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+
+    ourMoveFen = await appAX.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+      return c.fen();
+    });
+    await appAX.page.evaluate(({ fen }) =>
+      window.__engineImportTestHooks.importEngineVariation(['d4','Nf6','c4'], fen, ['e7e6'], 1),
+      { fen: ourMoveFen });
+
+    await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
+    ok('manual-only engine import: the new opponent try renders immediately from the in-memory PREFS mutation');
+  } catch(e){ bad('manual-only engine import: renders immediately', e); }
+
+  // 162. Same import must still invalidate the castle-generation cache, even
+  //      though no "reply" was written -- the "count" the old code guarded on
+  //      stayed 0 here since the PV was just one opponent move.
+  try {
+    assert((await appAX.page.evaluate(() => window.__vrCacheTestHooks.isCached())) === false,
+      'expected a manual-only engine import (no "reply" written) to still invalidate the cache');
+    ok('VR cache: a manual-only engine import (startSeq ending on our own move) still invalidates the cache');
+  } catch(e){ bad('VR cache: invalidated by a manual-only engine import', e); }
+
+  // 163. And it must actually be persisted to IndexedDB, not just mutated in
+  //      the in-memory PREFS object -- reload and confirm it's still there.
+  try {
+    await appAX.page.reload({ waitUntil: 'domcontentloaded' });
+    await appAX.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appAX.page.click('.line-row');
+    await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+    await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
+    ok('manual-only engine import: the new opponent try survives a full reload (real IDB round-trip)');
+  } catch(e){ bad('manual-only engine import: survives reload', e); }
 } finally {
   await appAX.close();
 }

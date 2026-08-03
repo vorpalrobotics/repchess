@@ -1566,7 +1566,7 @@ function setSlotOverride(roomKey, slotId, assetId){
     const r = ensureRoomLayout(roomKey);
     if(assetId) r.slots[slotId] = assetId; else delete r.slots[slotId];
     if(!assetId) delete r.slotXform[slotId];   // removed prop loses its nudge/scale too
-    if(assetId) delete r.slotWords[slotId];    // a real image replaces any placeholder label
+    delete r.slotWords[slotId];   // a real image replaces any placeholder label, and "Remove" (assetId null) must clear a label-only override too, or it lingers forever unremovable
   });
 }
 // a manually-typed placeholder label for a move-object slot -- a lightweight
@@ -3351,6 +3351,24 @@ function moveObjectListResolved(roomKey, slot){
   if(!item) return null;
   const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
   return { word: item.name, asset };
+}
+// clears every per-slot manual override (asset, word, nudge/scale) on a
+// bucket's own move-object slots -- called whenever that bucket's wall list is
+// freshly assigned or swapped, so the pick actually takes effect immediately
+// instead of being silently blocked by stale per-slot overrides left over
+// from before the list existed (e.g. test props hand-placed on individual
+// slots). moveObjectListResolved is still checked LAST in the render order
+// (see the moveObject case above), so a slot you deliberately override AFTER
+// this point continues to win over the list, same as always.
+function clearBucketSlotOverrides(roomKey, bucket){
+  const r = ensureRoomLayout(roomKey);
+  for(const slot of moveObjectSlots(roomKey)){
+    const ctx = slotListContext(roomKey, slot);
+    if(!ctx || ctx.bucket !== bucket) continue;
+    delete r.slots[slot.id];
+    delete r.slotWords[slot.id];
+    delete r.slotXform[slot.id];
+  }
 }
 
 function mnemonicSlots(roomKey){
@@ -6894,8 +6912,10 @@ function handleEditTarget(ud){
     inputLocked = true;
     const owner = ud.ownerRoomKey;
     const current = slotAssetFor(owner, ud.slotId);
+    // allowRemove must also cover a label-only override (no asset), or Remove
+    // never shows and a manually-typed word can't be cleared at all.
     openAssetPicker({
-      allow: ud.allow || PROP_TYPES, allowRemove: !!current,
+      allow: ud.allow || PROP_TYPES, allowRemove: !!(current || slotWordFor(owner, ud.slotId)),
       allowWord: true, currentWord: slotWordFor(owner, ud.slotId),
       onClose: () => { inputLocked = false; },
       onPick: id => setSlotOverride(owner, ud.slotId, id),
@@ -7616,8 +7636,15 @@ function renderWallListsDialog(ov, roomKey){
       const val = sel.value;
       const r = ensureRoomLayout(roomKey);
       if(!r.wallLists) r.wallLists = {};
-      if(val) r.wallLists[bucket] = { listId: val };
-      else delete r.wallLists[bucket];
+      if(val){
+        r.wallLists[bucket] = { listId: val };
+        // a freshly (re)assigned list must actually take effect, not stay
+        // silently blocked by stale per-slot overrides left over from before
+        // (e.g. hand-placed test props) -- see clearBucketSlotOverrides.
+        clearBucketSlotOverrides(roomKey, bucket);
+      } else {
+        delete r.wallLists[bucket];
+      }
       persistLayout();
       // refresh this bucket's preview and rebuild the room live
       const pv = ov.querySelector(`.wl-preview[data-bucket="${bucket}"]`);
@@ -7641,6 +7668,7 @@ function renderWallListsDialog(ov, roomKey){
       const r = ensureRoomLayout(roomKey);
       if(!r.wallLists) r.wallLists = {};
       r.wallLists[bucket] = { listId: newId };
+      clearBucketSlotOverrides(roomKey, bucket);
       persistLayout();
       buildRoom(currentRoomKey);
     }
@@ -7983,7 +8011,7 @@ function renderRoomGeomDialog(ov, roomKey){
       const refresh = () => { btn.textContent = 'Object: ' + objBtnLabel(target); };
       ov.style.display = 'none';
       openAssetPicker({
-        allow: PROP_TYPES, allowRemove: !!slotAssetFor(target, slotId),
+        allow: PROP_TYPES, allowRemove: !!(slotAssetFor(target, slotId) || slotWordFor(target, slotId)),
         allowWord: true, currentWord: slotWordFor(target, slotId),
         onPick: id => { setSlotOverride(target, slotId, id); refresh(); },
         onRemove: () => { setSlotOverride(target, slotId, null); refresh(); },
@@ -8881,7 +8909,12 @@ export async function openThreeTest(containerEl, opts){
         const rk = roomKeyArg || currentRoomKey;
         const r = ensureRoomLayout(rk);
         if(!r.wallLists) r.wallLists = {};
-        if(listId) r.wallLists[bucket] = { listId }; else delete r.wallLists[bucket];
+        if(listId){
+          r.wallLists[bucket] = { listId };
+          clearBucketSlotOverrides(rk, bucket);
+        } else {
+          delete r.wallLists[bucket];
+        }
         persistLayout();
         buildRoom(currentRoomKey);
       },
@@ -8973,6 +9006,18 @@ export async function openThreeTest(containerEl, opts){
         await refreshAssetMap();
         buildRoom(currentRoomKey);
       },
+      // sets (or clears) a manual placeholder-label override on a move-object
+      // slot -- the same mutation the picker's "type a label" field makes
+      // (setSlotWordOverride), for testing the label-only-override path
+      // (fully-decorated's "word counts as filled" rule, and the wall-list
+      // stale-override-clearing / Remove-must-clear-the-word regressions)
+      // without driving the real picker dialog.
+      setSlotWord: (roomKey, slotId, word) => setSlotWordOverride(roomKey, slotId, word),
+      // opens the real per-slot asset/word picker exactly as the gear icon /
+      // Enter key would (openPropManager) -- for testing the Remove/word-apply
+      // flow (setSlotOverride's word-clearing in particular) end-to-end
+      // through the actual dialog, without needing a real raycasting click.
+      openPropManager: (roomKey, slotId) => openPropManager(roomKey, slotId),
       // names (or clears) a room the same way the Room Geometry dialog's
       // "Room names" fields do (setRoomName) -- for testing Part A's "every
       // forward door's target is named" check without driving that dialog.
