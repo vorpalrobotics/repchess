@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-274';
+const BUILD_TAG = '-275';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4705,7 +4705,13 @@ function renderTreeBody(line){
   // the Unfocus button in sync across compact/visibility rebuilds).
   const keepFocusKey = FOCUSED_ROW_KEY, keepFocusSeq = FOCUSED_SEQ;
   clearFocus();
+  // temporary timing breakdown -- see importLine/importEngineVariation's own
+  // console logging; a report of an 11.5s render (against a near-instant
+  // parse+commit) traced the real cost to THIS function, so it needs its own
+  // breakdown to find which phase inside it is actually slow.
+  const rt0 = performance.now();
   populateTableCastleSelect();
+  const rt1 = performance.now();
 
   $('tree').innerHTML='';
   const triggers = line.openingMoves || [];
@@ -4723,10 +4729,14 @@ function renderTreeBody(line){
       renderBranch(wrap,lineGames,[mv],0);
     }
   });
+  const rt2 = performance.now();
   refreshSystemStats();
   refreshAnalysisQueueRowMarkers();
+  const rt3 = performance.now();
 
   if(keepFocusKey) reapplyFocus(keepFocusKey, keepFocusSeq);
+  const rt4 = performance.now();
+  console.log(`[renderTreeBody] "Show Castle" populate ${(rt1-rt0).toFixed(0)}ms, tree build ${(rt2-rt1).toFixed(0)}ms, stats+queue markers ${(rt3-rt2).toFixed(0)}ms, reapplyFocus ${(rt4-rt3).toFixed(0)}ms, total ${(rt4-rt0).toFixed(0)}ms`);
 }
 
 /* find the rebuilt row matching a saved focus identity and re-focus it. If the
