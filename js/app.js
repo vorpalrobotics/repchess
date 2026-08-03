@@ -3,7 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260803-265';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260801-76';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile } from './objectLists.js?v=20260801-48';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider } from './objectLists.js?v=20260803-49';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-282';
+const BUILD_TAG = '-284';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6194,6 +6194,60 @@ $('objectListsCloseBtn').onclick = ()=>{
   $('objectListsOverlay').style.display='none';
   closeObjectListManager();
 };
+
+// "Quiz a Castle's Lists" (inside the Object List Manager) needs to know
+// which castles exist, which are actually built, and which object lists are
+// assigned to their rooms' walls -- all app.js-side concepts (LAYOUT
+// persistence, castle/line enumeration) that objectLists.js otherwise has no
+// reason to know about. Supplied once as a plain data-fetching callback pair
+// rather than an import, so objectLists.js stays as ignorant of "lines"/
+// "castles" as ever -- same reasoning assets.js's openNewAssetModal gets
+// imported the other way instead (no castle-shaped state to inject there).
+setCastleQuizProvider({
+  // every built castle that has at least one wall-list assignment anywhere
+  // in it -- an unused castle isn't worth offering (nothing to quiz).
+  async listOptions(){
+    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    if(!lines.length) return [];
+    const built = await gatherBuiltCastles(lines);
+    let LAYOUT; try { LAYOUT = JSON.parse(await getMeta('threeLayout') || '{}'); } catch { LAYOUT = {}; }
+    const out = [];
+    for(const c of built){
+      const used = c.genRooms.some(gr => {
+        const wl = LAYOUT[castleRoomKey(c.instanceId, gr.posKey)]?.wallLists;
+        return wl && Object.values(wl).some(b => b?.listId);
+      });
+      if(!used) continue;
+      const line = lines.find(l => l.id === c.lineId);
+      out.push({ lineId: c.lineId, lineName: line ? line.name : c.lineId, castleName: c.castleName });
+    }
+    return out;
+  },
+  // every item from every DISTINCT list assigned to any wall bucket anywhere
+  // in the chosen castle, combined -- posLabel carries the source list's own
+  // name since positions aren't comparable once lists are combined.
+  async entriesForCastle(lineId, castleName){
+    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const built = await gatherBuiltCastles(lines);
+    const castle = built.find(c => c.lineId === lineId && c.castleName === castleName);
+    if(!castle) return [];
+    let LAYOUT; try { LAYOUT = JSON.parse(await getMeta('threeLayout') || '{}'); } catch { LAYOUT = {}; }
+    const listIds = new Set();
+    for(const gr of castle.genRooms){
+      const wl = LAYOUT[castleRoomKey(castle.instanceId, gr.posKey)]?.wallLists;
+      if(wl) for(const b of Object.values(wl)) if(b?.listId) listIds.add(b.listId);
+    }
+    if(!listIds.size) return [];
+    const lists = await getAllObjectLists();
+    const entries = [];
+    for(const id of [...listIds].sort()){
+      const list = lists.find(l => l.id === id);
+      if(!list) continue;
+      list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, posLabel: `${list.name} #${i + 1}` }));
+    }
+    return entries;
+  },
+});
 
 /* ---------- help modal ----------
    Topics come from help/topics.json: [{id, title, file}, ...]. Each topic's
