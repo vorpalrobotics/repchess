@@ -4398,6 +4398,104 @@ try {
 
 } catch(e){ bad('Phase AD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AD2: "fully decorated" -- a WALL-LIST item's own word/label now
+//     counts as filled, same as a manual placeholder label typed straight
+//     onto the slot (LAYOUT.slotWords) already did. Previously only a list
+//     item with an image asset bound counted, silently blocking "decorated"
+//     on any room whose wall lists were assigned but not yet illustrated --
+//     reported live: a real two-track room (both lanes wall-listed, one
+//     ending in a locked door) that should have read as decorated. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appAD2 = await launchApp();
+try {
+  // genuine two-track room: LEFT lane has 2 real chain members (e6,Nc3 then
+  // Bb4,Bd2) before its own branch -- one child unbuilt (a6, becomes a
+  // LOCKED door: isRoomEmpty) and one built further (O-O e4, an ordinary
+  // open door needing its target named). RIGHT lane also has 2 members
+  // (d5,Nf3 then c6,Bg5), left as a plain dead end. Matches the reported
+  // room shape: a two-lane sequence with a locked door on one side.
+  await seedBackup(appAD2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4','Bd2','O-O'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'Nf3' },
+      { seq: ['d4','Nf6','c4','d5','Nf3','c6'], reply: 'Bg5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 a6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 O-O e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 d5 Nf3 c6 Bg5', white: 'a', black: 'b', result: '*' },
+    ],
+    // label-only items (assetId: null) -- exactly the "list assigned, but
+    // only labeled, no images yet" case reported live.
+    objectLists: [
+      { id: 'lane_list', name: 'Lane List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAD2.page);
+  const keyFor = (mv) => appAD2.page.evaluate((moves) => {
+    const c = new Chess();
+    for(const m of moves) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, mv);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const openTarget = await keyFor(['d4','Nf6','c4','e6','Nc3','Bb4','Bd2','O-O','e4']);
+  await appAD2.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appAD2.page.waitForTimeout(300);
+  const exitEditMode = async () => {
+    await appAD2.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appAD2.page.evaluate(() => window.__threeTestEdit.toggle());
+  };
+
+  // 87b. Setup: a genuine two-track room with 2 real move-object slots per
+  //      lane, and (confirmed via the mesh scan) a real locked-door icon on
+  //      the unbuilt branch -- the exact shape reported.
+  try {
+    const ids = await appAD2.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), root);
+    const nonCenter = ids.filter(id => id !== 'obj-C1').sort();
+    assert(JSON.stringify(nonCenter) === JSON.stringify(['obj-L1','obj-L2','obj-R1','obj-R2']),
+      `test setup issue: expected 2 fillable slots per lane, got ${JSON.stringify(ids)}`);
+    const meshKinds = await appAD2.page.evaluate(() => window.__threeTestEdit.meshes().map(m => m.kind));
+    assert(meshKinds.includes('locked-door-icon'), `test setup issue: expected a locked-door icon on the unbuilt branch, got ${JSON.stringify(meshKinds)}`);
+    ok('fully-decorated setup: a genuine two-track room with 2 real slots per lane and a locked door on one branch');
+  } catch(e){ bad('fully-decorated (wall-list labels) setup', e); }
+
+  // 87c. Before assigning anything: not decorated (unfilled slots, unnamed
+  //      open-door target).
+  try {
+    await exitEditMode();
+    const dec = await appAD2.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(!dec, `expected the room NOT decorated before assigning wall lists, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated (wall-list labels): not decorated before wall lists are assigned');
+  } catch(e){ bad('fully-decorated (wall-list labels): baseline false', e); }
+
+  // 87d. Assign the label-only list to BOTH lanes and name the one door that
+  //      actually needs it (the open, non-empty target -- the locked door's
+  //      target is exempt, left unnamed on purpose, matching the reported
+  //      setup where naming it anyway is harmless per test 86 above). This
+  //      alone should now flip the room to fully decorated -- a wall-list
+  //      item's own word counts as filled, same as a typed placeholder label.
+  try {
+    await appAD2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'left', 'lane_list'), root);
+    await appAD2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'right', 'lane_list'), root);
+    await appAD2.page.evaluate(({ k, n }) => window.__threeTestEdit.setRoomName(k, n), { k: openTarget, n: 'Open target' });
+    await exitEditMode();
+    const dec = await appAD2.page.evaluate(() => window.__threeTestEdit.decorated());
+    assert(dec, `expected the room decorated once both lanes have a (label-only) wall list assigned and the open door is named, got ${JSON.stringify(dec)}`);
+    ok('fully-decorated: a wall-list item\'s own label counts as filled, even with no image bound');
+  } catch(e){ bad('fully-decorated: wall-list label-only counts as filled', e); }
+} finally {
+  await appAD2.close();
+}
+} catch(e){ bad('Phase AD2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AE: "fully decorated" rooms get a 🎨 glyph on their digraph node
 //     label, mirroring the memorized-room border (Phase Z). ---
 if(shouldRunPhase(['digraph'])){

@@ -1408,30 +1408,30 @@ async function loadDecorated(){
   catch { DECORATED = {}; }
 }
 function persistDecorated(){ setMeta(DECORATED_KEY, JSON.stringify(DECORATED)); }
-// A room is fully decorated when every move-object slot has a real image
-// asset (or a manual placeholder label -- LAYOUT.slotWords, set via the
-// picker's text field -- counts too, since the user is explicitly saying
-// "decorated, just not with an image yet"; a WALL-LIST item's word-only
-// fallback does NOT count, that's still "unfilled, showing whatever it can
-// in the meantime") AND every forward (non-back) door leads to a named room
-// -- EXCEPT a
+// A room is fully decorated when every move-object slot has EITHER a real
+// image asset OR at least a label (a manual placeholder word -- LAYOUT.slotWords,
+// set via the picker's text field -- or a WALL-LIST item's own name, image
+// bound or not) AND every forward (non-back) door leads to a named room --
+// EXCEPT a
 // locked door (see isRoomEmpty): its target is a genuine dead end with
 // nothing built past it, so there's nothing there worth naming or
 // remembering, and requiring a name would just block "decorated" on rooms
 // deliberately left as plain passageways. Door SKIN is never checked here --
-// only naming and slot art matter for whether a room can be memorized. The
-// shared center/anchor pair is excluded unless this room hosts it in-room
-// (entryNoStreet) -- normally it's decorated at the street building's entry
-// instead (see buildSlots' matching skip). A door whose target isn't
-// registered this session (e.g. an unlinked foreign castle in a single-castle
-// preview) is skipped rather than counted as a failure -- that's session
-// state, not missing work. A room with nothing to fill is vacuously true.
+// only naming and slot art/labeling matter for whether a room can be
+// memorized. The shared center/anchor pair is excluded unless this room
+// hosts it in-room (entryNoStreet) -- normally it's decorated at the street
+// building's entry instead (see buildSlots' matching skip). A door whose
+// target isn't registered this session (e.g. an unlinked foreign castle in a
+// single-castle preview) is skipped rather than counted as a failure --
+// that's session state, not missing work. A room with nothing to fill is
+// vacuously true.
 function computeFullyDecorated(roomKey){
   const room = mergedRoom(roomKey);
   if(!room) return false;
   for(const slot of moveObjectSlots(roomKey)){
     if(slot.side === 'center' && !room.entryNoStreet) continue;
-    const filled = slotAssetFor(roomKey, slot.id) || slotWordFor(roomKey, slot.id) || moveObjectListResolved(roomKey, slot)?.asset;
+    const listResolved = moveObjectListResolved(roomKey, slot);
+    const filled = slotAssetFor(roomKey, slot.id) || slotWordFor(roomKey, slot.id) || listResolved?.asset || listResolved?.word;
     if(!filled) return false;
   }
   for(const ex of (room.exits || [])){
@@ -1573,7 +1573,7 @@ function setSlotOverride(roomKey, slotId, assetId){
 // stand-in ("just the name of the thing") for when making a real image asset
 // isn't worth the time yet. Renders via the same word-plaque builder a wall-
 // list item's word-only entry already uses (buildMoveObjectWordLabel), and --
-// unlike that wall-list case -- counts as filled for "fully decorated"
+// same as that wall-list case -- counts as filled for "fully decorated"
 // purposes (see computeFullyDecorated), since the user is explicitly saying
 // "this is decorated, just not with an image yet." Mutually exclusive with a
 // real asset override: setting one clears the other.
@@ -8603,7 +8603,8 @@ export async function openThreeTest(containerEl, opts){
           const manualWord = slotWordFor(roomKey, slot.id);
           const listResolved = (!override && !manualWord) ? moveObjectListResolved(roomKey, slot) : null;
           const asset = override || (listResolved && listResolved.asset);
-          const filled = override || manualWord || asset;
+          const listWord = listResolved && listResolved.word;
+          const filled = override || manualWord || asset || listWord;
           console.log(`[Debug]   slot ${slot.id}: exempt=${exempt}, overrideAssetId=${overrideId || null}` +
             (override === null && overrideId ? ' (!! set but does not resolve in ASSET_BY_ID !!)' : '') +
             `, manualWord=${JSON.stringify(manualWord)}, listWord=${listResolved ? JSON.stringify(listResolved.word) : null}, resolvedAsset=${asset ? asset.id : null}` +
