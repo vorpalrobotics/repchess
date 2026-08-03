@@ -525,7 +525,12 @@ function registerOneCastle(castle, instanceId, opts = {}){
                                                  // outside a two-track room) -- lets a two-track room's
                                                  // per-lane chain (buildMoveObjectChain) fan out to only
                                                  // ITS OWN lane's doors, not the other lane's.
-                                                 track: dp.ex.track });
+                                                 track: dp.ex.track,
+                                                 // which member (side/order) this door originates FROM --
+                                                 // carried through so continuationListItem can tell whether
+                                                 // this is a lane's ONE AND ONLY door and, if so, which list
+                                                 // index comes right after that lane's own last member.
+                                                 fromSide: dp.ex.fromSide, fromOrder: dp.ex.fromOrder });
     const key = roomKeyFor(r);
     // move-pair billboards + numbered object slots: reuse the existing mnemonic
     // machinery by registering the room's pairs under its key. When present, the
@@ -3955,11 +3960,41 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   group.add(m);
   return group;
 }
+// when a lane ends in exactly one forward door (no branch), the destination
+// room's own head object can continue the SAME wall list this lane's own
+// interior members already draw from, picking up right where the lane left
+// off -- so filling one list just naturally carries across the doorway
+// instead of stopping dead at the last in-room slot, with no separate
+// assignment needed. Purely a read-time fallback (nothing persisted): it
+// stays live as the list or the lane's own length changes, and a deliberate
+// manual override on the destination's own head slot (or the destination's
+// own wall list, on an entryNoStreet room) still wins over it, same as any
+// other override. `ex` is the room's own exit record for this door (see
+// buildCastleGraph's fromSide/fromOrder tagging in app.js) -- null for the
+// street-entry pair, which has no lane to continue.
+function continuationListItem(roomKey, room, ex){
+  if(!ex || (ex.fromSide !== 'left' && ex.fromSide !== 'right') || !ex.fromOrder) return null;
+  const bucket = room.twoTrack ? ex.fromSide : 'all';
+  // more than one forward door sharing this same lane (a branch at the tail,
+  // or a memorized-room-stability side-door) -- no single "next" item to
+  // continue with, so leave it to the placeholder/manual-override path.
+  const siblingCount = (room.exits || []).filter(e => !e.back && e.fromSide === ex.fromSide).length;
+  if(siblingCount !== 1) return null;
+  const id = wallListId(roomKey, bucket);
+  if(!id) return null;
+  const list = OBJECT_LISTS[id];
+  if(!list || !Array.isArray(list.items)) return null;
+  const item = list.items[ex.fromOrder];   // 0-based: one past this lane's own last member
+  if(!item) return null;
+  const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
+  return { word: item.name, asset };
+}
 // resolves the move-pair billboard + head-object content for the room BEYOND a
 // door/entrance. exPair (edge-specific) wins for the billboard; else the target's
 // canonical head pair. The object is the target's head object (obj-C1): a manual
-// override, else the target room's assigned list item.
-function doorPairContent(target, exPair){
+// override, else the target room's assigned list item, else (listFallback) the
+// SOURCE lane's own list continuing onto this door (see continuationListItem).
+function doorPairContent(target, exPair, listFallback){
   const pair = exPair
     || (DEMO_MNEMONICS[target] && DEMO_MNEMONICS[target].pairs
         && DEMO_MNEMONICS[target].pairs.find(p => p.side === 'center'))
@@ -3972,6 +4007,7 @@ function doorPairContent(target, exPair){
     const r = moveObjectListResolved(target, headSlot);
     if(r){ asset = r.asset; word = r.word; }
   }
+  if(!asset && !word && listFallback){ asset = listFallback.asset; word = listFallback.word; }
   return { pair, asset, word, slotId };
 }
 // builds the move-pair billboard (eye height) + head object for a room beyond a
@@ -3983,9 +4019,9 @@ function doorPairContent(target, exPair){
 // without a roomSlots entry. `occurrence` (only ever passed by
 // buildStreetEntryPair -- "which castles should I prioritize memorizing?" is a
 // street-level, not per-door, question) is a small line drawn under the pair.
-function buildPairAt(roomKey, room, x, z, target, exPair, occurrence){
+function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallback){
   const group = new THREE.Group();
-  const { pair, asset, word, slotId } = doorPairContent(target, exPair);
+  const { pair, asset, word, slotId } = doorPairContent(target, exPair, listFallback);
   if(hintsOn && pair){
     // the pair billboard is selectable + movable like the old in-room one: its
     // per-door position/height/scale live in this room's slotXform under
@@ -4032,7 +4068,7 @@ function buildPairAt(roomKey, room, x, z, target, exPair, occurrence){
 function buildDoorPair(roomKey, room, wall, offset, ex){
   const sideSign = wall === 'east' ? 1 : -1;
   const { x, z } = doorSideXZ(room, wall, offset, sideSign);
-  return buildPairAt(roomKey, room, x, z, ex.target, ex.pair);
+  return buildPairAt(roomKey, room, x, z, ex.target, ex.pair, undefined, continuationListItem(roomKey, room, ex));
 }
 // Phase 2: the entry (mansion-root) room's pair/object out on the street, beside
 // the building's front door -- that room's centre pair now lives here rather than
@@ -8806,6 +8842,31 @@ export async function openThreeTest(containerEl, opts){
         buildRoom(currentRoomKey);
       },
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h, doorKey:o.userData.doorKey }); }); return out; },
+      // a room's own resolved exits, incl. the fromSide/fromOrder tagging
+      // (which member each door originates from) that continuationListItem
+      // relies on -- for pinning that the graph-generation -> render-time
+      // exits.push threading actually carries those fields through, without
+      // scraping door meshes out of the scene by hand.
+      exitsFor: (roomKey) => (mergedRoom(roomKey || currentRoomKey).exits || []).map(e =>
+        ({ wall: e.wall, target: e.target, back: !!e.back, track: e.track || null,
+           fromSide: e.fromSide || null, fromOrder: e.fromOrder || null })),
+      // the pure resolution logic behind "a lane ending in exactly one door
+      // continues its own wall list onto that door's head object" -- called
+      // directly against a real roomKey (so wallListId/OBJECT_LISTS reads are
+      // real) but a caller-supplied room/ex shape, so a test can exercise the
+      // single-door / branch / no-list cases without needing to coax the real
+      // castle generator into producing each exact graph shape.
+      continuationListItem: (roomKey, room, ex) => continuationListItem(roomKey, room, ex),
+      // same resolution, but against a door's REAL exit record (found by its
+      // target room key) instead of a synthetic one -- confirms the graph-
+      // generation -> render-time fromSide/fromOrder threading (see exitsFor)
+      // actually drives a genuine castle-generated single door's own
+      // continuation, not just the pure-logic synthetic cases above.
+      continuationListItemForRealDoor: (roomKey, targetRoomKey) => {
+        const room = mergedRoom(roomKey);
+        const ex = room && (room.exits || []).find(e => e.target === targetRoomKey);
+        return ex ? continuationListItem(roomKey, room, ex) : null;
+      },
       meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
