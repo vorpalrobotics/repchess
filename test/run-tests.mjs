@@ -4474,6 +4474,14 @@ try {
         orderingType: 'procedural', orderingRule: '',
         items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }],
         mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      // a 3rd item beyond lane_list's own 2, for testing that the real O-O
+      // door (this lane's sole VISIBLE exit -- the locked a6 door doesn't
+      // occupy a room.exits slot at all) continues the SAME list onto its
+      // own head object.
+      { id: 'lane_list3', name: 'Lane List 3', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'First', assetId: null }, { name: 'Second', assetId: null }, { name: 'Third', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
     ],
   }, { defaultPlayerColor: 'white' });
   await openVR(appAD2.page);
@@ -4555,6 +4563,91 @@ try {
     assert(listWord === 'First', `expected the slot to now resolve to the list's own first item, got ${JSON.stringify(listWord)}`);
     ok('wall list assignment clears a stale per-slot override so the list actually takes effect');
   } catch(e){ bad('wall list assignment clears stale per-slot overrides', e); }
+
+  // 87f. exits carry fromSide/fromOrder through from graph generation to
+  //      render time -- the data plumbing continuationListItem depends on to
+  //      tell which lane/member a door belongs to. The locked a6 door never
+  //      occupies a room.exits slot at all (an unbuilt/leaf exit isn't part
+  //      of this room's own exits array -- see genRooms' own `unbuilt`
+  //      comment), so O-O is this lane's ONLY entry here despite the real
+  //      branch -- which is exactly what makes the O-O door eligible for
+  //      "exactly one door" continuation below, even though two tries were
+  //      actually recorded from Bd2's position.
+  try {
+    const exits = await appAD2.page.evaluate((k) => window.__threeTestEdit.exitsFor(k), root);
+    const leftExits = exits.filter(e => !e.back && e.fromSide === 'left');
+    assert(leftExits.length === 1, `test setup issue: expected exactly 1 door slot for the left lane (the locked a6 door isn't one), got ${JSON.stringify(leftExits)}`);
+    assert(leftExits[0].fromOrder === 2, `expected the door tagged fromOrder=2 (Bd2 is the lane's 2nd member), got ${JSON.stringify(leftExits[0])}`);
+    ok('room exits carry fromSide/fromOrder through from graph generation to render time');
+  } catch(e){ bad('room exits: fromSide/fromOrder threading', e); }
+
+  // 87f2. That real O-O door -- this lane's one and only VISIBLE exit --
+  //      actually continues the SAME wall list assigned to the lane, end to
+  //      end through the real castle generator (not a synthetic room/ex).
+  try {
+    await appAD2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'left', 'lane_list3'), root);
+    const exits = await appAD2.page.evaluate((k) => window.__threeTestEdit.exitsFor(k), root);
+    const oO = exits.find(e => !e.back && e.fromSide === 'left');
+    const result = await appAD2.page.evaluate(({ k, t }) => window.__threeTestEdit.continuationListItemForRealDoor(k, t),
+      { k: root, t: oO.target });
+    assert(result && result.word === 'Third',
+      `expected the real O-O door to continue lane_list3's 3rd item (0-based index 2), got ${JSON.stringify(result)}`);
+    ok('a real castle-generated single door continues its lane\'s own wall list end to end');
+  } catch(e){ bad('continuationListItem: real single-door case via the actual castle generator', e); }
+
+  // 87g. When a lane ends in exactly one door (no branch), that door's own
+  //      head object continues the SAME wall list right where the lane's own
+  //      members left off -- requested live, after the reported wall-list
+  //      fix above, as the natural next step: "in the case where there is
+  //      exactly 1 door ... I want the move pair by that door to continue
+  //      using the object list's next item". Exercised directly against
+  //      continuationListItem (root has a real wall list assigned, but no
+  //      real single-door branch is constructible without a genuine
+  //      transposition, so the exits shape is supplied synthetically).
+  try {
+    const result = await appAD2.page.evaluate((k) =>
+      window.__threeTestEdit.continuationListItem(k,
+        { twoTrack: true, exits: [{ back: false, fromSide: 'left', fromOrder: 1 }] },
+        { fromSide: 'left', fromOrder: 1 }),
+      root);
+    assert(result && result.word === 'Second',
+      `expected the list's next item (0-based index 1) to continue onto the lane's sole door, got ${JSON.stringify(result)}`);
+    ok('continuationListItem: a lane\'s single door continues the wall list at the next index');
+  } catch(e){ bad('continuationListItem: single-door case', e); }
+
+  // 87h. ...but not when the tail branches into more than one door (like the
+  //      real a6/O-O branch above) -- there's no single "next" item to
+  //      continue with.
+  try {
+    const result = await appAD2.page.evaluate((k) =>
+      window.__threeTestEdit.continuationListItem(k,
+        { twoTrack: true, exits: [
+          { back: false, fromSide: 'left', fromOrder: 1 },
+          { back: false, fromSide: 'left', fromOrder: 1 },
+        ] },
+        { fromSide: 'left', fromOrder: 1 }),
+      root);
+    assert(result === null, `expected a branch (2 doors from the same lane) to NOT continue the list, got ${JSON.stringify(result)}`);
+    ok('continuationListItem: a branch (more than one door on the same lane) does not continue the list');
+  } catch(e){ bad('continuationListItem: branch case returns null', e); }
+
+  // 87i. ...and not when the resolved bucket has no wall list assigned, or
+  //      the continuation index runs past the assigned list's own length.
+  try {
+    const noList = await appAD2.page.evaluate((k) =>
+      window.__threeTestEdit.continuationListItem(k,
+        { twoTrack: false, exits: [{ back: false, fromSide: 'left', fromOrder: 1 }] },
+        { fromSide: 'left', fromOrder: 1 }),
+      root);
+    assert(noList === null, `expected no continuation when the resolved bucket has no wall list assigned, got ${JSON.stringify(noList)}`);
+    const pastEnd = await appAD2.page.evaluate((k) =>
+      window.__threeTestEdit.continuationListItem(k,
+        { twoTrack: true, exits: [{ back: false, fromSide: 'left', fromOrder: 5 }] },
+        { fromSide: 'left', fromOrder: 5 }),
+      root);
+    assert(pastEnd === null, `expected an index past the list's own length to return null, got ${JSON.stringify(pastEnd)}`);
+    ok('continuationListItem: no list assigned, or index past the list\'s own length, both return null');
+  } catch(e){ bad('continuationListItem: no-list / past-end cases', e); }
 } finally {
   await appAD2.close();
 }
