@@ -5,10 +5,39 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-77';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-52';
+import { openAssetPicker } from './assets.js?v=20260804-78';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-53';
 
 let THREE = null;
+
+// Every full-screen overlay here (help, room geometry, wall lists, ...)
+// closes on a "click the dark backdrop" gesture -- but a plain
+// `ov.onclick = e => e.target === ov` check misfires on an ordinary
+// text-selection DRAG that starts inside the modal's own content (a size
+// field, a paragraph of text) and ends with the mouse out over the backdrop:
+// browsers fire the resulting "click" on the nearest common ancestor of the
+// mousedown and mouseup targets, which IS the overlay itself once the drag
+// has left the content, silently closing the modal (reported live, from the
+// New Asset modal: sweep-selecting a size field to overtype it made the
+// whole modal vanish, no console error). Only close when BOTH the mousedown
+// and the click itself landed directly on the backdrop, not just the click.
+// Re-wiring a PERSISTENT singleton overlay (most of these -- created once via
+// document.getElementById(id) || createElement, then reused across many
+// opens) would otherwise stack a fresh pair of listeners on every open, each
+// closing over that invocation's own `onClose`; only the two most recent
+// ever get removed automatically (on an actual backdrop click), so a dialog
+// reopened many times via its Close button/Escape instead would leak one
+// stale pair per open. Storing the current pair on the element and removing
+// it first makes repeated calls idempotent regardless of how it was closed.
+function wireBackdropClose(ov, onClose, opts){
+  if(ov._backdropMousedown) ov.removeEventListener('mousedown', ov._backdropMousedown);
+  if(ov._backdropClick) ov.removeEventListener('click', ov._backdropClick);
+  let downOnBackdrop = false;
+  ov._backdropMousedown = e => { downOnBackdrop = e.target === ov; };
+  ov._backdropClick = e => { if(downOnBackdrop && e.target === ov) onClose(); };
+  ov.addEventListener('mousedown', ov._backdropMousedown);
+  ov.addEventListener('click', ov._backdropClick, opts);
+}
 
 /* asset types that can sit in a slot (props, not surfaces). Cylindrical
    listed first -- it's the right choice for almost everything (see
@@ -7332,7 +7361,7 @@ function buildHelpOverlay(){
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
     </div>`;
-  ov.addEventListener('click', (e) => { if(e.target === ov) toggleHelp(false); });
+  wireBackdropClose(ov, () => toggleHelp(false));
   ov.querySelector('#threeHelpCloseBtn').addEventListener('click', () => toggleHelp(false));
   return ov;
 }
@@ -7662,7 +7691,7 @@ function renderWallListsDialog(ov, roomKey){
         : bucketBlocks}
     </div>`;
   ov.querySelector('#wlCloseBtn').onclick = closeWallListsDialog;
-  ov.addEventListener('click', e => { if(e.target === ov) closeWallListsDialog(); }, { once: true });
+  wireBackdropClose(ov, closeWallListsDialog, { once: true });
   ov.querySelectorAll('.wl-select').forEach(sel => {
     sel.onchange = () => {
       const bucket = sel.dataset.bucket;
