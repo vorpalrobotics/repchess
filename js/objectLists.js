@@ -503,13 +503,19 @@ function checkQuizAnswer(correctName){
   const val = $('olq_answer').value.trim();
   const correct = quizAnswerMatches(val, correctName);
   if(correct) QUIZ.hits++; else QUIZ.misses++;
-  revealAnswer(correct, correctName);
+  // a PARTIAL match (e.g. "hamp" for "Hamper") reveals the full name even on
+  // a hit, so the user actually sees/confirms the whole word, not just their
+  // own shorthand; an exact match already IS the full name, nothing to add.
+  const exact = val.toLowerCase() === correctName.trim().toLowerCase();
+  revealAnswer(correct, correctName, correct && !exact);
 }
 
-function revealAnswer(correct, correctName){
+function revealAnswer(correct, correctName, showFullOnHit=false){
   QUIZ.revealed = true;
   $('olq_feedback').innerHTML = correct
-    ? '<span class="objlist-quiz-hit">&#10003; Correct</span>'
+    ? (showFullOnHit
+        ? `<span class="objlist-quiz-hit">&#10003; Correct — &ldquo;${esc(correctName)}&rdquo;</span>`
+        : '<span class="objlist-quiz-hit">&#10003; Correct</span>')
     : `<span class="objlist-quiz-miss">&#10007; It was &ldquo;${esc(correctName)}&rdquo;</span>`;
   $('olq_answer').disabled = true;
   $('olq_skip').style.display = 'none';
