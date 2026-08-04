@@ -5,13 +5,20 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260801-76';
-import { openNewObjectListModal } from './objectLists.js?v=20260803-51';
+import { openAssetPicker } from './assets.js?v=20260804-77';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-52';
 
 let THREE = null;
 
-/* asset types that can sit in a slot (props, not surfaces) */
-const PROP_TYPES = ['extruded', 'billboard-cylindrical', 'billboard-sprite'];
+/* asset types that can sit in a slot (props, not surfaces). Cylindrical
+   listed first -- it's the right choice for almost everything (see
+   buildBillboardAsset), and callers that default a new asset's type to
+   allow[0] (e.g. assets.js's picker "+ New Asset" button) should land there
+   instead of "extruded". 'billboard-sprite' (a full always-faces-camera
+   sprite) was removed as choosable -- db.js's getAllAssets normalizes any
+   already-saved asset of that type to 'billboard-cylindrical' on read, so
+   it keeps rendering the same way instead of breaking. */
+const PROP_TYPES = ['billboard-cylindrical', 'extruded'];
 
 const ROOMS = {
   mainStreet: {
@@ -2177,25 +2184,15 @@ function assetSurfaceMaterial(asset, repeatX, repeatY){
   return mat;
 }
 
+// a cylindrical billboard: a flat plane, rotated to face the camera's
+// horizontal angle each frame (see the `billboards` array/update loop) but
+// never tilting up/down -- the right choice for anything meant to stand in
+// the room (see PROP_TYPES' own comment). Also built for a legacy
+// 'billboard-sprite' asset (normalized to 'billboard-cylindrical' on read by
+// db.js's getAllAssets), so this function itself no longer needs to know
+// that type ever existed.
 function buildBillboardAsset(asset){
   const { w, h } = asset.size;
-  if(asset.type === 'billboard-sprite'){
-    // alphaTest cutout so the PNG's transparent background is discarded instead
-    // of rendering opaque (a SpriteMaterial defaults to transparent:false, which
-    // ignores the alpha channel and shows the background's baked RGB -- white,
-    // in the reported case). Same hard-cutout the cylindrical billboard uses, so
-    // it also avoids the dark/halo fringe that alpha *blending* would give.
-    const mat = new THREE.SpriteMaterial({ color: 0xffffff, alphaTest: 0.5 });
-    const myGen = buildGeneration;
-    textureLoader.load(asset.image, (tex) => {
-      if(buildGeneration !== myGen) return;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      mat.map = tex; mat.needsUpdate = true;
-    });
-    const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(w, h, 1);
-    return sprite;
-  }
   // alphaTest-only cutout (no `transparent` blending): semi-transparent
   // anti-aliased edge pixels in the source PNG carry near-black RGB once
   // alpha-blended, which read as a dark halo around the cutout shape.
@@ -2371,7 +2368,7 @@ function edgeColor(data, W, H){
 
 function buildPropAsset(asset){
   if(asset.type === 'extruded') return buildExtrudedAsset(asset);
-  return buildBillboardAsset(asset); // cylindrical or sprite
+  return buildBillboardAsset(asset); // cylindrical (or a legacy 'billboard-sprite' asset, normalized to it on read)
 }
 
 // rotation.y so a prop's front (local -z) points into the room off a wall
@@ -2638,7 +2635,7 @@ function applyAccessoryTransform(obj, room, slot, asset, xform){
     let y = slot.y + (xform.dY || 0);
     if(slot.ground){ const h = ((asset.size && asset.size.h) || 1) * scale; y = floorHeightAt(room, z) + h/2; }
     obj.position.set(x, y, z);
-    if(!(asset.type === 'billboard-cylindrical' || asset.type === 'billboard-sprite')){
+    if(asset.type !== 'billboard-cylindrical'){
       obj.rotation.y = WALL_INWARD_YAW[slot.wall] || 0;
     }
   } else {
@@ -6339,9 +6336,9 @@ function attachSelectionVisuals(){
   // which is what made the outline look "rotated wrong" from most angles.
   // Measuring with rotation zeroed (its stable, never-authored resting
   // orientation -- applyAccessoryTransform deliberately never sets rotation.y
-  // on a billboard) gives the true footprint instead; a Sprite (mnemonic,
-  // billboard-sprite) never has its own rotation touched at all, so this is a
-  // no-op for those.
+  // on a billboard) gives the true footprint instead; a true THREE.Sprite
+  // (mnemonic pair labels/plaques) never has its own rotation touched at
+  // all, so this is a no-op for those.
   const isCylBillboard = billboards.includes(found);
   let box;
   if(isCylBillboard){

@@ -40,10 +40,14 @@ function anyAssetsOverlayOpen(){
 window.addEventListener('keydown', e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
 window.addEventListener('keyup',   e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
 
+// 'billboard-sprite' (a full always-faces-camera sprite, tilting on every
+// axis -- looked wrong for anything meant to stand in the room) was removed
+// as a choosable type; db.js's getAllAssets normalizes any already-saved
+// asset of that type to 'billboard-cylindrical' on read, so it isn't listed
+// here at all -- nothing in memory ever carries the old value to show.
 const ASSET_TYPES = {
-  'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
   'billboard-cylindrical': { label: 'Prop: Billboard (cylindrical)',  kind: 'prop' },
-  'billboard-sprite':      { label: 'Prop: Billboard (sprite)',       kind: 'prop' },
+  'extruded':              { label: 'Prop: Extruded (silhouette)',    kind: 'prop' },
   'surface':               { label: 'Surface (floor / wall texture)', kind: 'surface' },
   'facade':                { label: 'Surface: Facade (large, non-tiled)', kind: 'facade' },
   'sign':                  { label: 'Surface: Sign skin', kind: 'sign' },
@@ -88,7 +92,7 @@ const RESOLUTION_CAPS = {
 function resolutionCategory(type){
   if(type === 'facade')  return 'large';
   if(type === 'surface') return 'tiled';
-  return 'object';                       // extruded, billboard-cylindrical, billboard-sprite, sign
+  return 'object';                       // extruded, billboard-cylindrical, sign
 }
 function resolutionCap(type, tier){
   const cat = RESOLUTION_CAPS[resolutionCategory(type)] || RESOLUTION_CAPS.object;
@@ -227,7 +231,7 @@ function openEditor(id, initialType, allowTypes){
 }
 
 function renderEditor(a, initialType, allowTypes){
-  const type = (a && a.type) || initialType || 'extruded';
+  const type = (a && a.type) || initialType || 'billboard-cylindrical';
   // when opened for a specific slot (e.g. the picker's "New Asset…" button),
   // restrict the type choices to what that slot actually accepts -- picking
   // something outside that set would save fine but then never show up back
@@ -1336,7 +1340,7 @@ function readTypeFields(type){
       orientation: $('assetOrientation').value === 'flat' ? 'flat' : 'standing',
     };
   }
-  if(type === 'billboard-cylindrical' || type === 'billboard-sprite'){
+  if(type === 'billboard-cylindrical'){
     return { size: { w: Number($('assetSizeW').value)||0, h: Number($('assetSizeH').value)||0 } };
   }
   if(type === 'facade'){
@@ -1478,7 +1482,7 @@ function assetToJson(a){
   if(a.keywords) json.keywords = a.keywords;
   if(a.type === 'extruded'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, orientation: a.orientation || 'standing' });
-  } else if(a.type === 'billboard-cylindrical' || a.type === 'billboard-sprite'){
+  } else if(a.type === 'billboard-cylindrical'){
     Object.assign(json, { size: a.size });
   } else if(a.type === 'facade'){
     Object.assign(json, { size: a.size, sideColor: a.sideColor, tint: a.tint, roughness: a.roughness, metalness: a.metalness });
@@ -1681,7 +1685,7 @@ async function renderPicker(ov){
   };
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
   ov.querySelector('#pickerNewAssetBtn').onclick = async () => {
-    const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'extruded';
+    const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'billboard-cylindrical';
     const newId = await openNewAssetModal(initialType, pickerOpts.allow);
     if(newId) await renderPicker(ov);   // refresh so the new asset shows up for the user to pick
   };

@@ -327,11 +327,24 @@ const BLANK_ASSET = {
   createdAt:0, updatedAt:0
 };
 
+// 'billboard-sprite' (a full always-faces-camera sprite, tilting on every
+// axis) was removed as a choosable asset type -- 'billboard-cylindrical'
+// (Y-axis-only rotation, so it stays upright as you look up/down at it)
+// covers the same "flat PNG prop" need correctly in virtually every case.
+// Read-time fallback so an asset saved under the old type before this change
+// keeps rendering/editing/labeling exactly like a cylindrical one instead of
+// silently breaking, with no destructive rewrite of the stored record and no
+// migration step needed -- every consumer reads assets through this one
+// function, so normalizing here alone is enough.
+function normalizeAssetType(asset){
+  return asset && asset.type === 'billboard-sprite' ? { ...asset, type: 'billboard-cylindrical' } : asset;
+}
+
 async function getAllAssets(){
   const db = await openDB();
   return new Promise((resolve,reject)=>{
     const req = db.transaction('assets','readonly').objectStore('assets').getAll();
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => resolve(req.result.map(normalizeAssetType));
     req.onerror   = () => reject(req.error);
   });
 }
