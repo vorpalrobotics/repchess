@@ -18,12 +18,18 @@ differences from the original proposal:
   the "Import resolution" section below (that section describes shipped
   behavior, not a plan). There's no `assets/three/props/` directory.
 - **The `box` prop type is called `extruded` in the shipped code**
-  (`PROP_TYPES = ['extruded', 'billboard-cylindrical', 'billboard-sprite']`
-  in `js/threeVR.js`) — same concept (one skinned face + a flat-colored
-  side), different name. `billboard-cylindrical` and `billboard-sprite`
-  shipped under their proposed names, as did `surface` (`repeatPerMeter`)
-  and `facade` (one-shot, whole-building-front texture, wired into
-  `buildingFacadeFor`).
+  (`PROP_TYPES = ['billboard-cylindrical', 'extruded']` in `js/threeVR.js`)
+  — same concept (one skinned face + a flat-colored side), different name.
+  `billboard-cylindrical` shipped under its proposed name, as did `surface`
+  (`repeatPerMeter`) and `facade` (one-shot, whole-building-front texture,
+  wired into `buildingFacadeFor`).
+- **`billboard-sprite` (a full always-faces-camera sprite, tilting on every
+  axis) was removed as a choosable type** — in practice `billboard-
+  cylindrical` (Y-axis-only rotation, staying upright as the camera looks
+  up/down) is the right choice for virtually everything, and a full-tilt
+  sprite just looked wrong for anything meant to stand in the room.
+  `db.js`'s `getAllAssets` normalizes any already-saved asset of that type
+  to `billboard-cylindrical` on read, so nothing broke when it was removed.
 
 ## The core idea
 
@@ -48,9 +54,9 @@ a new prop or texture never requires touching `threeVR.js` itself.
 Don't use one schema for everything — "a grandfather clock" and "a brick
 wall texture" are different shapes of problem:
 
-- **Props** (`type: "box"`, `"billboard-cylindrical"`, `"billboard-sprite"`)
-  — a discrete object placed at a specific `(x, z, yaw)` in a room, with an
-  explicit size in meters. Furniture, signs, trees, birdbaths.
+- **Props** (`type: "box"`, `"billboard-cylindrical"`) — a discrete object
+  placed at a specific `(x, z, yaw)` in a room, with an explicit size in
+  meters. Furniture, signs, trees, birdbaths.
 - **Surfaces** (`type: "surface"`) — a tileable material applied across
   geometry the room-builder already constructs (floors, walls, stair
   tops). These don't have a fixed size — they need a *repeat density*
@@ -128,12 +134,16 @@ would visibly lean as the camera looks up or down at it.
   how the billboard loader works, so asset authors don't need to
   remember to set it.
 
-### `billboard-sprite`
+### `billboard-sprite` (removed)
 
-A full always-faces-camera sprite (`THREE.Sprite`), tilts in every axis to
-fully front the camera. Rare — appropriate for something like a distant
-flat icon or a particle-style effect, not for anything meant to look
-planted in the world. Same fields as `billboard-cylindrical`.
+Used to be a full always-faces-camera sprite (`THREE.Sprite`), tilting in
+every axis to fully front the camera — removed from the choosable types
+since `billboard-cylindrical` is correct for virtually everything a prop
+would be used for, and full-tilt made anything meant to stand in the room
+visibly lean. An asset already saved under this type isn't broken: `db.js`'s
+`getAllAssets` normalizes it to `billboard-cylindrical` on every read (not a
+one-time migration — the stored record itself is left untouched), so it
+keeps rendering, editing, and labeling exactly like one.
 
 ## Surface type
 

@@ -1017,7 +1017,7 @@ try {
   // generic to any empty-slot marker, wall/ceiling included -- see
   // handleEditTarget's own 'slot' branch).
   async function assignPropA(slotId){
-    await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+    await appGZ2.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical'] }), slotId);
     await appGZ2.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await appGZ2.page.evaluate(() => {
       const card = [...document.querySelectorAll('#pickerGrid .asset-card')].find(c => c.textContent.includes('propA'));
@@ -6039,7 +6039,7 @@ try {
     await appAO.page.waitForSelector('#assetsOverlay', { state: 'visible', timeout: 5000 });
     await appAO.page.evaluate(() => document.getElementById('assetsNewBtn').click());
     const options = await appAO.page.evaluate(() => [...document.getElementById('assetTypeInput').options].map(o => o.value));
-    assert(options.length === 7, `expected all 7 asset types offered in the full Asset Manager, got ${JSON.stringify(options)}`);
+    assert(options.length === 6, `expected all 6 asset types offered in the full Asset Manager, got ${JSON.stringify(options)}`);
     ok('the full Asset Manager\'s own New Asset still offers every type (not scoped to a picker)');
   } catch(e){ bad('full Asset Manager New Asset: unrestricted type list', e); }
 } finally {
@@ -6234,7 +6234,7 @@ try {
   const slotIds = await appAR.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
   const slotId = slotIds.find(id => id !== 'obj-C1');
   const openSlotPicker = () => appAR.page.evaluate((sid) =>
-    window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+    window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical'] }), slotId);
 
   // 137. Search box: typing filters the grid by id/keyword; clearing it
   //      brings everything back.
@@ -6422,6 +6422,82 @@ try {
   await appAR2.close();
 }
 } catch(e){ bad('Phase AR2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase AR3: 'billboard-sprite' (a full always-faces-camera sprite,
+//     tilting on every axis) removed as a choosable asset type --
+//     'billboard-cylindrical' (Y-axis-only rotation) is correct for
+//     virtually everything a prop asset is used for, so it's now the default
+//     for a brand-new asset too (previously 'extruded'). An asset already
+//     saved under the removed type keeps working: db.js's getAllAssets
+//     normalizes it to 'billboard-cylindrical' on every read (not a one-time
+//     migration -- the stored record itself is left untouched), so every
+//     consumer (the asset manager's grid/editor, and threeVR.js's ASSET_BY_ID)
+//     sees it as cylindrical. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appAR3 = await launchApp();
+try {
+  await seedBackup(appAR3.page, {
+    version: 6, user: 'tester',
+    lines: [],
+    // saved under the removed type, from before this change existed.
+    assets: [{ id: 'legacy-sprite', type: 'billboard-sprite', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.6, h: 0.6 } }],
+  });
+  await appAR3.page.evaluate(() => document.getElementById('menuAssets').click());
+  await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+
+  // 92. A brand-new asset defaults to "Billboard (cylindrical)", not
+  //     "Extruded" -- and "Billboard (sprite)" is no longer offered at all.
+  try {
+    await appAR3.page.evaluate(() => document.getElementById('assetsNewBtn').click());
+    await appAR3.page.waitForSelector('#assetTypeInput', { timeout: 5000 });
+    const type = await appAR3.page.evaluate(() => document.getElementById('assetTypeInput').value);
+    assert(type === 'billboard-cylindrical', `expected a brand-new asset to default to billboard-cylindrical, got ${JSON.stringify(type)}`);
+    const optionValues = await appAR3.page.evaluate(() =>
+      [...document.getElementById('assetTypeInput').options].map(o => o.value));
+    assert(!optionValues.includes('billboard-sprite'),
+      `expected "billboard-sprite" to no longer be offered as a choosable type, got ${JSON.stringify(optionValues)}`);
+    ok('New Asset: defaults to billboard-cylindrical, and billboard-sprite is no longer offered');
+    await appAR3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+  } catch(e){ bad('New Asset: cylindrical default, sprite type removed', e); }
+
+  // 93. An asset already saved under the removed 'billboard-sprite' type
+  //     shows (and opens in the editor) as billboard-cylindrical, not with a
+  //     blank/broken type selection or a stale "sprite" label.
+  try {
+    await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+    const cardLabel = await appAR3.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#assetsGrid .asset-card')].find(c => c.textContent.includes('legacy-sprite'));
+      return card ? card.querySelector('.asset-type')?.textContent : null;
+    });
+    assert(cardLabel === 'Prop: Billboard (cylindrical)',
+      `expected the legacy asset's grid card to show the cylindrical label, got ${JSON.stringify(cardLabel)}`);
+    await appAR3.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#assetsGrid .asset-card')].find(c => c.textContent.includes('legacy-sprite'));
+      card.click();
+    });
+    await appAR3.page.waitForSelector('#assetTypeInput', { timeout: 5000 });
+    const openedType = await appAR3.page.evaluate(() => document.getElementById('assetTypeInput').value);
+    assert(openedType === 'billboard-cylindrical', `expected the legacy asset to open as billboard-cylindrical, got ${JSON.stringify(openedType)}`);
+    ok('legacy billboard-sprite asset: shows and opens as billboard-cylindrical in the manager UI');
+    await appAR3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+  } catch(e){ bad('legacy billboard-sprite asset: normalized in the manager UI', e); }
+
+  // 94. getAllAssets() itself normalizes the type on every read -- the single
+  //     choke point every consumer (asset manager, threeVR.js's ASSET_BY_ID)
+  //     loads assets through, confirmed directly against the stored record.
+  try {
+    const type = await appAR3.page.evaluate(async () => {
+      const assets = await getAllAssets();
+      return assets.find(a => a.id === 'legacy-sprite')?.type;
+    });
+    assert(type === 'billboard-cylindrical', `expected getAllAssets to normalize the type, got ${JSON.stringify(type)}`);
+    ok('getAllAssets: normalizes a legacy billboard-sprite asset to billboard-cylindrical on every read');
+  } catch(e){ bad('getAllAssets: normalizes legacy billboard-sprite type', e); }
+} finally {
+  await appAR3.close();
+}
+} catch(e){ bad('Phase AR3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
@@ -13233,7 +13309,7 @@ try {
 
     // assign a placeholder WORD label (no image) via the real picker UI --
     // same flow a user takes from an empty slot (mirrors Phase AR's test 139).
-    await appCL.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical','billboard-sprite'] }), slotId);
+    await appCL.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'slot', slotId: sid, allow: ['extruded','billboard-cylindrical'] }), slotId);
     await appCL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await appCL.page.fill('#pickerWordInput', 'Grandfather Clock');
     await appCL.page.click('#pickerWordApplyBtn');
