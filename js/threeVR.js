@@ -6,7 +6,7 @@
    door instead of just spawning inside it.
 */
 import { openAssetPicker } from './assets.js?v=20260801-76';
-import { openNewObjectListModal } from './objectLists.js?v=20260803-49';
+import { openNewObjectListModal } from './objectLists.js?v=20260803-50';
 
 let THREE = null;
 

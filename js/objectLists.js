@@ -559,7 +559,7 @@ function renderQuizSummary(){
 let CASTLE_QUIZ_PROVIDER = null;   // { listOptions(): Promise<{lineId,lineName,castleName}[]>, entriesForCastle(lineId,castleName): Promise<entry[]> }
 export function setCastleQuizProvider(provider){ CASTLE_QUIZ_PROVIDER = provider; }
 
-async function openCastleQuizPicker(){
+export async function openCastleQuizPicker(){
   if(!CASTLE_QUIZ_PROVIDER) return;
   const grid = $('objlistGrid');
   if(grid) grid.style.display = 'none';

@@ -3,7 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260803-265';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260801-76';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider } from './objectLists.js?v=20260803-49';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider, openCastleQuizPicker } from './objectLists.js?v=20260803-50';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-284';
+const BUILD_TAG = '-285';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7025,6 +7025,16 @@ $('menuQuiz').onclick = ()=>{
 $('menuTestChessboard').onclick = ()=>{
   $('menuList').style.display='none';
   openChessboardQuizSetup();
+};
+// jumps straight to "Quiz a Castle's Lists" (skipping the list grid) --
+// opens the same Manage Object Lists modal the VR Object Lists menu item
+// does, since that's where the quiz UI lives, but lands directly on the
+// castle-scoped quiz picker instead of the list browser.
+$('menuTestObjectLists').onclick = async ()=>{
+  $('menuList').style.display='none';
+  $('objectListsOverlay').style.display='flex';
+  await openObjectListManager($('objectListsBodyWrap'));
+  await openCastleQuizPicker();
 };
 $('quizScopeSelect').onchange = ()=>{
   const custom = $('quizScopeSelect').value === 'custom';

@@ -10415,19 +10415,20 @@ try {
       mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } }],
     threeLayout: JSON.stringify({ [rootKey]: { wallLists: { all: { listId: 'castle_quiz_list' } } } }),
   });
-  await appCQ.page.evaluate(() => document.getElementById('menuObjectLists').click());
-  await appCQ.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
-
-  // 172. Only the castle with a wall-list assignment appears in the picker.
+  // 172. Test > Object Lists (hamburger menu) jumps straight to the
+  //      castle-scoped quiz picker, skipping the list grid entirely -- and
+  //      only the castle with a wall-list assignment appears in it.
   try {
-    await appCQ.page.click('#objlistCastleQuizBtn');
+    await appCQ.page.evaluate(() => document.getElementById('menuTestObjectLists').click());
     await appCQ.page.waitForSelector('#olcq_select', { timeout: 5000 });
+    const gridHidden = await appCQ.page.evaluate(() => document.getElementById('objlistGrid').style.display === 'none');
+    assert(gridHidden, 'expected Test > Object Lists to skip the list grid and land directly on the castle picker');
     const optionLabels = await appCQ.page.evaluate(() =>
       [...document.querySelectorAll('#olcq_select option')].map(o => o.textContent));
     assert(JSON.stringify(optionLabels) === JSON.stringify(['Alpha']),
       `expected only the used castle ("Alpha") in the picker, got ${JSON.stringify(optionLabels)}`);
-    ok('Quiz a Castle: only castles with an assigned wall list appear in the picker');
-  } catch(e){ bad('Quiz a Castle: picker excludes unused castles', e); }
+    ok('Test > Object Lists: jumps straight to the castle picker, which excludes unused castles');
+  } catch(e){ bad('Quiz a Castle: Test-menu shortcut and picker filtering', e); }
 
   // 173. Starting the quiz combines the castle's own assigned list's items,
   //      with each un-illustrated item's slot labeled by its source list.
