@@ -10368,8 +10368,21 @@ try {
     feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
     assert(feedback.includes('Correct') || feedback.includes('✓'),
       `expected a 3-letter case-insensitive prefix ("SIN" for "Sink") to count as correct, got ${JSON.stringify(feedback)}`);
+    assert(feedback.includes('Sink'), `expected a partial-match hit to also reveal the full name "Sink", got ${JSON.stringify(feedback)}`);
     ok('object list quiz: a 3+ letter case-insensitive prefix counts as correct, shorter does not');
   } catch(e){ bad('object list quiz: partial-match answer rule', e); }
+
+  // 171b. An EXACT match's hit feedback does NOT redundantly repeat the name
+  //      (the user already typed it in full) -- only a partial match does.
+  try {
+    await appQL.page.click('#olq_submit');   // Next -> item 3 (Fridge)
+    await appQL.page.fill('#olq_answer', 'Fridge');
+    await appQL.page.click('#olq_submit');
+    const feedback = await appQL.page.evaluate(() => document.getElementById('olq_feedback').textContent);
+    assert(feedback.includes('Correct') && !feedback.includes('Fridge'),
+      `expected an exact-match hit to say just "Correct", not repeat the name, got ${JSON.stringify(feedback)}`);
+    ok('object list quiz: an exact-match hit does not redundantly repeat the name');
+  } catch(e){ bad('object list quiz: exact-match hit feedback stays plain', e); }
 } finally {
   await appQL.close();
 }
