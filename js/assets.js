@@ -40,6 +40,31 @@ function anyAssetsOverlayOpen(){
 window.addEventListener('keydown', e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
 window.addEventListener('keyup',   e => { if(anyAssetsOverlayOpen()) e.stopPropagation(); }, true);
 
+// Every full-screen overlay in this module closes on a "click the dark
+// backdrop" gesture -- but a plain `ov.onclick = e => e.target === ov` check
+// misfires on an ordinary text-selection DRAG that starts inside a field
+// (e.g. sweep-selecting a size input to overtype it) and ends with the mouse
+// out over the backdrop: browsers fire the resulting "click" on the nearest
+// common ancestor of the mousedown and mouseup targets, which IS the overlay
+// itself once the drag has left the field, silently closing the modal and
+// discarding all in-progress work (reported live: no console error, just
+// the modal vanishing mid-edit). Only close when BOTH the mousedown and the
+// click itself landed directly on the backdrop, not just the click.
+// These overlays are PERSISTENT singletons (document.getElementById(id) ||
+// createElement, reused across many opens) -- re-wiring on every open would
+// otherwise stack a fresh listener pair each time, each closing over that
+// invocation's own `onClose`; storing the current pair on the element and
+// removing it first keeps repeated calls idempotent.
+function wireBackdropClose(ov, onClose){
+  if(ov._backdropMousedown) ov.removeEventListener('mousedown', ov._backdropMousedown);
+  if(ov._backdropClick) ov.removeEventListener('click', ov._backdropClick);
+  let downOnBackdrop = false;
+  ov._backdropMousedown = e => { downOnBackdrop = e.target === ov; };
+  ov._backdropClick = e => { if(downOnBackdrop && e.target === ov) onClose(); };
+  ov.addEventListener('mousedown', ov._backdropMousedown);
+  ov.addEventListener('click', ov._backdropClick);
+}
+
 // 'billboard-sprite' (a full always-faces-camera sprite, tilting on every
 // axis -- looked wrong for anything meant to stand in the room) was removed
 // as a choosable type; db.js's getAllAssets normalizes any already-saved
@@ -871,7 +896,7 @@ function openGenerateModal(){
   let lastDataUrl = null;
   const close = () => { ov.style.display = 'none'; ov.innerHTML = ''; };
   q('genCloseBtn').onclick = close;
-  ov.onclick = e => { if(e.target === ov) close(); };
+  wireBackdropClose(ov, close);
 
   q('genRunBtn').onclick = async () => {
     const key = q('genApiKey').value.trim();
@@ -1451,7 +1476,7 @@ export async function openNewAssetModal(initialType, allowTypes){
     };
     ov.querySelector('#assetsCancelBtn').onclick = () => finish(null);
     ov.querySelector('#assetNewCloseBtn').onclick = () => finish(null);
-    ov.onclick = e => { if(e.target === ov) finish(null); };
+    wireBackdropClose(ov, () => finish(null));
   });
 }
 

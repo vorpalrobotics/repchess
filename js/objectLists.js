@@ -21,7 +21,7 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal } from './assets.js?v=20260804-77';
+import { openNewAssetModal } from './assets.js?v=20260804-78';
 
 const ORDERING_TYPES = {
   'canonical_sequence': 'Canonical sequence (culturally fixed — planets, scale, HOMES)',
@@ -51,6 +51,30 @@ function $(id){ return containerEl.querySelector(`#${id}`); }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function slug(s){ return String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,''); }
 function assetById(id){ return id ? ASSETS.find(a => a.id === id) : null; }
+
+// Every full-screen overlay here closes on a "click the dark backdrop"
+// gesture -- but a plain `ov.onclick = e => e.target === ov` check misfires
+// on an ordinary text-selection DRAG that starts inside a field (e.g.
+// sweep-selecting a name to overtype it) and ends with the mouse out over
+// the backdrop: browsers fire the resulting "click" on the nearest common
+// ancestor of the mousedown and mouseup targets, which IS the overlay itself
+// once the drag has left the field, silently closing the modal and
+// discarding all in-progress work. Only close when BOTH the mousedown and
+// the click itself landed directly on the backdrop, not just the click.
+// This overlay is a PERSISTENT singleton (document.getElementById(id) ||
+// createElement, reused across many opens) -- re-wiring on every open would
+// otherwise stack a fresh listener pair each time, each closing over that
+// invocation's own `onClose`; storing the current pair on the element and
+// removing it first keeps repeated calls idempotent.
+function wireBackdropClose(ov, onClose){
+  if(ov._backdropMousedown) ov.removeEventListener('mousedown', ov._backdropMousedown);
+  if(ov._backdropClick) ov.removeEventListener('click', ov._backdropClick);
+  let downOnBackdrop = false;
+  ov._backdropMousedown = e => { downOnBackdrop = e.target === ov; };
+  ov._backdropClick = e => { if(downOnBackdrop && e.target === ov) onClose(); };
+  ov.addEventListener('mousedown', ov._backdropMousedown);
+  ov.addEventListener('click', ov._backdropClick);
+}
 
 export async function openObjectListManager(container){
   containerEl = container;
@@ -871,7 +895,7 @@ export async function openNewObjectListModal(){
     };
     ov.querySelector('#ol_cancel').onclick = () => finish(null);
     ov.querySelector('#objlistNewCloseBtn').onclick = () => finish(null);
-    ov.onclick = e => { if(e.target === ov) finish(null); };
+    wireBackdropClose(ov, () => finish(null));
   });
 }
 

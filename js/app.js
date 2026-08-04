@@ -1,9 +1,9 @@
 import { Engine } from './engine.js?v=20260731-6';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-266';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-77';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-52';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-78';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-53';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-287';
+const BUILD_TAG = '-288';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2854,7 +2854,20 @@ $('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none
 
 // browse games modal wiring
 $('gamesListCloseBtn').onclick = () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; };
-$('gamesListOverlay').addEventListener('click', e => { if(e.target === $('gamesListOverlay')){ $('gamesListOverlay').style.display='none'; _gamesModalState=null; } });
+// Closing on a "click the dark backdrop" gesture misfires on an ordinary
+// text-selection DRAG that starts inside the moves-filter input (sweep-
+// selecting it to overtype) and ends with the mouse out over the backdrop:
+// browsers fire the resulting "click" on the nearest common ancestor of the
+// mousedown and mouseup targets, which IS the overlay itself once the drag
+// has left the field, silently closing the modal. Only close when BOTH the
+// mousedown and the click itself landed directly on the backdrop.
+{
+  let gamesListDownOnBackdrop = false;
+  $('gamesListOverlay').addEventListener('mousedown', e => { gamesListDownOnBackdrop = e.target === $('gamesListOverlay'); });
+  $('gamesListOverlay').addEventListener('click', e => {
+    if(gamesListDownOnBackdrop && e.target === $('gamesListOverlay')){ $('gamesListOverlay').style.display='none'; _gamesModalState=null; }
+  });
+}
 $('gamesModePos').onclick = () => { _gamesModalState.mode = 'pos'; $('gamesModePos').classList.add('active'); $('gamesModeLine').classList.remove('active'); renderGamesList(); };
 $('gamesModeLine').onclick = () => { _gamesModalState.mode = 'line'; $('gamesModeLine').classList.add('active'); $('gamesModePos').classList.remove('active'); renderGamesList(); };
 document.querySelectorAll('.games-color-btn').forEach(btn => {

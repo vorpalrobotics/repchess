@@ -5741,6 +5741,51 @@ try {
     await appAL.page.click('#pickerCloseBtn');
     await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: Save/Cancel outcomes', e); }
+
+  // 128. The New Asset modal's "click the backdrop to close" gesture must
+  //      not misfire on an ordinary text-selection drag that starts inside a
+  //      field and ends over the backdrop -- reported live: sweep-selecting
+  //      a size input to overtype it made the whole modal (and all
+  //      in-progress work) vanish, with no console error. Browsers fire the
+  //      resulting "click" on the nearest common ancestor of the
+  //      mousedown/mouseup targets, which is the overlay itself once the
+  //      drag leaves the field -- simulated directly via dispatched events
+  //      (real mouse-drag text selection isn't reliably reproducible in
+  //      headless Chromium) rather than guessed at through an actual drag.
+  try {
+    // a synthetic 'slot' target (a real move-object slot needs a built
+    // castle with chain members, which this minimal fixture has none of) --
+    // handleEditTarget's 'slot' branch only ever reads ud.allow/ud.slotId,
+    // so a made-up slotId is fine for opening a prop-scoped picker.
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'slot', slotId: 'fake-slot', allow: ['billboard-cylindrical','extruded'] }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.fill('#assetSizeW', '2.5');
+    await appAL.page.evaluate(() => {
+      document.getElementById('assetSizeW').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      document.getElementById('assetNewOverlay').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const stillOpen = await appAL.page.evaluate(() => document.getElementById('assetNewOverlay').style.display !== 'none');
+    assert(stillOpen, 'expected a drag-selection ending on the backdrop (mousedown started elsewhere) to NOT close the New Asset modal');
+    const stillTyped = await appAL.page.evaluate(() => document.getElementById('assetSizeW').value);
+    assert(stillTyped === '2.5', `expected the in-progress edit to survive, got ${JSON.stringify(stillTyped)}`);
+    ok('New Asset modal: a text-selection drag ending on the backdrop does not close it');
+  } catch(e){ bad('New Asset modal: backdrop-click false positive from a text-selection drag', e); }
+
+  // 129. A genuine backdrop click (mousedown AND click both directly on the
+  //      backdrop itself, no drag) still closes the modal as before.
+  try {
+    await appAL.page.evaluate(() => {
+      const ov = document.getElementById('assetNewOverlay');
+      ov.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      ov.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAL.page.click('#pickerCloseBtn');
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    ok('New Asset modal: a genuine backdrop click (no drag) still closes it');
+  } catch(e){ bad('New Asset modal: genuine backdrop click still closes it', e); }
 } finally {
   await appAL.close();
 }
@@ -9710,6 +9755,33 @@ try {
     ok('games-list: modal opens from the menu and lists only the games where the user played the line\'s own color');
     await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
   } catch(e){ bad('games-list: modal open + render, filtered to the line\'s own color', e); }
+
+  // 154a. Closing on a backdrop click must not misfire on an ordinary text-
+  //       selection drag that starts inside the moves-filter input and ends
+  //       over the backdrop -- same class of bug as the New Asset modal's
+  //       own (see Phase AL): browsers fire the resulting "click" on the
+  //       nearest common ancestor of the mousedown/mouseup targets, which is
+  //       the overlay itself once the drag leaves the field.
+  try {
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="gamesHere"]').click());
+    await appAV.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appAV.page.evaluate(() => {
+      document.getElementById('gamesListMovesInput').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      document.getElementById('gamesListOverlay').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const stillOpen = await appAV.page.evaluate(() => document.getElementById('gamesListOverlay').style.display !== 'none');
+    assert(stillOpen, 'expected a drag-selection ending on the backdrop (mousedown started elsewhere) to NOT close the Browse Games modal');
+    ok('Browse Games modal: a text-selection drag ending on the backdrop does not close it');
+
+    await appAV.page.evaluate(() => {
+      const ov = document.getElementById('gamesListOverlay');
+      ov.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      ov.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await appAV.page.waitForSelector('#gamesListOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Browse Games modal: a genuine backdrop click (no drag) still closes it');
+  } catch(e){ bad('Browse Games modal: backdrop-click false positive from a text-selection drag', e); }
 
   // 154b. The position index (already built once by test 151/154's 'pos'-mode
   //       queries above) is persisted to IndexedDB, so a reload doesn't
