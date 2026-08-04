@@ -3,7 +3,7 @@ import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-78';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleQuizProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-53';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-54';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-288';
+const BUILD_TAG = '-289';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6208,15 +6208,16 @@ $('objectListsCloseBtn').onclick = ()=>{
   closeObjectListManager();
 };
 
-// "Quiz a Castle's Lists" (inside the Object List Manager) needs to know
-// which castles exist, which are actually built, and which object lists are
+// "Quiz a Castle's Lists" and each list card/editor's "used in these
+// castles" display (inside the Object List Manager) both need to know which
+// castles exist, which are actually built, and which object lists are
 // assigned to their rooms' walls -- all app.js-side concepts (LAYOUT
 // persistence, castle/line enumeration) that objectLists.js otherwise has no
-// reason to know about. Supplied once as a plain data-fetching callback pair
-// rather than an import, so objectLists.js stays as ignorant of "lines"/
-// "castles" as ever -- same reasoning assets.js's openNewAssetModal gets
-// imported the other way instead (no castle-shaped state to inject there).
-setCastleQuizProvider({
+// reason to know about. Supplied once as a plain data-fetching callback
+// object rather than an import, so objectLists.js stays as ignorant of
+// "lines"/"castles" as ever -- same reasoning assets.js's openNewAssetModal
+// gets imported the other way instead (no castle-shaped state to inject there).
+setCastleInfoProvider({
   // every built castle that has at least one wall-list assignment anywhere
   // in it -- an unused castle isn't worth offering (nothing to quiz).
   async listOptions(){
@@ -6259,6 +6260,33 @@ setCastleQuizProvider({
       list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, posLabel: `${list.name} #${i + 1}` }));
     }
     return entries;
+  },
+  // listId -> [{lineName, castleName}, ...], one entry per castle (deduped --
+  // regardless of how many of ITS OWN rooms use the list) that has it
+  // assigned to any wall bucket anywhere -- powers each list card's "Unused"
+  // / "<castle>" / "<castle> + N more" line and the editor's own full "Used
+  // in" section (see objectLists.js's LIST_USAGE/usageSummary).
+  async usageByListId(){
+    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    if(!lines.length) return {};
+    const built = await gatherBuiltCastles(lines);
+    let LAYOUT; try { LAYOUT = JSON.parse(await getMeta('threeLayout') || '{}'); } catch { LAYOUT = {}; }
+    const usage = {};
+    for(const c of built){
+      const line = lines.find(l => l.id === c.lineId);
+      const lineName = line ? line.name : c.lineId;
+      const seenHere = new Set();   // dedupe multiple rooms of the SAME castle using the SAME list
+      for(const gr of c.genRooms){
+        const wl = LAYOUT[castleRoomKey(c.instanceId, gr.posKey)]?.wallLists;
+        if(!wl) continue;
+        for(const bucket of Object.values(wl)){
+          if(!bucket?.listId || seenHere.has(bucket.listId)) continue;
+          seenHere.add(bucket.listId);
+          (usage[bucket.listId] ??= []).push({ lineName, castleName: c.castleName });
+        }
+      }
+    }
+    return usage;
   },
 });
 

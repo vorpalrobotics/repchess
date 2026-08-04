@@ -10627,6 +10627,140 @@ try {
 } catch(e){ bad('Phase AY3C: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase AY3D: each object list's card (and its own editor) shows which
+//     castle(s) actually use it -- "Unused", the single castle's name, or
+//     "<castle> + N more" -- requested live so a list can be assigned to
+//     only ONE castle at a time without accidentally reusing it and
+//     colliding two rooms' worth of associations in memory. Reuses the same
+//     usageByListId() provider "Quiz a Castle's Lists" already needed (see
+//     Phase AY3C), so this is seeded via threeLayout the same way -- no VR
+//     walk needed. ---
+if(shouldRunPhase(['object-lists'])){
+try {
+const appLU = await launchApp();
+try {
+  const rootKeyFor = (page, lineId, castleName, moves) => page.evaluate(({ lineId, castleName, moves }) => {
+    const c = new Chess();
+    for(const m of moves) c.move(m, { sloppy: true });
+    return `cas:${lineId}_${castleName}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, { lineId, castleName, moves });
+  const alphaKey = await rootKeyFor(appLU.page, 'L1', 'Alpha', ['d4','Nf6','c4']);
+  const betaKey = await rootKeyFor(appLU.page, 'L2', 'Beta', ['e4','e5','Nf3']);
+  const gammaKey = await rootKeyFor(appLU.page, 'L3', 'Gamma', ['c4','e5','Nc3']);
+  await seedBackup(appLU.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Line A', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      ]},
+      { id: 'L2', name: 'Line B', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 1 },
+      ]},
+      { id: 'L3', name: 'Line C', color: 'white', openingMoves: ['c4'], prefs: [
+        { seq: ['c4','e5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Gamma', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'c4 e5 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+    objectLists: [
+      // used by BOTH Alpha and Beta -- exercises the "+ N more" form.
+      { id: 'shared_list', name: 'Shared List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Thing', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      // used by exactly one castle -- exercises the plain single-castle form.
+      { id: 'solo_list', name: 'Solo List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Thing', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      // assigned nowhere -- exercises "Unused".
+      { id: 'idle_list', name: 'Idle List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'Thing', assetId: null }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+    threeLayout: JSON.stringify({
+      [alphaKey]: { wallLists: { all: { listId: 'shared_list' } } },
+      [betaKey]: { wallLists: { all: { listId: 'shared_list' } } },
+      [gammaKey]: { wallLists: { all: { listId: 'solo_list' } } },
+    }),
+  });
+  await appLU.page.evaluate(() => document.getElementById('menuObjectLists').click());
+  await appLU.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+
+  const cardUsage = (name) => appLU.page.evaluate((n) => {
+    const card = [...document.querySelectorAll('#objlistGrid .objlist-card')]
+      .find(c => c.querySelector('.objlist-card-name')?.textContent === n);
+    const el = card && card.querySelector('.objlist-card-usage');
+    return el ? { text: el.textContent, unused: el.classList.contains('objlist-card-unused') } : null;
+  }, name);
+
+  // 175. A list used by two castles shows "<first castle> + 1 more".
+  try {
+    const usage = await cardUsage('Shared List');
+    assert(usage && usage.text === 'Alpha + 1 more',
+      `expected "Alpha + 1 more" for a list used by 2 castles, got ${JSON.stringify(usage)}`);
+    assert(!usage.unused, 'expected a used list\'s card NOT to carry the "unused" styling class');
+    ok('object list card: a list used by 2 castles shows "<first castle> + 1 more"');
+  } catch(e){ bad('object list card: multi-castle usage summary', e); }
+
+  // 176. A list used by exactly one castle shows that castle's own name.
+  try {
+    const usage = await cardUsage('Solo List');
+    assert(usage && usage.text === 'Gamma', `expected the single using castle's own name, got ${JSON.stringify(usage)}`);
+    ok('object list card: a list used by exactly one castle shows its name');
+  } catch(e){ bad('object list card: single-castle usage summary', e); }
+
+  // 177. A list used nowhere shows "Unused", styled distinctly.
+  try {
+    const usage = await cardUsage('Idle List');
+    assert(usage && usage.text === 'Unused', `expected "Unused" for a list with no castle usage, got ${JSON.stringify(usage)}`);
+    assert(usage.unused, 'expected an unused list\'s card to carry the "unused" styling class');
+    ok('object list card: a list used nowhere shows "Unused"');
+  } catch(e){ bad('object list card: unused summary', e); }
+
+  // 178. The details/editor view lists EVERY castle using the list, each
+  //      disambiguated with its own opening-system (line) name.
+  try {
+    await appLU.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#objlistGrid .objlist-card')]
+        .find(c => c.querySelector('.objlist-card-name')?.textContent === 'Shared List');
+      card.click();
+    });
+    await appLU.page.waitForSelector('#ol_id', { timeout: 5000 });
+    const usedInText = await appLU.page.evaluate(() => {
+      const h3 = [...document.querySelectorAll('#objlistEditor h3')].find(h => h.textContent.trim() === 'Used in');
+      return h3 ? h3.nextElementSibling.textContent : null;
+    });
+    assert(usedInText && usedInText.includes('Alpha') && usedInText.includes('Line A'),
+      `expected the "Used in" section to name Alpha (Line A), got ${JSON.stringify(usedInText)}`);
+    assert(usedInText.includes('Beta') && usedInText.includes('Line B'),
+      `expected the "Used in" section to also name Beta (Line B), got ${JSON.stringify(usedInText)}`);
+    ok('object list editor: "Used in" section lists every using castle with its own line name');
+    await appLU.page.evaluate(() => document.getElementById('ol_cancel').click());
+  } catch(e){ bad('object list editor: "Used in" section', e); }
+
+  // 179. A brand-new (unsaved) list has no "Used in" section at all -- there's
+  //      no id yet for any castle to have possibly used.
+  try {
+    await appLU.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    await appLU.page.click('#objlistNewBtn');
+    await appLU.page.waitForSelector('#ol_id', { timeout: 5000 });
+    const hasUsedInSection = await appLU.page.evaluate(() =>
+      [...document.querySelectorAll('#objlistEditor h3')].some(h => h.textContent.trim() === 'Used in'));
+    assert(!hasUsedInSection, 'expected a brand-new unsaved list to have no "Used in" section');
+    ok('object list editor: a brand-new unsaved list has no "Used in" section');
+    await appLU.page.evaluate(() => document.getElementById('ol_cancel').click());
+  } catch(e){ bad('object list editor: no "Used in" section for a new list', e); }
+} finally {
+  await appLU.close();
+}
+} catch(e){ bad('Phase AY3D: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase AZ2: "Compare Games" (three-dot menu) -- one row per move you've
 //     actually played from this exact line in your own games (not a modal,
 //     unlike "Browse Games"). The header row carries the node's own configured
