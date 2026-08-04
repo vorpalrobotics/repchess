@@ -46,6 +46,12 @@ let EDIT = null;       // working copy of the list being edited, or null when sh
 let EDIT_IS_NEW = false;
 let PICK_CB = null;    // pending asset-picker callback
 let FILTER_TEXT = '';
+// listId -> [{lineName, castleName}, ...] -- every castle (deduped, one entry
+// per castle regardless of how many of its own rooms use the list) actually
+// using that list anywhere, from CASTLE_INFO_PROVIDER.usageByListId() (see
+// below); refreshed alongside LISTS/ASSETS. {} (not yet loaded, or no
+// provider wired up) reads identically to "no castle uses any list yet".
+let LIST_USAGE = {};
 
 function $(id){ return containerEl.querySelector(`#${id}`); }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -146,7 +152,10 @@ function buildShell(){
 }
 
 async function refresh(){
-  [LISTS, ASSETS] = await Promise.all([getAllObjectLists(), getAllAssets()]);
+  [LISTS, ASSETS, LIST_USAGE] = await Promise.all([
+    getAllObjectLists(), getAllAssets(),
+    CASTLE_INFO_PROVIDER ? CASTLE_INFO_PROVIDER.usageByListId() : {},
+  ]);
   if(EDIT) renderEditor(); else showIndex();
 }
 
@@ -236,6 +245,18 @@ function renderCategoryGrid(grid){
   }
 }
 
+// "Unused" / "<castle>" / "<castle> + N more" -- the short form shown on a
+// list's own card. Deliberately just the castle name here (no line name):
+// the point is a quick "is this list already spoken for" glance while
+// picking a list to assign to a NEW room, not full disambiguation -- that's
+// what the editor's own (roomier) usage section is for, see renderEditor.
+function usageSummary(listId){
+  const uses = LIST_USAGE[listId];
+  if(!uses || !uses.length) return 'Unused';
+  if(uses.length === 1) return uses[0].castleName;
+  return `${uses[0].castleName} + ${uses.length - 1} more`;
+}
+
 // the list-card grid itself -- shared by the filtered (flat, cross-category)
 // view and a single category's drilled-in view.
 function renderListCards(grid, visible){
@@ -258,6 +279,7 @@ function renderListCards(grid, visible){
       <div class="objlist-card-items">${items.map(it => esc(it.name)).join(' · ') || '(no items)'}</div>
       ${l.mnemonic && l.mnemonic.phrase ? `<div class="objlist-card-mnem">“${esc(l.mnemonic.phrase)}”</div>` : ''}
       <div class="objlist-card-count">${items.length} item${items.length===1?'':'s'} · ${bound}/${items.length} image${items.length===1?'':'s'}</div>
+      <div class="objlist-card-usage${LIST_USAGE[l.id]?.length ? '' : ' objlist-card-unused'}">${esc(usageSummary(l.id))}</div>
     `;
     card.onclick = () => openEditor(l.id);
     grid.appendChild(card);
@@ -351,6 +373,14 @@ function renderEditor(){
       <label>Source</label>
       <input type="text" id="ol_msource" placeholder="Project mnemonic" value="${esc(l.mnemonic.source||'')}">
     </div>
+
+    ${EDIT_IS_NEW ? '' : `
+    <h3 class="objlist-h3">Used in</h3>
+    <p class="objlist-hint">${
+      (LIST_USAGE[l.id] && LIST_USAGE[l.id].length)
+        ? LIST_USAGE[l.id].map(u => `${esc(u.castleName)} <span style="color:#999">(${esc(u.lineName)})</span>`).join(', ')
+        : '<em>Not used in any castle yet -- assign it via a room\'s Wall Object Lists dialog to avoid picking a list that\'s already spoken for elsewhere.</em>'
+    }</p>`}
 
     <div class="assets-error" id="ol_error"></div>
     <div class="assets-editor-actions">
@@ -575,29 +605,33 @@ function renderQuizSummary(){
   $('olq_done').onclick = closeQuiz;
 }
 
-/* ---------- castle-scoped quiz ----------
-   "Quiz a castle's lists": every DISTINCT object list actually assigned to
-   any wall bucket anywhere in a chosen castle, combined into one quiz --
-   requested live as the natural companion to "Quiz this list", for studying
+/* ---------- castle context (quiz + usage) ----------
+   Two features need to know about lines/castles, a concept this module is
+   otherwise entirely ignorant of (see the module doc comment): "Quiz a
+   castle's lists" (every DISTINCT object list actually assigned to any wall
+   bucket anywhere in a chosen castle, combined into one quiz -- studying
    exactly what a given memory palace actually uses instead of one list in
-   isolation. Castle/line enumeration is app.js's domain (LAYOUT persistence,
-   which castles exist, which are actually built) -- CASTLE_QUIZ_PROVIDER is
-   supplied once from there (see setCastleQuizProvider), keeping this module
-   as ignorant of "lines"/"castles" as it's ever been. Each entry's posLabel
-   is "<list name> #<position in that list>" since positions aren't
+   isolation), and each list card/editor showing which castle(s) actually use
+   it (so a list can be assigned to only ONE castle at a time without
+   accidentally reusing it and colliding two rooms' worth of associations in
+   memory). Castle/line enumeration is app.js's domain (LAYOUT persistence,
+   which castles exist, which are actually built) -- CASTLE_INFO_PROVIDER is
+   supplied once from there (see setCastleInfoProvider), keeping this module
+   as ignorant of "lines"/"castles" as it's ever been. Each quiz entry's
+   posLabel is "<list name> #<position in that list>" since positions aren't
    comparable across different lists once combined. */
-let CASTLE_QUIZ_PROVIDER = null;   // { listOptions(): Promise<{lineId,lineName,castleName}[]>, entriesForCastle(lineId,castleName): Promise<entry[]> }
-export function setCastleQuizProvider(provider){ CASTLE_QUIZ_PROVIDER = provider; }
+let CASTLE_INFO_PROVIDER = null;   // { listOptions(), entriesForCastle(lineId,castleName), usageByListId() }
+export function setCastleInfoProvider(provider){ CASTLE_INFO_PROVIDER = provider; }
 
 export async function openCastleQuizPicker(){
-  if(!CASTLE_QUIZ_PROVIDER) return;
+  if(!CASTLE_INFO_PROVIDER) return;
   const grid = $('objlistGrid');
   if(grid) grid.style.display = 'none';
   $('objlistEditor').style.display = 'none';
   const el = $('objlistQuiz');
   el.style.display = '';
   el.innerHTML = `<p class="objlist-hint">Loading castles…</p>`;
-  const options = await CASTLE_QUIZ_PROVIDER.listOptions();
+  const options = await CASTLE_INFO_PROVIDER.listOptions();
   if(!options.length){
     el.innerHTML = `
       <h3 class="objlist-h3">Quiz a Castle's Lists</h3>
@@ -630,7 +664,7 @@ export async function openCastleQuizPicker(){
   $('olcq_back').onclick = () => { $('objlistQuiz').style.display = 'none'; showIndex(); };
   $('olcq_start').onclick = async () => {
     const opt = options[+$('olcq_select').value];
-    const entries = await CASTLE_QUIZ_PROVIDER.entriesForCastle(opt.lineId, opt.castleName);
+    const entries = await CASTLE_INFO_PROVIDER.entriesForCastle(opt.lineId, opt.castleName);
     if(!entries.length){
       $('olcq_error').textContent = 'That castle has no object lists assigned after all -- pick another.';
       return;
