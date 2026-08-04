@@ -49,9 +49,14 @@ let FILTER_TEXT = '';
 // listId -> [{lineName, castleName}, ...] -- every castle (deduped, one entry
 // per castle regardless of how many of its own rooms use the list) actually
 // using that list anywhere, from CASTLE_INFO_PROVIDER.usageByListId() (see
-// below); refreshed alongside LISTS/ASSETS. {} (not yet loaded, or no
-// provider wired up) reads identically to "no castle uses any list yet".
+// below); loaded separately from LISTS/ASSETS (see loadUsage) since scanning
+// every castle can take several seconds for a user with many of them.
+// USAGE_LOADED distinguishes "not loaded yet" (show a loading placeholder)
+// from "loaded and confirmed unused" (show "Unused") -- without it, every
+// card would flash "Unused" the instant it first renders, even ones that
+// turn out to be used, since LIST_USAGE starts out empty either way.
 let LIST_USAGE = {};
+let USAGE_LOADED = false;
 
 function $(id){ return containerEl.querySelector(`#${id}`); }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -152,11 +157,52 @@ function buildShell(){
 }
 
 async function refresh(){
-  [LISTS, ASSETS, LIST_USAGE] = await Promise.all([
-    getAllObjectLists(), getAllAssets(),
-    CASTLE_INFO_PROVIDER ? CASTLE_INFO_PROVIDER.usageByListId() : {},
-  ]);
+  [LISTS, ASSETS] = await Promise.all([getAllObjectLists(), getAllAssets()]);
   if(EDIT) renderEditor(); else showIndex();
+  loadUsage();   // don't block the initial render on this -- see its own doc comment
+}
+
+// Scanning every castle (gatherBuiltCastles, inside usageByListId) can take
+// several seconds the first time it runs for a user with many built
+// castles -- blocking the WHOLE modal open on it (as an earlier version of
+// this feature did) left it sitting blank that whole time. Fetched
+// separately and patched into the already-rendered DOM once it resolves
+// (see patchUsageDom), rather than re-rendering the whole grid/editor, which
+// would disrupt an in-progress edit's cursor/focus/scroll position if the
+// user started interacting before this lands.
+let usageRequestId = 0;
+async function loadUsage(){
+  if(!CASTLE_INFO_PROVIDER) return;
+  const myReq = ++usageRequestId;
+  const usage = await CASTLE_INFO_PROVIDER.usageByListId();
+  if(myReq !== usageRequestId) return;   // a newer refresh's own fetch has already superseded this one
+  LIST_USAGE = usage;
+  USAGE_LOADED = true;
+  patchUsageDom();
+}
+
+// Updates just the usage-dependent DOM in place (card summaries, and the
+// editor's own "Used in" section if a saved list happens to be open) --
+// deliberately NOT a call back into renderListCards/renderEditor, which
+// would rebuild the whole subtree and disrupt whatever the user is doing
+// right when the (possibly several-seconds-later) usage data lands.
+function patchUsageDom(){
+  const grid = $('objlistGrid');
+  if(grid){
+    grid.querySelectorAll('.objlist-card[data-list-id]').forEach(card => {
+      const id = card.dataset.listId;
+      const usageEl = card.querySelector('.objlist-card-usage');
+      if(!usageEl) return;
+      usageEl.textContent = usageSummary(id);
+      usageEl.classList.remove('objlist-card-usage-loading');
+      usageEl.classList.toggle('objlist-card-unused', !(LIST_USAGE[id] && LIST_USAGE[id].length));
+    });
+  }
+  if(EDIT && !EDIT_IS_NEW){
+    const editor = $('objlistEditor');
+    const h3 = editor && [...editor.querySelectorAll('h3')].find(h => h.textContent.trim() === 'Used in');
+    if(h3 && h3.nextElementSibling) h3.nextElementSibling.innerHTML = usedInHtml(EDIT.id);
+  }
 }
 
 function showIndex(){
@@ -245,16 +291,30 @@ function renderCategoryGrid(grid){
   }
 }
 
-// "Unused" / "<castle>" / "<castle> + N more" -- the short form shown on a
-// list's own card. Deliberately just the castle name here (no line name):
-// the point is a quick "is this list already spoken for" glance while
-// picking a list to assign to a NEW room, not full disambiguation -- that's
-// what the editor's own (roomier) usage section is for, see renderEditor.
+// "…" (still loading) / "Unused" / "<castle>" / "<castle> + N more" -- the
+// short form shown on a list's own card. Deliberately just the castle name
+// here (no line name): the point is a quick "is this list already spoken
+// for" glance while picking a list to assign to a NEW room, not full
+// disambiguation -- that's what the editor's own (roomier) usage section is
+// for, see usedInHtml/renderEditor.
 function usageSummary(listId){
+  if(!USAGE_LOADED) return '…';
   const uses = LIST_USAGE[listId];
   if(!uses || !uses.length) return 'Unused';
   if(uses.length === 1) return uses[0].castleName;
   return `${uses[0].castleName} + ${uses.length - 1} more`;
+}
+
+// the editor's own full "Used in" section: every using castle, each
+// disambiguated with its own opening-system (line) name (unlike the card's
+// short castle-name-only form -- two different lines could name a castle
+// the same thing, and there's room here to spell it out).
+function usedInHtml(listId){
+  if(!USAGE_LOADED) return '<em>Loading…</em>';
+  const uses = LIST_USAGE[listId];
+  return (uses && uses.length)
+    ? uses.map(u => `${esc(u.castleName)} <span style="color:#999">(${esc(u.lineName)})</span>`).join(', ')
+    : '<em>Not used in any castle yet -- assign it via a room\'s Wall Object Lists dialog to avoid picking a list that\'s already spoken for elsewhere.</em>';
 }
 
 // the list-card grid itself -- shared by the filtered (flat, cross-category)
@@ -273,13 +333,16 @@ function renderListCards(grid, visible){
     const bound = items.filter(it => it.assetId).length;
     const card = document.createElement('div');
     card.className = 'asset-card objlist-card';
+    card.dataset.listId = l.id;   // patchUsageDom's own lookup key, once usage loads in later
+    const usageClass = !USAGE_LOADED ? ' objlist-card-usage-loading'
+      : (!LIST_USAGE[l.id]?.length ? ' objlist-card-unused' : '');
     card.innerHTML = `
       <div class="objlist-card-name">${esc(l.name || '(unnamed)')}</div>
       <div class="objlist-card-meta">${esc(l.roomName || '')}${l.category ? ' · '+esc(l.category) : ''}</div>
       <div class="objlist-card-items">${items.map(it => esc(it.name)).join(' · ') || '(no items)'}</div>
       ${l.mnemonic && l.mnemonic.phrase ? `<div class="objlist-card-mnem">“${esc(l.mnemonic.phrase)}”</div>` : ''}
       <div class="objlist-card-count">${items.length} item${items.length===1?'':'s'} · ${bound}/${items.length} image${items.length===1?'':'s'}</div>
-      <div class="objlist-card-usage${LIST_USAGE[l.id]?.length ? '' : ' objlist-card-unused'}">${esc(usageSummary(l.id))}</div>
+      <div class="objlist-card-usage${usageClass}">${esc(usageSummary(l.id))}</div>
     `;
     card.onclick = () => openEditor(l.id);
     grid.appendChild(card);
@@ -376,11 +439,7 @@ function renderEditor(){
 
     ${EDIT_IS_NEW ? '' : `
     <h3 class="objlist-h3">Used in</h3>
-    <p class="objlist-hint">${
-      (LIST_USAGE[l.id] && LIST_USAGE[l.id].length)
-        ? LIST_USAGE[l.id].map(u => `${esc(u.castleName)} <span style="color:#999">(${esc(u.lineName)})</span>`).join(', ')
-        : '<em>Not used in any castle yet -- assign it via a room\'s Wall Object Lists dialog to avoid picking a list that\'s already spoken for elsewhere.</em>'
-    }</p>`}
+    <p class="objlist-hint">${usedInHtml(l.id)}</p>`}
 
     <div class="assets-error" id="ol_error"></div>
     <div class="assets-editor-actions">
