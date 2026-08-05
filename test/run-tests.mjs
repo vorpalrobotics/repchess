@@ -14176,5 +14176,101 @@ try {
 } catch(e){ bad('Phase CQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CR: auto-import Phase 5 -- the boot-time trigger itself
+//     (runAutoImportCheck, fired fire-and-forget right after the app's
+//     normal first render). Test 246 drives the REAL wiring end to end via
+//     an actual page reload (not the test hook) to prove it really fires on
+//     boot, not just that the underlying function works in isolation;
+//     247/248 use the hook directly for the skip/failure paths, which don't
+//     need a real reload to exercise. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCR = await launchApp();
+try {
+  // 246. A 45-day-old Lichess game (deep enough into estimateLichessAutoMaxGames's
+  //      cap that timing drift can't affect the expected size) plus the feature
+  //      enabled: reloading the page (simulating "the first refresh of the
+  //      day") fires the real boot-time trigger with NO test hook involved,
+  //      requests the correctly-capped max=1000 from the real endpoint,
+  //      merges the new game in, and marks today's check done.
+  try {
+    const oldTimestamp = Date.now() - 45 * 86400000;
+    await seedBackup(appCR.page, {
+      version: 6, user: 'oldlichessuser',
+      lines: [], games: [
+        { id: 'old1', moves: 'e4 e5', createdAt: oldTimestamp, players: { white: { user: { name: 'oldlichessuser' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    const acKeys246 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => localStorage.setItem(keys.autoImport, '1'), acKeys246);
+
+    let capturedUrl = null;
+    await appCR.page.route(/lichess\.org\/api\/games\/user\/oldlichessuser/, route => {
+      capturedUrl = route.request().url();
+      route.fulfill({
+        status: 200, contentType: 'application/x-ndjson',
+        body: JSON.stringify({ id: 'newgame', moves: 'd4 d5', createdAt: Date.now(), players: { white: { user: { name: 'oldlichessuser' } }, black: { user: { name: 'opp2' } } } }),
+      });
+    });
+
+    await appCR.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCR.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCR.page.waitForFunction(
+      () => window.__autoImportTestHooks && window.__autoImportTestHooks.shouldAutoCheck('lichess') === false,
+      { timeout: 15000 },
+    );
+
+    assert(capturedUrl && capturedUrl.includes('max=1000'),
+      `expected the real boot-time request to carry the capped estimate (max=1000) for a 45-day-old game, got ${capturedUrl}`);
+    const games = await appCR.page.evaluate(() => window.__autoImportTestHooks.getGames());
+    assert(games.some(g => g.id === 'newgame'), `expected the auto-fetched game to be merged into storage, got ${JSON.stringify(games.map(g=>g.id))}`);
+    ok('auto-import: the real boot-time trigger fires on page load, sizes the request correctly, and merges + marks the day done');
+  } catch(e){ bad('auto-import: real boot-time trigger (page reload, no test hook)', e); }
+
+  // 247. Already checked today: runAutoImportCheck skips without attempting
+  //      any fetch at all (no route mocked for this username -- if a fetch
+  //      were attempted it would hit the unmocked catch-all and abort/error,
+  //      which the "skipped" log's absence of a "due --"/failure line rules out).
+  try {
+    const acKeys247 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => {
+      localStorage.setItem('lichess_lastUser', 'alreadydone');
+      localStorage.setItem(keys.autoImport, '1');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+    }, acKeys247);
+    const countBefore = appCR.consoleLogs.length;
+    await appCR.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const newLogs = appCR.consoleLogs.slice(countBefore);
+    assert(newLogs.some(l => l.includes('[lichess] skipped -- already checked today')),
+      `expected a "skipped -- already checked today" log line, got ${JSON.stringify(newLogs)}`);
+    assert(!newLogs.some(l => l.includes('[lichess] due')), `expected no fetch attempt for an already-checked platform, got ${JSON.stringify(newLogs)}`);
+    ok('auto-import: runAutoImportCheck skips a platform already checked today without attempting a fetch');
+  } catch(e){ bad('auto-import: runAutoImportCheck skips when already checked today', e); }
+
+  // 248. A fetch that fails (network error) does NOT mark today's check
+  //      done -- it should retry on the very next refresh, not wait a day.
+  try {
+    const acKeys248 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => {
+      localStorage.setItem('lichess_lastUser', 'willfail');
+      localStorage.removeItem(keys.lichessCheck);
+      localStorage.setItem(keys.autoImport, '1');
+    }, acKeys248);
+    await appCR.page.route(/lichess\.org\/api\/games\/user\/willfail/, route => route.fulfill({ status: 500, body: 'server error' }));
+
+    await appCR.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const stillDue = await appCR.page.evaluate(() => window.__autoImportTestHooks.shouldAutoCheck('lichess'));
+    assert(stillDue === true, `expected a failed fetch to leave the platform still due (not marked done), got ${stillDue}`);
+    ok('auto-import: a failed fetch does not mark today\'s check done, so it retries on the next refresh');
+  } catch(e){ bad('auto-import: failed fetch does not mark the day done', e); }
+} finally {
+  await appCR.close();
+}
+} catch(e){ bad('Phase CR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-296';
+const BUILD_TAG = '-297';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1027,6 +1027,41 @@ async function importGamesFromPlatform(source, username, sizeParam, { onFetchPro
   return { fetchedCount: fetched.length, newCount, duplicateCount, totalGames: GAMES.length };
 }
 
+// The boot-time trigger: called fire-and-forget, once, right after the app's
+// normal first render -- see its own call site's comment. MUST NOT throw
+// uncaught (nothing awaits this) and MUST NOT touch the UI (no re-render, no
+// modal, no alert): a background daily check has to be invisible unless it
+// finds something, same principle as the Object List Manager's own
+// background usage-scan fix. Checks both platforms independently; one
+// platform's failure doesn't stop the other from being checked.
+async function runAutoImportCheck(){
+  if(!GAMES) GAMES = await getGames(LOCAL_USER);
+  autoImportLog('daily check starting…');
+  for(const source of ['lichess', 'chesscom']){
+    const username = localStorage.getItem(source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+    if(!shouldAutoCheck(source)){
+      const reason = localStorage.getItem(LS_AUTO_IMPORT) !== '1' ? 'feature disabled'
+        : !username ? 'no remembered username'
+        : 'already checked today';
+      autoImportLog(`[${source}] skipped -- ${reason}`);
+      continue;
+    }
+    const sizeParam = source === 'chesscom' ? estimateChessComAutoMonths(GAMES) : estimateLichessAutoMaxGames(GAMES);
+    autoImportLog(`[${source}] due -- fetching as "${username}", requesting ${sizeParam} ${source === 'chesscom' ? 'month(s) back' : 'game(s) max'}`);
+    try {
+      const result = await importGamesFromPlatform(source, username, sizeParam);
+      markAutoCheckSucceeded(source);
+      autoImportLog(`[${source}] check succeeded: ${result.newCount} new game(s), ${result.duplicateCount} already had`);
+    } catch(err){
+      // deliberately NOT marking today's check done -- see markAutoCheckSucceeded's
+      // own doc comment: a transient failure should retry on the next refresh,
+      // not wait a full day.
+      console.error(`[auto-import] [${source}] check failed`, err);
+      autoImportLog(`[${source}] check FAILED: ${err.message} -- will retry on the next refresh`);
+    }
+  }
+}
+
 if(localStorage.getItem('threeTestDebug')){
   window.__autoImportTestHooks = {
     lastGameDateForSource: (games, source) => lastGameDateForSource(games, source),
@@ -1042,6 +1077,8 @@ if(localStorage.getItem('threeTestDebug')){
     keys: { autoImport: LS_AUTO_IMPORT, lichessCheck: LS_AUTO_CHECK_LICHESS, chesscomCheck: LS_AUTO_CHECK_CHESSCOM },
     importGamesFromPlatform: (source, username, sizeParam) => importGamesFromPlatform(source, username, sizeParam),
     isAutoImportVerbose: () => isAutoImportVerbose(),
+    runAutoImportCheck: () => runAutoImportCheck(),
+    getGames: () => getGames(LOCAL_USER),
   };
 }
 
@@ -5456,7 +5493,10 @@ $('dlBtn').onclick = async ()=>{
 // this module (including the __xTestHooks registrations much further down)
 // until the recovery check's own IndexedDB round trip resolves, same
 // fire-and-forget-via-.then() reasoning as refreshAnalysisQueue() below.
-maybeRecoverFromInterruptedRestore().then(() => renderHome());
+maybeRecoverFromInterruptedRestore().then(() => {
+  renderHome();
+  runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
+});
 
 // auto-start the background analysis queue: load whatever's left over from a
 // prior session and let it start chugging as soon as the engine is ready (see
