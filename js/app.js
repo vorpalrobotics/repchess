@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-292';
+const BUILD_TAG = '-293';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -885,6 +885,66 @@ const GAME_SOURCE_BADGE = {
   chesscom: '<i class="fa-solid fa-chess-pawn games-col-src cc" title="chess.com"></i>',
   lichess:  '<i class="fa-solid fa-chess-knight games-col-src lichess" title="Lichess"></i>',
 };
+
+/* ---------- auto-import sizing ----------
+   Auto-import (see the daily-check phase, further down) needs to guess how
+   far back to look for a platform it hasn't checked since some earlier day --
+   "the last N months" for chess.com's month-archive API, "the last N games"
+   for Lichess's count-based one. Both estimates are deliberately biased to
+   overshoot: putGames upserts by id, so re-fetching a game already stored
+   costs a little bandwidth and nothing else, while undershooting silently
+   drops games until the NEXT daily check happens to cover them. Each has its
+   own floor (a light day/short absence still gets fully covered) and cap (a
+   multi-month absence doesn't balloon into one enormous request -- the next
+   several days' checks catch up incrementally instead).
+*/
+const CHESSCOM_AUTO_MIN_MONTHS = 1, CHESSCOM_AUTO_MAX_MONTHS = 24, CHESSCOM_AUTO_DEFAULT_MONTHS = 12;
+const LICHESS_AUTO_MIN_GAMES = 50, LICHESS_AUTO_MAX_GAMES = 1000, LICHESS_AUTO_DEFAULT_GAMES = 300;
+const LICHESS_AUTO_GAMES_PER_DAY = 150;   // generous -- see file doc comment above
+
+// epoch ms of the newest game from `source` in `games`, or null if there are
+// none yet (a platform that's never been imported at all).
+function lastGameDateForSource(games, source){
+  let latest = null;
+  for(const g of games){
+    if(gameSource(g) !== source) continue;
+    if(g.createdAt && (latest == null || g.createdAt > latest)) latest = g.createdAt;
+  }
+  return latest;
+}
+function daysSinceEpoch(epochMs){
+  return Math.max(0, (Date.now() - epochMs) / 86400000);
+}
+// "the last N months" for a due chess.com auto-check, from how long it's
+// been since the newest chess.com game already on file. No prior chess.com
+// game at all (never imported from this platform before) falls back to the
+// same default the manual download modal already offers.
+function estimateChessComAutoMonths(games){
+  const last = lastGameDateForSource(games, 'chesscom');
+  if(last == null) return CHESSCOM_AUTO_DEFAULT_MONTHS;
+  const months = Math.ceil(daysSinceEpoch(last) / 30) + 1;   // +1 month buffer past the exact boundary
+  return Math.min(CHESSCOM_AUTO_MAX_MONTHS, Math.max(CHESSCOM_AUTO_MIN_MONTHS, months));
+}
+// "the last N games" for a due Lichess auto-check, same reasoning as above.
+function estimateLichessAutoMaxGames(games){
+  const last = lastGameDateForSource(games, 'lichess');
+  if(last == null) return LICHESS_AUTO_DEFAULT_GAMES;
+  const estimate = Math.ceil(daysSinceEpoch(last) * LICHESS_AUTO_GAMES_PER_DAY);
+  return Math.min(LICHESS_AUTO_MAX_GAMES, Math.max(LICHESS_AUTO_MIN_GAMES, estimate));
+}
+
+if(localStorage.getItem('threeTestDebug')){
+  window.__autoImportTestHooks = {
+    lastGameDateForSource: (games, source) => lastGameDateForSource(games, source),
+    estimateChessComAutoMonths: (games) => estimateChessComAutoMonths(games),
+    estimateLichessAutoMaxGames: (games) => estimateLichessAutoMaxGames(games),
+    defaults: {
+      chesscomMin: CHESSCOM_AUTO_MIN_MONTHS, chesscomMax: CHESSCOM_AUTO_MAX_MONTHS, chesscomDefault: CHESSCOM_AUTO_DEFAULT_MONTHS,
+      lichessMin: LICHESS_AUTO_MIN_GAMES, lichessMax: LICHESS_AUTO_MAX_GAMES, lichessDefault: LICHESS_AUTO_DEFAULT_GAMES,
+      lichessPerDay: LICHESS_AUTO_GAMES_PER_DAY,
+    },
+  };
+}
 
 // numbered SAN text for a move sequence, e.g. ['d4','Nf6','c4'] -> "1. d4 Nf6 2. c4"
 // -- the format Browse Games' moves input is pre-filled with and re-parses

@@ -59,6 +59,7 @@ const SUBSYSTEMS = {
   'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
   'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
+  'auto-import':       'daily auto-import from Lichess/chess.com: sizing heuristics, daily gate, boot trigger',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -13818,6 +13819,94 @@ try {
     await appCN.close();
   }
 } catch(e){ bad('Phase CN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CO: auto-import Phase 1 -- pure sizing heuristics that estimate
+//     how far back a DUE-but-never-run-today auto-check should look, from
+//     how long it's been since the newest already-stored game for that
+//     platform. Deliberately biased to overshoot (see the functions' own doc
+//     comment in app.js): a floor so a short absence still gets fully
+//     covered, a cap so a long absence doesn't balloon into one enormous
+//     request. Pure functions over a plain games array -- no seeded backup,
+//     no DB, no network needed. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCO = await launchApp();
+try {
+  const defaults = await appCO.page.evaluate(() => window.__autoImportTestHooks.defaults);
+
+  // 230. lastGameDateForSource finds the max createdAt among games matching
+  //      the requested source ONLY, ignoring the other platform's games and
+  //      picking the newest (not the first) when several match.
+  try {
+    const games = [
+      { source: 'chesscom', createdAt: 1000 },
+      { players: {}, createdAt: 5000 },          // lichess-shaped (has `players`)
+      { source: 'chesscom', createdAt: 3000 },   // newest chesscom
+    ];
+    const cc = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'chesscom'), games);
+    const lc = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'lichess'), games);
+    const none = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'lichess'), []);
+    assert(cc === 3000, `expected the newest chess.com game's createdAt (3000), got ${cc}`);
+    assert(lc === 5000, `expected the newest (only) lichess game's createdAt (5000), got ${lc}`);
+    assert(none === null, `expected null for a platform with no games at all, got ${none}`);
+    ok('auto-import: lastGameDateForSource picks the newest same-platform game, ignoring the other platform');
+  } catch(e){ bad('auto-import: lastGameDateForSource', e); }
+
+  // 231. estimateChessComAutoMonths: no prior chess.com game at all falls back
+  //      to the same default the manual download modal already offers.
+  try {
+    const months = await appCO.page.evaluate(() => window.__autoImportTestHooks.estimateChessComAutoMonths([]));
+    assert(months === defaults.chesscomDefault, `expected the manual default (${defaults.chesscomDefault}) with no prior chess.com game, got ${months}`);
+    ok('auto-import: estimateChessComAutoMonths falls back to the manual default with no prior chess.com game');
+  } catch(e){ bad('auto-import: estimateChessComAutoMonths default', e); }
+
+  // 232. estimateChessComAutoMonths: a game dated slightly in the FUTURE
+  //      (clamped to 0 elapsed days, robust against any real clock drift
+  //      between this assertion and the function's own Date.now() call --
+  //      unlike "createdAt: now", which sits exactly on ceil()'s integer
+  //      boundary and any nonzero drift flips it) floors at the minimum; a
+  //      45-day-old game (well clear of the 30/60-day ceil boundaries) lands
+  //      mid-range; a ~800-day-old game clamps at the cap instead of
+  //      requesting an absurd number of months.
+  try {
+    const dayMs = 86400000;
+    const future = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now + 10*dayMs }]), { now: Date.now(), dayMs });
+    const midRange = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now - 45*dayMs }]), { now: Date.now(), dayMs });
+    const veryOld = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now - 800*dayMs }]), { now: Date.now(), dayMs });
+    assert(future === defaults.chesscomMin, `expected a future-dated (0-elapsed-day) game to floor at the minimum (${defaults.chesscomMin}), got ${future}`);
+    assert(midRange === 3, `expected a 45-day-old game to estimate 3 months back, got ${midRange}`);
+    assert(veryOld === defaults.chesscomMax, `expected an ~800-day-old game to clamp at the cap (${defaults.chesscomMax}), got ${veryOld}`);
+    ok('auto-import: estimateChessComAutoMonths floors/scales/caps correctly from days-since-last-game');
+  } catch(e){ bad('auto-import: estimateChessComAutoMonths floor/scale/cap', e); }
+
+  // 233. estimateLichessAutoMaxGames: same shape of test, but for Lichess's
+  //      game-count-based API and its own default/min/max/per-day constants.
+  //      The mid-range case uses 2 days + 1 hour (2.0417 days), not a clean
+  //      multiple of a day -- days*150 landing exactly on an integer (as a
+  //      whole number of days, or any tenth of a day, would given 150's
+  //      factors) is exactly the same boundary-flip risk as test 232's
+  //      "today" case, just easier to trip over by accident when picking a
+  //      round day count.
+  try {
+    const noPrior = await appCO.page.evaluate(() => window.__autoImportTestHooks.estimateLichessAutoMaxGames([]));
+    assert(noPrior === defaults.lichessDefault, `expected the manual default (${defaults.lichessDefault}) with no prior lichess game, got ${noPrior}`);
+
+    const dayMs = 86400000;
+    const future = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now + 10*dayMs }]), { now: Date.now(), dayMs });
+    assert(future === defaults.lichessMin, `expected a future-dated (0-elapsed-day) game to floor at the minimum (${defaults.lichessMin}), got ${future}`);
+
+    const midRange = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now - (2*dayMs + dayMs/24) }]), { now: Date.now(), dayMs });
+    assert(midRange === 307, `expected a ~2.04-day-old game to estimate 307 games back, got ${midRange}`);
+
+    const longAbsence = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now - 10*dayMs }]), { now: Date.now(), dayMs });
+    assert(longAbsence === defaults.lichessMax, `expected a 10-day absence to clamp at the cap (${defaults.lichessMax}), got ${longAbsence}`);
+    ok('auto-import: estimateLichessAutoMaxGames floors/scales/caps correctly from days-since-last-game');
+  } catch(e){ bad('auto-import: estimateLichessAutoMaxGames floor/scale/cap', e); }
+} finally {
+  await appCO.close();
+}
+} catch(e){ bad('Phase CO: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
