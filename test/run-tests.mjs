@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR } from './harness.mjs';
+import { launchApp, seedBackup, openVR, mockLichessGames, mockChessComGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +59,8 @@ const SUBSYSTEMS = {
   'object-lists':      'Object List Manager: room-database JSON import, id/item dedup',
   'help':              'Help modal',
   'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
+  'auto-import':       'daily auto-import from Lichess/chess.com: sizing heuristics, daily gate, boot trigger',
+  'user-migration':    'migrateLegacyUserData: pre-CURRENT_USER-removal data recovery to LOCAL_USER',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -8137,7 +8139,7 @@ try {
     );
     await setFiles;
     await appBH.page.waitForFunction(
-      () => document.getElementById('userId') && document.getElementById('userId').value === 'tester',
+      () => document.getElementById('userIdLichess') && document.getElementById('userIdLichess').value === 'tester',
       { timeout: 10000 }
     );
     await appBH.page.waitForFunction(
@@ -8239,7 +8241,7 @@ try {
     // though the FIRST (failing) attempt never got that far.
     await appBH.page.waitForFunction((n) => window.__importBackupGen() > n, genBefore, { timeout: 15000 });
 
-    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    const userId = await appBH.page.evaluate(() => document.getElementById('userIdLichess').value);
     assert(userId === 'goodUser', `expected the failed import to roll back the remembered Lichess handle to "goodUser", got ${userId}`);
 
     const [lines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
@@ -8284,7 +8286,7 @@ try {
     }, { timeout: 15000 });
     await appBH.page.waitForFunction(() => window.__importBackupGen && window.__importBackupGen() > 0, { timeout: 15000 });
 
-    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    const userId = await appBH.page.evaluate(() => document.getElementById('userIdLichess').value);
     assert(userId === 'recoverUser', `expected boot-time recovery to restore the remembered Lichess handle to "recoverUser", got ${userId}`);
 
     const [lines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
@@ -13818,6 +13820,670 @@ try {
     await appCN.close();
   }
 } catch(e){ bad('Phase CN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CO: auto-import Phase 1 -- pure sizing heuristics that estimate
+//     how far back a DUE-but-never-run-today auto-check should look, from
+//     how long it's been since the newest already-stored game for that
+//     platform. Deliberately biased to overshoot (see the functions' own doc
+//     comment in app.js): a floor so a short absence still gets fully
+//     covered, a cap so a long absence doesn't balloon into one enormous
+//     request. Pure functions over a plain games array -- no seeded backup,
+//     no DB, no network needed. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCO = await launchApp();
+try {
+  const defaults = await appCO.page.evaluate(() => window.__autoImportTestHooks.defaults);
+
+  // 230. lastGameDateForSource finds the max createdAt among games matching
+  //      the requested source ONLY, ignoring the other platform's games and
+  //      picking the newest (not the first) when several match.
+  try {
+    const games = [
+      { source: 'chesscom', createdAt: 1000 },
+      { players: {}, createdAt: 5000 },          // lichess-shaped (has `players`)
+      { source: 'chesscom', createdAt: 3000 },   // newest chesscom
+    ];
+    const cc = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'chesscom'), games);
+    const lc = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'lichess'), games);
+    const none = await appCO.page.evaluate((gs) => window.__autoImportTestHooks.lastGameDateForSource(gs, 'lichess'), []);
+    assert(cc === 3000, `expected the newest chess.com game's createdAt (3000), got ${cc}`);
+    assert(lc === 5000, `expected the newest (only) lichess game's createdAt (5000), got ${lc}`);
+    assert(none === null, `expected null for a platform with no games at all, got ${none}`);
+    ok('auto-import: lastGameDateForSource picks the newest same-platform game, ignoring the other platform');
+  } catch(e){ bad('auto-import: lastGameDateForSource', e); }
+
+  // 231. estimateChessComAutoMonths: no prior chess.com game at all falls back
+  //      to the same default the manual download modal already offers.
+  try {
+    const months = await appCO.page.evaluate(() => window.__autoImportTestHooks.estimateChessComAutoMonths([]));
+    assert(months === defaults.chesscomDefault, `expected the manual default (${defaults.chesscomDefault}) with no prior chess.com game, got ${months}`);
+    ok('auto-import: estimateChessComAutoMonths falls back to the manual default with no prior chess.com game');
+  } catch(e){ bad('auto-import: estimateChessComAutoMonths default', e); }
+
+  // 232. estimateChessComAutoMonths: a game dated slightly in the FUTURE
+  //      (clamped to 0 elapsed days, robust against any real clock drift
+  //      between this assertion and the function's own Date.now() call --
+  //      unlike "createdAt: now", which sits exactly on ceil()'s integer
+  //      boundary and any nonzero drift flips it) floors at the minimum; a
+  //      45-day-old game (well clear of the 30/60-day ceil boundaries) lands
+  //      mid-range; a ~800-day-old game clamps at the cap instead of
+  //      requesting an absurd number of months.
+  try {
+    const dayMs = 86400000;
+    const future = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now + 10*dayMs }]), { now: Date.now(), dayMs });
+    const midRange = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now - 45*dayMs }]), { now: Date.now(), dayMs });
+    const veryOld = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateChessComAutoMonths([{ source: 'chesscom', createdAt: now - 800*dayMs }]), { now: Date.now(), dayMs });
+    assert(future === defaults.chesscomMin, `expected a future-dated (0-elapsed-day) game to floor at the minimum (${defaults.chesscomMin}), got ${future}`);
+    assert(midRange === 3, `expected a 45-day-old game to estimate 3 months back, got ${midRange}`);
+    assert(veryOld === defaults.chesscomMax, `expected an ~800-day-old game to clamp at the cap (${defaults.chesscomMax}), got ${veryOld}`);
+    ok('auto-import: estimateChessComAutoMonths floors/scales/caps correctly from days-since-last-game');
+  } catch(e){ bad('auto-import: estimateChessComAutoMonths floor/scale/cap', e); }
+
+  // 233. estimateLichessAutoMaxGames: same shape of test, but for Lichess's
+  //      game-count-based API and its own default/min/max/per-day constants.
+  //      The mid-range case uses 2 days + 1 hour (2.0417 days), not a clean
+  //      multiple of a day -- days*150 landing exactly on an integer (as a
+  //      whole number of days, or any tenth of a day, would given 150's
+  //      factors) is exactly the same boundary-flip risk as test 232's
+  //      "today" case, just easier to trip over by accident when picking a
+  //      round day count.
+  try {
+    const noPrior = await appCO.page.evaluate(() => window.__autoImportTestHooks.estimateLichessAutoMaxGames([]));
+    assert(noPrior === defaults.lichessDefault, `expected the manual default (${defaults.lichessDefault}) with no prior lichess game, got ${noPrior}`);
+
+    const dayMs = 86400000;
+    const future = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now + 10*dayMs }]), { now: Date.now(), dayMs });
+    assert(future === defaults.lichessMin, `expected a future-dated (0-elapsed-day) game to floor at the minimum (${defaults.lichessMin}), got ${future}`);
+
+    const midRange = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now - (2*dayMs + dayMs/24) }]), { now: Date.now(), dayMs });
+    assert(midRange === 307, `expected a ~2.04-day-old game to estimate 307 games back, got ${midRange}`);
+
+    const longAbsence = await appCO.page.evaluate(({now, dayMs}) => window.__autoImportTestHooks.estimateLichessAutoMaxGames([{ players: {}, createdAt: now - 10*dayMs }]), { now: Date.now(), dayMs });
+    assert(longAbsence === defaults.lichessMax, `expected a 10-day absence to clamp at the cap (${defaults.lichessMax}), got ${longAbsence}`);
+    ok('auto-import: estimateLichessAutoMaxGames floors/scales/caps correctly from days-since-last-game');
+  } catch(e){ bad('auto-import: estimateLichessAutoMaxGames floor/scale/cap', e); }
+
+  const acKeys = await appCO.page.evaluate(() => window.__autoImportTestHooks.keys);
+
+  // 234. shouldAutoCheck: false when the feature is off entirely, even with a
+  //      remembered username and no prior check ever recorded -- auto-import
+  //      is opt-in, not opt-out.
+  try {
+    const due = await appCO.page.evaluate(() => {
+      localStorage.clear();
+      localStorage.setItem('lichess_lastUser', 'tester');
+      // deliberately NOT setting the auto-import-enabled flag
+      return window.__autoImportTestHooks.shouldAutoCheck('lichess');
+    });
+    assert(due === false, `expected shouldAutoCheck to be false with the feature disabled, got ${due}`);
+    ok('auto-import: shouldAutoCheck is false when the feature is disabled, regardless of everything else');
+  } catch(e){ bad('auto-import: shouldAutoCheck disabled-by-default', e); }
+
+  // 235. shouldAutoCheck: false when enabled but this platform has no
+  //      remembered username -- never fetches a platform you haven't
+  //      connected, even if the checkbox is on (because the OTHER platform
+  //      is connected).
+  try {
+    const due = await appCO.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem(keys.autoImport, '1');
+      // deliberately NOT setting lichess_lastUser
+      return window.__autoImportTestHooks.shouldAutoCheck('lichess');
+    }, acKeys);
+    assert(due === false, `expected shouldAutoCheck to be false with no remembered username for this platform, got ${due}`);
+    ok('auto-import: shouldAutoCheck is false for a platform with no remembered username, even with the feature enabled');
+  } catch(e){ bad('auto-import: shouldAutoCheck no-username', e); }
+
+  // 236-238. Enabled + both platforms connected: each is due when never
+  //      checked before; NOT due once markAutoCheckSucceeded records today;
+  //      a per-platform autoImportResetToday('lichess') (the real console
+  //      utility, not a test-only hook) makes ONLY lichess due again,
+  //      leaving chess.com's own "done today" flag untouched -- proving the
+  //      two platforms are gated independently, not by one shared flag.
+  //      This is exactly the "play a few games, run the reset function,
+  //      refresh" workflow the console utility was built for.
+  try {
+    await appCO.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.setItem('lichess_lastUser', 'tester');
+      localStorage.setItem('chesscom_lastUser', 'tester');
+    }, acKeys);
+
+    const dueInitially = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueInitially.lichess === true && dueInitially.chesscom === true,
+      `expected both platforms due when enabled, connected, and never checked before, got ${JSON.stringify(dueInitially)}`);
+
+    await appCO.page.evaluate(() => {
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('chesscom');
+    });
+    const dueAfterSuccess = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueAfterSuccess.lichess === false && dueAfterSuccess.chesscom === false,
+      `expected both platforms NOT due right after a successful check today, got ${JSON.stringify(dueAfterSuccess)}`);
+
+    await appCO.page.evaluate(() => window.autoImportResetToday('lichess'));
+    const dueAfterLichessReset = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueAfterLichessReset.lichess === true, `expected lichess due again after autoImportResetToday('lichess'), got ${dueAfterLichessReset.lichess}`);
+    assert(dueAfterLichessReset.chesscom === false, `expected chess.com's own "done today" flag untouched by a lichess-only reset, got ${dueAfterLichessReset.chesscom}`);
+    ok('auto-import: shouldAutoCheck cycles due -> not-due -> due again via markAutoCheckSucceeded/autoImportResetToday, independently per platform');
+  } catch(e){ bad('auto-import: shouldAutoCheck + markAutoCheckSucceeded + autoImportResetToday lifecycle', e); }
+
+  // 239. autoImportResetToday() with no argument clears BOTH platforms' flags
+  //      at once (the common case: "just let me re-check everything now").
+  try {
+    await appCO.page.evaluate((keys) => {
+      localStorage.setItem(keys.lichessCheck, new Date().toDateString());
+      localStorage.setItem(keys.chesscomCheck, new Date().toDateString());
+    }, acKeys);
+    await appCO.page.evaluate(() => window.autoImportResetToday());
+    const bothDue = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(bothDue.lichess === true && bothDue.chesscom === true, `expected autoImportResetToday() with no argument to make both platforms due again, got ${JSON.stringify(bothDue)}`);
+    ok('auto-import: autoImportResetToday() with no argument resets both platforms at once');
+  } catch(e){ bad('auto-import: autoImportResetToday resets both platforms', e); }
+
+  // 240. importGamesFromPlatform (Phase 3's shared fetch/store/reindex core,
+  //      also the first test in this suite to mock a REAL Lichess network
+  //      response rather than seeding games straight into IDB): fetching a
+  //      mix of one already-on-file game and one genuinely new one reports
+  //      the correct new-vs-duplicate split, merges into GAMES without
+  //      double-counting the duplicate, and -- with verbose logging on by
+  //      default -- logs the split and the newest on-file game's date;
+  //      turning verbose off silences further auto-import log lines.
+  try {
+    await seedBackup(appCO.page, {
+      version: 6, user: 'tester',
+      lines: [], games: [
+        { id: 'old1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    await mockLichessGames(appCO.page, 'testuser', [
+      { id: 'old1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp' } } } },
+      { id: 'new1', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp2' } } } },
+    ]);
+    const result = await appCO.page.evaluate(() => window.__autoImportTestHooks.importGamesFromPlatform('lichess', 'testuser', 50));
+    assert(result.fetchedCount === 2, `expected 2 games fetched, got ${result.fetchedCount}`);
+    assert(result.newCount === 1, `expected exactly 1 new game (new1), got ${result.newCount}`);
+    assert(result.duplicateCount === 1, `expected exactly 1 duplicate (old1, already on file), got ${result.duplicateCount}`);
+    assert(result.totalGames === 2, `expected the merged total to be 2 (old1 + new1, not double-counting the duplicate), got ${result.totalGames}`);
+
+    const splitLog = appCO.consoleLogs.find(l => l.includes('[lichess] fetched 2 game(s): 1 new, 1 already had'));
+    assert(splitLog, `expected a verbose new-vs-duplicate log line, got logs: ${JSON.stringify(appCO.consoleLogs.slice(-10))}`);
+    const dateLog = appCO.consoleLogs.find(l => l.includes('[lichess] most recent game on file:'));
+    assert(dateLog, `expected a verbose "most recent game on file" log line, got logs: ${JSON.stringify(appCO.consoleLogs.slice(-10))}`);
+    ok('auto-import: importGamesFromPlatform reports new-vs-duplicate counts and logs them verbosely by default');
+  } catch(e){ bad('auto-import: importGamesFromPlatform new-vs-duplicate + verbose logging', e); }
+
+  // 241. autoImportSetVerbose(false) actually silences further auto-import
+  //      log lines (not just flips a flag nothing reads).
+  try {
+    await mockLichessGames(appCO.page, 'testuser2', [
+      { id: 'new2', moves: 'c4 c5', createdAt: 3000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp3' } } } },
+    ]);
+    await appCO.page.evaluate(() => window.autoImportSetVerbose(false));
+    const verboseNow = await appCO.page.evaluate(() => window.__autoImportTestHooks.isAutoImportVerbose());
+    assert(verboseNow === false, `expected isAutoImportVerbose() to reflect the toggle, got ${verboseNow}`);
+
+    const countBefore = appCO.consoleLogs.length;
+    await appCO.page.evaluate(() => window.__autoImportTestHooks.importGamesFromPlatform('lichess', 'testuser2', 50));
+    const newAutoImportLogs = appCO.consoleLogs.slice(countBefore).filter(l => l.startsWith('[auto-import]'));
+    assert(newAutoImportLogs.length === 0, `expected no [auto-import]-prefixed logs while verbose is off, got ${JSON.stringify(newAutoImportLogs)}`);
+    ok('auto-import: autoImportSetVerbose(false) actually silences further auto-import log lines');
+  } catch(e){ bad('auto-import: autoImportSetVerbose(false) silences logging', e); }
+} finally {
+  await appCO.close();
+}
+} catch(e){ bad('Phase CO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CP: auto-import Phase 3 (continued) + Phase 4 -- the manual
+//     "Import Now" button (dlBtn), refactored to call
+//     importGamesFromPlatform, driven through the REAL modal UI end to end
+//     against mocked Lichess/chess.com responses; and the redesigned
+//     download modal itself, now showing BOTH platforms' fields at once
+//     (no more a single source dropdown) plus the auto-import checkbox. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCP = await launchApp();
+try {
+  await mockLichessGames(appCP.page, 'realflow', [
+    { id: 'rf1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp' } } } },
+    { id: 'rf2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp2' } } } },
+  ]);
+
+  // 242. Filling in the download modal and clicking "Import Now" (dlBtn)
+  //      fetches from the (mocked) real Lichess endpoint, remembers the
+  //      username, reports the correct imported/total count, and closes
+  //      the modal on success -- the same outward behavior as before the
+  //      importGamesFromPlatform extraction.
+  try {
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCP.page.fill('#userIdLichess', 'realflow');
+    await appCP.page.click('#dlBtn');
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 10000 });
+
+    const progressText = await appCP.page.evaluate(() => document.getElementById('downloadProgress').textContent);
+    assert(progressText.includes('imported 2 (2 total)'), `expected the final progress text to report "imported 2 (2 total)", got "${progressText}"`);
+
+    const rememberedUser = await appCP.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    assert(rememberedUser === 'realflow', `expected the username to be remembered for next time, got "${rememberedUser}"`);
+    ok('auto-import: the manual "Import Now" flow still works end to end through the real modal after the importGamesFromPlatform refactor');
+  } catch(e){ bad('auto-import: manual Import Now flow (real modal, mocked network)', e); }
+
+  // 243. Both platforms' fields render simultaneously (no dropdown to pick
+  //      one) and independently pre-fill from their own remembered handle;
+  //      the auto-import checkbox reflects the persisted enabled flag.
+  try {
+    await appCP.page.evaluate((keys) => {
+      localStorage.setItem('chesscom_lastUser', 'ccperson');
+      localStorage.setItem(keys.autoImport, '1');
+    }, await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    const state = await appCP.page.evaluate(() => ({
+      lichess: document.getElementById('userIdLichess').value,
+      chesscom: document.getElementById('userIdChesscom').value,
+      sourceDropdown: document.getElementById('importSourceInput'),
+      autoImportChecked: document.getElementById('autoImportCheckbox').checked,
+    }));
+    assert(state.lichess === 'realflow', `expected the Lichess field to keep showing its own remembered handle, got "${state.lichess}"`);
+    assert(state.chesscom === 'ccperson', `expected the chess.com field to independently show ITS remembered handle, got "${state.chesscom}"`);
+    assert(state.sourceDropdown === null, 'expected the old single-source dropdown to be gone entirely, not just hidden');
+    assert(state.autoImportChecked === true, `expected the auto-import checkbox to reflect the persisted enabled flag, got ${state.autoImportChecked}`);
+    ok('auto-import: the download modal shows both platforms\' fields at once, each independently pre-filled, plus the auto-import checkbox state');
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+  } catch(e){ bad('auto-import: combined modal renders both platforms + checkbox state', e); }
+
+  // 244. Toggling the checkbox persists immediately (not just on a later
+  //      Import Now click) and survives closing/reopening the modal.
+  try {
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCP.page.uncheck('#autoImportCheckbox');
+    const persistedOff = await appCP.page.evaluate((keys) => localStorage.getItem(keys.autoImport), await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
+    assert(persistedOff === '0', `expected unchecking to immediately persist "0", got "${persistedOff}"`);
+
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    const checkedOnReopen = await appCP.page.evaluate(() => document.getElementById('autoImportCheckbox').checked);
+    assert(checkedOnReopen === false, `expected the unchecked state to survive closing and reopening the modal, got ${checkedOnReopen}`);
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    ok('auto-import: the auto-import checkbox persists immediately and survives modal reopen');
+  } catch(e){ bad('auto-import: auto-import checkbox persistence', e); }
+} finally {
+  await appCP.close();
+}
+} catch(e){ bad('Phase CP: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CQ: auto-import Phase 4 (continued) -- with BOTH platforms'
+//     usernames filled in, a single "Import Now" click fetches from both,
+//     sequentially, in one combined run -- the "set up your whole import
+//     portfolio in one shot" idea the redesigned modal exists for. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCQ = await launchApp();
+try {
+  await mockLichessGames(appCQ.page, 'bothlichess', [
+    { id: 'bl1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'bothlichess' } }, black: { user: { name: 'opp' } } } },
+  ]);
+  await mockChessComGames(appCQ.page, 'bothchesscom', [
+    {
+      uuid: 'bc1', url: 'https://www.chess.com/game/live/1', rated: true, time_class: 'blitz', end_time: 1700000000,
+      pgn: '1. d4 d5 2. c4 e6',
+      white: { username: 'bothchesscom', rating: 1500, result: 'win' },
+      black: { username: 'opp2', rating: 1500, result: 'resigned' },
+    },
+  ]);
+
+  // 245. Filling in BOTH platforms and clicking "Import Now" once fetches
+  //      both (not just whichever the old dropdown would have had
+  //      selected), and the final total reflects games from both.
+  try {
+    await appCQ.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCQ.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCQ.page.fill('#userIdLichess', 'bothlichess');
+    await appCQ.page.fill('#userIdChesscom', 'bothchesscom');
+    await appCQ.page.click('#dlBtn');
+    await appCQ.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 15000 });
+
+    const progressText = await appCQ.page.evaluate(() => document.getElementById('downloadProgress').textContent);
+    assert(progressText.includes('imported 2 (2 total)'), `expected both platforms' games counted together ("imported 2 (2 total)"), got "${progressText}"`);
+
+    const rememberedLichess = await appCQ.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    const rememberedChesscom = await appCQ.page.evaluate(() => localStorage.getItem('chesscom_lastUser'));
+    assert(rememberedLichess === 'bothlichess' && rememberedChesscom === 'bothchesscom',
+      `expected both usernames remembered independently, got lichess="${rememberedLichess}" chesscom="${rememberedChesscom}"`);
+    ok('auto-import: filling in both platforms and clicking Import Now once fetches from both, sequentially');
+  } catch(e){ bad('auto-import: single Import Now click fetches both platforms', e); }
+} finally {
+  await appCQ.close();
+}
+} catch(e){ bad('Phase CQ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CR: auto-import Phase 5 -- the boot-time trigger itself
+//     (runAutoImportCheck, fired fire-and-forget right after the app's
+//     normal first render). Test 246 drives the REAL wiring end to end via
+//     an actual page reload (not the test hook) to prove it really fires on
+//     boot, not just that the underlying function works in isolation;
+//     247/248 use the hook directly for the skip/failure paths, which don't
+//     need a real reload to exercise. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCR = await launchApp();
+try {
+  // 246. A 45-day-old Lichess game (deep enough into estimateLichessAutoMaxGames's
+  //      cap that timing drift can't affect the expected size) plus the feature
+  //      enabled: reloading the page (simulating "the first refresh of the
+  //      day") fires the real boot-time trigger with NO test hook involved,
+  //      requests the correctly-capped max=1000 from the real endpoint,
+  //      merges the new game in, and marks today's check done.
+  try {
+    const oldTimestamp = Date.now() - 45 * 86400000;
+    await seedBackup(appCR.page, {
+      version: 6, user: 'oldlichessuser',
+      lines: [], games: [
+        { id: 'old1', moves: 'e4 e5', createdAt: oldTimestamp, players: { white: { user: { name: 'oldlichessuser' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    const acKeys246 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => localStorage.setItem(keys.autoImport, '1'), acKeys246);
+
+    let capturedUrl = null;
+    await appCR.page.route(/lichess\.org\/api\/games\/user\/oldlichessuser/, route => {
+      capturedUrl = route.request().url();
+      route.fulfill({
+        status: 200, contentType: 'application/x-ndjson',
+        body: JSON.stringify({ id: 'newgame', moves: 'd4 d5', createdAt: Date.now(), players: { white: { user: { name: 'oldlichessuser' } }, black: { user: { name: 'opp2' } } } }),
+      });
+    });
+
+    await appCR.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCR.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCR.page.waitForFunction(
+      () => window.__autoImportTestHooks && window.__autoImportTestHooks.shouldAutoCheck('lichess') === false,
+      { timeout: 15000 },
+    );
+
+    assert(capturedUrl && capturedUrl.includes('max=1000'),
+      `expected the real boot-time request to carry the capped estimate (max=1000) for a 45-day-old game, got ${capturedUrl}`);
+    const games = await appCR.page.evaluate(() => window.__autoImportTestHooks.getGames());
+    assert(games.some(g => g.id === 'newgame'), `expected the auto-fetched game to be merged into storage, got ${JSON.stringify(games.map(g=>g.id))}`);
+    ok('auto-import: the real boot-time trigger fires on page load, sizes the request correctly, and merges + marks the day done');
+  } catch(e){ bad('auto-import: real boot-time trigger (page reload, no test hook)', e); }
+
+  // 247. Already checked today: runAutoImportCheck skips without attempting
+  //      any fetch at all (no route mocked for this username -- if a fetch
+  //      were attempted it would hit the unmocked catch-all and abort/error,
+  //      which the "skipped" log's absence of a "due --"/failure line rules out).
+  try {
+    const acKeys247 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => {
+      localStorage.setItem('lichess_lastUser', 'alreadydone');
+      localStorage.setItem(keys.autoImport, '1');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+    }, acKeys247);
+    const countBefore = appCR.consoleLogs.length;
+    await appCR.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const newLogs = appCR.consoleLogs.slice(countBefore);
+    assert(newLogs.some(l => l.includes('[lichess] skipped -- already checked today')),
+      `expected a "skipped -- already checked today" log line, got ${JSON.stringify(newLogs)}`);
+    assert(!newLogs.some(l => l.includes('[lichess] due')), `expected no fetch attempt for an already-checked platform, got ${JSON.stringify(newLogs)}`);
+    ok('auto-import: runAutoImportCheck skips a platform already checked today without attempting a fetch');
+  } catch(e){ bad('auto-import: runAutoImportCheck skips when already checked today', e); }
+
+  // 248. A fetch that fails (network error) does NOT mark today's check
+  //      done -- it should retry on the very next refresh, not wait a day.
+  try {
+    const acKeys248 = await appCR.page.evaluate(() => window.__autoImportTestHooks.keys);
+    await appCR.page.evaluate((keys) => {
+      localStorage.setItem('lichess_lastUser', 'willfail');
+      localStorage.removeItem(keys.lichessCheck);
+      localStorage.setItem(keys.autoImport, '1');
+    }, acKeys248);
+    await appCR.page.route(/lichess\.org\/api\/games\/user\/willfail/, route => route.fulfill({ status: 500, body: 'server error' }));
+
+    await appCR.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const stillDue = await appCR.page.evaluate(() => window.__autoImportTestHooks.shouldAutoCheck('lichess'));
+    assert(stillDue === true, `expected a failed fetch to leave the platform still due (not marked done), got ${stillDue}`);
+    ok('auto-import: a failed fetch does not mark today\'s check done, so it retries on the next refresh');
+  } catch(e){ bad('auto-import: failed fetch does not mark the day done', e); }
+} finally {
+  await appCR.close();
+}
+} catch(e){ bad('Phase CR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CS: auto-import Phase 6 -- the user-visible notification. Reuses
+//     the app's existing #progress status line (the same passive banner
+//     boot-time recovery already writes to) rather than a new toast widget;
+//     only touched when there's actually something to report, left
+//     completely alone otherwise (zero new games, or nothing due at all). ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCS = await launchApp();
+try {
+  const acKeysCS = await appCS.page.evaluate(() => window.__autoImportTestHooks.keys);
+
+  // 249. Genuinely new games found -> #progress reports how many, from which
+  //      platform.
+  try {
+    await appCS.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem('lichess_lastUser', 'notifyme');
+      localStorage.setItem(keys.autoImport, '1');
+      document.getElementById('progress').textContent = '';
+    }, acKeysCS);
+    await mockLichessGames(appCS.page, 'notifyme', [
+      { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'notifyme' } }, black: { user: { name: 'opp' } } } },
+      { id: 'nn2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'notifyme' } }, black: { user: { name: 'opp2' } } } },
+    ]);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText.includes('Auto-imported 2 from Lichess'), `expected #progress to report the 2 new games, got "${progressText}"`);
+    ok('auto-import: finding new games writes a summary to the existing #progress status line');
+  } catch(e){ bad('auto-import: notification on new games found', e); }
+
+  // 250. Zero new games (everything fetched was already on file) -> #progress
+  //      is left completely untouched, not overwritten with a "0 new" message.
+  try {
+    const sentinel = 'sentinel: nothing should overwrite this';
+    // seed the SAME game id the mocked fetch below returns, so every fetched
+    // game is already on file (a 100%-duplicate fetch).
+    await seedBackup(appCS.page, {
+      version: 6, user: 'alldupes',
+      lines: [], games: [
+        { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'alldupes' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    await appCS.page.evaluate((keys) => {
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.removeItem(keys.lichessCheck);
+    }, acKeysCS);
+    await appCS.page.evaluate((s) => { document.getElementById('progress').textContent = s; }, sentinel);
+    await mockLichessGames(appCS.page, 'alldupes', [
+      { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'alldupes' } }, black: { user: { name: 'opp' } } } },
+    ]);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === sentinel, `expected #progress untouched when nothing new was found, got "${progressText}"`);
+    ok('auto-import: zero new games leaves #progress untouched (no "0 new" noise)');
+  } catch(e){ bad('auto-import: no notification when nothing new found', e); }
+
+  // 251. A fully-skipped check (already done today) also leaves #progress
+  //      untouched -- no fetch even attempted.
+  try {
+    const sentinel = 'sentinel 2: still should not be overwritten';
+    await appCS.page.evaluate((keys) => {
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.setItem('lichess_lastUser', 'skipme');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+    }, acKeysCS);
+    await appCS.page.evaluate((s) => { document.getElementById('progress').textContent = s; }, sentinel);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === sentinel, `expected #progress untouched when the check was skipped entirely, got "${progressText}"`);
+    ok('auto-import: a fully-skipped check (already done today) leaves #progress untouched');
+  } catch(e){ bad('auto-import: no notification when skipped entirely', e); }
+} finally {
+  await appCS.close();
+}
+} catch(e){ bad('Phase CS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CT: migrateLegacyUserData -- the reported bug. Before CURRENT_USER
+//     was removed as an identity concept, games/lines/analysisQueue were
+//     stored keyed by whatever real username had been bootstrapped as the
+//     app's one "identity"; every read now always queries the fixed
+//     LOCAL_USER constant instead, so pre-existing data under the OLD key
+//     silently stopped showing up (still in IndexedDB, just never found) --
+//     this is the automatic one-time fix. ---
+if(shouldRunPhase(['user-migration'])){
+try {
+const appCT = await launchApp();
+try {
+  // launchApp()'s own boot sequence already kicked off migrateLegacyUserData
+  // once (a harmless no-op on the still-empty DB) -- it's async, so it may
+  // still be in flight when launchApp() returns (waitForFunction there only
+  // waits for #buildStamp, set synchronously long before this async chain
+  // even starts). Wait for that FIRST run to actually finish (flag set)
+  // before this test does its own reset/seed/migrate dance below --
+  // otherwise the first run's own delayed completion can re-set the flag
+  // right after this test clears it, racing with test 252's own migrate() call.
+  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+
+  // 252. A line + game + analysisQueue item seeded under an old real-username
+  //      key, all get migrated to LOCAL_USER (same id, same content, just
+  //      the `user` field corrected -- games additionally get their PRIMARY
+  //      KEY corrected, since it embeds `user`), and are gone from the old
+  //      key afterward.
+  try {
+    const localUser = await appCT.page.evaluate(() => window.__migrationTestHooks.localUser);
+    const OLD_USER = 'oldlichessperson';
+    await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.seedLegacyLine(oldUser, { name: 'Legacy System', color: 'white', openingMoves: ['e4'] }),
+      window.__importTestHooks.putGames(oldUser, [{ id: 'legacygame1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: oldUser } }, black: { user: { name: 'opp' } } } }]),
+      window.__migrationTestHooks.seedLegacyAnalysisQueueItem({ id: 'aq:legacy1', user: oldUser, lineId: 'whatever', seq: ['e4'], depth: 20, multipv: 1, status: 'queued', createdAt: 1000 }),
+    ]), OLD_USER);
+
+    // launchApp()'s own initial page load already ran migrateLegacyUserData
+    // once (harmlessly, on an empty DB, before this test seeded anything),
+    // consuming the one-time flag -- a real user's very first boot with this
+    // code would instead find their legacy data ALREADY present at that
+    // first run. Reset the flag here to put this test in that same state.
+    await appCT.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());
+
+    const [oldLines, oldGames, oldQueue, newLines, newGames, newQueue] = await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.getLines(oldUser),
+      window.__migrationTestHooks.getGames(oldUser),
+      window.__migrationTestHooks.getAnalysisQueue(oldUser),
+      window.__migrationTestHooks.getLines(window.__migrationTestHooks.localUser),
+      window.__migrationTestHooks.getGames(window.__migrationTestHooks.localUser),
+      window.__migrationTestHooks.getAnalysisQueue(window.__migrationTestHooks.localUser),
+    ]), OLD_USER);
+
+    assert(oldLines.length === 0, `expected nothing left under the old user key for lines, got ${JSON.stringify(oldLines)}`);
+    assert(oldGames.length === 0, `expected nothing left under the old user key for games, got ${JSON.stringify(oldGames)}`);
+    assert(oldQueue.length === 0, `expected nothing left under the old user key for analysisQueue, got ${JSON.stringify(oldQueue)}`);
+
+    assert(newLines.some(l => l.name === 'Legacy System' && l.user === localUser), `expected the migrated line under LOCAL_USER, got ${JSON.stringify(newLines)}`);
+    assert(newGames.some(g => g.id === 'legacygame1'), `expected the migrated game under LOCAL_USER, got ${JSON.stringify(newGames.map(g=>g.id))}`);
+    assert(newQueue.some(q => q.id === 'aq:legacy1' && q.user === localUser), `expected the migrated analysisQueue item under LOCAL_USER, got ${JSON.stringify(newQueue)}`);
+    ok('auto-import migration: lines/games/analysisQueue under an old real-username key are re-keyed to LOCAL_USER, and gone from the old key');
+  } catch(e){ bad('auto-import migration: lines/games/analysisQueue re-keyed correctly', e); }
+
+  // 253. Idempotent / one-time: once the flag is set, a SECOND migrate() call
+  //      does nothing, even if more legacy-keyed data shows up afterward
+  //      (shouldn't happen in practice post-fix, but the gate itself should
+  //      hold) -- resetting the flag makes it re-scan again.
+  try {
+    const OLD_USER2 = 'anotheroldperson';
+    await appCT.page.evaluate((oldUser) => window.__importTestHooks.putGames(oldUser, [
+      { id: 'legacygame2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: oldUser } }, black: { user: { name: 'opp2' } } } },
+    ]), OLD_USER2);
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());   // flag already set from test 252 -- should no-op
+    const stillOld = await appCT.page.evaluate((oldUser) => window.__migrationTestHooks.getGames(oldUser), OLD_USER2);
+    assert(stillOld.length === 1, `expected the second migrate() call to no-op (flag already set), leaving the game under its old key, got ${JSON.stringify(stillOld)}`);
+
+    await appCT.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());
+    const [nowOld, nowNew] = await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.getGames(oldUser),
+      window.__migrationTestHooks.getGames(window.__migrationTestHooks.localUser),
+    ]), OLD_USER2);
+    assert(nowOld.length === 0, `expected the game migrated away from the old key after resetting the flag and re-running, got ${JSON.stringify(nowOld)}`);
+    assert(nowNew.some(g => g.id === 'legacygame2'), `expected the game now under LOCAL_USER, got ${JSON.stringify(nowNew.map(g=>g.id))}`);
+    ok('auto-import migration: gated behind a one-time flag, not re-scanning every call, but re-runnable if the flag is cleared');
+  } catch(e){ bad('auto-import migration: one-time flag gating', e); }
+} finally {
+  await appCT.close();
+}
+} catch(e){ bad('Phase CT: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CU: the exact reported bug, reproduced end to end -- data seeded
+//     under an old real-username key (simulating a browser that used the app
+//     BEFORE the CURRENT_USER removal), then a real page reload (the
+//     migration's actual boot-time trigger, not the test hook), confirming
+//     the opening system is visible on Home afterward instead of showing
+//     "no opening systems yet". ---
+if(shouldRunPhase(['user-migration'])){
+try {
+const appCU = await launchApp();
+try {
+  // wait for launchApp()'s own boot-time migration run (on the still-empty
+  // DB) to actually finish before this test touches the flag itself -- see
+  // Phase CT's identical wait for why.
+  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+
+  // 254. Real end-to-end reproduction: seed a line under an old username key
+  //      directly (bypassing seedBackup, which already always writes under
+  //      LOCAL_USER -- this simulates data that predates that code existing
+  //      at all), reload, and confirm Home shows it instead of the empty state.
+  try {
+    await appCU.page.evaluate((oldUser) => window.__migrationTestHooks.seedLegacyLine(oldUser, { name: 'Pre-Migration System', color: 'white', openingMoves: ['d4'] }), 'reallyoldhandle');
+    // as in test 252: launchApp()'s own initial load already consumed the
+    // one-time flag on an empty DB before this test seeded anything. A real
+    // user's actual first boot with this code has their legacy data present
+    // from the start, so reset the flag to put this reload in that same
+    // "first boot, data already there" state instead of a synthetic second one.
+    await appCU.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+
+    await appCU.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCU.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCU.page.waitForSelector('.line-row', { timeout: 15000 });
+
+    const lineNames = await appCU.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(lineNames.includes('Pre-Migration System'), `expected the pre-existing opening system to appear on Home after reload, got ${JSON.stringify(lineNames)}`);
+    ok('auto-import migration: the exact reported bug (opening systems from before the CURRENT_USER removal) is fixed by a real reload, no manual backup re-import needed');
+  } catch(e){ bad('auto-import migration: real end-to-end reproduction of the reported bug', e); }
+} finally {
+  await appCU.close();
+}
+} catch(e){ bad('Phase CU: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

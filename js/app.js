@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-292';
+const BUILD_TAG = '-299';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -128,7 +128,6 @@ function hideBootSpinner(){
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
-const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_AQ_THREADS='aq_lastThreads';
 const LS_COMPARE_DEPTH='compare_lastDepth';
@@ -136,7 +135,8 @@ const COMPARE_DEFAULT_DEPTH=20;
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
-$('userId').value  = localStorage.getItem(LS_ID)  || '';
+$('userIdLichess').value  = localStorage.getItem(LS_ID)  || '';
+$('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
 /* ---------- globals ---------- */
@@ -885,6 +885,214 @@ const GAME_SOURCE_BADGE = {
   chesscom: '<i class="fa-solid fa-chess-pawn games-col-src cc" title="chess.com"></i>',
   lichess:  '<i class="fa-solid fa-chess-knight games-col-src lichess" title="Lichess"></i>',
 };
+
+/* ---------- auto-import sizing ----------
+   Auto-import (see the daily-check phase, further down) needs to guess how
+   far back to look for a platform it hasn't checked since some earlier day --
+   "the last N months" for chess.com's month-archive API, "the last N games"
+   for Lichess's count-based one. Both estimates are deliberately biased to
+   overshoot: putGames upserts by id, so re-fetching a game already stored
+   costs a little bandwidth and nothing else, while undershooting silently
+   drops games until the NEXT daily check happens to cover them. Each has its
+   own floor (a light day/short absence still gets fully covered) and cap (a
+   multi-month absence doesn't balloon into one enormous request -- the next
+   several days' checks catch up incrementally instead).
+*/
+const CHESSCOM_AUTO_MIN_MONTHS = 1, CHESSCOM_AUTO_MAX_MONTHS = 24, CHESSCOM_AUTO_DEFAULT_MONTHS = 12;
+const LICHESS_AUTO_MIN_GAMES = 50, LICHESS_AUTO_MAX_GAMES = 1000, LICHESS_AUTO_DEFAULT_GAMES = 300;
+const LICHESS_AUTO_GAMES_PER_DAY = 150;   // generous -- see file doc comment above
+
+// epoch ms of the newest game from `source` in `games`, or null if there are
+// none yet (a platform that's never been imported at all).
+function lastGameDateForSource(games, source){
+  let latest = null;
+  for(const g of games){
+    if(gameSource(g) !== source) continue;
+    if(g.createdAt && (latest == null || g.createdAt > latest)) latest = g.createdAt;
+  }
+  return latest;
+}
+function daysSinceEpoch(epochMs){
+  return Math.max(0, (Date.now() - epochMs) / 86400000);
+}
+// "the last N months" for a due chess.com auto-check, from how long it's
+// been since the newest chess.com game already on file. No prior chess.com
+// game at all (never imported from this platform before) falls back to the
+// same default the manual download modal already offers.
+function estimateChessComAutoMonths(games){
+  const last = lastGameDateForSource(games, 'chesscom');
+  if(last == null) return CHESSCOM_AUTO_DEFAULT_MONTHS;
+  const months = Math.ceil(daysSinceEpoch(last) / 30) + 1;   // +1 month buffer past the exact boundary
+  return Math.min(CHESSCOM_AUTO_MAX_MONTHS, Math.max(CHESSCOM_AUTO_MIN_MONTHS, months));
+}
+// "the last N games" for a due Lichess auto-check, same reasoning as above.
+function estimateLichessAutoMaxGames(games){
+  const last = lastGameDateForSource(games, 'lichess');
+  if(last == null) return LICHESS_AUTO_DEFAULT_GAMES;
+  const estimate = Math.ceil(daysSinceEpoch(last) * LICHESS_AUTO_GAMES_PER_DAY);
+  return Math.min(LICHESS_AUTO_MAX_GAMES, Math.max(LICHESS_AUTO_MIN_GAMES, estimate));
+}
+
+/* ---------- auto-import daily gate ----------
+   "Once a day, per platform" is tracked as a plain local-calendar-date
+   string (toDateString(), e.g. "Mon Aug 04 2026") rather than a rolling
+   24h window -- matches "the first time I refresh each day" literally, and
+   is simpler to reason about than a timestamp diff. Stamped only on a
+   SUCCESSFUL fetch+merge (see the boot-trigger phase), not on mere attempt,
+   so a transient failure (offline, rate-limited, API hiccup) retries on the
+   next refresh instead of waiting a full day.
+*/
+const LS_AUTO_IMPORT = 'autoImport_enabled';
+const LS_AUTO_CHECK_LICHESS = 'autoImport_lastCheck_lichess';
+const LS_AUTO_CHECK_CHESSCOM = 'autoImport_lastCheck_chesscom';
+function autoCheckKeyFor(source){
+  return source === 'chesscom' ? LS_AUTO_CHECK_CHESSCOM : LS_AUTO_CHECK_LICHESS;
+}
+// true when `source` is due for an auto-check right now: the feature is
+// enabled, this platform actually has a remembered username (auto-import
+// never fetches a platform you've never connected), and it hasn't
+// successfully checked yet today.
+function shouldAutoCheck(source){
+  if(localStorage.getItem(LS_AUTO_IMPORT) !== '1') return false;
+  const username = localStorage.getItem(source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+  if(!username) return false;
+  const lastCheck = localStorage.getItem(autoCheckKeyFor(source));
+  return lastCheck !== new Date().toDateString();
+}
+function markAutoCheckSucceeded(source){
+  localStorage.setItem(autoCheckKeyFor(source), new Date().toDateString());
+}
+
+// Console utility (always available, not gated behind threeTestDebug -- this
+// is for real day-to-day use in an actual browser session, not just the
+// offline test harness): clears one or both platforms' "already checked
+// today" flag, so a manual sanity check ("play a few Lichess games, run
+// this, refresh, confirm they show up") doesn't have to wait for the next
+// real day to roll over. `source` is optional -- omit it to reset both.
+window.autoImportResetToday = (source) => {
+  const sources = source ? [source] : ['lichess', 'chesscom'];
+  for(const s of sources) localStorage.removeItem(autoCheckKeyFor(s));
+  console.log(`[auto-import] cleared today's check flag for: ${sources.join(', ')} -- the next refresh will re-check ${sources.length > 1 ? 'them' : 'it'} (if enabled and a username is remembered).`);
+};
+
+/* ---------- auto-import diagnostic logging ----------
+   Detailed console logging (what fired, why, new-vs-duplicate game counts,
+   the most recent game on file per platform) so the feature's behavior can
+   be sanity-checked over the first several days of real use without any UI.
+   Gated on a persisted flag, defaulting ON for that initial soak-testing
+   period -- meant to be turned off via autoImportSetVerbose(false) once the
+   feature's been trusted for a while, but left in the code for future
+   debugging rather than removed outright.
+*/
+const LS_AUTO_IMPORT_VERBOSE = 'autoImport_verboseLogging';
+function isAutoImportVerbose(){
+  return localStorage.getItem(LS_AUTO_IMPORT_VERBOSE) !== '0';
+}
+function autoImportLog(...args){
+  if(isAutoImportVerbose()) console.log('[auto-import]', ...args);
+}
+window.autoImportSetVerbose = (on) => {
+  localStorage.setItem(LS_AUTO_IMPORT_VERBOSE, on ? '1' : '0');
+  console.log(`[auto-import] verbose logging ${on ? 'enabled' : 'disabled'}.`);
+};
+
+// Fetches the latest games for one platform and merges them into local
+// storage -- the shared core of BOTH the manual "Import Now" button (dlBtn)
+// and the background auto-import trigger, so both stay on exactly one
+// fetch/store/reindex code path instead of two that could drift apart.
+// `sizeParam` is months-back for chess.com, max-games for Lichess (matching
+// fetchChessCom/fetchLatest's own parameter) -- the CALLER decides what that
+// number should be (a manual field's value, or an auto-sized estimate) and
+// whether to persist it as a future default; this function only acts on it,
+// and doesn't touch any UI (no modal-closing, no re-render) -- the caller's
+// job, since a background auto-check must never disrupt whatever's on screen.
+async function importGamesFromPlatform(source, username, sizeParam, { onFetchProgress, onIndexProgress } = {}){
+  const fetched = source === 'chesscom'
+    ? await fetchChessCom(username, sizeParam, onFetchProgress)
+    : await fetchLatest(username, sizeParam, onFetchProgress);
+
+  const existingKeys = new Set((GAMES || []).map(gameIndexKey));
+  const newCount = fetched.filter(g => !existingKeys.has(gameIndexKey(g))).length;
+  const duplicateCount = fetched.length - newCount;
+  autoImportLog(`[${source}] fetched ${fetched.length} game(s): ${newCount} new, ${duplicateCount} already had`);
+
+  await putGames(LOCAL_USER, fetched);
+  GAMES = await getGames(LOCAL_USER);
+  invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+  await reindexAfterImport(GAMES, onIndexProgress);
+
+  const latest = lastGameDateForSource(GAMES, source);
+  autoImportLog(`[${source}] most recent game on file: ${latest ? new Date(latest).toLocaleString() : '(none)'}`);
+
+  return { fetchedCount: fetched.length, newCount, duplicateCount, totalGames: GAMES.length };
+}
+
+// The boot-time trigger: called fire-and-forget, once, right after the app's
+// normal first render -- see its own call site's comment. MUST NOT throw
+// uncaught (nothing awaits this) and MUST NOT force any re-render, open a
+// modal, or alert(): a background daily check has to stay out of the way of
+// whatever's already on screen, same principle as the Object List Manager's
+// own background usage-scan fix. The one exception is the existing #progress
+// status line (the same passive, easy-to-ignore banner boot-time recovery
+// already uses) -- only touched when there's actually something to report
+// (new games found), left completely alone otherwise. Checks both platforms
+// independently; one platform's failure doesn't stop the other from being
+// checked.
+async function runAutoImportCheck(){
+  if(!GAMES) GAMES = await getGames(LOCAL_USER);
+  autoImportLog('daily check starting…');
+  const newGamesBySource = [];
+  for(const source of ['lichess', 'chesscom']){
+    const username = localStorage.getItem(source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+    if(!shouldAutoCheck(source)){
+      const reason = localStorage.getItem(LS_AUTO_IMPORT) !== '1' ? 'feature disabled'
+        : !username ? 'no remembered username'
+        : 'already checked today';
+      autoImportLog(`[${source}] skipped -- ${reason}`);
+      continue;
+    }
+    const sizeParam = source === 'chesscom' ? estimateChessComAutoMonths(GAMES) : estimateLichessAutoMaxGames(GAMES);
+    autoImportLog(`[${source}] due -- fetching as "${username}", requesting ${sizeParam} ${source === 'chesscom' ? 'month(s) back' : 'game(s) max'}`);
+    try {
+      const result = await importGamesFromPlatform(source, username, sizeParam);
+      markAutoCheckSucceeded(source);
+      autoImportLog(`[${source}] check succeeded: ${result.newCount} new game(s), ${result.duplicateCount} already had`);
+      if(result.newCount > 0) newGamesBySource.push({ source, newCount: result.newCount });
+    } catch(err){
+      // deliberately NOT marking today's check done -- see markAutoCheckSucceeded's
+      // own doc comment: a transient failure should retry on the next refresh,
+      // not wait a full day. Console-only -- a transient hiccup that's about
+      // to retry isn't worth alarming the user over.
+      console.error(`[auto-import] [${source}] check failed`, err);
+      autoImportLog(`[${source}] check FAILED: ${err.message} -- will retry on the next refresh`);
+    }
+  }
+  if(newGamesBySource.length){
+    const label = { lichess: 'Lichess', chesscom: 'chess.com' };
+    const parts = newGamesBySource.map(r => `${r.newCount} from ${label[r.source]}`);
+    log(`Auto-imported ${parts.join(', ')}`);
+  }
+}
+
+if(localStorage.getItem('threeTestDebug')){
+  window.__autoImportTestHooks = {
+    lastGameDateForSource: (games, source) => lastGameDateForSource(games, source),
+    estimateChessComAutoMonths: (games) => estimateChessComAutoMonths(games),
+    estimateLichessAutoMaxGames: (games) => estimateLichessAutoMaxGames(games),
+    defaults: {
+      chesscomMin: CHESSCOM_AUTO_MIN_MONTHS, chesscomMax: CHESSCOM_AUTO_MAX_MONTHS, chesscomDefault: CHESSCOM_AUTO_DEFAULT_MONTHS,
+      lichessMin: LICHESS_AUTO_MIN_GAMES, lichessMax: LICHESS_AUTO_MAX_GAMES, lichessDefault: LICHESS_AUTO_DEFAULT_GAMES,
+      lichessPerDay: LICHESS_AUTO_GAMES_PER_DAY,
+    },
+    shouldAutoCheck: (source) => shouldAutoCheck(source),
+    markAutoCheckSucceeded: (source) => markAutoCheckSucceeded(source),
+    keys: { autoImport: LS_AUTO_IMPORT, lichessCheck: LS_AUTO_CHECK_LICHESS, chesscomCheck: LS_AUTO_CHECK_CHESSCOM },
+    importGamesFromPlatform: (source, username, sizeParam) => importGamesFromPlatform(source, username, sizeParam),
+    isAutoImportVerbose: () => isAutoImportVerbose(),
+    runAutoImportCheck: () => runAutoImportCheck(),
+    getGames: () => getGames(LOCAL_USER),
+  };
+}
 
 // numbered SAN text for a move sequence, e.g. ['d4','Nf6','c4'] -> "1. d4 Nf6 2. c4"
 // -- the format Browse Games' moves input is pre-filled with and re-parses
@@ -5244,34 +5452,43 @@ $('lineSaveBtn').onclick = async () => {
 };
 
 /* ---------- UI actions ---------- */
+// "Import Now" fetches every platform with a non-empty username, one after
+// another (not just whichever was last selected -- there's no more source
+// dropdown, both platforms' fields are always on screen) -- lets the whole
+// import portfolio be set up and run in one visit.
+const IMPORT_PLATFORMS = [
+  { source: 'lichess',  userField: 'userIdLichess',  userKey: LS_ID,          sizeField: 'maxGames',   sizeKey: LS_MAX,     sizeDefault: 300 },
+  { source: 'chesscom', userField: 'userIdChesscom', userKey: LS_ID_CHESSCOM, sizeField: 'monthsBack', sizeKey: LS_MONTHS,  sizeDefault: 12 },
+];
 $('dlBtn').onclick = async ()=>{
-  const source = $('importSourceInput').value;
-  const fetchUser = $('userId').value.trim().toLowerCase();
-  if(!fetchUser){ logDl('enter a username',true); return; }
-  localStorage.setItem(LS_SOURCE,source);
-  localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, fetchUser);
+  const platforms = IMPORT_PLATFORMS
+    .map(p => ({ ...p, username: $(p.userField).value.trim().toLowerCase() }))
+    .filter(p => p.username);
+  if(!platforms.length){ logDl('enter a username for at least one platform',true); return; }
 
   try{
-    let fetched;
-    if(source==='chesscom'){
-      const months=+$('monthsBack').value||12;
-      localStorage.setItem(LS_MONTHS,months);
-      logDl('fetching…');
-      fetched = await fetchChessCom(fetchUser,months,
-        (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
-    } else {
-      const max=+$('maxGames').value||300;
-      localStorage.setItem(LS_MAX,max);
-      logDl('fetching…');
-      fetched = await fetchLatest(fetchUser,max,n=>logDl(`fetching… got ${n}`));
+    const results = [];
+    for(const p of platforms){
+      localStorage.setItem(p.userKey, p.username);
+      const sizeParam = +$(p.sizeField).value || p.sizeDefault;
+      localStorage.setItem(p.sizeKey, sizeParam);
+      logDl(`${p.source}: fetching…`);
+      const onFetchProgress = p.source === 'chesscom'
+        ? (n,done,total)=>logDl(`${p.source}: fetching… archive ${done}/${total}, ${n} games so far`)
+        : n=>logDl(`${p.source}: fetching… got ${n}`);
+      const result = await importGamesFromPlatform(p.source, p.username, sizeParam, {
+        onFetchProgress,
+        onIndexProgress: (done,total) => logDl(`${p.source}: indexing… ${done} of ${total}`),
+      });
+      results.push(result);
     }
-    logDl(`fetched ${fetched.length}, writing to database…`);
-    await putGames(LOCAL_USER,fetched);
-    GAMES = await getGames(LOCAL_USER); // reload the full merged set, not just this batch
-    invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-    logDl(`imported ${fetched.length}, indexing…`);
-    await reindexAfterImport(GAMES, (done,total) => logDl(`indexing… ${done} of ${total}`));
-    logDl(`imported ${fetched.length} (${GAMES.length} total)`);
+    // totalGames is the full merged count as of the LAST platform processed --
+    // each importGamesFromPlatform call reloads GAMES fresh from IDB, so it
+    // already reflects every platform imported so far this run, not just its
+    // own. Summed fetchedCount across a single platform matches the pre-
+    // multi-platform "imported N (M total)" wording exactly.
+    const fetchedTotal = results.reduce((sum, r) => sum + r.fetchedCount, 0);
+    logDl(`imported ${fetchedTotal} (${results[results.length - 1].totalGames} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
     // the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -5288,7 +5505,20 @@ $('dlBtn').onclick = async ()=>{
 // this module (including the __xTestHooks registrations much further down)
 // until the recovery check's own IndexedDB round trip resolves, same
 // fire-and-forget-via-.then() reasoning as refreshAnalysisQueue() below.
-maybeRecoverFromInterruptedRestore().then(() => renderHome());
+// migrateLegacyUserData FIRST, before any crash-recovery replay -- a
+// recovery replay's own applyBackupData call does a clearAllData() wipe of
+// games/lines/analysisQueue before restoring its snapshot, which would
+// permanently destroy any not-yet-migrated legacy-keyed data if migration
+// ran second. .catch() (not a try/catch inside the function) so a migration
+// failure can never hang the rest of boot -- same "never blocks rendering"
+// guarantee maybeRecoverFromInterruptedRestore already gives itself internally.
+migrateLegacyUserData(LOCAL_USER)
+  .catch(err => console.error('[migration] failed to migrate pre-CURRENT_USER-removal data', err))
+  .then(() => maybeRecoverFromInterruptedRestore())
+  .then(() => {
+    renderHome();
+    runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
+  });
 
 // auto-start the background analysis queue: load whatever's left over from a
 // prior session and let it start chugging as soon as the engine is ready (see
@@ -5329,29 +5559,24 @@ document.addEventListener('click', e=>{
   if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
 });
 
-/* ---------- import games modal ---------- */
-function updateImportFieldsVisibility(){
-  const isChesscom = $('importSourceInput').value==='chesscom';
-  $('maxGamesField').style.display = isChesscom ? 'none' : 'inline-flex';
-  $('monthsBackField').style.display = isChesscom ? 'inline-flex' : 'none';
-}
-$('importSourceInput').onchange = ()=>{
-  const source = $('importSourceInput').value;
-  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
-  updateImportFieldsVisibility();
-};
+/* ---------- import games modal ----------
+   Both platforms shown at once (not a source dropdown picking one) so the
+   whole import portfolio can be set up in a single visit; each has its own
+   username + platform-specific size field, always visible. */
 $('menuDownload').onclick = ()=>{
   $('menuList').style.display='none';
   logDl('');
-  const source = localStorage.getItem(LS_SOURCE) || 'lichess';
-  $('importSourceInput').value = source;
-  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  $('userIdLichess').value = localStorage.getItem(LS_ID) || '';
+  $('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
   $('maxGames').value = localStorage.getItem(LS_MAX) || 300;
   $('monthsBack').value = localStorage.getItem(LS_MONTHS) || 12;
-  updateImportFieldsVisibility();
+  $('autoImportCheckbox').checked = localStorage.getItem(LS_AUTO_IMPORT) === '1';
   $('downloadOverlay').style.display='flex';
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
+$('autoImportCheckbox').onchange = ()=>{
+  localStorage.setItem(LS_AUTO_IMPORT, $('autoImportCheckbox').checked ? '1' : '0');
+};
 
 /* ---------- gzip helpers for backups ----------
    Backups are dominated by base64 PNG data URLs (VR assets + move images),
@@ -5461,13 +5686,13 @@ async function exportBackup(){
 }
 
 // test-only generation counter, bumped at the very end of applyBackupData
-// (see below) -- the restored lichess/chesscom handles and $('userId').value
-// are set very early in that function, well before games/lines/mnemonics are
-// actually written, so the test harness's seedBackup() polls this instead of
-// userId to avoid racing a still-in-flight restore under load. Also ticks at
-// the end of a rollback or boot-time recovery replay (both call
-// applyBackupData too), which is exactly the "restore settled" signal a test
-// waiting on either wants.
+// (see below) -- the restored lichess/chesscom handles and the download
+// modal's #userIdLichess/#userIdChesscom fields are set very early in that
+// function, well before games/lines/mnemonics are actually written, so the
+// test harness's seedBackup() polls this instead of racing a still-in-flight
+// restore under load. Also ticks at the end of a rollback or boot-time
+// recovery replay (both call applyBackupData too), which is exactly the
+// "restore settled" signal a test waiting on either wants.
 let _importBackupGen = 0;
 if(localStorage.getItem('threeTestDebug')){
   window.__importBackupGen = () => _importBackupGen;
@@ -5509,7 +5734,8 @@ async function applyBackupData(data, onMnemProgress){
   const chesscomUser = data.chesscomUser ?? '';
   localStorage.setItem(LS_ID, lichessUser);
   localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
-  $('userId').value = localStorage.getItem($('importSourceInput').value === 'chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  $('userIdLichess').value = lichessUser;
+  $('userIdChesscom').value = chesscomUser;
 
   if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
   GAMES = data.games || [];
@@ -9242,6 +9468,26 @@ if(localStorage.getItem('threeTestDebug')){
     normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
     putGames: (user, games) => putGames(user, games),
     getGames: (user) => getGames(user),
+  };
+}
+
+// test-only hook for migrateLegacyUserData (db.js) -- lets a test seed a
+// record under an arbitrary OLD user key (simulating pre-CURRENT_USER-
+// removal data) via the same createLine/putGames/putAnalysisQueueItem the
+// real pre-removal code path used, run the migration, then verify by
+// reading back under both the old key (should be empty after) and
+// LOCAL_USER (should have it). resetFlag lets one test instance run the
+// migration more than once (the real flag is one-time-ever).
+if(localStorage.getItem('threeTestDebug')){
+  window.__migrationTestHooks = {
+    localUser: LOCAL_USER,
+    migrate: () => migrateLegacyUserData(LOCAL_USER),
+    resetFlag: () => localStorage.removeItem('repchess-legacy-user-migration-v1'),
+    seedLegacyLine: (user, opts) => createLine(user, opts),
+    seedLegacyAnalysisQueueItem: (item) => putAnalysisQueueItem(item),
+    getLines: (user) => getLines(user),
+    getGames: (user) => getGames(user),
+    getAnalysisQueue: (user) => getAnalysisQueue(user),
   };
 }
 

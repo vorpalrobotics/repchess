@@ -188,6 +188,13 @@
   .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
   .modal h2{margin-top:0}
   .modal .modal-actions{margin-top:1rem;text-align:right}
+  .modal-h3{margin:.9rem 0 .2rem;font-size:1rem;color:#1f4e79}
+  .modal-h3:first-of-type{margin-top:0}
+  /* the download modal's rows must always stack one per line -- plain
+     .field is inline-flex so adjacent rows can end up side by side once the
+     modal's own content (two platforms + a checkbox) makes it wide enough. */
+  #downloadOverlay .field{display:flex}
+  #autoImportField label{flex:1 1 auto;display:flex;align-items:center;gap:.4rem}
 
   #roomInfoOverlay .modal{display:flex;flex-direction:column;max-height:85vh}
   #roomInfoOverlay .modal h2,#roomInfoOverlay .modal-actions{flex:none}
@@ -788,22 +795,27 @@
 <div id="downloadOverlay" class="overlay">
   <div class="modal">
     <h2>Import Games</h2>
+
+    <h3 class="modal-h3">Lichess.org</h3>
     <div class="field">
-      <label>Import source:</label>
-      <select id="importSourceInput">
-        <option value="lichess">lichess.org</option>
-        <option value="chesscom">chess.com</option>
-      </select>
+      <label>Username:</label><input id="userIdLichess">
     </div>
     <div class="field">
-      <label>Username:</label><input id="userId">
-    </div>
-    <div class="field" id="maxGamesField">
       <label>Max games:</label><input id="maxGames" type="number" min="1" value="300" style="width:90px">
     </div>
-    <div class="field" id="monthsBackField" style="display:none">
+
+    <h3 class="modal-h3">Chess.com</h3>
+    <div class="field">
+      <label>Username:</label><input id="userIdChesscom">
+    </div>
+    <div class="field">
       <label>Months back:</label><input id="monthsBack" type="number" min="1" value="12" style="width:90px">
     </div>
+
+    <div class="field" id="autoImportField">
+      <label><input type="checkbox" id="autoImportCheckbox"> Automatically import new games from these each day</label>
+    </div>
+
     <div id="downloadProgress"></div>
     <div class="modal-actions">
       <button id="downloadCancelBtn">Cancel</button>
@@ -1417,7 +1429,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-49"></script>
+<script src="js/db.js?v=20260804-50"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1434,6 +1446,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-292"></script>
+<script type="module" src="js/app.js?v=20260804-299"></script>
 </body>
 </html>
