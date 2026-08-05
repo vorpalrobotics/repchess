@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-295';
+const BUILD_TAG = '-296';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -128,7 +128,6 @@ function hideBootSpinner(){
 /* ---------- persistent prefs (small, stays in localStorage) ---------- */
 const LS_ID='lichess_lastUser', LS_MAX='lichess_lastMax';
 const LS_ID_CHESSCOM='chesscom_lastUser', LS_MONTHS='chesscom_lastMonths';
-const LS_SOURCE='import_lastSource';
 const LS_ENGINE_LINES='engine_lastLines', LS_ENGINE_DEPTH='engine_lastDepth', LS_ENGINE_THREADS='engine_lastThreads';
 const LS_AQ_THREADS='aq_lastThreads';
 const LS_COMPARE_DEPTH='compare_lastDepth';
@@ -136,7 +135,8 @@ const COMPARE_DEFAULT_DEPTH=20;
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
-$('userId').value  = localStorage.getItem(LS_ID)  || '';
+$('userIdLichess').value  = localStorage.getItem(LS_ID)  || '';
+$('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
 /* ---------- globals ---------- */
@@ -5403,30 +5403,43 @@ $('lineSaveBtn').onclick = async () => {
 };
 
 /* ---------- UI actions ---------- */
+// "Import Now" fetches every platform with a non-empty username, one after
+// another (not just whichever was last selected -- there's no more source
+// dropdown, both platforms' fields are always on screen) -- lets the whole
+// import portfolio be set up and run in one visit.
+const IMPORT_PLATFORMS = [
+  { source: 'lichess',  userField: 'userIdLichess',  userKey: LS_ID,          sizeField: 'maxGames',   sizeKey: LS_MAX,     sizeDefault: 300 },
+  { source: 'chesscom', userField: 'userIdChesscom', userKey: LS_ID_CHESSCOM, sizeField: 'monthsBack', sizeKey: LS_MONTHS,  sizeDefault: 12 },
+];
 $('dlBtn').onclick = async ()=>{
-  const source = $('importSourceInput').value;
-  const fetchUser = $('userId').value.trim().toLowerCase();
-  if(!fetchUser){ logDl('enter a username',true); return; }
-  localStorage.setItem(LS_SOURCE,source);
-  localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, fetchUser);
+  const platforms = IMPORT_PLATFORMS
+    .map(p => ({ ...p, username: $(p.userField).value.trim().toLowerCase() }))
+    .filter(p => p.username);
+  if(!platforms.length){ logDl('enter a username for at least one platform',true); return; }
 
   try{
-    let sizeParam, onFetchProgress;
-    if(source==='chesscom'){
-      sizeParam = +$('monthsBack').value||12;
-      localStorage.setItem(LS_MONTHS,sizeParam);
-      onFetchProgress = (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`);
-    } else {
-      sizeParam = +$('maxGames').value||300;
-      localStorage.setItem(LS_MAX,sizeParam);
-      onFetchProgress = n=>logDl(`fetching… got ${n}`);
+    const results = [];
+    for(const p of platforms){
+      localStorage.setItem(p.userKey, p.username);
+      const sizeParam = +$(p.sizeField).value || p.sizeDefault;
+      localStorage.setItem(p.sizeKey, sizeParam);
+      logDl(`${p.source}: fetching…`);
+      const onFetchProgress = p.source === 'chesscom'
+        ? (n,done,total)=>logDl(`${p.source}: fetching… archive ${done}/${total}, ${n} games so far`)
+        : n=>logDl(`${p.source}: fetching… got ${n}`);
+      const result = await importGamesFromPlatform(p.source, p.username, sizeParam, {
+        onFetchProgress,
+        onIndexProgress: (done,total) => logDl(`${p.source}: indexing… ${done} of ${total}`),
+      });
+      results.push(result);
     }
-    logDl('fetching…');
-    const result = await importGamesFromPlatform(source, fetchUser, sizeParam, {
-      onFetchProgress,
-      onIndexProgress: (done,total) => logDl(`indexing… ${done} of ${total}`),
-    });
-    logDl(`imported ${result.fetchedCount} (${result.totalGames} total)`);
+    // totalGames is the full merged count as of the LAST platform processed --
+    // each importGamesFromPlatform call reloads GAMES fresh from IDB, so it
+    // already reflects every platform imported so far this run, not just its
+    // own. Summed fetchedCount across a single platform matches the pre-
+    // multi-platform "imported N (M total)" wording exactly.
+    const fetchedTotal = results.reduce((sum, r) => sum + r.fetchedCount, 0);
+    logDl(`imported ${fetchedTotal} (${results[results.length - 1].totalGames} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
     // the freshly-updated GAMES; openLine would also call clearFocus(),
@@ -5484,29 +5497,24 @@ document.addEventListener('click', e=>{
   if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
 });
 
-/* ---------- import games modal ---------- */
-function updateImportFieldsVisibility(){
-  const isChesscom = $('importSourceInput').value==='chesscom';
-  $('maxGamesField').style.display = isChesscom ? 'none' : 'inline-flex';
-  $('monthsBackField').style.display = isChesscom ? 'inline-flex' : 'none';
-}
-$('importSourceInput').onchange = ()=>{
-  const source = $('importSourceInput').value;
-  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
-  updateImportFieldsVisibility();
-};
+/* ---------- import games modal ----------
+   Both platforms shown at once (not a source dropdown picking one) so the
+   whole import portfolio can be set up in a single visit; each has its own
+   username + platform-specific size field, always visible. */
 $('menuDownload').onclick = ()=>{
   $('menuList').style.display='none';
   logDl('');
-  const source = localStorage.getItem(LS_SOURCE) || 'lichess';
-  $('importSourceInput').value = source;
-  $('userId').value = localStorage.getItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  $('userIdLichess').value = localStorage.getItem(LS_ID) || '';
+  $('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
   $('maxGames').value = localStorage.getItem(LS_MAX) || 300;
   $('monthsBack').value = localStorage.getItem(LS_MONTHS) || 12;
-  updateImportFieldsVisibility();
+  $('autoImportCheckbox').checked = localStorage.getItem(LS_AUTO_IMPORT) === '1';
   $('downloadOverlay').style.display='flex';
 };
 $('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
+$('autoImportCheckbox').onchange = ()=>{
+  localStorage.setItem(LS_AUTO_IMPORT, $('autoImportCheckbox').checked ? '1' : '0');
+};
 
 /* ---------- gzip helpers for backups ----------
    Backups are dominated by base64 PNG data URLs (VR assets + move images),
@@ -5616,13 +5624,13 @@ async function exportBackup(){
 }
 
 // test-only generation counter, bumped at the very end of applyBackupData
-// (see below) -- the restored lichess/chesscom handles and $('userId').value
-// are set very early in that function, well before games/lines/mnemonics are
-// actually written, so the test harness's seedBackup() polls this instead of
-// userId to avoid racing a still-in-flight restore under load. Also ticks at
-// the end of a rollback or boot-time recovery replay (both call
-// applyBackupData too), which is exactly the "restore settled" signal a test
-// waiting on either wants.
+// (see below) -- the restored lichess/chesscom handles and the download
+// modal's #userIdLichess/#userIdChesscom fields are set very early in that
+// function, well before games/lines/mnemonics are actually written, so the
+// test harness's seedBackup() polls this instead of racing a still-in-flight
+// restore under load. Also ticks at the end of a rollback or boot-time
+// recovery replay (both call applyBackupData too), which is exactly the
+// "restore settled" signal a test waiting on either wants.
 let _importBackupGen = 0;
 if(localStorage.getItem('threeTestDebug')){
   window.__importBackupGen = () => _importBackupGen;
@@ -5664,7 +5672,8 @@ async function applyBackupData(data, onMnemProgress){
   const chesscomUser = data.chesscomUser ?? '';
   localStorage.setItem(LS_ID, lichessUser);
   localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
-  $('userId').value = localStorage.getItem($('importSourceInput').value === 'chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
+  $('userIdLichess').value = lichessUser;
+  $('userIdChesscom').value = chesscomUser;
 
   if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
   GAMES = data.games || [];

@@ -183,6 +183,21 @@ export async function mockLichessGames(page, username, games){
     route.fulfill({ status: 200, contentType: 'application/x-ndjson', body }));
 }
 
+// Mocks chess.com's two-step public API (fetchChessCom's own flow) for one
+// username: an /archives list, then one games-array response per archive
+// URL. `games` are already chess.com-archive-shaped objects (uuid/url/
+// white/black/end_time/pgn) all served from a single mocked monthly
+// archive -- fetchChessCom slices archives.slice(-months), so any
+// months>=1 pulls this one archive and every game in it.
+export async function mockChessComGames(page, username, games){
+  const base = `https://api.chess.com/pub/player/${username}/games`;
+  const archiveUrl = `${base}/2026/01`;
+  await page.route(`${base}/archives`, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ archives: [archiveUrl] }) }));
+  await page.route(archiveUrl, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ games }) }));
+}
+
 // Open the VR "Build world" flow and wait for the render loop to be live.
 export async function openVR(page){
   // the menu item lives in the collapsed hamburger, so click it programmatically

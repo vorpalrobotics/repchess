@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR, mockLichessGames } from './harness.mjs';
+import { launchApp, seedBackup, openVR, mockLichessGames, mockChessComGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8138,7 +8138,7 @@ try {
     );
     await setFiles;
     await appBH.page.waitForFunction(
-      () => document.getElementById('userId') && document.getElementById('userId').value === 'tester',
+      () => document.getElementById('userIdLichess') && document.getElementById('userIdLichess').value === 'tester',
       { timeout: 10000 }
     );
     await appBH.page.waitForFunction(
@@ -8240,7 +8240,7 @@ try {
     // though the FIRST (failing) attempt never got that far.
     await appBH.page.waitForFunction((n) => window.__importBackupGen() > n, genBefore, { timeout: 15000 });
 
-    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    const userId = await appBH.page.evaluate(() => document.getElementById('userIdLichess').value);
     assert(userId === 'goodUser', `expected the failed import to roll back the remembered Lichess handle to "goodUser", got ${userId}`);
 
     const [lines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
@@ -8285,7 +8285,7 @@ try {
     }, { timeout: 15000 });
     await appBH.page.waitForFunction(() => window.__importBackupGen && window.__importBackupGen() > 0, { timeout: 15000 });
 
-    const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
+    const userId = await appBH.page.evaluate(() => document.getElementById('userIdLichess').value);
     assert(userId === 'recoverUser', `expected boot-time recovery to restore the remembered Lichess handle to "recoverUser", got ${userId}`);
 
     const [lines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
@@ -14049,11 +14049,12 @@ try {
 } catch(e){ bad('Phase CO: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
-// --- Phase CP: auto-import Phase 3 (continued) -- the manual "Import Now"
-//     button (dlBtn) itself, refactored to call importGamesFromPlatform,
-//     driven through the REAL modal UI end to end against a mocked Lichess
-//     response, proving the refactor didn't change the user-facing manual
-//     import flow. ---
+// --- Phase CP: auto-import Phase 3 (continued) + Phase 4 -- the manual
+//     "Import Now" button (dlBtn), refactored to call
+//     importGamesFromPlatform, driven through the REAL modal UI end to end
+//     against mocked Lichess/chess.com responses; and the redesigned
+//     download modal itself, now showing BOTH platforms' fields at once
+//     (no more a single source dropdown) plus the auto-import checkbox. ---
 if(shouldRunPhase(['auto-import'])){
 try {
 const appCP = await launchApp();
@@ -14071,7 +14072,7 @@ try {
   try {
     await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
-    await appCP.page.fill('#userId', 'realflow');
+    await appCP.page.fill('#userIdLichess', 'realflow');
     await appCP.page.click('#dlBtn');
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 10000 });
 
@@ -14082,10 +14083,97 @@ try {
     assert(rememberedUser === 'realflow', `expected the username to be remembered for next time, got "${rememberedUser}"`);
     ok('auto-import: the manual "Import Now" flow still works end to end through the real modal after the importGamesFromPlatform refactor');
   } catch(e){ bad('auto-import: manual Import Now flow (real modal, mocked network)', e); }
+
+  // 243. Both platforms' fields render simultaneously (no dropdown to pick
+  //      one) and independently pre-fill from their own remembered handle;
+  //      the auto-import checkbox reflects the persisted enabled flag.
+  try {
+    await appCP.page.evaluate((keys) => {
+      localStorage.setItem('chesscom_lastUser', 'ccperson');
+      localStorage.setItem(keys.autoImport, '1');
+    }, await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    const state = await appCP.page.evaluate(() => ({
+      lichess: document.getElementById('userIdLichess').value,
+      chesscom: document.getElementById('userIdChesscom').value,
+      sourceDropdown: document.getElementById('importSourceInput'),
+      autoImportChecked: document.getElementById('autoImportCheckbox').checked,
+    }));
+    assert(state.lichess === 'realflow', `expected the Lichess field to keep showing its own remembered handle, got "${state.lichess}"`);
+    assert(state.chesscom === 'ccperson', `expected the chess.com field to independently show ITS remembered handle, got "${state.chesscom}"`);
+    assert(state.sourceDropdown === null, 'expected the old single-source dropdown to be gone entirely, not just hidden');
+    assert(state.autoImportChecked === true, `expected the auto-import checkbox to reflect the persisted enabled flag, got ${state.autoImportChecked}`);
+    ok('auto-import: the download modal shows both platforms\' fields at once, each independently pre-filled, plus the auto-import checkbox state');
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+  } catch(e){ bad('auto-import: combined modal renders both platforms + checkbox state', e); }
+
+  // 244. Toggling the checkbox persists immediately (not just on a later
+  //      Import Now click) and survives closing/reopening the modal.
+  try {
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCP.page.uncheck('#autoImportCheckbox');
+    const persistedOff = await appCP.page.evaluate((keys) => localStorage.getItem(keys.autoImport), await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
+    assert(persistedOff === '0', `expected unchecking to immediately persist "0", got "${persistedOff}"`);
+
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    const checkedOnReopen = await appCP.page.evaluate(() => document.getElementById('autoImportCheckbox').checked);
+    assert(checkedOnReopen === false, `expected the unchecked state to survive closing and reopening the modal, got ${checkedOnReopen}`);
+    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    ok('auto-import: the auto-import checkbox persists immediately and survives modal reopen');
+  } catch(e){ bad('auto-import: auto-import checkbox persistence', e); }
 } finally {
   await appCP.close();
 }
 } catch(e){ bad('Phase CP: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CQ: auto-import Phase 4 (continued) -- with BOTH platforms'
+//     usernames filled in, a single "Import Now" click fetches from both,
+//     sequentially, in one combined run -- the "set up your whole import
+//     portfolio in one shot" idea the redesigned modal exists for. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCQ = await launchApp();
+try {
+  await mockLichessGames(appCQ.page, 'bothlichess', [
+    { id: 'bl1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'bothlichess' } }, black: { user: { name: 'opp' } } } },
+  ]);
+  await mockChessComGames(appCQ.page, 'bothchesscom', [
+    {
+      uuid: 'bc1', url: 'https://www.chess.com/game/live/1', rated: true, time_class: 'blitz', end_time: 1700000000,
+      pgn: '1. d4 d5 2. c4 e6',
+      white: { username: 'bothchesscom', rating: 1500, result: 'win' },
+      black: { username: 'opp2', rating: 1500, result: 'resigned' },
+    },
+  ]);
+
+  // 245. Filling in BOTH platforms and clicking "Import Now" once fetches
+  //      both (not just whichever the old dropdown would have had
+  //      selected), and the final total reflects games from both.
+  try {
+    await appCQ.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCQ.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCQ.page.fill('#userIdLichess', 'bothlichess');
+    await appCQ.page.fill('#userIdChesscom', 'bothchesscom');
+    await appCQ.page.click('#dlBtn');
+    await appCQ.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 15000 });
+
+    const progressText = await appCQ.page.evaluate(() => document.getElementById('downloadProgress').textContent);
+    assert(progressText.includes('imported 2 (2 total)'), `expected both platforms' games counted together ("imported 2 (2 total)"), got "${progressText}"`);
+
+    const rememberedLichess = await appCQ.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    const rememberedChesscom = await appCQ.page.evaluate(() => localStorage.getItem('chesscom_lastUser'));
+    assert(rememberedLichess === 'bothlichess' && rememberedChesscom === 'bothchesscom',
+      `expected both usernames remembered independently, got lichess="${rememberedLichess}" chesscom="${rememberedChesscom}"`);
+    ok('auto-import: filling in both platforms and clicking Import Now once fetches from both, sequentially');
+  } catch(e){ bad('auto-import: single Import Now click fetches both platforms', e); }
+} finally {
+  await appCQ.close();
+}
+} catch(e){ bad('Phase CQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
