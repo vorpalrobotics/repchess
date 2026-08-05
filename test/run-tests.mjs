@@ -14272,5 +14272,82 @@ try {
 } catch(e){ bad('Phase CR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CS: auto-import Phase 6 -- the user-visible notification. Reuses
+//     the app's existing #progress status line (the same passive banner
+//     boot-time recovery already writes to) rather than a new toast widget;
+//     only touched when there's actually something to report, left
+//     completely alone otherwise (zero new games, or nothing due at all). ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCS = await launchApp();
+try {
+  const acKeysCS = await appCS.page.evaluate(() => window.__autoImportTestHooks.keys);
+
+  // 249. Genuinely new games found -> #progress reports how many, from which
+  //      platform.
+  try {
+    await appCS.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem('lichess_lastUser', 'notifyme');
+      localStorage.setItem(keys.autoImport, '1');
+      document.getElementById('progress').textContent = '';
+    }, acKeysCS);
+    await mockLichessGames(appCS.page, 'notifyme', [
+      { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'notifyme' } }, black: { user: { name: 'opp' } } } },
+      { id: 'nn2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'notifyme' } }, black: { user: { name: 'opp2' } } } },
+    ]);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText.includes('Auto-imported 2 from Lichess'), `expected #progress to report the 2 new games, got "${progressText}"`);
+    ok('auto-import: finding new games writes a summary to the existing #progress status line');
+  } catch(e){ bad('auto-import: notification on new games found', e); }
+
+  // 250. Zero new games (everything fetched was already on file) -> #progress
+  //      is left completely untouched, not overwritten with a "0 new" message.
+  try {
+    const sentinel = 'sentinel: nothing should overwrite this';
+    // seed the SAME game id the mocked fetch below returns, so every fetched
+    // game is already on file (a 100%-duplicate fetch).
+    await seedBackup(appCS.page, {
+      version: 6, user: 'alldupes',
+      lines: [], games: [
+        { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'alldupes' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    await appCS.page.evaluate((keys) => {
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.removeItem(keys.lichessCheck);
+    }, acKeysCS);
+    await appCS.page.evaluate((s) => { document.getElementById('progress').textContent = s; }, sentinel);
+    await mockLichessGames(appCS.page, 'alldupes', [
+      { id: 'nn1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'alldupes' } }, black: { user: { name: 'opp' } } } },
+    ]);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === sentinel, `expected #progress untouched when nothing new was found, got "${progressText}"`);
+    ok('auto-import: zero new games leaves #progress untouched (no "0 new" noise)');
+  } catch(e){ bad('auto-import: no notification when nothing new found', e); }
+
+  // 251. A fully-skipped check (already done today) also leaves #progress
+  //      untouched -- no fetch even attempted.
+  try {
+    const sentinel = 'sentinel 2: still should not be overwritten';
+    await appCS.page.evaluate((keys) => {
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.setItem('lichess_lastUser', 'skipme');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+    }, acKeysCS);
+    await appCS.page.evaluate((s) => { document.getElementById('progress').textContent = s; }, sentinel);
+    await appCS.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const progressText = await appCS.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === sentinel, `expected #progress untouched when the check was skipped entirely, got "${progressText}"`);
+    ok('auto-import: a fully-skipped check (already done today) leaves #progress untouched');
+  } catch(e){ bad('auto-import: no notification when skipped entirely', e); }
+} finally {
+  await appCS.close();
+}
+} catch(e){ bad('Phase CS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

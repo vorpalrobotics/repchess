@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-297';
+const BUILD_TAG = '-298';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1029,14 +1029,19 @@ async function importGamesFromPlatform(source, username, sizeParam, { onFetchPro
 
 // The boot-time trigger: called fire-and-forget, once, right after the app's
 // normal first render -- see its own call site's comment. MUST NOT throw
-// uncaught (nothing awaits this) and MUST NOT touch the UI (no re-render, no
-// modal, no alert): a background daily check has to be invisible unless it
-// finds something, same principle as the Object List Manager's own
-// background usage-scan fix. Checks both platforms independently; one
-// platform's failure doesn't stop the other from being checked.
+// uncaught (nothing awaits this) and MUST NOT force any re-render, open a
+// modal, or alert(): a background daily check has to stay out of the way of
+// whatever's already on screen, same principle as the Object List Manager's
+// own background usage-scan fix. The one exception is the existing #progress
+// status line (the same passive, easy-to-ignore banner boot-time recovery
+// already uses) -- only touched when there's actually something to report
+// (new games found), left completely alone otherwise. Checks both platforms
+// independently; one platform's failure doesn't stop the other from being
+// checked.
 async function runAutoImportCheck(){
   if(!GAMES) GAMES = await getGames(LOCAL_USER);
   autoImportLog('daily check starting…');
+  const newGamesBySource = [];
   for(const source of ['lichess', 'chesscom']){
     const username = localStorage.getItem(source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
     if(!shouldAutoCheck(source)){
@@ -1052,13 +1057,20 @@ async function runAutoImportCheck(){
       const result = await importGamesFromPlatform(source, username, sizeParam);
       markAutoCheckSucceeded(source);
       autoImportLog(`[${source}] check succeeded: ${result.newCount} new game(s), ${result.duplicateCount} already had`);
+      if(result.newCount > 0) newGamesBySource.push({ source, newCount: result.newCount });
     } catch(err){
       // deliberately NOT marking today's check done -- see markAutoCheckSucceeded's
       // own doc comment: a transient failure should retry on the next refresh,
-      // not wait a full day.
+      // not wait a full day. Console-only -- a transient hiccup that's about
+      // to retry isn't worth alarming the user over.
       console.error(`[auto-import] [${source}] check failed`, err);
       autoImportLog(`[${source}] check FAILED: ${err.message} -- will retry on the next refresh`);
     }
+  }
+  if(newGamesBySource.length){
+    const label = { lichess: 'Lichess', chesscom: 'chess.com' };
+    const parts = newGamesBySource.map(r => `${r.newCount} from ${label[r.source]}`);
+    log(`Auto-imported ${parts.join(', ')}`);
   }
 }
 
