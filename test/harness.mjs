@@ -121,9 +121,10 @@ export async function launchApp({ headless = true, threeTestDebug = true } = {})
 //
 // `opts.defaultPlayerColor` ('white'|'black'), when given, fills in a
 // `players` field for every game in `backup.games` that doesn't already have
-// one -- `backup.user` (the seed's own signed-in user, so it matches
-// CURRENT_USER) on that color, a synthetic opponent on the other. The app
-// now only counts a game toward move-frequency/node-stats/castle generation
+// one -- `backup.user` (restored as the Lichess handle, see applyBackupData's
+// lichessUser/data.user back-compat fallback) on that color, a synthetic
+// opponent on the other. The app now only counts a game toward
+// move-frequency/node-stats/castle generation
 // (and Find Games/Compare Games) when it can determine the signed-in user
 // actually played the CURRENT line's own color, so most seeds need this to
 // produce any visible rows/rooms at all.
@@ -139,7 +140,7 @@ export async function seedBackup(page, backup, opts = {}){
   if(defaultPlayerColor && Array.isArray(backup.games)){
     const testerSide = defaultPlayerColor === 'black' ? 'black' : 'white';
     const oppSide = testerSide === 'white' ? 'black' : 'white';
-    const testerName = backup.user || 'tester';   // must match CURRENT_USER (backup.user), not a hardcoded name
+    const testerName = backup.user || 'tester';   // must match the restored Lichess handle (backup.user), not a hardcoded name
     data = {
       ...backup,
       games: backup.games.map((g, i) => g.players ? g : {
@@ -148,12 +149,13 @@ export async function seedBackup(page, backup, opts = {}){
       }),
     };
   }
-  // importBackup sets CURRENT_USER/userId.value near the very START, well
-  // before games/lines/mnemonics are actually written -- polling that (as
-  // this used to) can resolve while the restore is still mid-flight, racing
-  // whatever the caller does next. __importBackupGen only bumps at the very
-  // end (after renderHome()), so wait for THAT instead: capture the count
-  // before triggering the import, then wait for it to move past that value.
+  // importBackup sets the restored lichess/chesscom handles and userId.value
+  // near the very START, well before games/lines/mnemonics are actually
+  // written -- polling that (as this used to) can resolve while the restore
+  // is still mid-flight, racing whatever the caller does next.
+  // __importBackupGen only bumps at the very end (after renderHome()), so
+  // wait for THAT instead: capture the count before triggering the import,
+  // then wait for it to move past that value.
   const before = await page.evaluate(() => window.__importBackupGen ? window.__importBackupGen() : 0);
   await page.setInputFiles('#backupImport', {
     name: 'seed.json', mimeType: 'application/json',

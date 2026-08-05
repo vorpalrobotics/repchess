@@ -7416,9 +7416,9 @@ try {
 
     // the local-file import REPLACES GAMES wholesale, so (now that the move
     // table only counts games where the signed-in user played the line's own
-    // color) these need real players matching this sub-test's CURRENT_USER
-    // ('tester3') or every row -- including the ones asserted on below --
-    // would vanish under the color filter.
+    // color) these need real players matching this sub-test's remembered
+    // Lichess handle ('tester3') or every row -- including the ones asserted
+    // on below -- would vanish under the color filter.
     const p3 = { white: { user: { name: 'tester3' } }, black: { user: { name: 'opp' } } };
     const ndjson = [
       { id: 'g1', moves: 'd4 Nf6', players: p3, result: '*' },
@@ -8209,11 +8209,11 @@ try {
 
   // 87. If applyBackupData throws partway through the write phase (a record
   //     malformed in a way the shallow top-level validation -- data.lines is
-  //     an array, data.user is truthy -- can't catch up front), importBackup
-  //     must automatically roll back to a snapshot of whatever was there
-  //     before, so a bad file can't leave the browser with neither the old
-  //     nor a complete new copy. Covers the in-session case (tab stays alive
-  //     to run the catch block); test 88 covers the crash-survives case.
+  //     an array -- can't catch up front), importBackup must automatically
+  //     roll back to a snapshot of whatever was there before, so a bad file
+  //     can't leave the browser with neither the old nor a complete new
+  //     copy. Covers the in-session case (tab stays alive to run the catch
+  //     block); test 88 covers the crash-survives case.
   try {
     const goodBackup = {
       version: 6, user: 'goodUser',
@@ -8240,16 +8240,15 @@ try {
     await appBH.page.waitForFunction((n) => window.__importBackupGen() > n, genBefore, { timeout: 15000 });
 
     const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
-    assert(userId === 'goodUser', `expected the failed import to roll back CURRENT_USER to "goodUser", got ${userId}`);
+    assert(userId === 'goodUser', `expected the failed import to roll back the remembered Lichess handle to "goodUser", got ${userId}`);
 
-    const [goodLines, badLines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
-      window.__linesTestHooks.getLines('goodUser'),
-      window.__linesTestHooks.getLines('badUser'),
+    const [lines, goodPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines(),
       window.__aqTestHooks.getPref('L-GOOD', ['e4']),
       window.__backupTestHooks.hasSafetyBackup(),
     ]));
-    assert(goodLines.length === 1 && goodLines[0].id === 'L-GOOD', `expected the pre-restore line to survive the rollback, got ${JSON.stringify(goodLines)}`);
-    assert(badLines.length === 0, `expected the failed import's own data to NOT be present after rollback, got ${JSON.stringify(badLines)}`);
+    assert(lines.length === 1 && lines[0].id === 'L-GOOD', `expected the pre-restore line to survive the rollback, got ${JSON.stringify(lines)}`);
+    assert(!lines.some(l => l.id === 'L-BAD'), `expected the failed import's own data to NOT be present after rollback, got ${JSON.stringify(lines)}`);
     assert(goodPref?.reply === 'e5', `expected the pre-restore pref to survive the rollback, got ${JSON.stringify(goodPref)}`);
     assert(hasSafety === false, `expected the safety-backup row to be cleared once the rollback succeeded, got hasSafetyBackup=${hasSafety}`);
     ok('importBackup: a mid-restore failure automatically rolls back to the pre-restore snapshot (in-session)');
@@ -8286,16 +8285,15 @@ try {
     await appBH.page.waitForFunction(() => window.__importBackupGen && window.__importBackupGen() > 0, { timeout: 15000 });
 
     const userId = await appBH.page.evaluate(() => document.getElementById('userId').value);
-    assert(userId === 'recoverUser', `expected boot-time recovery to restore CURRENT_USER to "recoverUser", got ${userId}`);
+    assert(userId === 'recoverUser', `expected boot-time recovery to restore the remembered Lichess handle to "recoverUser", got ${userId}`);
 
-    const [recoveredLines, staleLines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
-      window.__linesTestHooks.getLines('recoverUser'),
-      window.__linesTestHooks.getLines('staleUser'),
+    const [lines, recoveredPref, hasSafety] = await appBH.page.evaluate(() => Promise.all([
+      window.__linesTestHooks.getLines(),
       window.__aqTestHooks.getPref('L-RECOVER', ['e4']),
       window.__backupTestHooks.hasSafetyBackup(),
     ]));
-    assert(recoveredLines.length === 1 && recoveredLines[0].id === 'L-RECOVER', `expected the orphaned safety snapshot to be restored on boot, got ${JSON.stringify(recoveredLines)}`);
-    assert(staleLines.length === 0, `expected the pre-crash live data to be replaced by the recovered snapshot, got ${JSON.stringify(staleLines)}`);
+    assert(lines.length === 1 && lines[0].id === 'L-RECOVER', `expected the orphaned safety snapshot to be restored on boot, got ${JSON.stringify(lines)}`);
+    assert(!lines.some(l => l.id === 'L-STALE'), `expected the pre-crash live data to be replaced by the recovered snapshot, got ${JSON.stringify(lines)}`);
     assert(recoveredPref?.reply === 'e5', `expected the recovered snapshot's pref data to be present, got ${JSON.stringify(recoveredPref)}`);
     assert(hasSafety === false, `expected the safety-backup row to be cleared once boot-time recovery succeeded, got hasSafetyBackup=${hasSafety}`);
     ok('boot-time recovery: an orphaned safety snapshot (simulating a crash mid-restore) is replayed automatically on the next page load');
@@ -9673,12 +9671,10 @@ try {
   } catch(e){ bad('games-list: perspective outcome', e); }
 
   // 152b. A chess.com game whose player name matches localStorage's
-  //       per-platform chesscom_lastUser (NOT CURRENT_USER, "tester" here)
-  //       still resolves your color -- the reported bug: CURRENT_USER is
-  //       only ever bootstrapped from whichever platform was imported
-  //       FIRST and never updated after, so a later chess.com import under
-  //       a different handle used to read as "someone else's game" despite
-  //       the player data being right there.
+  //       per-platform chesscom_lastUser resolves your color even though the
+  //       remembered Lichess handle ("tester" here) is a different string --
+  //       each platform's identity is tracked independently, so a chess.com
+  //       handle that doesn't match your Lichess one still works.
   try {
     await appAV.page.evaluate(() => localStorage.setItem('chesscom_lastUser', 'MyChessComHandle'));
     const asWhite = await H('outcome', {
@@ -9691,15 +9687,15 @@ try {
       players: { white: { user: { name: 'opp' } }, black: { user: { name: 'MyChessComHandle' } } },
     });
     // a Lichess-shaped game (no source:'chesscom') must NOT match against the
-    // chess.com identity -- only CURRENT_USER, keeping the two platforms'
-    // identities from bleeding into each other.
+    // chess.com identity -- only the remembered Lichess handle, keeping the
+    // two platforms' identities from bleeding into each other.
     const lichessCrossMatch = await H('color', {
       players: { white: { user: { name: 'MyChessComHandle' } }, black: { user: { name: 'opp' } } },
     });
     assert(asWhite === 'win', `expected the chess.com-identity match to resolve White's win from the user's perspective, got ${asWhite}`);
     assert(asBlack === 'black', `expected the chess.com-identity match to resolve Black, got ${asBlack}`);
     assert(lichessCrossMatch === null, `expected a Lichess-shaped game to NOT match against the chess.com identity, got ${lichessCrossMatch}`);
-    ok('games-list: a chess.com game matches your per-platform chess.com handle even when it differs from CURRENT_USER');
+    ok('games-list: a chess.com game matches your per-platform chess.com handle even when it differs from your Lichess handle');
     await appAV.page.evaluate(() => localStorage.removeItem('chesscom_lastUser'));
   } catch(e){ bad('games-list: cross-platform identity fallback', e); }
 

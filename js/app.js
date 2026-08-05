@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-291';
+const BUILD_TAG = '-292';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -140,13 +140,20 @@ $('userId').value  = localStorage.getItem(LS_ID)  || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
 
 /* ---------- globals ---------- */
-let GAMES=null, CURRENT_USER=localStorage.getItem(LS_ID)||'', PREFS={}, CURRENT_LINE=null;
+// there's no UI to switch between identities and never has been -- games/
+// lines/the analysis queue are namespaced by a "user" key in IndexedDB
+// purely as a historical artifact, so every read/write of those three
+// stores just uses this same fixed constant. Your ACTUAL Lichess/chess.com
+// handle (for "which color did I play in this game") lives independently in
+// LS_ID/LS_ID_CHESSCOM -- see userColorInGame.
+const LOCAL_USER = 'local';
+let GAMES=null, PREFS={}, CURRENT_LINE=null;
 
 // background analysis queue state (see the "background analysis queue"
 // section below for the functions that use these) -- declared here, ahead
 // of the boot-time refreshAnalysisQueue() call further down, so that call
 // isn't reading these bindings before their own `let` would otherwise have run.
-let ANALYSIS_QUEUE = [];         // mirrors the IDB store for CURRENT_USER, createdAt order
+let ANALYSIS_QUEUE = [];         // mirrors the IDB store, createdAt order
 let AQ_LINE_NAMES = new Map();   // lineId -> line name, for the queue modal's Position column
 let aqProcessing = false;        // true while processAnalysisQueueLoop's loop is actively running
 let aqCurrentItem = null;        // the queue item currently being searched, or null
@@ -830,24 +837,19 @@ function actualMovesHtml(lineId, seq, reply){
 }
 
 // which side the signed-in user played, or null when unknown (a legacy bare
-// {moves} game, or someone else's game). CURRENT_USER (the app's one overall
-// identity) is only ever bootstrapped from whichever platform got imported
-// FIRST (`if(!CURRENT_USER) CURRENT_USER = fetchUser;` in dlBtn) and never
-// updated after that -- a LATER-imported platform's own handle can
-// legitimately differ (e.g. a chess.com username that doesn't match an
-// earlier Lichess import's), so also try the per-platform username
-// remembered at import time (LS_ID_CHESSCOM / LS_ID, set alongside
-// CURRENT_USER in dlBtn) before giving up. Without this fallback every game
-// from that later platform would read as "someone else's game" despite the
-// player data being right there.
+// {moves} game, or someone else's game). Matches against whichever handle is
+// remembered for THIS game's own platform (LS_ID_CHESSCOM / LS_ID, kept
+// current on every download in dlBtn and restored from a backup's own
+// lichessUser/chesscomUser fields) -- each platform's identity is independent,
+// so a chess.com game never matches against your Lichess handle or vice versa.
 function userColorInGame(game){
-  const perPlatform = localStorage.getItem(game.source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
-  const candidates = [CURRENT_USER, perPlatform].filter(Boolean).map(s => s.toLowerCase());
-  if(!candidates.length) return null;
+  const mine = localStorage.getItem(game.source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+  if(!mine) return null;
+  const name = mine.toLowerCase();
   const w = game.players?.white?.user?.name?.toLowerCase();
   const b = game.players?.black?.user?.name?.toLowerCase();
-  if(w && candidates.includes(w)) return 'white';
-  if(b && candidates.includes(b)) return 'black';
+  if(w === name) return 'white';
+  if(b === name) return 'black';
   return null;
 }
 // win / loss / draw from the user's perspective, or null when the user's color
@@ -927,7 +929,7 @@ function showGamesAtNode(seq){
 // user clicks this page load, before any line's openLine() has had a chance
 // to populate GAMES, even though real imported games already exist in IDB.
 async function openBrowseGames({ seq = [], color = 'either' } = {}){
-  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
   if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
   _gamesModalState = { mode: 'pos', color };
   $('gamesListMovesInput').value = seq.length ? movesToNumberedText(seq) : '';
@@ -2933,7 +2935,7 @@ $('castleWalkBtn').onclick = async () => {
   if(!LAST_GENERATED_CASTLE){ return; }
   $('castleReportOverlay').style.display='none';
   $('threeTestOverlay').style.display='flex';
-  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const lines = await getLines(LOCAL_USER);
   const systems = await systemsForWalk(lines);
   // same instance id the street flow uses, so decorations made during this
   // preview land in (and load from) the same per-castle rooms
@@ -4688,7 +4690,7 @@ $('fileImport').addEventListener('change', async e=>{
   GAMES = txt.trim().split(/\r?\n/).filter(Boolean)
     .map(l=>{ try{ return JSON.parse(l); }catch{ return null; } })
     .filter(Boolean);
-  if(CURRENT_USER) await putGames(CURRENT_USER,GAMES);
+  await putGames(LOCAL_USER,GAMES);
   invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
   await reindexAfterImport(GAMES);
   clr();
@@ -4708,15 +4710,11 @@ async function renderHome(){
 
   const list = $('linesList');
   list.innerHTML='';
-  if(!CURRENT_USER){
-    list.innerHTML = '<p>Import games via the menu &rarr; Import Games, then create an opening system.</p>';
-    return;
-  }
 
   const spinner = showSpinner('Loading opening systems…');
   await nextPaint();
   try {
-    const lines = await getLines(CURRENT_USER);
+    const lines = await getLines(LOCAL_USER);
     if(!lines.length){
       list.innerHTML = '<p>No opening systems yet &mdash; click + to create one.</p>';
       return;
@@ -4837,8 +4835,8 @@ async function openLine(line){
   const spinner = showSpinner('Loading opening system…');
   await nextPaint();
   try {
-    if(!GAMES && CURRENT_USER){
-      GAMES = await getGames(CURRENT_USER);
+    if(!GAMES){
+      GAMES = await getGames(LOCAL_USER);
       if(!GAMES.length) GAMES=null;
     }
     if(!GAMES){
@@ -5219,7 +5217,6 @@ $('lineSaveBtn').onclick = async () => {
   const name = $('lineNameInput').value.trim();
   const color = $('lineColorInput').value;
   if(!name){ $('lineModalError').textContent='enter a name'; return; }
-  if(!CURRENT_USER){ $('lineModalError').textContent='import games first (menu → Import Games)'; return; }
 
   let openingMoves = [];
   if(color==='white'){
@@ -5241,7 +5238,7 @@ $('lineSaveBtn').onclick = async () => {
     }
   }
 
-  await createLine(CURRENT_USER, {name, color, openingMoves});
+  await createLine(LOCAL_USER, {name, color, openingMoves});
   $('lineOverlay').style.display='none';
   renderHome();
 };
@@ -5251,13 +5248,6 @@ $('dlBtn').onclick = async ()=>{
   const source = $('importSourceInput').value;
   const fetchUser = $('userId').value.trim().toLowerCase();
   if(!fetchUser){ logDl('enter a username',true); return; }
-  // CURRENT_USER is the stable identity that owns your lines/games in this
-  // browser; only bootstrap it from the typed username the first time ever
-  // (no identity yet). On later imports — even from a different platform
-  // with a different handle — keep the existing identity so games get
-  // ADDED to your existing repertoire instead of switching to a new,
-  // empty-looking bucket of lines.
-  if(!CURRENT_USER) CURRENT_USER = fetchUser;
   localStorage.setItem(LS_SOURCE,source);
   localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, fetchUser);
 
@@ -5276,8 +5266,8 @@ $('dlBtn').onclick = async ()=>{
       fetched = await fetchLatest(fetchUser,max,n=>logDl(`fetching… got ${n}`));
     }
     logDl(`fetched ${fetched.length}, writing to database…`);
-    await putGames(CURRENT_USER,fetched);
-    GAMES = await getGames(CURRENT_USER); // reload the full merged set, not just this batch
+    await putGames(LOCAL_USER,fetched);
+    GAMES = await getGames(LOCAL_USER); // reload the full merged set, not just this batch
     invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
     logDl(`imported ${fetched.length}, indexing…`);
     await reindexAfterImport(GAMES, (done,total) => logDl(`indexing… ${done} of ${total}`));
@@ -5408,21 +5398,27 @@ async function downloadJsonBackup(obj, baseName){
 
 /* ---------- export / import backup ----------
    This is a *total* backup: everything stored locally (downloaded games,
-   repertoire lines/prefs, mnemonics + images, mnemonics notes, and the
-   Lichess user id) so that importing it into a brand-new browser/profile
-   reproduces the exact prior state with no other setup required.
+   repertoire lines/prefs, mnemonics + images, mnemonics notes, and your
+   remembered Lichess/chess.com handles) so that importing it into a
+   brand-new browser/profile reproduces the exact prior state with no other
+   setup required.
 */
 // Builds the full backup object without touching the download machinery --
 // split out (same rationale as buildMnemonicsExportData) so a test can
 // inspect exactly what a backup would contain without capturing a real
 // file download.
 async function buildBackupData(){
-  const lines = await getLines(CURRENT_USER);
+  const lines = await getLines(LOCAL_USER);
   const mnemonicsBySquare = await getAllMnemonics();
-  const games = await getGames(CURRENT_USER);
+  const games = await getGames(LOCAL_USER);
   return {
     version: 6,   // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists
-    user: CURRENT_USER,
+    // per-platform handles (independent of each other -- see userColorInGame)
+    // so restoring on a fresh browser/profile keeps matching "which color did
+    // I play" for BOTH platforms, not just whichever one this app version
+    // used to treat as "the" identity.
+    lichessUser: localStorage.getItem(LS_ID) || '',
+    chesscomUser: localStorage.getItem(LS_ID_CHESSCOM) || '',
     exportedAt: new Date().toISOString(),
     games,
     lines: await Promise.all(lines.map(async line=>({
@@ -5457,21 +5453,21 @@ async function buildBackupData(){
   };
 }
 async function exportBackup(){
-  if(!CURRENT_USER){ log('import games first (menu → Import Games)',true); return; }
   const data = await buildBackupData();
   const stamp = new Date().toISOString().slice(0,10);
-  const size = await downloadJsonBackup(data, `repchess-backup-${CURRENT_USER}-${stamp}`);
+  const size = await downloadJsonBackup(data, `repchess-backup-${stamp}`);
   const mb = (size/1048576).toFixed(1);
   log(`exported ${data.lines.length} opening system(s), ${data.games.length} game(s) — ${mb}MB${GZIP_OK ? ' (gzipped)' : ''}`);
 }
 
 // test-only generation counter, bumped at the very end of applyBackupData
-// (see below) -- CURRENT_USER/$('userId').value are set very early in that
-// function, well before games/lines/mnemonics are actually written, so the
-// test harness's seedBackup() polls this instead of userId to avoid racing
-// a still-in-flight restore under load. Also ticks at the end of a rollback
-// or boot-time recovery replay (both call applyBackupData too), which is
-// exactly the "restore settled" signal a test waiting on either wants.
+// (see below) -- the restored lichess/chesscom handles and $('userId').value
+// are set very early in that function, well before games/lines/mnemonics are
+// actually written, so the test harness's seedBackup() polls this instead of
+// userId to avoid racing a still-in-flight restore under load. Also ticks at
+// the end of a rollback or boot-time recovery replay (both call
+// applyBackupData too), which is exactly the "restore settled" signal a test
+// waiting on either wants.
 let _importBackupGen = 0;
 if(localStorage.getItem('threeTestDebug')){
   window.__importBackupGen = () => _importBackupGen;
@@ -5497,25 +5493,32 @@ async function applyBackupData(data, onMnemProgress){
   // mirror so a lingering background loop can't keep processing/saving
   // against lineIds this restore just replaced.
   ANALYSIS_QUEUE = [];
-  // a restore replaces the whole repertoire (possibly under a different user
-  // entirely) without a page reload -- drop the cached VR world-build result
-  // so the next "Run VR" rebuilds against the restored data instead of
-  // showing whatever was cached from before the restore.
+  // a restore replaces the whole repertoire without a page reload -- drop the
+  // cached VR world-build result so the next "Run VR" rebuilds against the
+  // restored data instead of showing whatever was cached from before the
+  // restore.
   invalidateBuiltCastlesCache();
   invalidatePositionIndexCache();
 
-  CURRENT_USER = data.user || '';
-  localStorage.setItem(LS_ID, CURRENT_USER);
-  $('userId').value = CURRENT_USER;
+  // restore each platform's own remembered handle independently (see
+  // userColorInGame) -- back-compat: a backup from before per-platform
+  // handles were tracked separately only ever carried one ambiguous `user`
+  // field (whichever platform happened to be imported first), so fall back
+  // to treating that as the Lichess handle, matching this app's old behavior.
+  const lichessUser = data.lichessUser ?? data.user ?? '';
+  const chesscomUser = data.chesscomUser ?? '';
+  localStorage.setItem(LS_ID, lichessUser);
+  localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
+  $('userId').value = localStorage.getItem($('importSourceInput').value === 'chesscom' ? LS_ID_CHESSCOM : LS_ID) || '';
 
-  if(Array.isArray(data.games) && data.games.length) await putGames(CURRENT_USER, data.games);
+  if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
   GAMES = data.games || [];
 
   for(const lineData of (data.lines||[])){
     // reuse the original line id when present (older backups omit it) so VR
     // decoration keys that embed it — castle rooms, building facades/signs —
     // still resolve against the restored threeLayout.
-    const line = await createLine(CURRENT_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
+    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
     if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {
@@ -5593,7 +5596,6 @@ async function readSafetyBackup(){
    applyBackupData (see its own doc comment). */
 async function importBackup(data, onMnemProgress){
   if(!data || !Array.isArray(data.lines)) throw new Error('not a valid backup file');
-  if(!data.user) throw new Error('backup file has no user id');
 
   const before = await buildBackupData();
   await persistSafetyBackup(before);
@@ -6103,7 +6105,7 @@ async function gatherBuiltCastles(lines){
     } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
   }
   const t0 = performance.now();
-  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
   // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
   // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
   // hit above already returned without reaching here, so this only runs on an
@@ -6177,7 +6179,7 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     // feed the walker the opening systems so it can lay out one street per system
     // (white branches right off Main Street, black branches left), plus every
     // built castle so each one appears as a building on its system's street.
-    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const lines = await getLines(LOCAL_USER);
     systems = await systemsForWalk(lines);
     if(forceRebuild) invalidateBuiltCastlesCache();
     castles = await gatherBuiltCastles(lines);
@@ -6250,7 +6252,7 @@ setCastleInfoProvider({
   // every built castle that has at least one wall-list assignment anywhere
   // in it -- an unused castle isn't worth offering (nothing to quiz).
   async listOptions(){
-    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const lines = await getLines(LOCAL_USER);
     if(!lines.length) return [];
     const built = await gatherBuiltCastles(lines);
     let LAYOUT; try { LAYOUT = JSON.parse(await getMeta('threeLayout') || '{}'); } catch { LAYOUT = {}; }
@@ -6270,7 +6272,7 @@ setCastleInfoProvider({
   // in the chosen castle, combined -- posLabel carries the source list's own
   // name since positions aren't comparable once lists are combined.
   async entriesForCastle(lineId, castleName){
-    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const lines = await getLines(LOCAL_USER);
     const built = await gatherBuiltCastles(lines);
     const castle = built.find(c => c.lineId === lineId && c.castleName === castleName);
     if(!castle) return [];
@@ -6296,7 +6298,7 @@ setCastleInfoProvider({
   // / "<castle>" / "<castle> + N more" line and the editor's own full "Used
   // in" section (see objectLists.js's LIST_USAGE/usageSummary).
   async usageByListId(){
-    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const lines = await getLines(LOCAL_USER);
     if(!lines.length) return {};
     const built = await gatherBuiltCastles(lines);
     let LAYOUT; try { LAYOUT = JSON.parse(await getMeta('threeLayout') || '{}'); } catch { LAYOUT = {}; }
@@ -6429,7 +6431,7 @@ const findCastleRootSeq = (line, castleName) => withLinePrefs(line, () => castle
    so the lead-in moves above the castle root aren't counted as "in" the castle,
    matching the generator's own scoping — see buildGeneratedCastle). */
 async function computeMnemonicCoverage(line, rootSeq=null){
-  if(!GAMES && CURRENT_USER){ GAMES = await getGames(CURRENT_USER); }
+  if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
   const graph = await withLinePrefs(line, () => buildCastleGraph(line, gamesForLineColor(GAMES, line.color), rootSeq, false));
   const seqs = [...graph.rooms.map(r=>r.seq), ...graph.edges.map(e=>e.seq)];
   const set = new Set();
@@ -6459,7 +6461,7 @@ let MNEM_CASTLE_OPTIONS = []; // [{lineId, castleName}]
 // select's leading "nothing chosen" option (wording differs by context).
 async function populateCoverageOptgroups(sel, noneOptionHtml){
   const prevValue = sel.value;
-  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const lines = await getLines(LOCAL_USER);
   MNEM_CASTLE_OPTIONS = [];
   const groups = [];
   for(const line of lines){
@@ -6830,7 +6832,7 @@ $('mnemonicsCoverageSelect').onchange = async (e)=>{
   if(!val){ MNEM_COVERAGE = null; renderMnemonicsGrid(); return; }
   const spinner = showSpinner('Loading opening system…');
   try {
-    const lines = await getLines(CURRENT_USER);
+    const lines = await getLines(LOCAL_USER);
     const sel = await resolveCoverageSelection(val, lines);
     MNEM_COVERAGE = await coverageSetFor(sel);
   } finally {
@@ -7064,7 +7066,7 @@ async function quizStart(){
   // opening system or castle (its repertoire coverage).
   const coverageVal = $('quizCoverageSelect').value;
   if(coverageVal){
-    const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+    const lines = await getLines(LOCAL_USER);
     const sel = await resolveCoverageSelection(coverageVal, lines);
     const coverage = await coverageSetFor(sel);
     if(coverage) pool = pool.filter(it => coverage.has(`${it.square}|${it.piece}`));
@@ -7589,7 +7591,7 @@ async function oqStartSession(coverageVal, n, depth, onlyMemorized){
   if(!Number.isFinite(n) || n < 1) return 'Enter a question count of 1 or more.';
   if(!Number.isFinite(depth) || depth < 1) return 'Enter a max depth of 1 or more.';
   if(!coverageVal) return 'Choose an opening system.';
-  const lines = CURRENT_USER ? await getLines(CURRENT_USER) : [];
+  const lines = await getLines(LOCAL_USER);
   const sel = await resolveCoverageSelection(coverageVal, lines);
   if(!sel) return 'That opening system could not be found — pick another.';
   if(sel.isCastle && !sel.rootSeq) return 'That castle has no content built yet — pick another.';
@@ -8251,9 +8253,9 @@ function queueChildrenForAnalysis(parentSeq, branchDiv){
    PREFS via setPref() (not the CURRENT_LINE-coupled savePrefField(), since
    the node being processed is often not the line the user has open) and the
    item itself is then deleted from the queue -- the queue is a to-do list,
-   not a history log. State variables live up near CURRENT_USER/PREFS (not
-   here) since the boot-time auto-resume call runs before the module reaches
-   this point in top-to-bottom evaluation. */
+   not a history log. State variables live up near PREFS (not here) since the
+   boot-time auto-resume call runs before the module reaches this point in
+   top-to-bottom evaluation. */
 
 // `seqs`: one or more move sequences under `lineId` to queue once Depth/Lines
 // are confirmed -- a single-element array for the per-node "Add to Analysis
@@ -8320,7 +8322,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv, {silent=false}={}
   }
   const item = {
     id: `aq:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,
-    user: CURRENT_USER, lineId, seq: seq.slice(), depth, multipv,
+    user: LOCAL_USER, lineId, seq: seq.slice(), depth, multipv,
     status: 'queued', createdAt: Date.now(),
   };
   await putAnalysisQueueItem(item);
@@ -8434,12 +8436,9 @@ async function cancelAnalysisQueueItem(id){
 }
 
 async function refreshAnalysisQueue(){
-  if(!CURRENT_USER){ ANALYSIS_QUEUE = []; AQ_LINE_NAMES = new Map(); }
-  else {
-    ANALYSIS_QUEUE = await getAnalysisQueue(CURRENT_USER);
-    const lines = await getLines(CURRENT_USER);
-    AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
-  }
+  ANALYSIS_QUEUE = await getAnalysisQueue(LOCAL_USER);
+  const lines = await getLines(LOCAL_USER);
+  AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
   refreshAnalysisQueueRowMarkers();
 }
 
@@ -9249,11 +9248,14 @@ if(localStorage.getItem('threeTestDebug')){
 // test-only hook for db.js's line CRUD -- plain IDB manipulation, works fine
 // in the offline harness. updateLine resolves `true`/`false` depending on
 // whether `id` actually matched a stored line, so a test can check that
-// signal directly instead of only inferring it from a re-fetch.
+// signal directly instead of only inferring it from a re-fetch. getLines()
+// takes no argument -- every line lives under the one fixed LOCAL_USER key
+// (there's no per-identity partitioning to select between), so it always
+// returns everything currently stored.
 if(localStorage.getItem('threeTestDebug')){
   window.__linesTestHooks = {
     updateLine: (id, patch) => updateLine(id, patch),
-    getLines: (user) => getLines(user),
+    getLines: () => getLines(LOCAL_USER),
   };
 }
 
