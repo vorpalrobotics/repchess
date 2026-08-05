@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-293';
+const BUILD_TAG = '-294';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -933,6 +933,48 @@ function estimateLichessAutoMaxGames(games){
   return Math.min(LICHESS_AUTO_MAX_GAMES, Math.max(LICHESS_AUTO_MIN_GAMES, estimate));
 }
 
+/* ---------- auto-import daily gate ----------
+   "Once a day, per platform" is tracked as a plain local-calendar-date
+   string (toDateString(), e.g. "Mon Aug 04 2026") rather than a rolling
+   24h window -- matches "the first time I refresh each day" literally, and
+   is simpler to reason about than a timestamp diff. Stamped only on a
+   SUCCESSFUL fetch+merge (see the boot-trigger phase), not on mere attempt,
+   so a transient failure (offline, rate-limited, API hiccup) retries on the
+   next refresh instead of waiting a full day.
+*/
+const LS_AUTO_IMPORT = 'autoImport_enabled';
+const LS_AUTO_CHECK_LICHESS = 'autoImport_lastCheck_lichess';
+const LS_AUTO_CHECK_CHESSCOM = 'autoImport_lastCheck_chesscom';
+function autoCheckKeyFor(source){
+  return source === 'chesscom' ? LS_AUTO_CHECK_CHESSCOM : LS_AUTO_CHECK_LICHESS;
+}
+// true when `source` is due for an auto-check right now: the feature is
+// enabled, this platform actually has a remembered username (auto-import
+// never fetches a platform you've never connected), and it hasn't
+// successfully checked yet today.
+function shouldAutoCheck(source){
+  if(localStorage.getItem(LS_AUTO_IMPORT) !== '1') return false;
+  const username = localStorage.getItem(source === 'chesscom' ? LS_ID_CHESSCOM : LS_ID);
+  if(!username) return false;
+  const lastCheck = localStorage.getItem(autoCheckKeyFor(source));
+  return lastCheck !== new Date().toDateString();
+}
+function markAutoCheckSucceeded(source){
+  localStorage.setItem(autoCheckKeyFor(source), new Date().toDateString());
+}
+
+// Console utility (always available, not gated behind threeTestDebug -- this
+// is for real day-to-day use in an actual browser session, not just the
+// offline test harness): clears one or both platforms' "already checked
+// today" flag, so a manual sanity check ("play a few Lichess games, run
+// this, refresh, confirm they show up") doesn't have to wait for the next
+// real day to roll over. `source` is optional -- omit it to reset both.
+window.autoImportResetToday = (source) => {
+  const sources = source ? [source] : ['lichess', 'chesscom'];
+  for(const s of sources) localStorage.removeItem(autoCheckKeyFor(s));
+  console.log(`[auto-import] cleared today's check flag for: ${sources.join(', ')} -- the next refresh will re-check ${sources.length > 1 ? 'them' : 'it'} (if enabled and a username is remembered).`);
+};
+
 if(localStorage.getItem('threeTestDebug')){
   window.__autoImportTestHooks = {
     lastGameDateForSource: (games, source) => lastGameDateForSource(games, source),
@@ -943,6 +985,9 @@ if(localStorage.getItem('threeTestDebug')){
       lichessMin: LICHESS_AUTO_MIN_GAMES, lichessMax: LICHESS_AUTO_MAX_GAMES, lichessDefault: LICHESS_AUTO_DEFAULT_GAMES,
       lichessPerDay: LICHESS_AUTO_GAMES_PER_DAY,
     },
+    shouldAutoCheck: (source) => shouldAutoCheck(source),
+    markAutoCheckSucceeded: (source) => markAutoCheckSucceeded(source),
+    keys: { autoImport: LS_AUTO_IMPORT, lichessCheck: LS_AUTO_CHECK_LICHESS, chesscomCheck: LS_AUTO_CHECK_CHESSCOM },
   };
 }
 

@@ -13903,6 +13903,97 @@ try {
     assert(longAbsence === defaults.lichessMax, `expected a 10-day absence to clamp at the cap (${defaults.lichessMax}), got ${longAbsence}`);
     ok('auto-import: estimateLichessAutoMaxGames floors/scales/caps correctly from days-since-last-game');
   } catch(e){ bad('auto-import: estimateLichessAutoMaxGames floor/scale/cap', e); }
+
+  const acKeys = await appCO.page.evaluate(() => window.__autoImportTestHooks.keys);
+
+  // 234. shouldAutoCheck: false when the feature is off entirely, even with a
+  //      remembered username and no prior check ever recorded -- auto-import
+  //      is opt-in, not opt-out.
+  try {
+    const due = await appCO.page.evaluate(() => {
+      localStorage.clear();
+      localStorage.setItem('lichess_lastUser', 'tester');
+      // deliberately NOT setting the auto-import-enabled flag
+      return window.__autoImportTestHooks.shouldAutoCheck('lichess');
+    });
+    assert(due === false, `expected shouldAutoCheck to be false with the feature disabled, got ${due}`);
+    ok('auto-import: shouldAutoCheck is false when the feature is disabled, regardless of everything else');
+  } catch(e){ bad('auto-import: shouldAutoCheck disabled-by-default', e); }
+
+  // 235. shouldAutoCheck: false when enabled but this platform has no
+  //      remembered username -- never fetches a platform you haven't
+  //      connected, even if the checkbox is on (because the OTHER platform
+  //      is connected).
+  try {
+    const due = await appCO.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem(keys.autoImport, '1');
+      // deliberately NOT setting lichess_lastUser
+      return window.__autoImportTestHooks.shouldAutoCheck('lichess');
+    }, acKeys);
+    assert(due === false, `expected shouldAutoCheck to be false with no remembered username for this platform, got ${due}`);
+    ok('auto-import: shouldAutoCheck is false for a platform with no remembered username, even with the feature enabled');
+  } catch(e){ bad('auto-import: shouldAutoCheck no-username', e); }
+
+  // 236-238. Enabled + both platforms connected: each is due when never
+  //      checked before; NOT due once markAutoCheckSucceeded records today;
+  //      a per-platform autoImportResetToday('lichess') (the real console
+  //      utility, not a test-only hook) makes ONLY lichess due again,
+  //      leaving chess.com's own "done today" flag untouched -- proving the
+  //      two platforms are gated independently, not by one shared flag.
+  //      This is exactly the "play a few games, run the reset function,
+  //      refresh" workflow the console utility was built for.
+  try {
+    await appCO.page.evaluate((keys) => {
+      localStorage.clear();
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.setItem('lichess_lastUser', 'tester');
+      localStorage.setItem('chesscom_lastUser', 'tester');
+    }, acKeys);
+
+    const dueInitially = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueInitially.lichess === true && dueInitially.chesscom === true,
+      `expected both platforms due when enabled, connected, and never checked before, got ${JSON.stringify(dueInitially)}`);
+
+    await appCO.page.evaluate(() => {
+      window.__autoImportTestHooks.markAutoCheckSucceeded('lichess');
+      window.__autoImportTestHooks.markAutoCheckSucceeded('chesscom');
+    });
+    const dueAfterSuccess = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueAfterSuccess.lichess === false && dueAfterSuccess.chesscom === false,
+      `expected both platforms NOT due right after a successful check today, got ${JSON.stringify(dueAfterSuccess)}`);
+
+    await appCO.page.evaluate(() => window.autoImportResetToday('lichess'));
+    const dueAfterLichessReset = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(dueAfterLichessReset.lichess === true, `expected lichess due again after autoImportResetToday('lichess'), got ${dueAfterLichessReset.lichess}`);
+    assert(dueAfterLichessReset.chesscom === false, `expected chess.com's own "done today" flag untouched by a lichess-only reset, got ${dueAfterLichessReset.chesscom}`);
+    ok('auto-import: shouldAutoCheck cycles due -> not-due -> due again via markAutoCheckSucceeded/autoImportResetToday, independently per platform');
+  } catch(e){ bad('auto-import: shouldAutoCheck + markAutoCheckSucceeded + autoImportResetToday lifecycle', e); }
+
+  // 239. autoImportResetToday() with no argument clears BOTH platforms' flags
+  //      at once (the common case: "just let me re-check everything now").
+  try {
+    await appCO.page.evaluate((keys) => {
+      localStorage.setItem(keys.lichessCheck, new Date().toDateString());
+      localStorage.setItem(keys.chesscomCheck, new Date().toDateString());
+    }, acKeys);
+    await appCO.page.evaluate(() => window.autoImportResetToday());
+    const bothDue = await appCO.page.evaluate(() => ({
+      lichess: window.__autoImportTestHooks.shouldAutoCheck('lichess'),
+      chesscom: window.__autoImportTestHooks.shouldAutoCheck('chesscom'),
+    }));
+    assert(bothDue.lichess === true && bothDue.chesscom === true, `expected autoImportResetToday() with no argument to make both platforms due again, got ${JSON.stringify(bothDue)}`);
+    ok('auto-import: autoImportResetToday() with no argument resets both platforms at once');
+  } catch(e){ bad('auto-import: autoImportResetToday resets both platforms', e); }
 } finally {
   await appCO.close();
 }
