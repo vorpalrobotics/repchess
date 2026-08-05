@@ -60,6 +60,7 @@ const SUBSYSTEMS = {
   'help':              'Help modal',
   'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
   'auto-import':       'daily auto-import from Lichess/chess.com: sizing heuristics, daily gate, boot trigger',
+  'user-migration':    'migrateLegacyUserData: pre-CURRENT_USER-removal data recovery to LOCAL_USER',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -14347,6 +14348,142 @@ try {
   await appCS.close();
 }
 } catch(e){ bad('Phase CS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CT: migrateLegacyUserData -- the reported bug. Before CURRENT_USER
+//     was removed as an identity concept, games/lines/analysisQueue were
+//     stored keyed by whatever real username had been bootstrapped as the
+//     app's one "identity"; every read now always queries the fixed
+//     LOCAL_USER constant instead, so pre-existing data under the OLD key
+//     silently stopped showing up (still in IndexedDB, just never found) --
+//     this is the automatic one-time fix. ---
+if(shouldRunPhase(['user-migration'])){
+try {
+const appCT = await launchApp();
+try {
+  // launchApp()'s own boot sequence already kicked off migrateLegacyUserData
+  // once (a harmless no-op on the still-empty DB) -- it's async, so it may
+  // still be in flight when launchApp() returns (waitForFunction there only
+  // waits for #buildStamp, set synchronously long before this async chain
+  // even starts). Wait for that FIRST run to actually finish (flag set)
+  // before this test does its own reset/seed/migrate dance below --
+  // otherwise the first run's own delayed completion can re-set the flag
+  // right after this test clears it, racing with test 252's own migrate() call.
+  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+
+  // 252. A line + game + analysisQueue item seeded under an old real-username
+  //      key, all get migrated to LOCAL_USER (same id, same content, just
+  //      the `user` field corrected -- games additionally get their PRIMARY
+  //      KEY corrected, since it embeds `user`), and are gone from the old
+  //      key afterward.
+  try {
+    const localUser = await appCT.page.evaluate(() => window.__migrationTestHooks.localUser);
+    const OLD_USER = 'oldlichessperson';
+    await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.seedLegacyLine(oldUser, { name: 'Legacy System', color: 'white', openingMoves: ['e4'] }),
+      window.__importTestHooks.putGames(oldUser, [{ id: 'legacygame1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: oldUser } }, black: { user: { name: 'opp' } } } }]),
+      window.__migrationTestHooks.seedLegacyAnalysisQueueItem({ id: 'aq:legacy1', user: oldUser, lineId: 'whatever', seq: ['e4'], depth: 20, multipv: 1, status: 'queued', createdAt: 1000 }),
+    ]), OLD_USER);
+
+    // launchApp()'s own initial page load already ran migrateLegacyUserData
+    // once (harmlessly, on an empty DB, before this test seeded anything),
+    // consuming the one-time flag -- a real user's very first boot with this
+    // code would instead find their legacy data ALREADY present at that
+    // first run. Reset the flag here to put this test in that same state.
+    await appCT.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());
+
+    const [oldLines, oldGames, oldQueue, newLines, newGames, newQueue] = await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.getLines(oldUser),
+      window.__migrationTestHooks.getGames(oldUser),
+      window.__migrationTestHooks.getAnalysisQueue(oldUser),
+      window.__migrationTestHooks.getLines(window.__migrationTestHooks.localUser),
+      window.__migrationTestHooks.getGames(window.__migrationTestHooks.localUser),
+      window.__migrationTestHooks.getAnalysisQueue(window.__migrationTestHooks.localUser),
+    ]), OLD_USER);
+
+    assert(oldLines.length === 0, `expected nothing left under the old user key for lines, got ${JSON.stringify(oldLines)}`);
+    assert(oldGames.length === 0, `expected nothing left under the old user key for games, got ${JSON.stringify(oldGames)}`);
+    assert(oldQueue.length === 0, `expected nothing left under the old user key for analysisQueue, got ${JSON.stringify(oldQueue)}`);
+
+    assert(newLines.some(l => l.name === 'Legacy System' && l.user === localUser), `expected the migrated line under LOCAL_USER, got ${JSON.stringify(newLines)}`);
+    assert(newGames.some(g => g.id === 'legacygame1'), `expected the migrated game under LOCAL_USER, got ${JSON.stringify(newGames.map(g=>g.id))}`);
+    assert(newQueue.some(q => q.id === 'aq:legacy1' && q.user === localUser), `expected the migrated analysisQueue item under LOCAL_USER, got ${JSON.stringify(newQueue)}`);
+    ok('auto-import migration: lines/games/analysisQueue under an old real-username key are re-keyed to LOCAL_USER, and gone from the old key');
+  } catch(e){ bad('auto-import migration: lines/games/analysisQueue re-keyed correctly', e); }
+
+  // 253. Idempotent / one-time: once the flag is set, a SECOND migrate() call
+  //      does nothing, even if more legacy-keyed data shows up afterward
+  //      (shouldn't happen in practice post-fix, but the gate itself should
+  //      hold) -- resetting the flag makes it re-scan again.
+  try {
+    const OLD_USER2 = 'anotheroldperson';
+    await appCT.page.evaluate((oldUser) => window.__importTestHooks.putGames(oldUser, [
+      { id: 'legacygame2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: oldUser } }, black: { user: { name: 'opp2' } } } },
+    ]), OLD_USER2);
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());   // flag already set from test 252 -- should no-op
+    const stillOld = await appCT.page.evaluate((oldUser) => window.__migrationTestHooks.getGames(oldUser), OLD_USER2);
+    assert(stillOld.length === 1, `expected the second migrate() call to no-op (flag already set), leaving the game under its old key, got ${JSON.stringify(stillOld)}`);
+
+    await appCT.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+    await appCT.page.evaluate(() => window.__migrationTestHooks.migrate());
+    const [nowOld, nowNew] = await appCT.page.evaluate((oldUser) => Promise.all([
+      window.__migrationTestHooks.getGames(oldUser),
+      window.__migrationTestHooks.getGames(window.__migrationTestHooks.localUser),
+    ]), OLD_USER2);
+    assert(nowOld.length === 0, `expected the game migrated away from the old key after resetting the flag and re-running, got ${JSON.stringify(nowOld)}`);
+    assert(nowNew.some(g => g.id === 'legacygame2'), `expected the game now under LOCAL_USER, got ${JSON.stringify(nowNew.map(g=>g.id))}`);
+    ok('auto-import migration: gated behind a one-time flag, not re-scanning every call, but re-runnable if the flag is cleared');
+  } catch(e){ bad('auto-import migration: one-time flag gating', e); }
+} finally {
+  await appCT.close();
+}
+} catch(e){ bad('Phase CT: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CU: the exact reported bug, reproduced end to end -- data seeded
+//     under an old real-username key (simulating a browser that used the app
+//     BEFORE the CURRENT_USER removal), then a real page reload (the
+//     migration's actual boot-time trigger, not the test hook), confirming
+//     the opening system is visible on Home afterward instead of showing
+//     "no opening systems yet". ---
+if(shouldRunPhase(['user-migration'])){
+try {
+const appCU = await launchApp();
+try {
+  // wait for launchApp()'s own boot-time migration run (on the still-empty
+  // DB) to actually finish before this test touches the flag itself -- see
+  // Phase CT's identical wait for why.
+  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+
+  // 254. Real end-to-end reproduction: seed a line under an old username key
+  //      directly (bypassing seedBackup, which already always writes under
+  //      LOCAL_USER -- this simulates data that predates that code existing
+  //      at all), reload, and confirm Home shows it instead of the empty state.
+  try {
+    await appCU.page.evaluate((oldUser) => window.__migrationTestHooks.seedLegacyLine(oldUser, { name: 'Pre-Migration System', color: 'white', openingMoves: ['d4'] }), 'reallyoldhandle');
+    // as in test 252: launchApp()'s own initial load already consumed the
+    // one-time flag on an empty DB before this test seeded anything. A real
+    // user's actual first boot with this code has their legacy data present
+    // from the start, so reset the flag to put this reload in that same
+    // "first boot, data already there" state instead of a synthetic second one.
+    await appCU.page.evaluate(() => window.__migrationTestHooks.resetFlag());
+
+    await appCU.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCU.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCU.page.waitForSelector('.line-row', { timeout: 15000 });
+
+    const lineNames = await appCU.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(lineNames.includes('Pre-Migration System'), `expected the pre-existing opening system to appear on Home after reload, got ${JSON.stringify(lineNames)}`);
+    ok('auto-import migration: the exact reported bug (opening systems from before the CURRENT_USER removal) is fixed by a real reload, no manual backup re-import needed');
+  } catch(e){ bad('auto-import migration: real end-to-end reproduction of the reported bug', e); }
+} finally {
+  await appCU.close();
+}
+} catch(e){ bad('Phase CU: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

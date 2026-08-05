@@ -103,6 +103,65 @@ function hashStr(s){
   return h.toString(36);
 }
 
+/* ---------- one-time migration: pre-CURRENT_USER-removal data ----------
+   Before CURRENT_USER was removed as an identity concept (see app.js),
+   games/lines/analysisQueue were stored keyed by whatever real username had
+   been bootstrapped as the app's one overall "identity" (e.g. a Lichess
+   handle) -- every read now always queries one fixed constant instead
+   (app.js's LOCAL_USER), so a record left over under the OLD key becomes
+   invisible to the app (still sitting in IndexedDB, just never found by any
+   getGames/getLines/getAnalysisQueue call) rather than actually lost. This
+   finds any such orphaned record and re-keys it to `localUser`, once.
+   Gated on its own flag -- NOT FRESH_START_FLAG's, which is for wiping
+   pre-release test data; this one exists specifically to PRESERVE real user
+   data -- so a full games/lines/analysisQueue scan doesn't run on every
+   single boot forever once there's nothing left to migrate. */
+const LEGACY_USER_MIGRATION_FLAG = 'repchess-legacy-user-migration-v1';
+async function migrateLegacyUserData(localUser){
+  if(localStorage.getItem(LEGACY_USER_MIGRATION_FLAG)) return;
+  const db = await openDB();
+
+  // lines + analysisQueue: `user` is a plain attribute, not part of the
+  // primary key -- an in-place put() under the SAME id, with the corrected
+  // user field, is enough.
+  for(const storeName of ['lines', 'analysisQueue']){
+    await new Promise((resolve, reject) => {
+      const txn = db.transaction(storeName, 'readwrite');
+      const store = txn.objectStore(storeName);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        for(const record of req.result){
+          if(record.user !== localUser) store.put({ ...record, user: localUser });
+        }
+      };
+      txn.oncomplete = () => resolve();
+      txn.onerror    = () => reject(txn.error);
+    });
+  }
+
+  // games: `user` IS embedded in the primary key (`${user}:${gameId}`), so
+  // re-keying means writing a new record under the corrected id and
+  // deleting the old one -- a put() under the same id would just leave a
+  // stale duplicate sitting under the old key.
+  await new Promise((resolve, reject) => {
+    const txn = db.transaction('games', 'readwrite');
+    const store = txn.objectStore('games');
+    const req = store.getAll();
+    req.onsuccess = () => {
+      for(const record of req.result){
+        if(record.user !== localUser){
+          store.delete(record.id);
+          store.put({ ...record, id: `${localUser}:${record.gameId}`, user: localUser });
+        }
+      }
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+
+  localStorage.setItem(LEGACY_USER_MIGRATION_FLAG, '1');
+}
+
 /* ---------- games ---------- */
 /* games: array of parsed Lichess game objects (already JSON.parse'd) */
 async function putGames(user, games){

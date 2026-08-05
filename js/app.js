@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-298';
+const BUILD_TAG = '-299';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5505,10 +5505,20 @@ $('dlBtn').onclick = async ()=>{
 // this module (including the __xTestHooks registrations much further down)
 // until the recovery check's own IndexedDB round trip resolves, same
 // fire-and-forget-via-.then() reasoning as refreshAnalysisQueue() below.
-maybeRecoverFromInterruptedRestore().then(() => {
-  renderHome();
-  runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
-});
+// migrateLegacyUserData FIRST, before any crash-recovery replay -- a
+// recovery replay's own applyBackupData call does a clearAllData() wipe of
+// games/lines/analysisQueue before restoring its snapshot, which would
+// permanently destroy any not-yet-migrated legacy-keyed data if migration
+// ran second. .catch() (not a try/catch inside the function) so a migration
+// failure can never hang the rest of boot -- same "never blocks rendering"
+// guarantee maybeRecoverFromInterruptedRestore already gives itself internally.
+migrateLegacyUserData(LOCAL_USER)
+  .catch(err => console.error('[migration] failed to migrate pre-CURRENT_USER-removal data', err))
+  .then(() => maybeRecoverFromInterruptedRestore())
+  .then(() => {
+    renderHome();
+    runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
+  });
 
 // auto-start the background analysis queue: load whatever's left over from a
 // prior session and let it start chugging as soon as the engine is ready (see
@@ -9458,6 +9468,26 @@ if(localStorage.getItem('threeTestDebug')){
     normalizeChessComGame: (g, moves) => normalizeChessComGame(g, moves),
     putGames: (user, games) => putGames(user, games),
     getGames: (user) => getGames(user),
+  };
+}
+
+// test-only hook for migrateLegacyUserData (db.js) -- lets a test seed a
+// record under an arbitrary OLD user key (simulating pre-CURRENT_USER-
+// removal data) via the same createLine/putGames/putAnalysisQueueItem the
+// real pre-removal code path used, run the migration, then verify by
+// reading back under both the old key (should be empty after) and
+// LOCAL_USER (should have it). resetFlag lets one test instance run the
+// migration more than once (the real flag is one-time-ever).
+if(localStorage.getItem('threeTestDebug')){
+  window.__migrationTestHooks = {
+    localUser: LOCAL_USER,
+    migrate: () => migrateLegacyUserData(LOCAL_USER),
+    resetFlag: () => localStorage.removeItem('repchess-legacy-user-migration-v1'),
+    seedLegacyLine: (user, opts) => createLine(user, opts),
+    seedLegacyAnalysisQueueItem: (item) => putAnalysisQueueItem(item),
+    getLines: (user) => getLines(user),
+    getGames: (user) => getGames(user),
+    getAnalysisQueue: (user) => getAnalysisQueue(user),
   };
 }
 
