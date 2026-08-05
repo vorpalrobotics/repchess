@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR } from './harness.mjs';
+import { launchApp, seedBackup, openVR, mockLichessGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13994,10 +13994,98 @@ try {
     assert(bothDue.lichess === true && bothDue.chesscom === true, `expected autoImportResetToday() with no argument to make both platforms due again, got ${JSON.stringify(bothDue)}`);
     ok('auto-import: autoImportResetToday() with no argument resets both platforms at once');
   } catch(e){ bad('auto-import: autoImportResetToday resets both platforms', e); }
+
+  // 240. importGamesFromPlatform (Phase 3's shared fetch/store/reindex core,
+  //      also the first test in this suite to mock a REAL Lichess network
+  //      response rather than seeding games straight into IDB): fetching a
+  //      mix of one already-on-file game and one genuinely new one reports
+  //      the correct new-vs-duplicate split, merges into GAMES without
+  //      double-counting the duplicate, and -- with verbose logging on by
+  //      default -- logs the split and the newest on-file game's date;
+  //      turning verbose off silences further auto-import log lines.
+  try {
+    await seedBackup(appCO.page, {
+      version: 6, user: 'tester',
+      lines: [], games: [
+        { id: 'old1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp' } } } },
+      ],
+    });
+    await mockLichessGames(appCO.page, 'testuser', [
+      { id: 'old1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp' } } } },
+      { id: 'new1', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp2' } } } },
+    ]);
+    const result = await appCO.page.evaluate(() => window.__autoImportTestHooks.importGamesFromPlatform('lichess', 'testuser', 50));
+    assert(result.fetchedCount === 2, `expected 2 games fetched, got ${result.fetchedCount}`);
+    assert(result.newCount === 1, `expected exactly 1 new game (new1), got ${result.newCount}`);
+    assert(result.duplicateCount === 1, `expected exactly 1 duplicate (old1, already on file), got ${result.duplicateCount}`);
+    assert(result.totalGames === 2, `expected the merged total to be 2 (old1 + new1, not double-counting the duplicate), got ${result.totalGames}`);
+
+    const splitLog = appCO.consoleLogs.find(l => l.includes('[lichess] fetched 2 game(s): 1 new, 1 already had'));
+    assert(splitLog, `expected a verbose new-vs-duplicate log line, got logs: ${JSON.stringify(appCO.consoleLogs.slice(-10))}`);
+    const dateLog = appCO.consoleLogs.find(l => l.includes('[lichess] most recent game on file:'));
+    assert(dateLog, `expected a verbose "most recent game on file" log line, got logs: ${JSON.stringify(appCO.consoleLogs.slice(-10))}`);
+    ok('auto-import: importGamesFromPlatform reports new-vs-duplicate counts and logs them verbosely by default');
+  } catch(e){ bad('auto-import: importGamesFromPlatform new-vs-duplicate + verbose logging', e); }
+
+  // 241. autoImportSetVerbose(false) actually silences further auto-import
+  //      log lines (not just flips a flag nothing reads).
+  try {
+    await mockLichessGames(appCO.page, 'testuser2', [
+      { id: 'new2', moves: 'c4 c5', createdAt: 3000, players: { white: { user: { name: 'tester' } }, black: { user: { name: 'opp3' } } } },
+    ]);
+    await appCO.page.evaluate(() => window.autoImportSetVerbose(false));
+    const verboseNow = await appCO.page.evaluate(() => window.__autoImportTestHooks.isAutoImportVerbose());
+    assert(verboseNow === false, `expected isAutoImportVerbose() to reflect the toggle, got ${verboseNow}`);
+
+    const countBefore = appCO.consoleLogs.length;
+    await appCO.page.evaluate(() => window.__autoImportTestHooks.importGamesFromPlatform('lichess', 'testuser2', 50));
+    const newAutoImportLogs = appCO.consoleLogs.slice(countBefore).filter(l => l.startsWith('[auto-import]'));
+    assert(newAutoImportLogs.length === 0, `expected no [auto-import]-prefixed logs while verbose is off, got ${JSON.stringify(newAutoImportLogs)}`);
+    ok('auto-import: autoImportSetVerbose(false) actually silences further auto-import log lines');
+  } catch(e){ bad('auto-import: autoImportSetVerbose(false) silences logging', e); }
 } finally {
   await appCO.close();
 }
 } catch(e){ bad('Phase CO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CP: auto-import Phase 3 (continued) -- the manual "Import Now"
+//     button (dlBtn) itself, refactored to call importGamesFromPlatform,
+//     driven through the REAL modal UI end to end against a mocked Lichess
+//     response, proving the refactor didn't change the user-facing manual
+//     import flow. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appCP = await launchApp();
+try {
+  await mockLichessGames(appCP.page, 'realflow', [
+    { id: 'rf1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp' } } } },
+    { id: 'rf2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp2' } } } },
+  ]);
+
+  // 242. Filling in the download modal and clicking "Import Now" (dlBtn)
+  //      fetches from the (mocked) real Lichess endpoint, remembers the
+  //      username, reports the correct imported/total count, and closes
+  //      the modal on success -- the same outward behavior as before the
+  //      importGamesFromPlatform extraction.
+  try {
+    await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+    await appCP.page.fill('#userId', 'realflow');
+    await appCP.page.click('#dlBtn');
+    await appCP.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 10000 });
+
+    const progressText = await appCP.page.evaluate(() => document.getElementById('downloadProgress').textContent);
+    assert(progressText.includes('imported 2 (2 total)'), `expected the final progress text to report "imported 2 (2 total)", got "${progressText}"`);
+
+    const rememberedUser = await appCP.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    assert(rememberedUser === 'realflow', `expected the username to be remembered for next time, got "${rememberedUser}"`);
+    ok('auto-import: the manual "Import Now" flow still works end to end through the real modal after the importGamesFromPlatform refactor');
+  } catch(e){ bad('auto-import: manual Import Now flow (real modal, mocked network)', e); }
+} finally {
+  await appCP.close();
+}
+} catch(e){ bad('Phase CP: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

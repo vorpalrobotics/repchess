@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-294';
+const BUILD_TAG = '-295';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -975,6 +975,58 @@ window.autoImportResetToday = (source) => {
   console.log(`[auto-import] cleared today's check flag for: ${sources.join(', ')} -- the next refresh will re-check ${sources.length > 1 ? 'them' : 'it'} (if enabled and a username is remembered).`);
 };
 
+/* ---------- auto-import diagnostic logging ----------
+   Detailed console logging (what fired, why, new-vs-duplicate game counts,
+   the most recent game on file per platform) so the feature's behavior can
+   be sanity-checked over the first several days of real use without any UI.
+   Gated on a persisted flag, defaulting ON for that initial soak-testing
+   period -- meant to be turned off via autoImportSetVerbose(false) once the
+   feature's been trusted for a while, but left in the code for future
+   debugging rather than removed outright.
+*/
+const LS_AUTO_IMPORT_VERBOSE = 'autoImport_verboseLogging';
+function isAutoImportVerbose(){
+  return localStorage.getItem(LS_AUTO_IMPORT_VERBOSE) !== '0';
+}
+function autoImportLog(...args){
+  if(isAutoImportVerbose()) console.log('[auto-import]', ...args);
+}
+window.autoImportSetVerbose = (on) => {
+  localStorage.setItem(LS_AUTO_IMPORT_VERBOSE, on ? '1' : '0');
+  console.log(`[auto-import] verbose logging ${on ? 'enabled' : 'disabled'}.`);
+};
+
+// Fetches the latest games for one platform and merges them into local
+// storage -- the shared core of BOTH the manual "Import Now" button (dlBtn)
+// and the background auto-import trigger, so both stay on exactly one
+// fetch/store/reindex code path instead of two that could drift apart.
+// `sizeParam` is months-back for chess.com, max-games for Lichess (matching
+// fetchChessCom/fetchLatest's own parameter) -- the CALLER decides what that
+// number should be (a manual field's value, or an auto-sized estimate) and
+// whether to persist it as a future default; this function only acts on it,
+// and doesn't touch any UI (no modal-closing, no re-render) -- the caller's
+// job, since a background auto-check must never disrupt whatever's on screen.
+async function importGamesFromPlatform(source, username, sizeParam, { onFetchProgress, onIndexProgress } = {}){
+  const fetched = source === 'chesscom'
+    ? await fetchChessCom(username, sizeParam, onFetchProgress)
+    : await fetchLatest(username, sizeParam, onFetchProgress);
+
+  const existingKeys = new Set((GAMES || []).map(gameIndexKey));
+  const newCount = fetched.filter(g => !existingKeys.has(gameIndexKey(g))).length;
+  const duplicateCount = fetched.length - newCount;
+  autoImportLog(`[${source}] fetched ${fetched.length} game(s): ${newCount} new, ${duplicateCount} already had`);
+
+  await putGames(LOCAL_USER, fetched);
+  GAMES = await getGames(LOCAL_USER);
+  invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
+  await reindexAfterImport(GAMES, onIndexProgress);
+
+  const latest = lastGameDateForSource(GAMES, source);
+  autoImportLog(`[${source}] most recent game on file: ${latest ? new Date(latest).toLocaleString() : '(none)'}`);
+
+  return { fetchedCount: fetched.length, newCount, duplicateCount, totalGames: GAMES.length };
+}
+
 if(localStorage.getItem('threeTestDebug')){
   window.__autoImportTestHooks = {
     lastGameDateForSource: (games, source) => lastGameDateForSource(games, source),
@@ -988,6 +1040,8 @@ if(localStorage.getItem('threeTestDebug')){
     shouldAutoCheck: (source) => shouldAutoCheck(source),
     markAutoCheckSucceeded: (source) => markAutoCheckSucceeded(source),
     keys: { autoImport: LS_AUTO_IMPORT, lichessCheck: LS_AUTO_CHECK_LICHESS, chesscomCheck: LS_AUTO_CHECK_CHESSCOM },
+    importGamesFromPlatform: (source, username, sizeParam) => importGamesFromPlatform(source, username, sizeParam),
+    isAutoImportVerbose: () => isAutoImportVerbose(),
   };
 }
 
@@ -5357,26 +5411,22 @@ $('dlBtn').onclick = async ()=>{
   localStorage.setItem(source==='chesscom' ? LS_ID_CHESSCOM : LS_ID, fetchUser);
 
   try{
-    let fetched;
+    let sizeParam, onFetchProgress;
     if(source==='chesscom'){
-      const months=+$('monthsBack').value||12;
-      localStorage.setItem(LS_MONTHS,months);
-      logDl('fetching…');
-      fetched = await fetchChessCom(fetchUser,months,
-        (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`));
+      sizeParam = +$('monthsBack').value||12;
+      localStorage.setItem(LS_MONTHS,sizeParam);
+      onFetchProgress = (n,done,total)=>logDl(`fetching… archive ${done}/${total}, ${n} games so far`);
     } else {
-      const max=+$('maxGames').value||300;
-      localStorage.setItem(LS_MAX,max);
-      logDl('fetching…');
-      fetched = await fetchLatest(fetchUser,max,n=>logDl(`fetching… got ${n}`));
+      sizeParam = +$('maxGames').value||300;
+      localStorage.setItem(LS_MAX,sizeParam);
+      onFetchProgress = n=>logDl(`fetching… got ${n}`);
     }
-    logDl(`fetched ${fetched.length}, writing to database…`);
-    await putGames(LOCAL_USER,fetched);
-    GAMES = await getGames(LOCAL_USER); // reload the full merged set, not just this batch
-    invalidateBuiltCastlesCache();   // a changed game set can change which opponent replies are frequent enough to be visible
-    logDl(`imported ${fetched.length}, indexing…`);
-    await reindexAfterImport(GAMES, (done,total) => logDl(`indexing… ${done} of ${total}`));
-    logDl(`imported ${fetched.length} (${GAMES.length} total)`);
+    logDl('fetching…');
+    const result = await importGamesFromPlatform(source, fetchUser, sizeParam, {
+      onFetchProgress,
+      onIndexProgress: (done,total) => logDl(`indexing… ${done} of ${total}`),
+    });
+    logDl(`imported ${result.fetchedCount} (${result.totalGames} total)`);
     $('downloadOverlay').style.display='none';
     // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
     // the freshly-updated GAMES; openLine would also call clearFocus(),

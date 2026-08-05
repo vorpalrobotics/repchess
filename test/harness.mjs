@@ -80,8 +80,12 @@ export async function launchApp({ headless = true, threeTestDebug = true } = {})
   const page = await context.newPage();
 
   const consoleErrors = [];
+  const consoleLogs = [];   // every console.log text, in order -- for tests asserting on deliberate diagnostic logging (e.g. auto-import's verbose mode), not just error absence
   const blockedCdn = [];
-  page.on('console', m => { if(m.type() === 'error') consoleErrors.push(m.text()); });
+  page.on('console', m => {
+    if(m.type() === 'error') consoleErrors.push(m.text());
+    if(m.type() === 'log') consoleLogs.push(m.text());
+  });
   page.on('pageerror', e => consoleErrors.push('PAGEERROR: ' + e.message));
   page.on('dialog', d => d.accept());   // auto-accept confirm() during restore etc.
 
@@ -111,7 +115,7 @@ export async function launchApp({ headless = true, threeTestDebug = true } = {})
   }, { timeout: 15000 });
 
   return {
-    browser, page, consoleErrors, blockedCdn, origin,
+    browser, page, consoleErrors, consoleLogs, blockedCdn, origin,
     async close(){ await browser.close(); server.close(); },
   };
 }
@@ -165,6 +169,18 @@ export async function seedBackup(page, backup, opts = {}){
     n => window.__importBackupGen && window.__importBackupGen() > n,
     before, { timeout: 15000 },
   );
+}
+
+// Mocks Lichess's ndjson game-export endpoint (fetchLatest's own URL) for one
+// username, returning `games` verbatim -- one JSON object per line, matching
+// exactly what fetchLatest's streaming parser expects. Call AFTER launchApp():
+// registered as its own page.route matching only this URL, layered on top of
+// (not replacing) launchApp's broad CDN-interception route, which still
+// governs every other request untouched.
+export async function mockLichessGames(page, username, games){
+  const body = games.map(g => JSON.stringify(g)).join('\n');
+  await page.route(new RegExp(`lichess\\.org/api/games/user/${username}`), route =>
+    route.fulfill({ status: 200, contentType: 'application/x-ndjson', body }));
 }
 
 // Open the VR "Build world" flow and wait for the render loop to be live.
