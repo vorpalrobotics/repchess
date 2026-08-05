@@ -9976,6 +9976,66 @@ try {
 } catch(e){ bad('Phase AV2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase AV2b: while the (one-time, per game-set) position index build is
+//     in flight, the moves input and mode/color buttons lock instead of
+//     accepting keystrokes -- each keystroke used to kick off its own
+//     redundant full rebuild (since _posIndex.games stays stale until the
+//     FIRST one finishes), compounding into multi-second per-character lag on
+//     a large game database (the reported bug). A BIG_N past the 100-game
+//     chunk boundary (see the "move-table" chunking phase below) guarantees
+//     the build spans a couple of yielded frames, giving the test a real
+//     window to observe the disabled state in. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appAV2b = await launchApp();
+try {
+  const BIG_N = 230;
+  await seedBackup(appAV2b.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['e4'], prefs: [] }],
+    games: Array.from({ length: BIG_N }, (_, i) => ({
+      id: `sg${i}`, moves: 'e4 e5 Nf3 Nc6', createdAt: i,
+      players: { white: { user: { name: 'tester' }, rating: 1500 }, black: { user: { name: 'opp' }, rating: 1500 } },
+    })),
+  });
+  await appAV2b.page.click('.line-row');
+  await appAV2b.page.waitForSelector('tr.data-row', { timeout: 10000 });
+
+  // 159b. Right after opening (before the index build finishes), the moves
+  //       input and the mode/color buttons are all disabled; they re-enable
+  //       once indexing completes, and the final list is still correct.
+  try {
+    const rightAfterOpen = await appAV2b.page.evaluate(() => {
+      document.getElementById('menuBrowseGames').click();
+      return {
+        moves: document.getElementById('gamesListMovesInput').disabled,
+        pos: document.getElementById('gamesModePos').disabled,
+        line: document.getElementById('gamesModeLine').disabled,
+        colors: [...document.querySelectorAll('.games-color-btn')].map(b => b.disabled),
+      };
+    });
+    assert(rightAfterOpen.moves === true, 'expected the moves input disabled while the position index is still building');
+    assert(rightAfterOpen.pos === true && rightAfterOpen.line === true, 'expected the mode buttons disabled while indexing');
+    assert(rightAfterOpen.colors.every(Boolean), 'expected the color filter buttons disabled while indexing');
+
+    await appAV2b.page.waitForFunction(() => document.getElementById('gamesListMovesInput').disabled === false, { timeout: 5000 });
+    const afterIndexed = await appAV2b.page.evaluate(() => ({
+      pos: document.getElementById('gamesModePos').disabled,
+      line: document.getElementById('gamesModeLine').disabled,
+      colors: [...document.querySelectorAll('.games-color-btn')].map(b => b.disabled),
+      summary: document.getElementById('gamesListSummary').textContent,
+    }));
+    assert(afterIndexed.pos === false && afterIndexed.line === false, 'expected the mode buttons re-enabled once indexing finishes');
+    assert(afterIndexed.colors.every(v => v === false), 'expected the color filter buttons re-enabled once indexing finishes');
+    assert(afterIndexed.summary.includes(String(BIG_N)), `expected the summary to report all ${BIG_N} matched games once indexing finishes, got "${afterIndexed.summary}"`);
+    ok('Browse Games: moves input + mode/color buttons lock during the one-time position-index build, then re-enable');
+  } catch(e){ bad('Browse Games: controls lock during indexing', e); }
+} finally {
+  await appAV2b.close();
+}
+} catch(e){ bad('Phase AV2b: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase AV3: Browse Games from the hamburger must lazy-load GAMES itself
 //     (the reported bug) -- opened as the very first thing this page load,
 //     before any line's openLine() has had a chance to populate GAMES into

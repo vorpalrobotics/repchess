@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-290';
+const BUILD_TAG = '-291';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -900,6 +900,20 @@ function movesToNumberedText(seq){
 // as a generic browser and as the three-dot menu's node-scoped view, which
 // just pre-fills the input rather than fixing it).
 let _gamesModalState = null;
+// true while a position-index build is in flight -- typing (or clicking mode/
+// color) during that window used to queue up another renderGamesList() per
+// keystroke, each re-checking _posIndex.games (still stale until the FIRST
+// build finishes) and kicking off its own redundant full rebuild concurrently
+// with the others, compounding into many seconds of visible per-keystroke lag
+// on a large game database. Locking the controls for the one-time build makes
+// each keystroke's own render wait its turn instead of piling on.
+let _gamesIndexBusy = false;
+function setGamesControlsDisabled(disabled){
+  $('gamesListMovesInput').disabled = disabled;
+  $('gamesModePos').disabled = disabled;
+  $('gamesModeLine').disabled = disabled;
+  document.querySelectorAll('.games-color-btn').forEach(b => b.disabled = disabled);
+}
 function showGamesAtNode(seq){
   openBrowseGames({ seq, color: CURRENT_LINE ? CURRENT_LINE.color : 'either' });
 }
@@ -926,6 +940,7 @@ async function openBrowseGames({ seq = [], color = 'either' } = {}){
 }
 async function renderGamesList(){
   if(!_gamesModalState) return;
+  if(_gamesIndexBusy) return;   // a build from an earlier call is already running -- its own completion re-renders
   const { mode, color } = _gamesModalState;
   const text = $('gamesListMovesInput').value;
   let seq;
@@ -942,7 +957,12 @@ async function renderGamesList(){
   const showIndexingProgress = (done, total) => {
     body.innerHTML = `<div class="games-list-empty">Indexing your games… ${done} of ${total}</div>`;
   };
-  if(needsIndex){ body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>'; await nextPaint(); }
+  if(needsIndex){
+    _gamesIndexBusy = true;
+    setGamesControlsDisabled(true);
+    body.innerHTML = '<div class="games-list-empty">Indexing your games…</div>';
+    await nextPaint();
+  }
 
   // only games where the user was actually playing the selected color count
   // as "my games" here -- gamesAtPosition/gamesAlongLine match purely on
@@ -952,7 +972,16 @@ async function renderGamesList(){
   // whose color can't be determined at all (a legacy bare chess.com import)
   // is excluded even for "Either" -- it can't be confirmed to be the user's
   // own game at all, regardless of which side.
-  const rawMatches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  let rawMatches;
+  try {
+    rawMatches = mode === 'pos' ? await gamesAtPosition(GAMES, fen, showIndexingProgress) : gamesAlongLine(GAMES, seq);
+  } finally {
+    if(needsIndex){
+      _gamesIndexBusy = false;
+      setGamesControlsDisabled(false);
+      $('gamesListMovesInput').focus();
+    }
+  }
   const matches = rawMatches.filter(({game}) => {
     const gc = userColorInGame(game);
     return color === 'either' ? gc != null : gc === color;
