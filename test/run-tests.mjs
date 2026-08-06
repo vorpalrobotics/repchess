@@ -14511,14 +14511,16 @@ try {
     const saved = await appCV.page.evaluate(() => {
       const cfg = window.__perfectOpeningTestHooks.defaultConfig();
       cfg.enabled = true;
-      cfg.depth = 45;
+      cfg.depth = { 1: 50, 2: 45, 3: 40, 4: 35, default: 30 };
       cfg.toleranceCp = 30;
       cfg.maxLines = { 1: 12, 2: 9, 3: 5, 4: 5, default: 4 };
       cfg.maxTotalVariations = 100000;
       return window.__perfectOpeningTestHooks.setConfig(cfg).then(() => window.__perfectOpeningTestHooks.getConfig());
     });
-    assert(saved.enabled === true && saved.depth === 45 && saved.toleranceCp === 30 && saved.maxTotalVariations === 100000,
+    assert(saved.enabled === true && saved.toleranceCp === 30 && saved.maxTotalVariations === 100000,
       `expected the saved settings to round-trip, got ${JSON.stringify(saved)}`);
+    assert(JSON.stringify(saved.depth) === JSON.stringify({ 1: 50, 2: 45, 3: 40, 4: 35, default: 30 }),
+      `expected the saved depth schedule to round-trip, got ${JSON.stringify(saved.depth)}`);
     assert(JSON.stringify(saved.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
       `expected the saved maxLines schedule to round-trip, got ${JSON.stringify(saved.maxLines)}`);
     ok('Perfect Opening: setConfig persists to IndexedDB and getConfig reads it back');
@@ -14528,11 +14530,16 @@ try {
   //      expects, e.g. maxTotalVariations from before that setting existed)
   //      comes back merged over the current defaults for the missing field,
   //      not undefined -- same forward-compatibility concern as other
-  //      meta-stored JSON blobs (threeLayout etc.) in this codebase.
+  //      meta-stored JSON blobs (threeLayout etc.) in this codebase. Also
+  //      exercises the depth-schedule migration itself: a config saved
+  //      before depth became a per-move schedule has a plain number there,
+  //      which should come back expanded to "every move searches this deep".
   try {
     await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.setConfig({ enabled: true, depth: 33 }));
     const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.enabled === true && config.depth === 33, `expected the explicitly-saved fields to survive, got ${JSON.stringify(config)}`);
+    assert(config.enabled === true, `expected the explicitly-saved fields to survive, got ${JSON.stringify(config)}`);
+    assert(JSON.stringify(config.depth) === JSON.stringify({ 1: 33, 2: 33, 3: 33, 4: 33, default: 33 }),
+      `expected a legacy numeric depth (33) to migrate to a uniform per-move schedule, got ${JSON.stringify(config.depth)}`);
     assert(config.toleranceCp === 50, `expected a missing field to fall back to its default (50), got ${config.toleranceCp}`);
     assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 10, 2: 8, 3: 6, 4: 6, default: 6 }),
       `expected a missing maxLines to fall back to the full default schedule, got ${JSON.stringify(config.maxLines)}`);
@@ -14571,7 +14578,7 @@ try {
       const cfg = window.__perfectOpeningTestHooks.defaultConfig();
       cfg.enabled = true;
       cfg.lineId = lineId;
-      cfg.depth = 45;
+      cfg.depth = { 1: 45, 2: 45, 3: 45, 4: 45, default: 45 };
       cfg.totalVariations = 137;
       return Promise.all([
         window.__perfectOpeningTestHooks.setConfig(cfg),
@@ -14600,7 +14607,7 @@ try {
     await appCV.page.evaluate(() => {
       const cfg = window.__perfectOpeningTestHooks.defaultConfig();
       cfg.enabled = true;
-      cfg.depth = 40;
+      cfg.depth = { 1: 40, 2: 40, 3: 40, 4: 40, default: 40 };
       return window.__perfectOpeningTestHooks.setConfig(cfg);
     });
     await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
@@ -14630,7 +14637,11 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const fields = await appCW.page.evaluate(() => ({
       enabled: document.getElementById('poEnabledCheckbox').checked,
-      depth: document.getElementById('poDepth').value,
+      depth1: document.getElementById('poDepth1').value,
+      depth2: document.getElementById('poDepth2').value,
+      depth3: document.getElementById('poDepth3').value,
+      depth4: document.getElementById('poDepth4').value,
+      depthBeyond: document.getElementById('poDepthDefault').value,
       tolerance: document.getElementById('poTolerance').value,
       cap: document.getElementById('poMaxVariations').value,
       m1: document.getElementById('poMaxLines1').value,
@@ -14640,8 +14651,10 @@ try {
       beyond: document.getElementById('poMaxLinesDefault').value,
     }));
     assert(fields.enabled === false, `expected the checkbox unchecked by default, got ${fields.enabled}`);
-    assert(fields.depth === '20' && fields.tolerance === '50' && fields.cap === '50000',
-      `expected the documented defaults (depth 20, tolerance 50, cap 50000), got ${JSON.stringify(fields)}`);
+    assert(fields.depth1 === '20' && fields.depth2 === '20' && fields.depth3 === '20' && fields.depth4 === '20' && fields.depthBeyond === '20',
+      `expected the default depth schedule (20 for every move), got ${JSON.stringify(fields)}`);
+    assert(fields.tolerance === '50' && fields.cap === '50000',
+      `expected the documented defaults (tolerance 50, cap 50000), got ${JSON.stringify(fields)}`);
     assert(fields.m1 === '10' && fields.m2 === '8' && fields.m3 === '6' && fields.m4 === '6' && fields.beyond === '6',
       `expected the default 10/8/6/6/6 max-lines schedule, got ${JSON.stringify(fields)}`);
     ok('Perfect Opening: hamburger menu item opens the panel pre-filled with defaults');
@@ -14650,7 +14663,11 @@ try {
   // 262. Editing fields and clicking Save persists every value to the real
   //      config storage (not just the DOM), and closes the modal.
   try {
-    await appCW.page.fill('#poDepth', '45');
+    await appCW.page.fill('#poDepth1', '50');
+    await appCW.page.fill('#poDepth2', '45');
+    await appCW.page.fill('#poDepth3', '40');
+    await appCW.page.fill('#poDepth4', '35');
+    await appCW.page.fill('#poDepthDefault', '30');
     await appCW.page.fill('#poTolerance', '30');
     await appCW.page.fill('#poMaxVariations', '75000');
     await appCW.page.fill('#poMaxLines1', '12');
@@ -14663,8 +14680,10 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.enabled === true && config.depth === 45 && config.toleranceCp === 30 && config.maxTotalVariations === 75000,
+    assert(config.enabled === true && config.toleranceCp === 30 && config.maxTotalVariations === 75000,
       `expected the edited settings persisted, got ${JSON.stringify(config)}`);
+    assert(JSON.stringify(config.depth) === JSON.stringify({ 1: 50, 2: 45, 3: 40, 4: 35, default: 30 }),
+      `expected the edited depth schedule (deep-then-shallow) persisted, got ${JSON.stringify(config.depth)}`);
     assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
       `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
     assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
@@ -14676,17 +14695,17 @@ try {
   try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    await appCW.page.fill('#poDepth', '99');
+    await appCW.page.fill('#poDepth1', '99');
     await appCW.page.click('#poCancelBtn');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.depth === 45, `expected Cancel to discard the unsaved depth=99 edit, keeping the last saved value (45), got ${config.depth}`);
+    assert(config.depth[1] === 50, `expected Cancel to discard the unsaved move-1 depth=99 edit, keeping the last saved value (50), got ${config.depth[1]}`);
 
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth').value);
-    assert(reopenedDepth === '45', `expected reopening to show the last saved value (45), not the cancelled edit, got ${reopenedDepth}`);
+    const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth1').value);
+    assert(reopenedDepth === '50', `expected reopening to show the last saved value (50), not the cancelled edit, got ${reopenedDepth}`);
     await appCW.page.click('#poCancelBtn');
     ok('Perfect Opening: Cancel discards unsaved edits, reopening shows the last saved state');
   } catch(e){ bad('Perfect Opening: Cancel discards edits', e); }
@@ -14698,7 +14717,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poMaxLines1', '0');
-    await appCW.page.fill('#poDepth', '50');   // an otherwise-valid change, to prove NOTHING saves when one field fails
+    await appCW.page.fill('#poDepth1', '99');   // an otherwise-valid change, to prove NOTHING saves when one field fails
     await appCW.page.click('#poSaveBtn');
 
     const errorVisible = await appCW.page.evaluate(() => document.getElementById('poError').style.display !== 'none' && document.getElementById('poError').textContent.length > 0);
@@ -14707,7 +14726,7 @@ try {
     assert(stillOpen, 'expected the modal to stay open on a validation failure, not silently close');
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.depth === 45, `expected NOTHING to save when validation fails (depth should still be 45, not the attempted 50), got ${config.depth}`);
+    assert(config.depth[1] === 50, `expected NOTHING to save when validation fails (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
     await appCW.page.click('#poCancelBtn');
     ok('Perfect Opening: Save rejects a non-positive required field, persisting nothing');
   } catch(e){ bad('Perfect Opening: Save validation rejects bad input', e); }
@@ -14735,7 +14754,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.click('#poResetBtn');
-    await appCW.page.waitForFunction(() => document.getElementById('poDepth').value === '20', { timeout: 5000 });
+    await appCW.page.waitForFunction(() => document.getElementById('poDepth1').value === '20', { timeout: 5000 });
 
     assert(confirmMsg && /permanently|delete|cannot be undone/i.test(confirmMsg), `expected a clear destructive-action warning, got ${JSON.stringify(confirmMsg)}`);
     const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
@@ -14903,6 +14922,49 @@ try {
     assert(move5Opts.multipv === 2, `expected move 5 (beyond the explicit schedule) to fall back to maxLines.default=2, got ${move5Opts.multipv}`);
     ok('Perfect Opening: Black jobs request MultiPV per the move-number schedule, falling back to "beyond" past move 4');
   } catch(e){ bad('Perfect Opening: MultiPV width follows the move-number schedule', e); }
+
+  // 271b. Search depth follows the SAME per-move-number schedule as
+  //       maxLines, for both White and Black jobs (letting a real run start
+  //       deep and get dialed down for later moves) -- falling back to
+  //       `default` past move 4, and correctly recognizing a preempted
+  //       result against the MOVE-SPECIFIC target depth, not some single
+  //       global one.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.depth = { 1: 50, 2: 45, 3: 40, 4: 35, default: 30 };
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 50, pv: ['e2e4'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);   // move 1
+    const white1Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(white1Opts.depth === 50, `expected move 1's White job to request depth 50, got ${white1Opts.depth}`);
+
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 35, pv: ['e7e5'] } });
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O'] }, cfg), config);   // move 4
+    const black4Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(black4Opts.depth === 35, `expected move 4's Black job to request depth 35, got ${black4Opts.depth}`);
+
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 30, pv: ['e2e4'] } });
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O','Be7','Re1'] }, cfg), config);   // move 5, beyond schedule
+    const white5Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(white5Opts.depth === 30, `expected move 5 (beyond the explicit schedule) to fall back to depth.default=30, got ${white5Opts.depth}`);
+
+    // preemption is judged against the MOVE's own configured depth (50 for
+    // move 1 here), not some other move's -- a shallower-than-move-1's-own-
+    // target result must still be recognized as preempted. The shared
+    // stubEngine helper always echoes back the REQUESTED depth as
+    // result.depth (so it can never look preempted) -- a custom stub is
+    // needed here to fix result.depth at 35 independent of what was asked
+    // for (35 < move 1's own target of 50, but >= move 4's/beyond's).
+    await appCX.page.evaluate(() => {
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({ depth: 35, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 35, pv: ['e2e4'] } } });
+    });
+    const preemptResult = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(preemptResult.ok === false && preemptResult.preempted === true,
+      `expected a depth-35 result to be recognized as preempted against move 1's own depth-50 target, got ${JSON.stringify(preemptResult)}`);
+    ok('Perfect Opening: search depth follows the per-move-number schedule, judged against each job\'s own target');
+  } catch(e){ bad('Perfect Opening: depth schedule + move-specific preemption check', e); }
 
   // 272. The total variation cap truncates spawning mid-batch and
   //      auto-disables the project once reached -- a genuinely destructive-
@@ -15082,8 +15144,7 @@ try {
   try {
     await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
     const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
-    config.enabled = true;
-    config.depth = 20;
+    config.enabled = true;   // depth left at the default (20 for every move) -- matches the stub's fixed depth:10 result below
     await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
     await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:4', kind: 'white', seq: [], createdAt: Date.now() }]));
     // the shared stubEngine helper always echoes back opts.depth (the
@@ -15408,6 +15469,55 @@ try {
     await appDA.page.click('#poProgressCloseBtn');
     ok('Perfect Opening: Progress tracks "moves fully explored" and reports Paused when disabled despite a leftover queued job');
   } catch(e){ bad('Perfect Opening: Progress stats (deepestCompleteMove + status)', e); }
+
+  // 287. The scheduler tracks a recency-weighted average job time (avgJobMs)
+  //      from real elapsed wall-clock time, and Progress's "estimated time
+  //      to complete move N" reflects it -- checked by recomputing the
+  //      expected string from the ACTUAL persisted avgJobMs/queue through
+  //      the app's own formatter/move-number hooks (never an independently
+  //      guessed number), so this stays robust against real timing jitter
+  //      rather than asserting an exact duration.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };   // no branching -- exactly one job pending at any time
+    config.maxTotalVariations = 2;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:eta:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      // a fixed artificial delay per call so avgJobMs has something real
+      // (not near-zero) to converge toward.
+      window.__aqTestHooks.engine.analyze = (fen, opts) => new Promise(resolve => setTimeout(() => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      }, 50));
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const { target, pendingForTarget, expectedEta, avgJobMs, queue } = await appDA.page.evaluate(async () => {
+      const hooks = window.__perfectOpeningTestHooks;
+      const cfg = await hooks.getConfig();
+      const q = await hooks.getQueue();
+      const target = cfg.deepestCompleteMove + 1;
+      const pendingForTarget = q.filter(j => hooks.moveNumberOfJob(j) === target).length;
+      return { target, pendingForTarget, expectedEta: hooks.formatDurationEstimate(pendingForTarget * cfg.avgJobMs), avgJobMs: cfg.avgJobMs, queue: q };
+    });
+    assert(avgJobMs > 0, `expected avgJobMs to be tracked from real elapsed time, got ${avgJobMs}`);
+    assert(pendingForTarget > 0, `expected at least one job still pending for the current target move (${target}), got queue ${JSON.stringify(queue)}`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows[`Estimated time to complete move ${target}`] === expectedEta,
+      `expected the ETA row to match the app's own recomputation ("${expectedEta}"), got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: avgJobMs tracks real elapsed time, and Progress shows a matching ETA for the current move');
+  } catch(e){ bad('Perfect Opening: avgJobMs + ETA display', e); }
 } finally {
   await appDA.close();
 }

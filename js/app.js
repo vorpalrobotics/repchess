@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-308';
+const BUILD_TAG = '-309';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8898,7 +8898,11 @@ async function openPerfectOpeningPanel(){
   $('menuList').style.display = 'none';
   const config = await getPerfectOpeningConfig();
   $('poEnabledCheckbox').checked = config.enabled;
-  $('poDepth').value = config.depth;
+  $('poDepth1').value = config.depth[1];
+  $('poDepth2').value = config.depth[2];
+  $('poDepth3').value = config.depth[3];
+  $('poDepth4').value = config.depth[4];
+  $('poDepthDefault').value = config.depth.default;
   $('poTolerance').value = config.toleranceCp;
   $('poMaxVariations').value = config.maxTotalVariations;
   $('poMaxLines1').value = config.maxLines[1];
@@ -8916,23 +8920,47 @@ $('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'n
 function poProgressRow(label, value){
   return `<div class="po-progress-row"><span class="po-progress-label">${escapeHtml(label)}</span><span class="po-progress-value">${escapeHtml(String(value))}</span></div>`;
 }
+// e.g. 232461000 -> "2d 16h 21m"; drops leading zero units (an estimate
+// under an hour just reads "21m", not "0d 0h 21m"), and floors to whole
+// minutes since anything finer isn't meaningful for a multi-job estimate.
+function formatDurationEstimate(ms){
+  const totalMin = Math.round(ms / 60000);
+  if(totalMin < 1) return 'less than a minute';
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  return [d && `${d}d`, (d || h) && `${h}h`, `${m}m`].filter(Boolean).join(' ');
+}
 async function renderPerfectOpeningProgress(config){
   if(!config.lineId){
     $('poProgressBody').innerHTML = poProgressRow('Status', 'Not started yet');
     return;
   }
-  const pending = (await getPerfectOpeningQueue()).length;
+  const queue = await getPerfectOpeningQueue();
+  const pending = queue.length;
   // enabled is checked FIRST -- hitting the variation cap auto-disables the
   // project but can still leave jobs queued (the batch that pushed it over
   // the cap spawns children right up to the moment it disables), so a
   // non-empty queue does not by itself mean the scheduler will touch it.
   const status = !config.enabled ? 'Paused (disabled)' : (pending ? 'Running' : 'Caught up (waiting for the engine to free up)');
-  $('poProgressBody').innerHTML = [
+  const rows = [
     poProgressRow('Status', status),
     poProgressRow('Variations generated', config.totalVariations),
     poProgressRow('Moves fully explored', config.deepestCompleteMove),
     poProgressRow('Positions queued for expansion', pending),
-  ].join('');
+  ];
+  // the CURRENT move-in-progress is always exactly deepestCompleteMove+1 --
+  // deepestCompleteMove is defined as the largest N with nothing queued at
+  // ply <= 2N-1, so the shallowest ply actually in the queue always belongs
+  // to move deepestCompleteMove+1 (never anything shallower, by that same
+  // definition). No projection of future branching needed: every job that
+  // still has to run to finish this move already exists in the queue.
+  const targetMove = config.deepestCompleteMove + 1;
+  const pendingForTarget = queue.filter(j => poJobMoveNumber(j) === targetMove).length;
+  if(pendingForTarget && config.avgJobMs){
+    rows.push(poProgressRow(`Estimated time to complete move ${targetMove}`, formatDurationEstimate(pendingForTarget * config.avgJobMs)));
+  }
+  $('poProgressBody').innerHTML = rows.join('');
 }
 function poProgressModalOpen(){ return $('perfectOpeningProgressOverlay').style.display === 'flex'; }
 // mirrors renderPerfectOpeningStatusIfOpen -- keeps the Progress view live
@@ -8951,7 +8979,11 @@ $('menuPerfectOpeningProgress').onclick = openPerfectOpeningProgressPanel;
 $('poProgressCloseBtn').onclick = () => { $('perfectOpeningProgressOverlay').style.display = 'none'; };
 
 $('poSaveBtn').onclick = async () => {
-  const depth = +$('poDepth').value;
+  const depth1 = +$('poDepth1').value;
+  const depth2 = +$('poDepth2').value;
+  const depth3 = +$('poDepth3').value;
+  const depth4 = +$('poDepth4').value;
+  const depthDefault = +$('poDepthDefault').value;
   const toleranceCp = +$('poTolerance').value;
   const maxTotalVariations = +$('poMaxVariations').value;
   const maxLines1 = +$('poMaxLines1').value;
@@ -8961,7 +8993,8 @@ $('poSaveBtn').onclick = async () => {
   const maxLinesDefault = +$('poMaxLinesDefault').value;
 
   const showError = (msg) => { $('poError').textContent = msg; $('poError').style.display = ''; };
-  const positiveFields = { 'search depth': depth, 'total variation cap': maxTotalVariations,
+  const positiveFields = { 'total variation cap': maxTotalVariations,
+    'move 1 depth': depth1, 'move 2 depth': depth2, 'move 3 depth': depth3, 'move 4 depth': depth4, 'beyond-move-4 depth': depthDefault,
     'move 1 max lines': maxLines1, 'move 2 max lines': maxLines2, 'move 3 max lines': maxLines3,
     'move 4 max lines': maxLines4, 'beyond-move-4 max lines': maxLinesDefault };
   for(const [label, v] of Object.entries(positiveFields)){
@@ -8971,7 +9004,7 @@ $('poSaveBtn').onclick = async () => {
 
   const config = await getPerfectOpeningConfig();
   config.enabled = $('poEnabledCheckbox').checked;
-  config.depth = depth;
+  config.depth = { 1: depth1, 2: depth2, 3: depth3, 4: depth4, default: depthDefault };
   config.toleranceCp = toleranceCp;
   config.maxTotalVariations = maxTotalVariations;
   config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
@@ -9014,6 +9047,16 @@ $('poResetBtn').onclick = async () => {
 function poJobId(tag){
   return `po:${Date.now()}:${Math.random().toString(36).slice(2,8)}:${tag}`;
 }
+// The move NUMBER a job belongs to -- a White job's seq ends on Black's last
+// move (even length), a Black job's seq ends on White's last move (odd
+// length); both conventions agree that the very next ply played is move
+// floor(seq.length/2)+1.
+function poJobMoveNumber(job){
+  return Math.floor(job.seq.length / 2) + 1;
+}
+function poDepthForMove(config, moveNumber){
+  return config.depth[moveNumber] ?? config.depth.default;
+}
 // A raw UCI move (e.g. "e2e4", "e7e8q") -> its SAN in `fen`, or null if it
 // doesn't parse as a legal move there (shouldn't happen for a move the
 // engine itself just reported, but a defensive null is cheap insurance
@@ -9047,12 +9090,13 @@ async function processPerfectOpeningJob(job, config){
   const fen = fenForSeq(job.seq);
 
   if(job.kind === 'white'){
-    const result = await engine.analyze(fen, { multipv: 1, depth: config.depth });
+    const whiteDepth = poDepthForMove(config, poJobMoveNumber(job));
+    const result = await engine.analyze(fen, { multipv: 1, depth: whiteDepth });
     // a higher-priority caller (manual queue, live analysis) can preempt the
     // engine mid-search via its own internal _stopCurrent() -- that leaves a
     // shallow result we must not treat as authoritative. Bail out before any
     // persistence so the job stays queued for a later retry.
-    if(result.depth < config.depth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
+    if(result.depth < whiteDepth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
     const ranks = Object.keys(result.lines || {});
     if(!ranks.length) return { ok: false, reason: 'engine returned no line' };
     const best = result.lines[1] || result.lines[ranks[0]];
@@ -9092,10 +9136,11 @@ async function processPerfectOpeningJob(job, config){
   // number = how many full moves have been played so far, including this
   // one -- a Black job's seq always ends on White's move, so seq.length is
   // always odd and (seq.length+1)/2 is an integer).
-  const moveNumber = (job.seq.length + 1) / 2;
+  const moveNumber = poJobMoveNumber(job);
   const maxLines = config.maxLines[moveNumber] ?? config.maxLines.default;
-  const result = await engine.analyze(fen, { multipv: maxLines, depth: config.depth });
-  if(result.depth < config.depth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
+  const blackDepth = poDepthForMove(config, moveNumber);
+  const result = await engine.analyze(fen, { multipv: maxLines, depth: blackDepth });
+  if(result.depth < blackDepth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
   await saveAnalysisQueueResult({ lineId: config.lineId, seq: job.seq }, fen, result);
 
   const ranks = Object.keys(result.lines || {}).map(Number).sort((a,b) => a-b);
@@ -9156,6 +9201,7 @@ async function maybeResumePerfectOpening(){
       if(!queue.length) break;
       const job = queue[0];
       let result;
+      const startedAt = Date.now();
       try {
         result = await processPerfectOpeningJob(job, config);
       } catch(err){
@@ -9165,10 +9211,18 @@ async function maybeResumePerfectOpening(){
       if(!result.ok){
         // interrupted (preempted) or some other non-fatal problem -- leave
         // the job queued for a later retry and stop for now rather than
-        // spinning on the same failure.
+        // spinning on the same failure. Not timed -- a preempted job
+        // returns early by design, and folding that into the average would
+        // skew it toward "faster than a real completed search."
         break;
       }
       await deletePerfectOpeningQueueItem(job.id);
+      // recency-weighted (not a plain running average) so the ETA below
+      // converges quickly after a move-number transition to a different
+      // configured depth, rather than staying skewed by a slower/faster
+      // earlier move for a long time.
+      const elapsed = Date.now() - startedAt;
+      config.avgJobMs = config.avgJobMs ? config.avgJobMs * 0.75 + elapsed * 0.25 : elapsed;
       // "move N is fully complete" once nothing queued sits at ply <= 2N-1
       // (White's move N is ply 2N-2, Black's reply is ply 2N-1) -- the FIFO
       // queue processes strictly in ply order (each job's children are
@@ -9179,11 +9233,13 @@ async function maybeResumePerfectOpening(){
       const freshQueue = await getPerfectOpeningQueue();
       if(freshQueue.length){
         const deepest = Math.floor(Math.min(...freshQueue.map(j => j.seq.length)) / 2);
-        if(deepest > config.deepestCompleteMove){
-          config.deepestCompleteMove = deepest;
-          await setPerfectOpeningConfig(config);
-        }
+        if(deepest > config.deepestCompleteMove) config.deepestCompleteMove = deepest;
       }
+      // one write covers avgJobMs (always updated above) plus deepestCompleteMove
+      // (only sometimes) -- config.lineId/totalVariations/enabled may also have
+      // just changed inside processPerfectOpeningJob itself; harmless to
+      // re-save the same already-persisted values alongside these.
+      await setPerfectOpeningConfig(config);
       renderPerfectOpeningStatusIfOpen();
       renderPerfectOpeningProgressIfOpen();
     }
@@ -9851,9 +9907,10 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__perfectOpeningTestHooks = {
     defaultConfig: () => JSON.parse(JSON.stringify({
-      enabled: false, lineId: null, depth: 20, toleranceCp: 50,
+      enabled: false, lineId: null,
+      depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 }, toleranceCp: 50,
       maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
-      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0,
+      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0, avgJobMs: 0,
     })),
     getConfig: () => getPerfectOpeningConfig(),
     setConfig: (config) => setPerfectOpeningConfig(config),
@@ -9876,6 +9933,11 @@ if(localStorage.getItem('threeTestDebug')){
     // scheduler CAN run end-to-end in the offline harness.
     maybeResume: () => maybeResumePerfectOpening(),
     isProcessing: () => poProcessing,
+    // exposes the real formatter/move-number formula so a test can recompute
+    // the expected ETA string from the real persisted avgJobMs/queue rather
+    // than duplicating (and risking drift from) this logic itself.
+    moveNumberOfJob: (job) => poJobMoveNumber(job),
+    formatDurationEstimate: (ms) => formatDurationEstimate(ms),
   };
 }
 

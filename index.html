@@ -205,6 +205,8 @@
   #poEnabledField label{flex:1 1 auto;display:flex;align-items:center;gap:.4rem;white-space:normal}
   #poMaxLinesRow{flex-wrap:wrap;row-gap:.5rem}
   #poMaxLinesRow label{margin-right:.3rem}
+  #poDepthRow{flex-wrap:wrap;row-gap:.5rem}
+  #poDepthRow label{margin-right:.3rem}
 
   .po-progress-row{display:flex;justify-content:space-between;gap:1rem;padding:.35rem 0;border-bottom:1px solid #eee}
   .po-progress-row:last-child{border-bottom:none}
@@ -1204,13 +1206,19 @@
 
     <h3 class="modal-h3">Search settings</h3>
     <div class="field">
-      <label>Search depth:</label><input id="poDepth" type="number" min="1" max="99" style="width:70px">
-    </div>
-    <div class="field">
       <label>Pruning tolerance (cp):</label><input id="poTolerance" type="number" min="0" style="width:70px">
     </div>
     <div class="field">
       <label>Total variation cap:</label><input id="poMaxVariations" type="number" min="1" style="width:100px">
+    </div>
+
+    <h3 class="modal-h3">Search depth, per move</h3>
+    <div class="field" id="poDepthRow">
+      <label>Move 1:</label><input id="poDepth1" type="number" min="1" max="99" style="width:55px">
+      <label>Move 2:</label><input id="poDepth2" type="number" min="1" max="99" style="width:55px">
+      <label>Move 3:</label><input id="poDepth3" type="number" min="1" max="99" style="width:55px">
+      <label>Move 4:</label><input id="poDepth4" type="number" min="1" max="99" style="width:55px">
+      <label>Beyond:</label><input id="poDepthDefault" type="number" min="1" max="99" style="width:55px">
     </div>
 
     <h3 class="modal-h3">Max Black replies kept, per move</h3>
@@ -1523,6 +1531,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-308"></script>
+<script type="module" src="js/app.js?v=20260804-309"></script>
 </body>
 </html>

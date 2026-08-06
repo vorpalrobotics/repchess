@@ -626,7 +626,11 @@ async function clearAllData(){
 const PERFECT_OPENING_DEFAULT_CONFIG = {
   enabled: false,
   lineId: null,            // the generated "Perfect White Opening" line's id, once created
-  depth: 20,
+  // search depth per move NUMBER (not ply -- same convention as maxLines
+  // below), falling back to `default` beyond the ones explicitly listed --
+  // lets a real run start deep (e.g. 50) and be dialed down for later moves
+  // as the tree's branching makes that no longer time-feasible.
+  depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 },
   toleranceCp: 50,
   // max candidate replies kept per move NUMBER (not ply -- move 1 covers
   // both the White and Black half-move at that number), falling back to
@@ -641,19 +645,33 @@ const PERFECT_OPENING_DEFAULT_CONFIG = {
   // since the queue alone can't answer this once it's fully drained (either
   // paused mid-run or genuinely finished).
   deepestCompleteMove: 0,
+  // recency-weighted average wall-clock ms per completed job, maintained by
+  // the scheduler -- feeds the Progress view's "estimated time to complete
+  // move N" readout. Fast-adapting (see maybeResumePerfectOpening's own
+  // comment) so it converges quickly after a depth/move-number transition
+  // rather than staying skewed by a much slower or faster earlier move.
+  avgJobMs: 0,
 };
 function cloneDefaultPerfectOpeningConfig(){
-  return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines } };
+  return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines }, depth: { ...PERFECT_OPENING_DEFAULT_CONFIG.depth } };
 }
 async function getPerfectOpeningConfig(){
   const raw = await getMeta('perfectOpeningConfig');
   if(!raw) return cloneDefaultPerfectOpeningConfig();
   try {
     const parsed = JSON.parse(raw);
+    // a config saved before depth became a per-move schedule has a plain
+    // number here -- treat it as "every move searches this deep", same
+    // effective behavior as before this change.
+    const parsedDepth = typeof parsed.depth === 'number'
+      ? { 1: parsed.depth, 2: parsed.depth, 3: parsed.depth, 4: parsed.depth, default: parsed.depth }
+      : (parsed.depth || {});
     // merge over the defaults (not just trust what's stored) so a field
     // added to this shape in a later version doesn't come back undefined
     // for a config saved before that field existed.
-    return { ...cloneDefaultPerfectOpeningConfig(), ...parsed, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines, ...(parsed.maxLines || {}) } };
+    return { ...cloneDefaultPerfectOpeningConfig(), ...parsed,
+      maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines, ...(parsed.maxLines || {}) },
+      depth: { ...PERFECT_OPENING_DEFAULT_CONFIG.depth, ...parsedDepth } };
   } catch(e){
     console.warn('[db] perfectOpeningConfig was corrupt JSON, using defaults', e);
     return cloneDefaultPerfectOpeningConfig();
