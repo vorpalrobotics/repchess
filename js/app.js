@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-309';
+const BUILD_TAG = '-310';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -361,6 +361,23 @@ function replies(games,seq){
   for(const child of node.kids.values()){ counts[child.label]=child.pass; tot+=child.pass; }
   return {counts,tot};
 }
+/* Every consumer of replies() immediately merges in manualReplies (adding
+   any not already present, at count 0) before using `counts` -- call this
+   right after that merge to additionally strip anything NOT in
+   manualReplies, for a line that opted in (line.hideUnselectedGameMoves,
+   currently just Perfect Opening's own generated line). A real opponent's
+   move that the search itself didn't keep would otherwise clutter an
+   "objectively best" tree and, since games sort ahead of 0-count manual
+   replies, could even outrank the actually-recommended one. `tot` is
+   recomputed from the surviving counts so percentages stay meaningful
+   against what's actually shown, not the original (larger) total. A no-op
+   for every other line. */
+function filterCountsForLine(counts, tot, manualReplies, line){
+  if(!line?.hideUnselectedGameMoves) return {counts, tot};
+  const filtered = {};
+  for(const m of manualReplies) filtered[m] = counts[m] ?? 0;
+  return {counts: filtered, tot: Object.values(filtered).reduce((a,b)=>a+b, 0)};
+}
 /* "N (M%)" occurrence stat for one specific opponent reply out of a room,
    against `tot` (that room's total recorded continuations) -- same data the
    move table's own .cnt span uses (renderBranch), just rounded to a whole
@@ -379,9 +396,10 @@ function formatOccurrence(count, tot){
    don't contribute nodes of their own. Hidden branches (and everything
    nested under them) are excluded entirely, same as the eye-toggle filter. */
 function computeNodeStats(games,seq){
-  const counts = replies(games,seq).counts;
+  let counts = replies(games,seq).counts;
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manualReplies, CURRENT_LINE).counts;
 
   const visibleOpps = Object.keys(counts).filter(opp=>
     !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
@@ -1506,9 +1524,10 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
   function walk(seq, roomId){
-    const {counts, tot} = replies(games,seq);
+    let {counts, tot} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    ({counts, tot} = filterCountsForLine(counts, tot, manualReplies, line));
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
     for(const opp of visibleOpps) processExit(roomId,seq,opp,counts[opp],tot);
@@ -1622,9 +1641,10 @@ function buildCastle(line, games, rootSeq){
   }
 
   function walk(seq, room){
-    const {counts} = replies(games,seq);
+    let {counts} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    counts = filterCountsForLine(counts, 0, manualReplies, line).counts;
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
 
@@ -3719,9 +3739,10 @@ $('expandAllBtn').onclick = () => {
    (single-reply) sequence should read as one hallway, not a room per ply.
    `seq` always ends in OUR move here, same convention as renderBranch. */
 function visibleOppsAt(games,seq){
-  const {counts} = replies(games,seq);
+  let {counts} = replies(games,seq);
   const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manual, CURRENT_LINE).counts;
   let keys = Object.keys(counts);
   if(!showAllBranches){
     keys = keys.filter(opp=>!PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
@@ -4067,9 +4088,10 @@ function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
 // row (renderCompactRunRow) refreshes itself in response; nothing outside an
 // expansion ever sets this, so it's a no-op everywhere else.
 function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,notifyDirty=null){
-  const {counts,tot}=replies(games,seq);
+  let {counts,tot}=replies(games,seq);
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  ({counts,tot} = filterCountsForLine(counts, tot, manualReplies, CURRENT_LINE));
 
   // "complete to move N" for THIS position (seq, which ends in our move) --
   // same definition computeNodeStats uses (see its doc comment), computed as
@@ -5660,6 +5682,7 @@ async function buildBackupData(){
     lines: await Promise.all(lines.map(async line=>({
       id: line.id,   // preserve the line id: VR decoration keys (cas:<instanceId>:…) embed it
       name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
+      hideUnselectedGameMoves: !!line.hideUnselectedGameMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
@@ -5755,7 +5778,7 @@ async function applyBackupData(data, onMnemProgress){
     // reuse the original line id when present (older backups omit it) so VR
     // decoration keys that embed it — castle rooms, building facades/signs —
     // still resolve against the restored threeLayout.
-    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
+    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
     if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {
@@ -7395,9 +7418,10 @@ let OQ = null;     // {line, color, seq, expected, hits, misses, oppChoices, rep
 let oqBoard = null;
 
 function oqVisibleOpps(seq){
-  const {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
+  let {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
   const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manual, OQ.line).counts;
   return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);
 }
 
@@ -9110,7 +9134,7 @@ async function processPerfectOpeningJob(job, config){
       // that already has one -- just confirms/keeps it. Reset always clears
       // lineId first, so a fresh project always takes the create branch.
       if(!lineId){
-        const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [san] });
+        const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [san], hideUnselectedGameMoves: true });
         lineId = line.id;
         config.lineId = lineId;
         await setPerfectOpeningConfig(config);

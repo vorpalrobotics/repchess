@@ -13322,6 +13322,61 @@ try {
 } catch(e){ bad('Phase CI2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CI3: line.hideUnselectedGameMoves -- an opt-in flag (set by
+//     Perfect Opening on its own generated line) that hides a real opponent
+//     move from the tree/compact-mode/node-stats/quiz/VR-castle unless it's
+//     also a manualReply. Reported bug: a real opponent's move that the
+//     search didn't keep still showed up, and since games sort ahead of
+//     0-count manual replies, could even outrank the actually-recommended
+//     one. Every other line (the flag unset/false) is completely unaffected. ---
+if(shouldRunPhase(['move-table','perfect-opening'])){
+try {
+const appCI3 = await launchApp();
+try {
+  // one real game reaching d4 Nf6 c4 e6 (Black played e6); a manualReply
+  // (g6) at the SAME node represents what a search kept instead.
+  const fixture = (hideUnselectedGameMoves) => ({
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], hideUnselectedGameMoves, prefs: [
+      // Nf6 itself must also be a kept/selected reply (as a real Perfect
+      // Opening tree always records for every survivor) -- otherwise, with
+      // the flag on, this node's own OWN subtree gets filtered away before
+      // ever reaching the g6/e6 comparison one level down.
+      { seq: ['d4'], manualReplies: ['Nf6'] },
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4'], manualReplies: ['g6'] },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+
+  // 220b. hideUnselectedGameMoves:true hides the real game move (e6) not
+  //       kept by the search, keeping only the manual one (g6).
+  try {
+    await seedBackup(appCI3.page, fixture(true), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6Present = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(!e6Present, 'expected the real game move (e6), not kept by the search, to be hidden');
+    ok('Perfect Opening line: hideUnselectedGameMoves hides a real game move the search didn\'t keep');
+  } catch(e){ bad('hideUnselectedGameMoves hides an unselected game move', e); }
+
+  // 220c. Without the flag (every other line, including the default),
+  //       BOTH the real game move and the manual one still show, same as
+  //       always -- confirms this is genuinely opt-in, not a global change.
+  try {
+    await seedBackup(appCI3.page, fixture(false), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6Present = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(e6Present, 'expected a normal line (flag unset) to keep showing real game moves as before');
+    ok('Perfect Opening line: hideUnselectedGameMoves is opt-in -- a normal line still shows real game moves');
+  } catch(e){ bad('hideUnselectedGameMoves is opt-in, not global', e); }
+} finally {
+  await appCI3.close();
+}
+} catch(e){ bad('Phase CI3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase CJ: a corridor's move-object chain fans out to EVERY forward door,
 //     not just the first, and follows a nudged slot/door-object live (no
 //     rebuild needed). Reported: a 2-item corridor room whose tail branches
