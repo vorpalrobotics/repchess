@@ -14954,5 +14954,194 @@ try {
 } catch(e){ bad('Phase CX: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CY: Perfect Opening project, Phase 4 -- the scheduler
+//     (maybeResumePerfectOpening) and hard preemption. Drives the real
+//     scheduler via window.__perfectOpeningTestHooks.maybeResume(), bypassing
+//     its 5s poll timer. engine.ready starts false in this harness (no real
+//     Stockfish worker ever completes init()), so every test here force-sets
+//     it true first, same as the pre-existing live-engine/analysis-queue
+//     tests already do via __aqTestHooks.engine.ready. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCY = await launchApp();
+try {
+  const stubEngine = (page, linesBySeq) => page.evaluate((lines) => {
+    window.__aqTestHooks.engine.ready = true;
+    window.__aqTestHooks.engine.analyze = (fen, opts) => {
+      window.__lastAnalyzeOpts = opts;
+      return Promise.resolve({ depth: opts.depth, lines });
+    };
+  }, linesBySeq);
+
+  // 274. A full drain: starting from one seeded White job, the scheduler
+  //      keeps pulling+processing+deleting queue items on its own (no
+  //      per-job driving from the test) until the variation cap disables
+  //      the project, leaving exactly the one not-yet-processed job the
+  //      last completed job spawned.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;   // stop after the very first Black->White spawn
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    // the scheduler drains two jobs on its own here (White's e4, then Black's
+    // reply to it) without the test driving each step -- the shared stubEngine
+    // helper returns one fixed response regardless of side to move, which
+    // would make the second (Black) call replay White's e2e4 into an empty
+    // square and fail to parse. A call-counted stub scripts the two positions
+    // instead: first call is White's move, second is Black's reply.
+    await appCY.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      let calls = 0;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        calls++;
+        const pv = calls === 1 ? ['e2e4'] : ['e7e5'];
+        return Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv } } });
+      };
+    });
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'white', `expected the loop to stop with exactly one un-processed White job left, got ${JSON.stringify(queue)}`);
+    const savedConfig = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(savedConfig.enabled === false, `expected the project to auto-disable once the 1-variation cap is hit, got enabled=${savedConfig.enabled}`);
+    ok('Perfect Opening scheduler: drains White->Black->White jobs on its own until the variation cap disables the project');
+  } catch(e){ bad('Perfect Opening scheduler: full drain to the variation cap', e); }
+
+  // 275. A real manual analysis-queue item blocks Perfect Opening entirely,
+  //      even though it's enabled with a job ready to go.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:2', kind: 'white', seq: [], createdAt: Date.now() }]));
+
+    // engine.analyze() never resolves here -- guarantees the manual item stays
+    // in ANALYSIS_QUEUE (its own search never "finishes") regardless of
+    // engine.ready or whatever a previous test in this phase left the engine
+    // stub doing, rather than relying on timing to keep addToAnalysisQueue's
+    // own internal auto-drain from racing this test.
+    const line = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'manual-blocker', color: 'white', openingMoves: ['d4'] }));
+    await appCY.page.evaluate((lineId) => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = () => new Promise(() => {});
+      return window.__aqTestHooks.addToAnalysisQueue(lineId, [], 20, 1);
+    }, line.id);
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:2', `expected Perfect Opening's job untouched while the manual queue is non-empty, got ${JSON.stringify(queue)}`);
+
+    // cleanup: drop the manual queue item so it doesn't leak into later tests/phases
+    const aqItem = (await appCY.page.evaluate(() => window.__aqTestHooks.getQueue()))[0];
+    await appCY.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), aqItem.id);
+    ok('Perfect Opening scheduler: a real manual analysis-queue item blocks it entirely');
+  } catch(e){ bad('Perfect Opening scheduler: blocked by the manual analysis queue', e); }
+
+  // 276. Live interactive analysis (engineState:'running') also blocks it,
+  //      independent of the manual queue -- and returning to idle
+  //      automatically resumes it via the same hook live analysis already
+  //      uses to wake the manual queue.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:3', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await stubEngine(appCY.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['e2e4'] } });
+
+    await appCY.page.evaluate(() => window.__aqTestHooks.setEngineUI('running'));
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+    let queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:3', `expected it blocked while engineState is 'running', got ${JSON.stringify(queue)}`);
+
+    // setEngineUI('idle') itself fires maybeResumePerfectOpening() (fire-and-forget) --
+    // wait for that, not another explicit maybeResume() call, to prove the wiring works.
+    // The scheduler drains all the way to empty here: the White job's spawned
+    // Black job also gets processed (the fixed stub's "e2e4" isn't a legal
+    // Black reply, so that job just yields zero survivors) -- what this test
+    // cares about is that processing started at all once idle, evidenced by
+    // the "Perfect White Opening" line actually getting created.
+    await appCY.page.evaluate(() => window.__aqTestHooks.setEngineUI('idle'));
+    await appCY.page.waitForFunction(async () => {
+      const q = await window.__perfectOpeningTestHooks.getQueue();
+      return q.length === 0;
+    }, { timeout: 5000 });
+    const lines = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Perfect White Opening'), `expected the White job processed automatically once idle, got lines ${JSON.stringify(lines)}`);
+    ok('Perfect Opening scheduler: blocked by engineState "running", auto-resumes on the idle transition');
+  } catch(e){ bad('Perfect Opening scheduler: blocked by live interactive analysis', e); }
+
+  // 277. A preempted (shallower-than-requested) engine result leaves the job
+  //      queued untouched and halts the loop for that round, rather than
+  //      persisting a shallow/possibly-wrong result.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.depth = 20;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:4', kind: 'white', seq: [], createdAt: Date.now() }]));
+    // the shared stubEngine helper always echoes back opts.depth (the
+    // REQUESTED depth, always === config.depth here) as result.depth, which
+    // can never look preempted -- a custom stub is needed to fix result.depth
+    // at 10, independent of what was requested, to simulate a genuinely
+    // hard-preempted (stopped early) search.
+    await appCY.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({ depth: 10, lines: { 1: { score: { type: 'cp', value: 20 }, depth: 10, pv: ['e2e4'] } } });
+    });
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:4', `expected the preempted job left untouched in the queue, got ${JSON.stringify(queue)}`);
+    const lines = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(!lines.some(l => l.name === 'Perfect White Opening'), `expected no line created from a preempted (shallow) result, got ${JSON.stringify(lines)}`);
+    ok('Perfect Opening scheduler: a preempted (shallow) result leaves the job queued without persisting anything');
+  } catch(e){ bad('Perfect Opening scheduler: preemption leaves the job queued', e); }
+
+  // 278. Reentrancy: two concurrent maybeResume() calls only actually
+  //      process the queue once -- the second call sees poProcessing already
+  //      true and returns immediately rather than double-draining.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.lineId = line.id;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    // a single Black job whose stubbed reply ("e2e4", not a legal move for
+    // Black to move) survives no candidates and spawns nothing -- so even a
+    // single successful drain call makes exactly one engine.analyze() call
+    // before the queue empties on its own, isolating what this test actually
+    // wants to check: that the SECOND of two concurrent calls contributes zero.
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:5', kind: 'black', seq: ['e4'], createdAt: Date.now() }]));
+
+    const callCount = await appCY.page.evaluate(async () => {
+      window.__aqTestHooks.engine.ready = true;
+      let calls = 0;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        calls++;
+        return new Promise(res => setTimeout(() => res({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv: ['e2e4'] } } }), 30));
+      };
+      const p1 = window.__perfectOpeningTestHooks.maybeResume();
+      const p2 = window.__perfectOpeningTestHooks.maybeResume();
+      await Promise.all([p1, p2]);
+      return calls;
+    });
+    assert(callCount === 1, `expected only the first of two concurrent maybeResume() calls to actually process the job, got ${callCount} engine.analyze() call(s)`);
+    ok('Perfect Opening scheduler: concurrent maybeResume() calls are reentrancy-safe');
+  } catch(e){ bad('Perfect Opening scheduler: reentrancy safety', e); }
+} finally {
+  await appCY.close();
+}
+} catch(e){ bad('Phase CY: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

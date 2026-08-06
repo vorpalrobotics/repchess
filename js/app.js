@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-302';
+const BUILD_TAG = '-303';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5525,6 +5525,17 @@ migrateLegacyUserData(LOCAL_USER)
 // the engine.init().then(...) call below) -- no manual "start" step needed.
 refreshAnalysisQueue().then(() => maybeResumeAnalysisQueue());
 
+// Perfect Opening's own opportunistic boot kick, plus a periodic poll as the
+// robust catch-all: unlike the manual queue, nothing calls maybeResumeAnalysisQueue's
+// equivalent for it on every relevant state change (queue-drained, engine-idle,
+// etc.), so a 5s poll picks up any missed transition cheaply -- this is a
+// background research feature with no latency expectation. Deferred to a
+// microtask (not called bare here) since `engine` -- a later `const` in this
+// module -- isn't initialized yet at this point in top-to-bottom script
+// evaluation.
+Promise.resolve().then(() => maybeResumePerfectOpening());
+setInterval(() => maybeResumePerfectOpening(), 5000);
+
 // offer the default mnemonics bundle when there's nothing in the mnemonics
 // store yet (see maybeOfferDefaultMnemonics, defined below). Skipped under
 // the test harness, whose dialog handler auto-accepts every confirm() --
@@ -8217,7 +8228,10 @@ function setEngineUI(state){
   }
   // the engine just freed up -- let the background analysis queue (if
   // anything's in it) claim it. No-op if nothing's queued or it's already running.
-  if(state === 'idle' || state === 'stopped') maybeResumeAnalysisQueue();
+  if(state === 'idle' || state === 'stopped'){
+    maybeResumeAnalysisQueue();
+    maybeResumePerfectOpening();
+  }
 }
 $('engineStopBtn').onclick = () => {
   if(engineState === 'running'){
@@ -8249,6 +8263,7 @@ engine.init().then(() => {
   populateEngineThreadsSelect();
   populateAqThreadsSelect();
   maybeResumeAnalysisQueue();
+  maybeResumePerfectOpening();
 }).catch(err => {
   console.error('[engine] init failed', err);
   $('engineDepth').textContent = 'Engine unavailable';
@@ -8910,6 +8925,7 @@ $('poSaveBtn').onclick = async () => {
   config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
   await setPerfectOpeningConfig(config);
   $('perfectOpeningOverlay').style.display = 'none';
+  maybeResumePerfectOpening();
 };
 
 $('poResetBtn').onclick = async () => {
@@ -8970,6 +8986,11 @@ async function processPerfectOpeningJob(job, config){
 
   if(job.kind === 'white'){
     const result = await engine.analyze(fen, { multipv: 1, depth: config.depth });
+    // a higher-priority caller (manual queue, live analysis) can preempt the
+    // engine mid-search via its own internal _stopCurrent() -- that leaves a
+    // shallow result we must not treat as authoritative. Bail out before any
+    // persistence so the job stays queued for a later retry.
+    if(result.depth < config.depth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
     const ranks = Object.keys(result.lines || {});
     if(!ranks.length) return { ok: false, reason: 'engine returned no line' };
     const best = result.lines[1] || result.lines[ranks[0]];
@@ -9007,6 +9028,7 @@ async function processPerfectOpeningJob(job, config){
   const moveNumber = (job.seq.length + 1) / 2;
   const maxLines = config.maxLines[moveNumber] ?? config.maxLines.default;
   const result = await engine.analyze(fen, { multipv: maxLines, depth: config.depth });
+  if(result.depth < config.depth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
   await saveAnalysisQueueResult({ lineId: config.lineId, seq: job.seq }, fen, result);
 
   const ranks = Object.keys(result.lines || {}).map(Number).sort((a,b) => a-b);
@@ -9041,6 +9063,49 @@ async function processPerfectOpeningJob(job, config){
   await setPerfectOpeningConfig(config);
 
   return { ok: true, survivors: toSpawn, spawned: toSpawn.length, truncatedByBudget: toSpawn.length < survivors.length };
+}
+
+let poProcessing = false;   // true while maybeResumePerfectOpening's loop is actively running
+
+// Perfect Opening's own scheduler, mirroring processAnalysisQueueLoop's idiom
+// (reentrancy guard, re-check the gate every iteration, stop cleanly on the
+// first thing that isn't a plain success). It only ever runs when there's
+// truly nothing else for the engine to do: the manual analysis queue (any
+// depth/multipv, any priority) and live interactive analysis both take
+// precedence unconditionally, since Perfect Opening is a background research
+// project the user is deliberately never waiting on. Preemption itself is
+// free (engine.analyze() always stops whatever's running first) -- this loop
+// just has to notice when that happened (processPerfectOpeningJob's own
+// depth check) and back off instead of persisting a shallow result.
+async function maybeResumePerfectOpening(){
+  if(poProcessing) return;
+  poProcessing = true;
+  try {
+    while(true){
+      if(ANALYSIS_QUEUE.length || engineState === 'running' || !engine.ready) break;
+      const config = await getPerfectOpeningConfig();
+      if(!config.enabled) break;
+      const queue = await getPerfectOpeningQueue();
+      if(!queue.length) break;
+      const job = queue[0];
+      let result;
+      try {
+        result = await processPerfectOpeningJob(job, config);
+      } catch(err){
+        console.error('[perfectOpening] job failed', err);
+        break;
+      }
+      if(!result.ok){
+        // interrupted (preempted) or some other non-fatal problem -- leave
+        // the job queued for a later retry and stop for now rather than
+        // spinning on the same failure.
+        break;
+      }
+      await deletePerfectOpeningQueueItem(job.id);
+    }
+  } finally {
+    poProcessing = false;
+  }
 }
 
 /* writes a completed (or partially-completed, if interrupted) search result
@@ -9178,6 +9243,10 @@ async function processAnalysisQueueLoop(){
     aqCurrentItem = null;
     aqCurrentProgress = null;
   }
+  // the manual queue just drained (or yielded because nothing's left it can
+  // do) -- give Perfect Opening an immediate chance instead of waiting for
+  // its own poll. No-op if disabled/empty/engine unavailable.
+  maybeResumePerfectOpening();
 }
 
 function pvToSan(fen, uciMoves, maxPlies){
@@ -9709,6 +9778,13 @@ if(localStorage.getItem('threeTestDebug')){
     getLines: () => getLines(LOCAL_USER),
     processJob: (job, config) => processPerfectOpeningJob(job, config),
     getPref: (lineId, seq) => getPref(lineId, seq),
+    // drives the real scheduler directly, bypassing the 5s poll timer, so
+    // tests can deterministically resume/drain the queue. Same engine-stub
+    // pattern as __aqTestHooks.engine -- Perfect Opening's own engine.analyze()
+    // calls are stubbed by the test, so unlike processAnalysisQueueLoop this
+    // scheduler CAN run end-to-end in the offline harness.
+    maybeResume: () => maybeResumePerfectOpening(),
+    isProcessing: () => poProcessing,
   };
 }
 
