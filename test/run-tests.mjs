@@ -14614,5 +14614,167 @@ try {
 } catch(e){ bad('Phase CV: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CW: Perfect Opening project, Phase 2 -- the control panel modal
+//     itself: opens from the hamburger, fields load/save against Phase 1's
+//     config storage, Cancel discards, Save validates, Reset confirms then
+//     wipes. Still no engine/scheduling -- purely the UI shell over the
+//     already-tested data layer. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCW = await launchApp();
+try {
+  // 261. The hamburger menu item opens the modal with the documented
+  //      defaults pre-filled when nothing has ever been saved.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const fields = await appCW.page.evaluate(() => ({
+      enabled: document.getElementById('poEnabledCheckbox').checked,
+      depth: document.getElementById('poDepth').value,
+      tolerance: document.getElementById('poTolerance').value,
+      cap: document.getElementById('poMaxVariations').value,
+      m1: document.getElementById('poMaxLines1').value,
+      m2: document.getElementById('poMaxLines2').value,
+      m3: document.getElementById('poMaxLines3').value,
+      m4: document.getElementById('poMaxLines4').value,
+      beyond: document.getElementById('poMaxLinesDefault').value,
+    }));
+    assert(fields.enabled === false, `expected the checkbox unchecked by default, got ${fields.enabled}`);
+    assert(fields.depth === '20' && fields.tolerance === '50' && fields.cap === '50000',
+      `expected the documented defaults (depth 20, tolerance 50, cap 50000), got ${JSON.stringify(fields)}`);
+    assert(fields.m1 === '10' && fields.m2 === '8' && fields.m3 === '6' && fields.m4 === '6' && fields.beyond === '6',
+      `expected the default 10/8/6/6/6 max-lines schedule, got ${JSON.stringify(fields)}`);
+    ok('Perfect Opening: hamburger menu item opens the panel pre-filled with defaults');
+  } catch(e){ bad('Perfect Opening: panel opens with defaults', e); }
+
+  // 262. Editing fields and clicking Save persists every value to the real
+  //      config storage (not just the DOM), and closes the modal.
+  try {
+    await appCW.page.fill('#poDepth', '45');
+    await appCW.page.fill('#poTolerance', '30');
+    await appCW.page.fill('#poMaxVariations', '75000');
+    await appCW.page.fill('#poMaxLines1', '12');
+    await appCW.page.fill('#poMaxLines2', '9');
+    await appCW.page.fill('#poMaxLines3', '5');
+    await appCW.page.fill('#poMaxLines4', '5');
+    await appCW.page.fill('#poMaxLinesDefault', '4');
+    await appCW.page.check('#poEnabledCheckbox');
+    await appCW.page.click('#poSaveBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === true && config.depth === 45 && config.toleranceCp === 30 && config.maxTotalVariations === 75000,
+      `expected the edited settings persisted, got ${JSON.stringify(config)}`);
+    assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
+      `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
+    assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
+    ok('Perfect Opening: Save persists every field to real config storage without creating a line');
+  } catch(e){ bad('Perfect Opening: Save persists all fields', e); }
+
+  // 263. Cancel discards in-progress edits -- reopening shows the last SAVED
+  //      state (from test 262), not whatever was typed and then cancelled.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poDepth', '99');
+    await appCW.page.click('#poCancelBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.depth === 45, `expected Cancel to discard the unsaved depth=99 edit, keeping the last saved value (45), got ${config.depth}`);
+
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth').value);
+    assert(reopenedDepth === '45', `expected reopening to show the last saved value (45), not the cancelled edit, got ${reopenedDepth}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Cancel discards unsaved edits, reopening shows the last saved state');
+  } catch(e){ bad('Perfect Opening: Cancel discards edits', e); }
+
+  // 264. Save validates: a non-positive value in a required-positive field
+  //      (e.g. move-1 max lines set to 0) is rejected with a visible error,
+  //      and nothing gets persisted.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poMaxLines1', '0');
+    await appCW.page.fill('#poDepth', '50');   // an otherwise-valid change, to prove NOTHING saves when one field fails
+    await appCW.page.click('#poSaveBtn');
+
+    const errorVisible = await appCW.page.evaluate(() => document.getElementById('poError').style.display !== 'none' && document.getElementById('poError').textContent.length > 0);
+    assert(errorVisible, 'expected a visible validation error for a non-positive max-lines field');
+    const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
+    assert(stillOpen, 'expected the modal to stay open on a validation failure, not silently close');
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.depth === 45, `expected NOTHING to save when validation fails (depth should still be 45, not the attempted 50), got ${config.depth}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Save rejects a non-positive required field, persisting nothing');
+  } catch(e){ bad('Perfect Opening: Save validation rejects bad input', e); }
+
+  // 265. Tolerance specifically allows exactly 0 (a valid, if extreme,
+  //      "only the single best move survives" setting) -- it must NOT be
+  //      rejected by the same "must be positive" rule the other fields use.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poTolerance', '0');
+    await appCW.page.click('#poSaveBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.toleranceCp === 0, `expected a tolerance of exactly 0 to be accepted, got ${config.toleranceCp}`);
+    ok('Perfect Opening: a tolerance of exactly 0 is accepted, not rejected as non-positive');
+  } catch(e){ bad('Perfect Opening: zero tolerance is valid', e); }
+
+  // 266. Reset: confirms (with a clear, specific warning message) then wipes
+  //      everything and refreshes the panel's own fields back to defaults
+  //      without closing it.
+  try {
+    let confirmMsg = null;
+    appCW.page.once('dialog', d => { confirmMsg = d.message(); });   // read-only -- harness's own listener still accepts it
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.click('#poResetBtn');
+    await appCW.page.waitForFunction(() => document.getElementById('poDepth').value === '20', { timeout: 5000 });
+
+    assert(confirmMsg && /permanently|delete|cannot be undone/i.test(confirmMsg), `expected a clear destructive-action warning, got ${JSON.stringify(confirmMsg)}`);
+    const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
+    assert(stillOpen, 'expected the panel to stay open after Reset, refreshed rather than closed');
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    const defaults = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(defaults), `expected Reset to restore full defaults, got ${JSON.stringify(config)}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Reset confirms with a clear warning, then wipes to defaults and refreshes the open panel');
+  } catch(e){ bad('Perfect Opening: Reset confirms and wipes', e); }
+
+  // 267. The status line reflects real progress once a line/variation count
+  //      exist (seeded directly here, since real progress is a later
+  //      phase's job), and falls back to "not started" with none.
+  try {
+    const notStarted = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click()).then(() =>
+      appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 })).then(() =>
+      appCW.page.evaluate(() => document.getElementById('poStatus').textContent));
+    assert(/not started/i.test(notStarted), `expected a "not started" status with no line yet, got "${notStarted}"`);
+    await appCW.page.click('#poCancelBtn');
+
+    const line = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCW.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getConfig().then(cfg => {
+      cfg.lineId = lineId;
+      cfg.totalVariations = 42;
+      return window.__perfectOpeningTestHooks.setConfig(cfg);
+    }), line.id);
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const withProgress = await appCW.page.evaluate(() => document.getElementById('poStatus').textContent);
+    assert(withProgress.includes('42'), `expected the status line to report the 42 generated variations, got "${withProgress}"`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: status line reports real progress once a line/variation count exist, "not started" otherwise');
+  } catch(e){ bad('Perfect Opening: status line reflects progress', e); }
+} finally {
+  await appCW.close();
+}
+} catch(e){ bad('Phase CW: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

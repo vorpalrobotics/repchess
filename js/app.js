@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-300';
+const BUILD_TAG = '-301';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8851,6 +8851,72 @@ $('menuAnalysisQueue').onclick = async () => {
   $('analysisQueueOverlay').style.display='flex';
 };
 $('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
+
+/* ---------- Perfect Opening project control panel ----------
+   Phase 2 of the Perfect Opening project (see db.js's own section for the
+   data model): the control panel itself. Deliberately does NOT create the
+   generated line here, even when enabling for the first time -- the line's
+   openingMoves needs White's actual move 1, which isn't known until the
+   engine determines it (a later phase's job); the line gets created lazily
+   at that point instead of eagerly from a placeholder guess here. */
+function renderPerfectOpeningStatus(config){
+  $('poStatus').textContent = config.lineId
+    ? `${config.totalVariations} variation${config.totalVariations === 1 ? '' : 's'} generated so far.`
+    : 'Not started yet -- enable and Save to begin.';
+}
+async function openPerfectOpeningPanel(){
+  $('menuList').style.display = 'none';
+  const config = await getPerfectOpeningConfig();
+  $('poEnabledCheckbox').checked = config.enabled;
+  $('poDepth').value = config.depth;
+  $('poTolerance').value = config.toleranceCp;
+  $('poMaxVariations').value = config.maxTotalVariations;
+  $('poMaxLines1').value = config.maxLines[1];
+  $('poMaxLines2').value = config.maxLines[2];
+  $('poMaxLines3').value = config.maxLines[3];
+  $('poMaxLines4').value = config.maxLines[4];
+  $('poMaxLinesDefault').value = config.maxLines.default;
+  $('poError').style.display = 'none';
+  renderPerfectOpeningStatus(config);
+  $('perfectOpeningOverlay').style.display = 'flex';
+}
+$('menuPerfectOpening').onclick = openPerfectOpeningPanel;
+$('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'none'; };
+
+$('poSaveBtn').onclick = async () => {
+  const depth = +$('poDepth').value;
+  const toleranceCp = +$('poTolerance').value;
+  const maxTotalVariations = +$('poMaxVariations').value;
+  const maxLines1 = +$('poMaxLines1').value;
+  const maxLines2 = +$('poMaxLines2').value;
+  const maxLines3 = +$('poMaxLines3').value;
+  const maxLines4 = +$('poMaxLines4').value;
+  const maxLinesDefault = +$('poMaxLinesDefault').value;
+
+  const showError = (msg) => { $('poError').textContent = msg; $('poError').style.display = ''; };
+  const positiveFields = { 'search depth': depth, 'total variation cap': maxTotalVariations,
+    'move 1 max lines': maxLines1, 'move 2 max lines': maxLines2, 'move 3 max lines': maxLines3,
+    'move 4 max lines': maxLines4, 'beyond-move-4 max lines': maxLinesDefault };
+  for(const [label, v] of Object.entries(positiveFields)){
+    if(!Number.isFinite(v) || v < 1){ showError(`"${label}" must be a positive number.`); return; }
+  }
+  if(!Number.isFinite(toleranceCp) || toleranceCp < 0){ showError('Pruning tolerance must be zero or a positive number.'); return; }
+
+  const config = await getPerfectOpeningConfig();
+  config.enabled = $('poEnabledCheckbox').checked;
+  config.depth = depth;
+  config.toleranceCp = toleranceCp;
+  config.maxTotalVariations = maxTotalVariations;
+  config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
+  await setPerfectOpeningConfig(config);
+  $('perfectOpeningOverlay').style.display = 'none';
+};
+
+$('poResetBtn').onclick = async () => {
+  if(!confirm('This permanently deletes the generated "Perfect White Opening" line and all progress, and turns the project back off. This cannot be undone. Continue?')) return;
+  await resetPerfectOpening();
+  await openPerfectOpeningPanel();   // refreshes every field back to defaults, keeps the modal open
+};
 
 /* writes a completed (or partially-completed, if interrupted) search result
    for one queue item straight to IDB, gated by the same "never regress"
