@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 7;   // v7 adds safetyBackup (crash-surviving pre-restore snapshot)
+const DB_VERSION = 8;   // v7 adds safetyBackup (crash-surviving pre-restore snapshot); v8 adds perfectOpeningQueue
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -69,6 +69,15 @@ function openDB(){
         const aq = db.createObjectStore('analysisQueue', {keyPath:'id'});
         aq.createIndex('status','status');
         aq.createIndex('user','user');
+      }
+      // Perfect Opening project's own pending-expansion-job queue -- kept
+      // separate from analysisQueue (see app.js's Perfect Opening section):
+      // its jobs are reactively self-spawning (one result creates several
+      // more), a different processing model than analysisQueue's flat,
+      // user-curated list, and mixing thousands of these into that queue's
+      // own UI would bury the user's own manually-added items.
+      if(!db.objectStoreNames.contains('perfectOpeningQueue')){
+        db.createObjectStore('perfectOpeningQueue', {keyPath:'id'});
       }
       // Deliberately NOT in clearAllData()'s store list -- its whole purpose
       // is a pre-restore snapshot that survives the exact wipe that store
@@ -597,13 +606,104 @@ async function clearMnemonics(){
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();
-  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists','analysisQueue'];
+  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists','analysisQueue','perfectOpeningQueue'];
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });
+}
+
+/* ---------- Perfect Opening project ----------
+   Settings + progress live as one JSON blob in the existing meta store
+   (small, rewritten wholesale on every save -- same pattern as threeLayout/
+   graphLayout); pending expansion jobs get their own real object store
+   (perfectOpeningQueue) since that can grow into the thousands, where a
+   single-blob approach would mean rewriting the whole thing on every job
+   processed.
+*/
+const PERFECT_OPENING_DEFAULT_CONFIG = {
+  enabled: false,
+  lineId: null,            // the generated "Perfect White Opening" line's id, once created
+  depth: 20,
+  toleranceCp: 50,
+  // max candidate replies kept per move NUMBER (not ply -- move 1 covers
+  // both the White and Black half-move at that number), falling back to
+  // `default` for any move beyond the ones explicitly listed here.
+  maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
+  maxTotalVariations: 50000,
+  totalVariations: 0,      // running count of surviving leaf lines so far
+};
+function cloneDefaultPerfectOpeningConfig(){
+  return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines } };
+}
+async function getPerfectOpeningConfig(){
+  const raw = await getMeta('perfectOpeningConfig');
+  if(!raw) return cloneDefaultPerfectOpeningConfig();
+  try {
+    const parsed = JSON.parse(raw);
+    // merge over the defaults (not just trust what's stored) so a field
+    // added to this shape in a later version doesn't come back undefined
+    // for a config saved before that field existed.
+    return { ...cloneDefaultPerfectOpeningConfig(), ...parsed, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines, ...(parsed.maxLines || {}) } };
+  } catch(e){
+    console.warn('[db] perfectOpeningConfig was corrupt JSON, using defaults', e);
+    return cloneDefaultPerfectOpeningConfig();
+  }
+}
+async function setPerfectOpeningConfig(config){
+  await setMeta('perfectOpeningConfig', JSON.stringify(config));
+}
+
+async function getPerfectOpeningQueue(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('perfectOpeningQueue','readonly').objectStore('perfectOpeningQueue').getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+async function addPerfectOpeningQueueItems(items){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    const store = txn.objectStore('perfectOpeningQueue');
+    for(const item of items) store.put(item);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+async function deletePerfectOpeningQueueItem(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    txn.objectStore('perfectOpeningQueue').delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+async function clearPerfectOpeningQueueStore(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    txn.objectStore('perfectOpeningQueue').clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+// Wipes the Perfect Opening project back to a clean slate: deletes the
+// generated line (and its prefs/analysisQueue rows, via the exact same
+// deleteLine every manual line-delete already goes through), clears every
+// pending expansion job, and resets settings to their defaults -- including
+// turning the project back off, since a reset mid-run should stop it rather
+// than silently keep going against a now-empty tree.
+async function resetPerfectOpening(){
+  const config = await getPerfectOpeningConfig();
+  if(config.lineId) await deleteLine(config.lineId);
+  await clearPerfectOpeningQueueStore();
+  await setPerfectOpeningConfig(cloneDefaultPerfectOpeningConfig());
 }
 
 /* ---------- safety backup (crash-surviving pre-restore snapshot) ----------

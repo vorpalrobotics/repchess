@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-299';
+const BUILD_TAG = '-300';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9488,6 +9488,31 @@ if(localStorage.getItem('threeTestDebug')){
     getLines: (user) => getLines(user),
     getGames: (user) => getGames(user),
     getAnalysisQueue: (user) => getAnalysisQueue(user),
+  };
+}
+
+// test-only hook for the Perfect Opening project's data layer (db.js) --
+// Phase 1: config storage + the expansion-job queue + reset. No engine, no
+// scheduling, no UI yet -- those are later phases.
+if(localStorage.getItem('threeTestDebug')){
+  window.__perfectOpeningTestHooks = {
+    defaultConfig: () => JSON.parse(JSON.stringify({
+      enabled: false, lineId: null, depth: 20, toleranceCp: 50,
+      maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
+      maxTotalVariations: 50000, totalVariations: 0,
+    })),
+    getConfig: () => getPerfectOpeningConfig(),
+    setConfig: (config) => setPerfectOpeningConfig(config),
+    getQueue: () => getPerfectOpeningQueue(),
+    addQueueItems: (items) => addPerfectOpeningQueueItems(items),
+    deleteQueueItem: (id) => deletePerfectOpeningQueueItem(id),
+    clearQueueStore: () => clearPerfectOpeningQueueStore(),
+    reset: () => resetPerfectOpening(),
+    // reuses the exact same real line/pref helpers a genuinely-generated
+    // tree would, so tests can seed a stand-in "Perfect White Opening" line
+    // without needing Phase 3's actual engine-driven expansion logic yet.
+    seedLine: (opts) => createLine(LOCAL_USER, opts),
+    getLines: () => getLines(LOCAL_USER),
   };
 }
 

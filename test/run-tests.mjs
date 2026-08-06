@@ -61,6 +61,7 @@ const SUBSYSTEMS = {
   'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
   'auto-import':       'daily auto-import from Lichess/chess.com: sizing heuristics, daily gate, boot trigger',
   'user-migration':    'migrateLegacyUserData: pre-CURRENT_USER-removal data recovery to LOCAL_USER',
+  'perfect-opening':   'Perfect Opening project: config/queue data layer, control panel, expansion, scheduling',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -14484,6 +14485,133 @@ try {
   await appCU.close();
 }
 } catch(e){ bad('Phase CU: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CV: Perfect Opening project, Phase 1 -- config storage + the
+//     expansion-job queue store + resetPerfectOpening(). No engine, no
+//     scheduling, no UI yet -- purely the data layer those later phases
+//     will build on. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCV = await launchApp();
+try {
+  // 255. With nothing ever saved, getConfig() returns the documented
+  //      defaults (off, depth 20, 50cp tolerance, 10/8/6/6/default-6 lines,
+  //      50k cap, zero variations so far).
+  try {
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    const expected = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(expected), `expected the documented defaults with nothing saved, got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: getConfig() returns the documented defaults when nothing has been saved');
+  } catch(e){ bad('Perfect Opening: default config', e); }
+
+  // 256. setConfig persists, and a later getConfig sees it (round trip through
+  //      real IndexedDB, not just an in-memory echo).
+  try {
+    const saved = await appCV.page.evaluate(() => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.depth = 45;
+      cfg.toleranceCp = 30;
+      cfg.maxLines = { 1: 12, 2: 9, 3: 5, 4: 5, default: 4 };
+      cfg.maxTotalVariations = 100000;
+      return window.__perfectOpeningTestHooks.setConfig(cfg).then(() => window.__perfectOpeningTestHooks.getConfig());
+    });
+    assert(saved.enabled === true && saved.depth === 45 && saved.toleranceCp === 30 && saved.maxTotalVariations === 100000,
+      `expected the saved settings to round-trip, got ${JSON.stringify(saved)}`);
+    assert(JSON.stringify(saved.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
+      `expected the saved maxLines schedule to round-trip, got ${JSON.stringify(saved.maxLines)}`);
+    ok('Perfect Opening: setConfig persists to IndexedDB and getConfig reads it back');
+  } catch(e){ bad('Perfect Opening: config round trip', e); }
+
+  // 257. A config saved under an OLDER shape (missing a field this version
+  //      expects, e.g. maxTotalVariations from before that setting existed)
+  //      comes back merged over the current defaults for the missing field,
+  //      not undefined -- same forward-compatibility concern as other
+  //      meta-stored JSON blobs (threeLayout etc.) in this codebase.
+  try {
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.setConfig({ enabled: true, depth: 33 }));
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === true && config.depth === 33, `expected the explicitly-saved fields to survive, got ${JSON.stringify(config)}`);
+    assert(config.toleranceCp === 50, `expected a missing field to fall back to its default (50), got ${config.toleranceCp}`);
+    assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 10, 2: 8, 3: 6, 4: 6, default: 6 }),
+      `expected a missing maxLines to fall back to the full default schedule, got ${JSON.stringify(config.maxLines)}`);
+    ok('Perfect Opening: a config saved under an older/partial shape merges over current defaults for missing fields');
+  } catch(e){ bad('Perfect Opening: forward-compatible config merge', e); }
+
+  // 258. Queue CRUD: items added are visible via getQueue, deleting one
+  //      leaves the others, and clearQueueStore empties it entirely.
+  try {
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([
+      { id: 'po:1', kind: 'white', seq: ['e4'], createdAt: 1 },
+      { id: 'po:2', kind: 'black', seq: ['e4'], createdAt: 2 },
+      { id: 'po:3', kind: 'white', seq: ['e4', 'e5'], createdAt: 3 },
+    ]));
+    const afterAdd = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterAdd.length === 3, `expected all 3 seeded queue items, got ${JSON.stringify(afterAdd)}`);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.deleteQueueItem('po:2'));
+    const afterDelete = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterDelete.length === 2 && !afterDelete.some(i => i.id === 'po:2'), `expected only po:2 removed, got ${JSON.stringify(afterDelete)}`);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const afterClear = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterClear.length === 0, `expected the queue store fully emptied, got ${JSON.stringify(afterClear)}`);
+    ok('Perfect Opening: queue store CRUD (add/getAll/delete-one/clear) works over real IndexedDB');
+  } catch(e){ bad('Perfect Opening: queue store CRUD', e); }
+
+  // 259. resetPerfectOpening(): deletes the generated line (via the same
+  //      deleteLine every manual line-delete uses), clears every pending
+  //      queue item, and resets settings all the way back to defaults --
+  //      including turning the project back off, so a reset mid-run doesn't
+  //      silently keep expanding an now-empty tree.
+  try {
+    const line = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCV.page.evaluate((lineId) => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.lineId = lineId;
+      cfg.depth = 45;
+      cfg.totalVariations = 137;
+      return Promise.all([
+        window.__perfectOpeningTestHooks.setConfig(cfg),
+        window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:pending1', kind: 'black', seq: ['e4'], createdAt: 1 }]),
+      ]);
+    }, line.id);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+
+    const [lines, queue, config] = await appCV.page.evaluate(() => Promise.all([
+      window.__perfectOpeningTestHooks.getLines(),
+      window.__perfectOpeningTestHooks.getQueue(),
+      window.__perfectOpeningTestHooks.getConfig(),
+    ]));
+    assert(!lines.some(l => l.id === line.id), `expected the generated line deleted by reset, got ${JSON.stringify(lines)}`);
+    assert(queue.length === 0, `expected the queue emptied by reset, got ${JSON.stringify(queue)}`);
+    const expectedDefaults = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(expectedDefaults), `expected settings fully reset to defaults (incl. enabled:false), got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: resetPerfectOpening deletes the line, clears the queue, and restores default (off) settings');
+  } catch(e){ bad('Perfect Opening: resetPerfectOpening full wipe', e); }
+
+  // 260. resetPerfectOpening() when the project was configured but never
+  //      actually got as far as creating a line (lineId still null) doesn't
+  //      throw -- deleteLine(null) is never called.
+  try {
+    await appCV.page.evaluate(() => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.depth = 40;
+      return window.__perfectOpeningTestHooks.setConfig(cfg);
+    });
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === false, `expected reset to still succeed and turn the project off with no lineId ever set, got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: resetPerfectOpening is safe to call before any line has ever been created');
+  } catch(e){ bad('Perfect Opening: reset with no lineId yet', e); }
+} finally {
+  await appCV.close();
+}
+} catch(e){ bad('Phase CV: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
