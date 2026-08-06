@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-303';
+const BUILD_TAG = '-304';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8874,10 +8874,25 @@ $('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.dis
    openingMoves needs White's actual move 1, which isn't known until the
    engine determines it (a later phase's job); the line gets created lazily
    at that point instead of eagerly from a placeholder guess here. */
-function renderPerfectOpeningStatus(config){
-  $('poStatus').textContent = config.lineId
-    ? `${config.totalVariations} variation${config.totalVariations === 1 ? '' : 's'} generated so far.`
-    : 'Not started yet -- enable and Save to begin.';
+async function renderPerfectOpeningStatus(config){
+  if(!config.lineId){
+    $('poStatus').textContent = 'Not started yet -- enable and Save to begin.';
+    return;
+  }
+  const pending = (await getPerfectOpeningQueue()).length;
+  const variations = `${config.totalVariations} variation${config.totalVariations === 1 ? '' : 's'} generated so far.`;
+  const queued = pending
+    ? ` ${pending} position${pending === 1 ? '' : 's'} queued for expansion.`
+    : (config.enabled ? ' Caught up -- waiting for the manual queue and live analysis to free up the engine.' : ' Paused (disabled).');
+  $('poStatus').textContent = variations + queued;
+}
+function poModalOpen(){ return $('perfectOpeningOverlay').style.display === 'flex'; }
+// mirrors renderAnalysisQueueModalIfOpen: called after every job the
+// scheduler processes so a control panel left open shows live progress
+// instead of only refreshing whenever it's next opened.
+function renderPerfectOpeningStatusIfOpen(){
+  if(!poModalOpen()) return;
+  getPerfectOpeningConfig().then(config => renderPerfectOpeningStatus(config));
 }
 async function openPerfectOpeningPanel(){
   $('menuList').style.display = 'none';
@@ -8892,8 +8907,8 @@ async function openPerfectOpeningPanel(){
   $('poMaxLines4').value = config.maxLines[4];
   $('poMaxLinesDefault').value = config.maxLines.default;
   $('poError').style.display = 'none';
-  renderPerfectOpeningStatus(config);
   $('perfectOpeningOverlay').style.display = 'flex';
+  await renderPerfectOpeningStatus(config);
 }
 $('menuPerfectOpening').onclick = openPerfectOpeningPanel;
 $('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'none'; };
@@ -9102,9 +9117,16 @@ async function maybeResumePerfectOpening(){
         break;
       }
       await deletePerfectOpeningQueueItem(job.id);
+      renderPerfectOpeningStatusIfOpen();
     }
   } finally {
     poProcessing = false;
+    // covers the final state after the loop exits for a reason that didn't
+    // itself follow a completed job (disabled, preempted, engine claimed
+    // elsewhere) -- the per-job render above only fires after a SUCCESSFUL
+    // job, so without this the panel could be left showing a stale "queued"
+    // count from before the stopping condition was hit.
+    renderPerfectOpeningStatusIfOpen();
   }
 }
 

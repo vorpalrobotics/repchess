@@ -15143,5 +15143,134 @@ try {
 } catch(e){ bad('Phase CY: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CZ: Perfect Opening project, Phase 5 -- status/progress display
+//     and a real-world sanity check that a scheduler-generated tree (real
+//     branching, not a single stubbed job) behaves normally elsewhere in the
+//     app (VR world build). ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCZ = await launchApp();
+try {
+  const openPanel = async () => {
+    await appCZ.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCZ.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    return appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
+  };
+
+  // 279. The status line reports how many positions are queued for
+  //      expansion, on top of the variation count from Phase 2.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = line.id;
+    config.totalVariations = 3;
+    config.enabled = true;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([
+      { id: 'po:z:1', kind: 'white', seq: [], createdAt: Date.now() },
+      { id: 'po:z:2', kind: 'black', seq: ['e4'], createdAt: Date.now() },
+    ]));
+    const status = await openPanel();
+    assert(status.includes('3') && /2 positions queued for expansion/.test(status), `expected the queue depth reported alongside the variation count, got "${status}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: reports the number of positions queued for expansion');
+  } catch(e){ bad('Perfect Opening status: queue depth', e); }
+
+  // 280. An empty queue while enabled reads "caught up", not silence --
+  //      distinct from the disabled ("paused") case.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const status = await openPanel();
+    assert(/caught up/i.test(status), `expected a "caught up" status with an empty queue while enabled, got "${status}"`);
+    await appCZ.page.click('#poCancelBtn');
+
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.enabled = false;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    const pausedStatus = await openPanel();
+    assert(/paused/i.test(pausedStatus), `expected a "paused" status with the project disabled, got "${pausedStatus}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: distinguishes "caught up" (enabled, empty queue) from "paused" (disabled)');
+  } catch(e){ bad('Perfect Opening status: caught-up vs. paused wording', e); }
+
+  // 281. A control panel left open during a scheduler drain updates its
+  //      status line live, without the user having to close and reopen it.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = line.id;
+    config.enabled = true;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    // a Black job whose stubbed reply survives nothing (invalid move for
+    // Black to move) -- processes cleanly, spawns nothing, so the queue goes
+    // from 1 to 0 in exactly one step for a clean before/after comparison.
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:z:3', kind: 'black', seq: ['e4'], createdAt: Date.now() }]));
+    const before = await openPanel();
+    assert(/1 position/.test(before), `expected the panel to show 1 position queued before draining, got "${before}"`);
+
+    await appCZ.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv: ['e2e4'] } } });
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+    const after = await appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
+    assert(/caught up/i.test(after), `expected the OPEN panel's status to refresh to "caught up" once the scheduler drained the queue, got "${after}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: a panel left open refreshes live as the scheduler processes jobs');
+  } catch(e){ bad('Perfect Opening status: live refresh while open', e); }
+
+  // 282. Real-world sanity: a scheduler-built tree with actual branching
+  //      (not a single stubbed job) is a normal line/pref structure that the
+  //      rest of the app -- specifically the VR world build -- handles
+  //      without error. The stub always plays a real LEGAL move for whatever
+  //      position it's asked about (derived from chess.js itself, not a
+  //      hand-picked UCI string), so this exercises genuine multi-ply
+  //      branching irrespective of what the "best" move happens to be.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.toleranceCp = 15;       // ranks scored 0,-10,-20,... -- keeps exactly the top 2 replies
+    config.maxLines = { 1: 2, 2: 2, 3: 2, 4: 2, default: 2 };
+    config.maxTotalVariations = 6;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:z:4', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appCZ.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const legal = new Chess(fen).moves({ verbose: true });
+        const n = Math.min(opts.multipv, legal.length);
+        const lines = {};
+        for(let i = 0; i < n; i++){
+          const mv = legal[i];
+          lines[i+1] = { score: { type: 'cp', value: -i * 10 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] };
+        }
+        return Promise.resolve({ depth: opts.depth, lines });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const finalConfig = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(finalConfig.enabled === false, `expected the 6-variation cap to have been reached and auto-disabled, got ${JSON.stringify(finalConfig)}`);
+    const lines = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const poLine = lines.find(l => l.id === finalConfig.lineId);
+    assert(poLine && poLine.openingMoves.length === 1, `expected a real "Perfect White Opening" line to have been built, got ${JSON.stringify(poLine)}`);
+    const pref1 = await appCZ.page.evaluate((args) => window.__perfectOpeningTestHooks.getPref(args.lineId, [args.m]), { lineId: finalConfig.lineId, m: poLine.openingMoves[0] });
+    assert(pref1?.manualReplies?.length === 2, `expected real branching (2 Black replies) at the first Black-to-move node, got ${JSON.stringify(pref1)}`);
+
+    await openVR(appCZ.page);
+    await appCZ.page.waitForTimeout(300);
+    assert(realErrors(appCZ.consoleErrors).length === 0,
+      'unexpected console errors building the VR world for a scheduler-generated branching tree:\n' + realErrors(appCZ.consoleErrors).join('\n'));
+    ok('Perfect Opening real-world sanity: a scheduler-built branching tree renders in VR without error');
+  } catch(e){ bad('Perfect Opening real-world sanity: branching tree + VR build', e); }
+} finally {
+  await appCZ.close();
+}
+} catch(e){ bad('Phase CZ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
