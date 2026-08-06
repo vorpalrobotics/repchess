@@ -15309,6 +15309,36 @@ try {
       `expected Save to seed exactly one root White job (seq: []), got ${JSON.stringify(queue)}`);
     ok('Perfect Opening: enabling for the first time and hitting Save seeds the root job into the queue');
   } catch(e){ bad('Perfect Opening: Enable+Save seeds the root job (regression)', e); }
+
+  // 284. Regression: once the background scheduler actually creates the
+  //      "Perfect White Opening" line, a user sitting on the home screen's
+  //      opening-systems list sees it appear on its own -- no manual reload
+  //      needed (caught via real user testing: the line existed after a
+  //      refresh, but never showed up on its own while the panel was open).
+  try {
+    // test 283's own Save already closed the panel, back to the home screen
+    // underneath it -- confirm that's really where we are before proceeding.
+    await appDA.page.waitForFunction(() => document.getElementById('homeScreen').style.display !== 'none');
+    // fresh, bounded config -- reset() first rather than reusing test 283's
+    // leftover state (still enabled with maxTotalVariations at the 50000
+    // default), which would let this drive a runaway number of jobs.
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:home-refresh:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) =>
+        Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+    await appDA.page.waitForSelector('.line-row', { timeout: 5000 });
+    const names = await appDA.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(names.includes('Perfect White Opening'), `expected the new line to appear in the home screen list on its own, got ${JSON.stringify(names)}`);
+    ok('Perfect Opening: the home screen list refreshes on its own once the background scheduler creates the line');
+  } catch(e){ bad('Perfect Opening: home screen auto-refreshes on line creation (regression)', e); }
 } finally {
   await appDA.close();
 }
