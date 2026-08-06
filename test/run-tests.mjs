@@ -14776,5 +14776,183 @@ try {
 } catch(e){ bad('Phase CW: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase CX: Perfect Opening project, Phase 3 -- the core per-job
+//     expansion processor (processPerfectOpeningJob). Deliberately tiny,
+//     controlled fake engine results throughout (never a real WASM
+//     search -- depth-45+ multipv searches would be far too slow for a test
+//     and Stockfish isn't even available in this offline harness), driven
+//     through window.__aqTestHooks.engine, the same real Engine instance
+//     the analysis-queue's own tests already fake out this exact way. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCX = await launchApp();
+try {
+  // helper: stub engine.analyze() to return a fixed result and capture the
+  // options it was called with, for both assertions and the next test's setup.
+  const stubEngine = (page, linesBySeq) => page.evaluate((lines) => {
+    window.__aqTestHooks.engine.analyze = (fen, opts) => {
+      window.__lastAnalyzeOpts = opts;
+      return Promise.resolve({ depth: opts.depth, lines });
+    };
+  }, linesBySeq);
+
+  // 268. A White job at the very first move (empty seq): creates the
+  //      "Perfect White Opening" line with the engine's move as
+  //      openingMoves, persists config.lineId, saves the position's eval,
+  //      and queues exactly one Black job at the resulting position.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 35 }, depth: 20, pv: ['e2e4'] } });
+
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(result.ok === true && result.move === 'e4', `expected the White job to report move "e4", got ${JSON.stringify(result)}`);
+
+    const savedConfig = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(!!savedConfig.lineId, 'expected config.lineId to be set after creating the line');
+    const lines = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === savedConfig.lineId);
+    assert(line && line.name === 'Perfect White Opening' && JSON.stringify(line.openingMoves) === JSON.stringify(['e4']),
+      `expected a line named "Perfect White Opening" with openingMoves ["e4"], got ${JSON.stringify(line)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, []), savedConfig.lineId);
+    assert(pref?.eval?.depth === 20, `expected the root position's eval saved at depth 20, got ${JSON.stringify(pref?.eval)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'black' && JSON.stringify(queue[0].seq) === JSON.stringify(['e4']),
+      `expected exactly one Black job queued at ["e4"], got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a White job at the first move creates the line, saves its eval, and queues one Black job');
+  } catch(e){ bad('Perfect Opening: White job at the first move', e); }
+
+  // 269. A White job at a NON-empty seq (resuming further into the tree,
+  //      line already exists): writes the move as `reply` on that position's
+  //      pref instead of touching openingMoves, and still queues one Black
+  //      job at the resulting position.
+  try {
+    const configBefore = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['g1f3'] } });
+
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['e4', 'e5'] }, cfg), configBefore);
+    assert(result.ok === true && result.move === 'Nf3', `expected the White job to report "Nf3", got ${JSON.stringify(result)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, ['e4', 'e5']), configBefore.lineId);
+    assert(pref?.reply === 'Nf3', `expected reply:"Nf3" saved on the ["e4","e5"] pref, got ${JSON.stringify(pref)}`);
+
+    const line = (await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines())).find(l => l.id === configBefore.lineId);
+    assert(JSON.stringify(line.openingMoves) === JSON.stringify(['e4']), `expected openingMoves untouched by a non-root White job, got ${JSON.stringify(line.openingMoves)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'black' && JSON.stringify(queue[0].seq) === JSON.stringify(['e4', 'e5', 'Nf3']),
+      `expected exactly one Black job queued at ["e4","e5","Nf3"], got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a White job deeper in the tree writes `reply`, not openingMoves, and queues the next Black job');
+  } catch(e){ bad('Perfect Opening: White job resuming mid-tree', e); }
+
+  // 270. A Black job: only replies within the tolerance band of the best
+  //      score survive into manualReplies, and each survivor spawns its own
+  //      White job -- non-survivors spawn nothing.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.toleranceCp = 50;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+
+    // best is -30 (Black's own perspective); -60 is 30cp worse (survives,
+    // within 50); -90 is 60cp worse (does NOT survive).
+    await stubEngine(appCX.page, {
+      1: { score: { type: 'cp', value: -30 }, depth: 20, pv: ['e7e5'] },
+      2: { score: { type: 'cp', value: -60 }, depth: 20, pv: ['c7c5'] },
+      3: { score: { type: 'cp', value: -90 }, depth: 20, pv: ['e7e6'] },
+    });
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4'] }, cfg), config);
+    assert(JSON.stringify(result.survivors) === JSON.stringify(['e5', 'c5']), `expected only e5/c5 to survive the 50cp tolerance, got ${JSON.stringify(result.survivors)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, ['e4']), config.lineId);
+    assert(JSON.stringify(pref?.manualReplies) === JSON.stringify(['e5', 'c5']), `expected manualReplies to be exactly [e5,c5], got ${JSON.stringify(pref?.manualReplies)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    const whiteSeqs = queue.filter(j => j.kind === 'white').map(j => JSON.stringify(j.seq)).sort();
+    assert(whiteSeqs.length === 2 && whiteSeqs.includes(JSON.stringify(['e4','e5'])) && whiteSeqs.includes(JSON.stringify(['e4','c5'])),
+      `expected a White job queued for each of e5/c5 (and none for e6), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a Black job keeps only in-tolerance replies as manualReplies, spawning one White job per survivor');
+  } catch(e){ bad('Perfect Opening: Black job tolerance filtering', e); }
+
+  // 271. Black jobs request MultiPV matching the move-number schedule, not a
+  //      fixed width -- move 1 asks for maxLines[1], move 4 asks for
+  //      maxLines[4], and move 5 (beyond the explicit schedule) falls back
+  //      to maxLines.default.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.maxLines = { 1: 4, 2: 3, 3: 3, 4: 2, default: 2 };
+    config.totalVariations = 0;
+    config.maxTotalVariations = 1000;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['e7e5'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4'] }, cfg), config);   // move 1
+    const move1Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move1Opts.multipv === 4, `expected move 1 to request multipv=4, got ${move1Opts.multipv}`);
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O'] }, cfg), config);   // move 4 (4 White moves played: e4,Nf3,Bb5,O-O)
+    const move4Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move4Opts.multipv === 2, `expected move 4 to request multipv=2, got ${move4Opts.multipv}`);
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O','Be7','Re1'] }, cfg), config);   // move 5, beyond schedule
+    const move5Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move5Opts.multipv === 2, `expected move 5 (beyond the explicit schedule) to fall back to maxLines.default=2, got ${move5Opts.multipv}`);
+    ok('Perfect Opening: Black jobs request MultiPV per the move-number schedule, falling back to "beyond" past move 4');
+  } catch(e){ bad('Perfect Opening: MultiPV width follows the move-number schedule', e); }
+
+  // 272. The total variation cap truncates spawning mid-batch and
+  //      auto-disables the project once reached -- a genuinely destructive-
+  //      feeling outcome (no more expansion) reached without ever exceeding
+  //      the configured ceiling.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.toleranceCp = 1000;   // keep every candidate within tolerance for this test
+    config.maxTotalVariations = 5;
+    config.totalVariations = 3;   // only 2 more variations fit before the cap
+    config.enabled = true;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, {
+      1: { score: { type: 'cp', value: -10 }, depth: 20, pv: ['e7e5'] },
+      2: { score: { type: 'cp', value: -20 }, depth: 20, pv: ['c7c5'] },
+      3: { score: { type: 'cp', value: -30 }, depth: 20, pv: ['e7e6'] },
+      4: { score: { type: 'cp', value: -40 }, depth: 20, pv: ['c7c6'] },
+    });
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['d4'] }, cfg), config);
+    assert(result.spawned === 2 && result.truncatedByBudget === true, `expected only 2 of 4 survivors spawned (budget-truncated), got ${JSON.stringify(result)}`);
+
+    const savedConfig = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(savedConfig.totalVariations === 5, `expected totalVariations to land exactly at the cap (5), got ${savedConfig.totalVariations}`);
+    assert(savedConfig.enabled === false, `expected the project to auto-disable once the cap is reached, got enabled=${savedConfig.enabled}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.filter(j => j.kind === 'white').length === 2, `expected exactly 2 new White jobs queued (not 4), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: the total variation cap truncates spawning mid-batch and auto-disables the project');
+  } catch(e){ bad('Perfect Opening: variation cap truncation + auto-disable', e); }
+
+  // 273. An unparseable move from the engine fails cleanly (no line/pref/
+  //      queue mutation), rather than corrupting the tree with a bogus SAN.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['z9z9'] } });
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(result.ok === false, `expected an unparseable move to fail cleanly, got ${JSON.stringify(result)}`);
+    const lines = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(!lines.some(l => l.name === 'Perfect White Opening'), `expected no line created on failure, got ${JSON.stringify(lines)}`);
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 0, `expected nothing queued on failure, got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: an unparseable engine move fails cleanly without mutating the line, prefs, or queue');
+  } catch(e){ bad('Perfect Opening: unparseable move fails cleanly', e); }
+} finally {
+  await appCX.close();
+}
+} catch(e){ bad('Phase CX: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

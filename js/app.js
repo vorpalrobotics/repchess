@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-301';
+const BUILD_TAG = '-302';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8918,6 +8918,131 @@ $('poResetBtn').onclick = async () => {
   await openPerfectOpeningPanel();   // refreshes every field back to defaults, keeps the modal open
 };
 
+/* ---------- Perfect Opening project: core expansion logic (Phase 3) ----------
+   processPerfectOpeningJob(job, config) does the actual work for ONE pending
+   expansion job -- callable in isolation (no scheduler/loop yet, that's
+   Phase 4). `job.seq` is a full move-SAN sequence from the game start; a
+   White job's seq ends on Black's last move (or is empty, for the very
+   first move); a Black job's seq ends on White's last move. Deliberately
+   does NOT touch the job's own queue entry (dequeuing/deleting it is a
+   scheduling concern, not a per-job-processing one) -- the caller removes
+   it from perfectOpeningQueue once this resolves successfully.
+
+   Reuses saveAnalysisQueueResult (the same eval/evalLines persistence the
+   real background analysis queue uses) so every node this generates gets
+   the same rich eval display as a manually-analyzed one, "improves over
+   what's saved" gating included.
+*/
+function poJobId(tag){
+  return `po:${Date.now()}:${Math.random().toString(36).slice(2,8)}:${tag}`;
+}
+// A raw UCI move (e.g. "e2e4", "e7e8q") -> its SAN in `fen`, or null if it
+// doesn't parse as a legal move there (shouldn't happen for a move the
+// engine itself just reported, but a defensive null is cheap insurance
+// against silently corrupting the tree with a bogus move string).
+function uciMoveToSan(fen, uciMove){
+  const chess = new Chess(fen);
+  const from = uciMove.slice(0,2), to = uciMove.slice(2,4), promotion = uciMove.slice(4,5) || undefined;
+  const mv = chess.move({from,to,promotion},{sloppy:true});
+  return mv ? mv.san : null;
+}
+// A single comparable number for tolerance filtering, treating any mate
+// score as more extreme than any realistic centipawn score (shorter mates
+// ranking further from zero in the intuitive direction) -- opening-position
+// mate scores are vanishingly rare at any real search depth, so this only
+// needs to be reasonable, not exhaustively precise.
+function scoreToComparable(score){
+  if(score.type === 'mate') return score.value > 0 ? 100000 - score.value : -100000 - score.value;
+  return score.value;
+}
+// Same shape/semantics as addManualReply (js/app.js, near savePrefField),
+// but parameterized by lineId/seq instead of assuming CURRENT_LINE -- the
+// Perfect Opening line is background-generated and not necessarily the
+// line currently open in the UI.
+async function addManualReplyTo(lineId, seq, move){
+  const existing = (await getPref(lineId, seq))?.manualReplies || [];
+  if(existing.includes(move)) return;
+  await setPref(lineId, seq, { manualReplies: [...existing, move] });
+}
+
+async function processPerfectOpeningJob(job, config){
+  const fen = fenForSeq(job.seq);
+
+  if(job.kind === 'white'){
+    const result = await engine.analyze(fen, { multipv: 1, depth: config.depth });
+    const ranks = Object.keys(result.lines || {});
+    if(!ranks.length) return { ok: false, reason: 'engine returned no line' };
+    const best = result.lines[1] || result.lines[ranks[0]];
+    if(!best?.pv?.length) return { ok: false, reason: 'engine line has no PV' };
+    const san = uciMoveToSan(fen, best.pv[0]);
+    if(!san) return { ok: false, reason: `unparseable move "${best.pv[0]}"` };
+
+    let lineId = config.lineId;
+    if(job.seq.length === 0){
+      // the very first move: (re)creates the line, or -- resuming a project
+      // that already has one -- just confirms/keeps it. Reset always clears
+      // lineId first, so a fresh project always takes the create branch.
+      if(!lineId){
+        const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [san] });
+        lineId = line.id;
+        config.lineId = lineId;
+        await setPerfectOpeningConfig(config);
+      } else {
+        await updateLine(lineId, { openingMoves: [san] });
+      }
+    } else {
+      await setPref(lineId, job.seq, { reply: san });
+    }
+    await saveAnalysisQueueResult({ lineId, seq: job.seq }, fen, result);
+
+    const childSeq = [...job.seq, san];
+    await addPerfectOpeningQueueItems([{ id: poJobId(san), kind: 'black', seq: childSeq, createdAt: Date.now() }]);
+    return { ok: true, move: san, spawned: 1 };
+  }
+
+  // Black job: multipv width comes from the move-number schedule (move
+  // number = how many full moves have been played so far, including this
+  // one -- a Black job's seq always ends on White's move, so seq.length is
+  // always odd and (seq.length+1)/2 is an integer).
+  const moveNumber = (job.seq.length + 1) / 2;
+  const maxLines = config.maxLines[moveNumber] ?? config.maxLines.default;
+  const result = await engine.analyze(fen, { multipv: maxLines, depth: config.depth });
+  await saveAnalysisQueueResult({ lineId: config.lineId, seq: job.seq }, fen, result);
+
+  const ranks = Object.keys(result.lines || {}).map(Number).sort((a,b) => a-b);
+  if(!ranks.length) return { ok: false, reason: 'engine returned no lines' };
+  const bestScore = scoreToComparable(result.lines[ranks[0]].score);
+  const survivors = [];
+  for(const r of ranks){
+    const line = result.lines[r];
+    if(!line?.score || !line.pv?.length) continue;
+    // ranks are engine-ordered best-first for the side to move, so once one
+    // rank falls outside tolerance every rank after it is at least as far out.
+    if(bestScore - scoreToComparable(line.score) > config.toleranceCp) break;
+    const san = uciMoveToSan(fen, line.pv[0]);
+    if(san) survivors.push(san);
+  }
+
+  const remainingBudget = Math.max(0, config.maxTotalVariations - config.totalVariations);
+  const toSpawn = survivors.slice(0, remainingBudget);
+  const newJobs = [];
+  for(const san of toSpawn){
+    await addManualReplyTo(config.lineId, job.seq, san);
+    newJobs.push({ id: poJobId(san), kind: 'white', seq: [...job.seq, san], createdAt: Date.now() });
+  }
+  if(newJobs.length) await addPerfectOpeningQueueItems(newJobs);
+
+  config.totalVariations += toSpawn.length;
+  // capped this job (either by budget or the survivor list itself running
+  // past budget) -- turn the project off so the scheduler stops attempting
+  // further expansion against an exhausted budget, same "reset turns it
+  // off too" spirit as resetPerfectOpening.
+  if(config.totalVariations >= config.maxTotalVariations) config.enabled = false;
+  await setPerfectOpeningConfig(config);
+
+  return { ok: true, survivors: toSpawn, spawned: toSpawn.length, truncatedByBudget: toSpawn.length < survivors.length };
+}
+
 /* writes a completed (or partially-completed, if interrupted) search result
    for one queue item straight to IDB, gated by the same "never regress"
    rule as recordEvalIfDeeper -- but also treating "same depth, strictly more
@@ -9558,8 +9683,11 @@ if(localStorage.getItem('threeTestDebug')){
 }
 
 // test-only hook for the Perfect Opening project's data layer (db.js) --
-// Phase 1: config storage + the expansion-job queue + reset. No engine, no
-// scheduling, no UI yet -- those are later phases.
+// Phase 1: config storage + the expansion-job queue + reset. Phase 3 adds
+// the actual per-job processor, driven against `engine` -- monkey-patch
+// engine.analyze via window.__aqTestHooks.engine (the same real Engine
+// instance the analysis queue's own tests already fake out) before calling
+// processJob, for a fast/deterministic result instead of a real WASM search.
 if(localStorage.getItem('threeTestDebug')){
   window.__perfectOpeningTestHooks = {
     defaultConfig: () => JSON.parse(JSON.stringify({
@@ -9579,6 +9707,8 @@ if(localStorage.getItem('threeTestDebug')){
     // without needing Phase 3's actual engine-driven expansion logic yet.
     seedLine: (opts) => createLine(LOCAL_USER, opts),
     getLines: () => getLines(LOCAL_USER),
+    processJob: (job, config) => processPerfectOpeningJob(job, config),
+    getPref: (lineId, seq) => getPref(lineId, seq),
   };
 }
 
