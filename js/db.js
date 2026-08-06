@@ -657,6 +657,21 @@ const PERFECT_OPENING_DEFAULT_CONFIG = {
   // comment) so it converges quickly after a depth/move-number transition
   // rather than staying skewed by a much slower or faster earlier move.
   avgJobMs: 0,
+  // 0 means "use whatever the engine reports as its own cores-1 ceiling"
+  // (engine.maxThreads), resolved at analyze()-call time rather than baked
+  // in here, since the right number is a property of whatever device is
+  // actually running the search, not something that should travel as a
+  // fixed number across a backup restored onto a different machine. Perfect
+  // Opening never runs while anything else needs the engine, so unlike the
+  // live panel/analysis queue's own (conservative, shared-with-the-user)
+  // thread selectors, defaulting to the hardware ceiling is the right
+  // default here, not just an option.
+  threads: 0,
+  // MB -- see engine.js's own Hash-related comments for why bigger helps a
+  // long unattended run (the transposition table stays warm across every
+  // job) and why this should be treated as a "set once" value: changing it
+  // reallocates (and therefore empties) the table.
+  hashMB: 512,
 };
 function cloneDefaultPerfectOpeningConfig(){
   return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines }, depth: { ...PERFECT_OPENING_DEFAULT_CONFIG.depth } };

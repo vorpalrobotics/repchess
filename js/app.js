@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260731-6';
+import { Engine } from './engine.js?v=20260804-7';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-310';
+const BUILD_TAG = '-311';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8918,6 +8918,23 @@ function renderPerfectOpeningStatusIfOpen(){
   if(!poModalOpen()) return;
   getPerfectOpeningConfig().then(config => renderPerfectOpeningStatus(config));
 }
+// mirrors populateThreadsSelect (the live panel's/Analysis Queue's own
+// selectors), but sourced from Perfect Opening's own IDB-backed config
+// instead of localStorage, and with an extra "Max available" choice (value
+// 0) as the sensible default here -- see PERFECT_OPENING_DEFAULT_CONFIG's
+// own comment on why maxing out is right for this one, unlike the other two.
+function populatePoThreadsSelect(config){
+  if(!engine.multithreaded || engine.maxThreads <= 1){
+    $('poThreadsField').style.display = 'none';
+    return;
+  }
+  const sel = $('poThreadsSelect');
+  sel.innerHTML = [`<option value="0">Max available (${engine.maxThreads})</option>`]
+    .concat(Array.from({length: engine.maxThreads}, (_, i) => i + 1).map(n => `<option value="${n}">${n}</option>`))
+    .join('');
+  sel.value = String(config.threads || 0);
+  $('poThreadsField').style.display = '';
+}
 async function openPerfectOpeningPanel(){
   $('menuList').style.display = 'none';
   const config = await getPerfectOpeningConfig();
@@ -8934,6 +8951,8 @@ async function openPerfectOpeningPanel(){
   $('poMaxLines3').value = config.maxLines[3];
   $('poMaxLines4').value = config.maxLines[4];
   $('poMaxLinesDefault').value = config.maxLines.default;
+  $('poHashMB').value = config.hashMB;
+  populatePoThreadsSelect(config);
   $('poError').style.display = 'none';
   $('perfectOpeningOverlay').style.display = 'flex';
   await renderPerfectOpeningStatus(config);
@@ -9015,9 +9034,14 @@ $('poSaveBtn').onclick = async () => {
   const maxLines3 = +$('poMaxLines3').value;
   const maxLines4 = +$('poMaxLines4').value;
   const maxLinesDefault = +$('poMaxLinesDefault').value;
+  const hashMB = +$('poHashMB').value;
+  // hidden (single-threaded build, or maxThreads<=1) means "no real choice
+  // to make" -- read whatever's already there so Save doesn't clobber a
+  // previously-saved value with 0 just because the field wasn't shown.
+  const threads = $('poThreadsField').style.display === 'none' ? undefined : +$('poThreadsSelect').value;
 
   const showError = (msg) => { $('poError').textContent = msg; $('poError').style.display = ''; };
-  const positiveFields = { 'total variation cap': maxTotalVariations,
+  const positiveFields = { 'total variation cap': maxTotalVariations, 'hash (MB)': hashMB,
     'move 1 depth': depth1, 'move 2 depth': depth2, 'move 3 depth': depth3, 'move 4 depth': depth4, 'beyond-move-4 depth': depthDefault,
     'move 1 max lines': maxLines1, 'move 2 max lines': maxLines2, 'move 3 max lines': maxLines3,
     'move 4 max lines': maxLines4, 'beyond-move-4 max lines': maxLinesDefault };
@@ -9032,6 +9056,8 @@ $('poSaveBtn').onclick = async () => {
   config.toleranceCp = toleranceCp;
   config.maxTotalVariations = maxTotalVariations;
   config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
+  config.hashMB = hashMB;
+  if(threads !== undefined) config.threads = threads;
   await setPerfectOpeningConfig(config);
   // a genuinely fresh enable (never built a line, nothing already queued)
   // needs its root job seeded -- every job after this one is spawned
@@ -9081,6 +9107,15 @@ function poJobMoveNumber(job){
 function poDepthForMove(config, moveNumber){
   return config.depth[moveNumber] ?? config.depth.default;
 }
+// { threads, hash } for every engine.analyze() call this job processor
+// makes -- config.threads:0 means "use the hardware ceiling" (Perfect
+// Opening never runs while anything else needs the engine, so unlike the
+// live panel/analysis queue's own conservative selectors, maxing out is the
+// right default here). engine.maxThreads is 1 on a single-threaded build,
+// so this degrades to "no override" there without any special-casing.
+function poEngineOptions(config){
+  return { threads: config.threads || engine.maxThreads, hash: config.hashMB };
+}
 // A raw UCI move (e.g. "e2e4", "e7e8q") -> its SAN in `fen`, or null if it
 // doesn't parse as a legal move there (shouldn't happen for a move the
 // engine itself just reported, but a defensive null is cheap insurance
@@ -9115,7 +9150,7 @@ async function processPerfectOpeningJob(job, config){
 
   if(job.kind === 'white'){
     const whiteDepth = poDepthForMove(config, poJobMoveNumber(job));
-    const result = await engine.analyze(fen, { multipv: 1, depth: whiteDepth });
+    const result = await engine.analyze(fen, { multipv: 1, depth: whiteDepth, ...poEngineOptions(config) });
     // a higher-priority caller (manual queue, live analysis) can preempt the
     // engine mid-search via its own internal _stopCurrent() -- that leaves a
     // shallow result we must not treat as authoritative. Bail out before any
@@ -9163,7 +9198,7 @@ async function processPerfectOpeningJob(job, config){
   const moveNumber = poJobMoveNumber(job);
   const maxLines = config.maxLines[moveNumber] ?? config.maxLines.default;
   const blackDepth = poDepthForMove(config, moveNumber);
-  const result = await engine.analyze(fen, { multipv: maxLines, depth: blackDepth });
+  const result = await engine.analyze(fen, { multipv: maxLines, depth: blackDepth, ...poEngineOptions(config) });
   if(result.depth < blackDepth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
   await saveAnalysisQueueResult({ lineId: config.lineId, seq: job.seq }, fen, result);
 
@@ -9935,6 +9970,7 @@ if(localStorage.getItem('threeTestDebug')){
       depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 }, toleranceCp: 50,
       maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
       maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0, avgJobMs: 0,
+      threads: 0, hashMB: 512,
     })),
     getConfig: () => getPerfectOpeningConfig(),
     setConfig: (config) => setPerfectOpeningConfig(config),

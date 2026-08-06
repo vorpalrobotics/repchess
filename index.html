@@ -1230,6 +1230,16 @@
       <label>Beyond:</label><input id="poMaxLinesDefault" type="number" min="1" max="50" style="width:55px">
     </div>
 
+    <h3 class="modal-h3">Engine resources</h3>
+    <p class="objlist-hint" style="margin-top:0">Perfect Opening never runs while the Analysis Queue or live analysis needs the engine, so it's safe to let it use everything available while it has the engine to itself.</p>
+    <div class="field">
+      <label>Hash (MB):</label><input id="poHashMB" type="number" min="16" max="8192" style="width:90px">
+    </div>
+    <div class="field" id="poThreadsField">
+      <label>Threads:</label>
+      <select id="poThreadsSelect"></select>
+    </div>
+
     <p id="poStatus" class="objlist-hint"></p>
     <p id="poError" class="objlist-hint" style="color:#c62828;display:none"></p>
 
@@ -1514,7 +1524,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-52"></script>
+<script src="js/db.js?v=20260804-53"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1531,6 +1541,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-310"></script>
+<script type="module" src="js/app.js?v=20260804-311"></script>
 </body>
 </html>

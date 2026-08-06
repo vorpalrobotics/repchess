@@ -45,6 +45,7 @@ export class Engine {
                              // cores-1, uncapped, so a caller can deliberately go past
                              // the conservative default when they want it to go faster
     this._currentThreads = 1;   // whatever Threads value is actually configured right now
+    this._currentHash = 0;      // whatever Hash (MB) value is actually configured right now -- see init()/analyze()
     this._initPromise = null;   // in-flight init() call, if any -- see init()
   }
 
@@ -101,7 +102,15 @@ export class Engine {
     this.threads = Math.min(this.maxThreads, 8);
     this._send(`setoption name Threads value ${this.threads}`);
     this._currentThreads = this.threads;
-    this._send('setoption name Hash value 128');
+    // 512MB (was 128) -- nothing here ever sends `ucinewgame`, so this
+    // transposition table stays warm across every analyze() call for the
+    // life of the worker (position/go per call, never cleared), and a
+    // background-only, potentially multi-day search like Perfect Opening's
+    // genuinely benefits from more headroom before entries start getting
+    // overwritten. A caller can still override per search via analyze()'s
+    // own `hash` option (see there for why that resets the table's contents).
+    this._send('setoption name Hash value 512');
+    this._currentHash = 512;
     await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
     this.multithreaded = true;
     this.ready = true;
@@ -132,6 +141,12 @@ export class Engine {
     // the rest of the page's life.
     try {
       await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
+      // previously left unset here (unlike _initThreaded), silently falling
+      // back to Stockfish's own tiny built-in default (typically 16MB) --
+      // a single-threaded fallback usually means a more constrained device/
+      // browser, so a modest explicit bump rather than _initThreaded's 512.
+      this._send('setoption name Hash value 64');
+      this._currentHash = 64;
       await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
     } finally {
       URL.revokeObjectURL(blobUrl);
@@ -261,7 +276,17 @@ export class Engine {
   // already-running search for a Threads change isn't worth it for
   // unattended background work -- but the live engine panel's thread-count
   // selector does, safely, now that this handshake exists).
-  async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads } = {}) {
+  // `hash` (MB), when given, overrides the Hash option for just this search
+  // -- also only re-sent when it differs from what's currently configured.
+  // Unlike Threads this doesn't respawn a pthread pool, just reallocates the
+  // transposition table, so a missed ack isn't a wedge risk the same way --
+  // worst case the search just runs one beat early against whichever size
+  // is still actually configured. IMPORTANT: resizing Hash empties the
+  // table's contents (a fresh allocation, not a resize-in-place), so a
+  // caller relying on cross-search cache warmth (Perfect Opening, walking a
+  // tree of related positions over a long unattended run) should treat this
+  // as a "set once and leave it" value, not something to fluctuate per call.
+  async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads, hash = this._currentHash } = {}) {
     await this._stopCurrent();
     let threadsFallback = null;
     if (this.multithreaded) {
@@ -323,6 +348,22 @@ export class Engine {
           threadsFallback = { requested: clampedThreads, using: this._currentThreads };
         }
       }
+    }
+    if (hash !== this._currentHash) {
+      this._send(`setoption name Hash value ${hash}`);
+      this._currentHash = hash;
+      await new Promise(resolve => {
+        let settled = false;
+        const timer = setTimeout(() => { if (!settled) { settled = true; this._listener = null; resolve(); } }, 4000);
+        this._listener = line => {
+          if (line !== 'readyok' || settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this._listener = null;
+          resolve();
+        };
+        this._send('isready');
+      });
     }
     this._send(`setoption name MultiPV value ${multipv}`);
     this._send(`position fen ${fen}`);

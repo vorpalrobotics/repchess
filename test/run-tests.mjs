@@ -3011,6 +3011,7 @@ try {
     engine.threads = 8;
     engine.maxThreads = 8;   // analyze()'s clamp ceiling -- see Phase VA's test 63 for an explicit override
     engine._currentThreads = 8;
+    engine._currentHash = 512;
     window.__engineFake = { sentCommands: [], isreadyPending: false, orderViolated: false };
     engine._send = (cmd) => {
       const f = window.__engineFake;
@@ -3069,6 +3070,34 @@ try {
       `expected a request past maxThreads to clamp to maxThreads (15), not the conservative default (8), got: ${JSON.stringify(f.sentCommands)}`);
     ok("analyze()'s threads clamp uses maxThreads (the hardware ceiling), not the conservative default");
   } catch(e){ bad('engine: threads clamp uses maxThreads, not the conservative default', e); }
+
+  // 63b. A `hash` override that differs from the currently-configured value
+  //      sends setoption + syncs via isready/readyok before the next go,
+  //      same handshake discipline as Threads (though for a different
+  //      underlying reason -- resizing Hash reallocates the transposition
+  //      table rather than respawning a pthread pool).
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, hash:1024 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(f.sentCommands.includes('setoption name Hash value 1024'), `expected the new Hash value to be sent, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(f.sentCommands.includes('isready'), `expected an isready sync after the Hash change, got: ${JSON.stringify(f.sentCommands)}`);
+    const goIdx = f.sentCommands.findIndex(c => c.startsWith('go '));
+    const readyIdx = f.sentCommands.indexOf('isready');
+    assert(readyIdx !== -1 && readyIdx < goIdx, `expected isready before go, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('changing Hash syncs via isready/readyok before the next go command');
+  } catch(e){ bad('engine: Hash change syncs before next search', e); }
+
+  // 63c. Calling analyze() again with the SAME (already-configured) hash
+  //      size must NOT resend setoption/isready.
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, hash:512 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(!f.sentCommands.some(c => c.startsWith('setoption name Hash')), `expected no Hash change when already at that size, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(!f.sentCommands.includes('isready'), `expected no isready sync when Hash didn't change, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('analyze() skips the Hash/isready sync when the size is already correct');
+  } catch(e){ bad('engine: no redundant Hash sync when unchanged', e); }
 } finally {
   await app22.close();
 }
@@ -14704,6 +14733,7 @@ try {
       m3: document.getElementById('poMaxLines3').value,
       m4: document.getElementById('poMaxLines4').value,
       beyond: document.getElementById('poMaxLinesDefault').value,
+      hashMB: document.getElementById('poHashMB').value,
     }));
     assert(fields.enabled === false, `expected the checkbox unchecked by default, got ${fields.enabled}`);
     assert(fields.depth1 === '20' && fields.depth2 === '20' && fields.depth3 === '20' && fields.depth4 === '20' && fields.depthBeyond === '20',
@@ -14712,8 +14742,44 @@ try {
       `expected the documented defaults (tolerance 50, cap 50000), got ${JSON.stringify(fields)}`);
     assert(fields.m1 === '10' && fields.m2 === '8' && fields.m3 === '6' && fields.m4 === '6' && fields.beyond === '6',
       `expected the default 10/8/6/6/6 max-lines schedule, got ${JSON.stringify(fields)}`);
+    assert(fields.hashMB === '512', `expected the default Hash of 512MB, got ${fields.hashMB}`);
     ok('Perfect Opening: hamburger menu item opens the panel pre-filled with defaults');
   } catch(e){ bad('Perfect Opening: panel opens with defaults', e); }
+
+  // 261b. The Threads selector is hidden on a single-threaded build (no
+  //       real choice to make -- same rule as the live panel's/Analysis
+  //       Queue's own selectors), and shows 1..maxThreads plus a "Max
+  //       available" option once a multi-threaded build is faked in,
+  //       defaulting to "Max available" (0) rather than any specific count.
+  try {
+    await appCW.page.click('#poCancelBtn');
+    const hiddenWhileSingleThreaded = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click())
+      .then(() => appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 }))
+      .then(() => appCW.page.evaluate(() => document.getElementById('poThreadsField').style.display === 'none'));
+    assert(hiddenWhileSingleThreaded, 'expected the Threads field hidden on a single-threaded build (the harness\'s real default)');
+    await appCW.page.click('#poCancelBtn');
+
+    await appCW.page.evaluate(() => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = true;
+      engine.maxThreads = 6;
+    });
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const threadsField = await appCW.page.evaluate(() => ({
+      visible: document.getElementById('poThreadsField').style.display !== 'none',
+      options: [...document.getElementById('poThreadsSelect').options].map(o => o.value),
+      value: document.getElementById('poThreadsSelect').value,
+    }));
+    assert(threadsField.visible, 'expected the Threads field to show once a multi-threaded build is faked in');
+    assert(JSON.stringify(threadsField.options) === JSON.stringify(['0','1','2','3','4','5','6']),
+      `expected options 0 (Max available) through maxThreads (6), got ${JSON.stringify(threadsField.options)}`);
+    assert(threadsField.value === '0', `expected the default selection to be "Max available" (0), got ${threadsField.value}`);
+    // deliberately left open (multithreaded still faked in) -- the next
+    // test continues filling fields on this same open panel, same
+    // established convention every other field-editing test here follows.
+    ok('Perfect Opening: Threads selector hidden on single-threaded, defaults to "Max available" otherwise');
+  } catch(e){ bad('Perfect Opening: Threads selector visibility/default', e); }
 
   // 262. Editing fields and clicking Save persists every value to the real
   //      config storage (not just the DOM), and closes the modal.
@@ -14730,6 +14796,8 @@ try {
     await appCW.page.fill('#poMaxLines3', '5');
     await appCW.page.fill('#poMaxLines4', '5');
     await appCW.page.fill('#poMaxLinesDefault', '4');
+    await appCW.page.fill('#poHashMB', '1024');
+    await appCW.page.selectOption('#poThreadsSelect', '3');
     await appCW.page.check('#poEnabledCheckbox');
     await appCW.page.click('#poSaveBtn');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
@@ -14741,6 +14809,8 @@ try {
       `expected the edited depth schedule (deep-then-shallow) persisted, got ${JSON.stringify(config.depth)}`);
     assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
       `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
+    assert(config.hashMB === 1024, `expected the edited Hash (1024) persisted, got ${config.hashMB}`);
+    assert(config.threads === 3, `expected the edited Threads (3) persisted, got ${config.threads}`);
     assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
     ok('Perfect Opening: Save persists every field to real config storage without creating a line');
   } catch(e){ bad('Perfect Opening: Save persists all fields', e); }
@@ -15020,6 +15090,34 @@ try {
       `expected a depth-35 result to be recognized as preempted against move 1's own depth-50 target, got ${JSON.stringify(preemptResult)}`);
     ok('Perfect Opening: search depth follows the per-move-number schedule, judged against each job\'s own target');
   } catch(e){ bad('Perfect Opening: depth schedule + move-specific preemption check', e); }
+
+  // 271c. config.threads/hashMB flow into every engine.analyze() call this
+  //       job processor makes -- threads:0 (the default, "use whatever's
+  //       available") resolves against engine.maxThreads at call time
+  //       rather than being sent as a literal 0.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    await appCX.page.evaluate(() => { window.__aqTestHooks.engine.maxThreads = 7; });
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.threads = 0;
+    config.hashMB = 777;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 50, pv: ['e2e4'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    let opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(opts.threads === 7, `expected threads:0 to resolve to engine.maxThreads (7), got ${opts.threads}`);
+    assert(opts.hash === 777, `expected the configured hashMB (777) passed through as-is, got ${opts.hash}`);
+
+    // an explicit (non-zero) threads choice is passed through untouched,
+    // not overridden by maxThreads.
+    config.threads = 2;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(opts.threads === 2, `expected an explicit threads choice (2) to be passed through, not overridden by maxThreads, got ${opts.threads}`);
+    ok('Perfect Opening: config.threads/hashMB flow into every engine.analyze() call, threads:0 resolving to the hardware ceiling');
+  } catch(e){ bad('Perfect Opening: threads/hash options flow into engine.analyze()', e); }
 
   // 272. The total variation cap truncates spawning mid-batch and
   //      auto-disables the project once reached -- a genuinely destructive-
