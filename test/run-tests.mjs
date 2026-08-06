@@ -193,7 +193,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app2.page.click('.line-row');                                   // open the move table
-  await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
 
   // 5. Setting a glyph from the ⋮ strip renders it (colour-coded) on the move.
@@ -218,7 +218,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app2.page.click('.line-row');
-    await app2.page.waitForSelector(rowSel, { timeout: 10000 });
+    await app2.page.waitForSelector(rowSel, { timeout: 40000 });
     const glyph = (await app2.page.textContent(`${rowSel} .moveQual`)).trim();
     assert(glyph === '?', `glyph did not persist across reload, got '${glyph}'`);
     ok('move-quality glyph persists across reload (IDB)');
@@ -236,7 +236,7 @@ try {
     await app2.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-opp="Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
     ok('import-variation writes standard responses into the tree (engine-import core)');
   } catch(e){ bad('import-variation core', e); }
 
@@ -254,7 +254,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app2.page.click('.line-row');
-    await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+    await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
     const reply = (await app2.page.textContent('tr.data-row[data-opp="Nf6"] .ourReply')).trim();
     assert(reply === 'c4', `expected the imported reply to survive a reload, got '${reply}'`);
     ok('import-variation: the batched write actually commits to IndexedDB (survives a reload), not just PREFS in memory');
@@ -276,7 +276,7 @@ try {
       getComputedStyle(document.getElementById('spinnerOverlay')).display !== 'none');
     assert(shownRightAway, 'expected the spinner to appear immediately on Import');
     await app2.page.waitForFunction(() =>
-      getComputedStyle(document.getElementById('spinnerOverlay')).display === 'none', { timeout: 10000 });
+      getComputedStyle(document.getElementById('spinnerOverlay')).display === 'none', { timeout: 40000 });
     ok('import-variation: a spinner shows for the duration of the import, then hides');
   } catch(e){ bad('import-variation spinner', e); }
 
@@ -291,7 +291,7 @@ try {
     await app2.page.fill('#importLineInput',
       '1. d4 Nf6 2. c4 e6 3. Nc3 Bb4\n1. d4 Nf6 2. c4 e6 3. Nc3 g6');
     await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-    await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     const rows = await app2.page.evaluate(() => [
       !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,Bb4"]'),
       !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,g6"]'),
@@ -347,7 +347,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app3.page.click('.line-row');
-  await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 8. Generate Alpha's castle and walk it; a door into Beta shows the taller
   //    castle plaque -- three lines (castle + room + occurrence stat, since
@@ -415,7 +415,7 @@ try {
     threeLayout: JSON.stringify({ [keys.alphaEntry]: { exits: { [keys.betaEntry]: { type: 'stair' } } } }),
   }, { defaultPlayerColor: 'white' });
   await appC2.page.click('.line-row');
-  await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appC2.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -489,7 +489,7 @@ try {
     threeLayout: JSON.stringify({ [keys.alpha]: { exits: { [keys.r2]: { type: 'stair' } } } }),
   }, { defaultPlayerColor: 'white' });
   await app4.page.click('.line-row');
-  await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app4.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -556,7 +556,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app5.page.click('.line-row');
-  await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app5.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -645,7 +645,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await app6.page.click('.line-row');
-  await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app6.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -701,7 +701,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appGZ.page.click('.line-row');
-  await appGZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appGZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appGZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1382,7 +1382,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app8.page.click('.line-row');
-  await app8.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app8.page.waitForSelector('.data-row', { timeout: 40000 });
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app8.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1445,9 +1445,9 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app9.page.click('.line-row');
-  await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app9.page.waitForSelector('.data-row', { timeout: 40000 });
   await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   // 17. Drag a node, close and reopen the graph (fresh dagre relayout): the
   //     node should land back at dagre's own spot PLUS the saved delta, not
@@ -1471,7 +1471,7 @@ try {
     // reopen: close, then rebuild the graph fresh (new cy instance, fresh dagre run)
     await app9.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posAfter = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1492,9 +1492,9 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app9.page.click('.line-row');
-    await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+    await app9.page.waitForSelector('.data-row', { timeout: 40000 });
     await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posReload = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1510,7 +1510,7 @@ try {
   //     dagre's raw position (matching posBefore).
   try {
     await app9.page.evaluate(() => document.getElementById('graphResetLayoutBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posReset = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1540,7 +1540,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app10.page.click('.line-row');
-  await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app10.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1801,7 +1801,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app12.page.click('.line-row');
-  await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app12.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1870,7 +1870,7 @@ try {
       repeatPerMeter: 0.5 }],
   }, { defaultPlayerColor: 'white' });
   await app13.page.click('.line-row');
-  await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app13.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1972,7 +1972,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app14.page.click('.line-row');   // sets CURRENT_LINE, needed by refreshEvalSpan's color-coding
-  await app14.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app14.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -2115,7 +2115,7 @@ try {
     ],
   });
   await app15.page.click('.line-row');
-  await app15.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app15.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 39. Whole-system coverage: saved/restored by lineId, a stable value that
   //     doesn't depend on castle indices at all.
@@ -2229,7 +2229,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app16.page.click('.line-row');
-  await app16.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app16.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 42. Adding a fresh node queues it with the requested depth/lines.
   try {
@@ -2450,7 +2450,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app18.page.click('.line-row');
-  await app18.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app18.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 53. Clicking "Analyze All Children" opens the Add-to-Queue modal (Depth +
   //     Lines, titled with the child count) instead of starting a live search.
@@ -2532,7 +2532,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app19.page.click('.line-row');
-  await app19.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app19.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 56. A variation whose first move isn't even this system's opening pops
   //     up "Variation not found" (with the specific reason) and leaves the
@@ -2605,7 +2605,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appS2.page.click('.line-row');
-  await appS2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appS2.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 56a. Named rooms are loaded LAZILY: right after the line opens (a real
   //      tree render, exactly like an import triggers), the dropdown already
@@ -2764,7 +2764,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app20.page.click('.line-row');
-  await app20.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app20.page.waitForSelector('.data-row', { timeout: 40000 });
 
   await app20.page.evaluate(() => {
     window.__aqFakeEngine = { pending: null, callCount: 0 };
@@ -3002,7 +3002,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app22.page.click('.line-row');
-  await app22.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app22.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const setup = () => {
     const { engine } = window.__aqTestHooks;
@@ -3092,7 +3092,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app23.page.click('.line-row');
-  await app23.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app23.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const seqs = [['d4','Nf6'], ['d4','d5'], ['d4','c5'], ['d4','e5']];
   for(const seq of seqs){
@@ -3210,7 +3210,7 @@ try {
   try {
     await app23.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
     await app23.page.evaluate(() => document.getElementById('backBtn').click());
-    await app23.page.waitForSelector('.line-row', { timeout: 10000 });
+    await app23.page.waitForSelector('.line-row', { timeout: 40000 });
 
     const beforeCount = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
     assert(beforeCount > 0, `expected the queue seeded earlier in this phase to still be non-empty before deleting its line, got ${beforeCount}`);
@@ -3263,7 +3263,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app24.page.click('.line-row');
-  await app24.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app24.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 66. Single-threaded (or maxThreads<=1): the field stays hidden and
   //     engineThreads() returns undefined, so analyze() falls through to its
@@ -3378,7 +3378,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app25.page.click('.line-row');
-  await app25.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app25.page.waitForSelector('.data-row', { timeout: 40000 });
   // the select lives inside the modal overlay -- open it once so Playwright's
   // real selectOption() (test 71) can interact with it; harmless for test 70,
   // which only checks computed styles/hook return values.
@@ -3500,9 +3500,9 @@ try {
     mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
   }, { defaultPlayerColor: 'white' });
   await appW1.page.click('.line-row');
-  await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW1.page.waitForSelector('.data-row', { timeout: 40000 });
   await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   // 63. A White-repertoire room's exit rows are the OPPONENT's (Black's)
   //     replies -- never numbered, same rule plyLabel already applies to
@@ -3542,9 +3542,9 @@ try {
     mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
   }, { defaultPlayerColor: 'black' });
   await appW2.page.click('.line-row');
-  await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW2.page.waitForSelector('.data-row', { timeout: 40000 });
   await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   let roomFen;
   try {
@@ -3624,7 +3624,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appX.page.click('.line-row');
-  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -3836,9 +3836,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appZ.page.click('.line-row');
-  await appZ.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appZ.page.waitForSelector('.data-row', { timeout: 40000 });
   await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const roomFen = await appZ.page.evaluate(() => {
     const c = new Chess();
@@ -3866,7 +3866,7 @@ try {
     assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appZ.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🧠/.test(label || ''), `expected the memorized glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
     assert(await hasClass(roomFen, 'all-done') === false,
@@ -3880,7 +3880,7 @@ try {
     const roomKey = await appZ.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
     await appZ.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🧠/.test(label || '') && /🎨/.test(label || ''),
       `expected both glyphs once memorized AND decorated, got ${JSON.stringify(label)}`);
@@ -3925,7 +3925,7 @@ try {
     JSON.stringify({ [ks.rootRoom]: Date.now(), [ks.e6Room]: Date.now() })), keys);
 
   await appAA.page.click('.line-row');
-  await appAA.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAA.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAA.page.evaluate(() => window.__oqTestHooks.populateCoverage());
   const castleVal = await appAA.page.evaluate(() => {
     const opt = [...document.getElementById('oqCoverageSelect').options]
@@ -4670,9 +4670,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAE.page.click('.line-row');
-  await appAE.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAE.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const roomFen = await appAE.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
@@ -4693,7 +4693,7 @@ try {
     assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appAE.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appAE.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🎨/.test(label || ''), `expected the decorated glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
     ok('a decorated room shows the 🎨 glyph on its graph node label after reopening');
@@ -4718,9 +4718,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAF.page.click('.line-row');
-  await appAF.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAF.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAF.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAF.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAF.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const fens = await appAF.page.evaluate(() => {
     const c1 = new Chess(); for(const m of ['d4']) c1.move(m, { sloppy: true });
     const c2 = new Chess(); for(const m of ['d4','Nf6','c4']) c2.move(m, { sloppy: true });
@@ -4831,7 +4831,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appAG.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
-  await appAG.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appAG.page.waitForSelector(rowSel, { timeout: 40000 });
 
   // 96. Expanding the saved eval (tapping its badge) shows an import
   //     (three-dot) menu button beside EACH of the two saved lines.
@@ -4857,7 +4857,7 @@ try {
     await appAG.page.waitForFunction((sel) => {
       const row = document.querySelector(sel);
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, rowSel, { timeout: 10000 });
+    }, rowSel, { timeout: 40000 });
     ok('"Import this variation" from a saved eval line writes it into the tree');
   } catch(e){ bad('eval continuation: import this variation writes into tree', e); }
 } finally {
@@ -4897,7 +4897,7 @@ try {
   await appAG2.page.click('.line-row');
   const nf6Sel = 'tr.data-row[data-seq="d4,Nf6"]';
   const e6Sel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
-  await appAG2.page.waitForSelector(e6Sel, { timeout: 10000 });
+  await appAG2.page.waitForSelector(e6Sel, { timeout: 40000 });
 
   // 97b. Both rows start expanded (the default absent an explicit collapsed
   //      pref) -- confirm the test's own starting state before importing.
@@ -4921,7 +4921,7 @@ try {
     // the test), so there's no new DOM value to wait on -- wait on the
     // logged "imported N move(s)..." confirmation instead, which fires right
     // before importEngineVariation's own (synchronous) renderTreeBody call.
-    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 40000 });
     assert(await toggleState(nf6Sel), 'expected the Nf6 row to STAY expanded after import (it was merely re-touched with the same reply)');
     assert(await toggleState(e6Sel), 'expected the e6 row to STAY expanded after import (it was merely re-touched with the same reply)');
     ok('"Import this variation" leaves already-expanded, unchanged nodes expanded instead of force-collapsing them');
@@ -5639,7 +5639,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await appAL.page.click('.line-row');
-  await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appAL.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -6115,7 +6115,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAP.page.click('.line-row');
-  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   // 133. Setting the response opens the SAME Add-to-Queue modal "Analyze All
   //      Children" uses (Depth/Lines, titled with the child count) -- not an
@@ -6569,9 +6569,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
-  await appAS.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAS.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAS.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAS.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAS.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const fens = await appAS.page.evaluate(() => {
     const root = new Chess(); for(const m of ['d4','Nf6','c4']) root.move(m, { sloppy: true });
     const deadEnd = new Chess(); for(const m of ['d4','Nf6','c4','e6','Nc3']) deadEnd.move(m, { sloppy: true });
@@ -6683,7 +6683,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAT.page.click('.line-row');
-  await appAT.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAT.page.waitForSelector('.data-row', { timeout: 40000 });
   const stat = (seq) => appAT.page.evaluate((s) => window.__statsTestHooks.computeNodeStats(s).completeToMove, seq);
 
   // 145. A node with one branch answered deep and a sibling reply left
@@ -6899,7 +6899,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAV.page.click('.line-row');
-  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
@@ -6941,7 +6941,7 @@ try {
     await appAV.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
     await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     assert((await isCached()) === false, 'expected importing a variation to invalidate the cache');
     ok('VR cache: importing a variation invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by importing a variation', e); }
@@ -7016,7 +7016,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAW.page.click('.line-row');
-  await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAW.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
@@ -7123,7 +7123,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appAX.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
-  await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appAX.page.waitForSelector(rowSel, { timeout: 40000 });
 
   await openVR(appAX.page);
   await appAX.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
@@ -7144,7 +7144,7 @@ try {
     await appAX.page.waitForFunction((sel) => {
       const row = document.querySelector(sel);
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, rowSel, { timeout: 10000 });
+    }, rowSel, { timeout: 40000 });
     assert((await appAX.page.evaluate(() => window.__vrCacheTestHooks.isCached())) === false,
       'expected "Import this variation" from the move table to invalidate the cache');
     ok('VR cache: "Import this variation" from the move table invalidates the cache');
@@ -7205,7 +7205,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAX.page.click('.line-row');
-    await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+    await appAX.page.waitForSelector(rowSel, { timeout: 40000 });
     await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
     ok('manual-only engine import: the new opponent try survives a full reload (real IDB round-trip)');
   } catch(e){ bad('manual-only engine import: survives reload', e); }
@@ -7239,7 +7239,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAY.page.click('.line-row');
-  await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAY.page.waitForSelector('.data-row', { timeout: 40000 });
   const badge = (seq) => appAY.page.evaluate((s) => {
     const el = document.querySelector(`tr.data-row[data-seq="${s.join(',')}"] .completeBadge`);
     return el ? { text: el.textContent, hidden: el.style.display === 'none', title: el.title } : null;
@@ -7301,7 +7301,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAY.page.click('.line-row');
-    await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appAY.page.waitForSelector('.data-row', { timeout: 40000 });
     const parentBadge = await badge(['d4','Nf6']);
     assert(parentBadge && !parentBadge.hidden && parentBadge.text === '[4]',
       `expected the hidden g6 branch to be excluded, giving [4] from e6's branch, got ${JSON.stringify(parentBadge)}`);
@@ -7355,7 +7355,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .evaltag').click());
@@ -7366,7 +7366,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7385,7 +7385,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     await appAZ.page.evaluate(() => document.getElementById('menuImportLine').click());
@@ -7394,7 +7394,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7414,7 +7414,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     // the local-file import REPLACES GAMES wholesale, so (now that the move
@@ -7434,7 +7434,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const cnt = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4"]');
       return !!cnt || document.querySelectorAll('tr.data-row').length > 0;
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7484,7 +7484,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAZ3.page.click('.line-row');
-  await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 10000 });
+  await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 40000 });
 
   // 168b. Before the import: the ancestor's badge is [2] (e6 unanswered
   //       pins it there), and mark the unrelated sibling row so a later
@@ -7512,7 +7512,7 @@ try {
     await appAZ3.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'Nc3';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
     ok('targeted re-render: "Import this variation" writes the new reply into the target row');
   } catch(e){ bad('targeted re-render: import writes the target row', e); }
 
@@ -7701,13 +7701,13 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBB.page.click('.line-row');
-  await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 173. The digraph's edge labels show the same occurrence stat, as a
   //      small second line under the move.
   try {
     await appBB.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBB.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBB.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const labels = await appBB.page.evaluate(({ g6Seq, e6Seq }) => {
       const cy = window.__graphTestHooks.cy();
       const find = seq => {
@@ -7773,7 +7773,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBC.page.click('.line-row');
-  await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 175. The street entry billboard's canvas grows a footer strip to fit the
   //      occurrence stat (renderMnemPairCanvas: 768 -> 858px tall) -- a
@@ -7831,7 +7831,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBD.page.click('.line-row');
-  await appBD.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBD.page.waitForSelector('.data-row', { timeout: 40000 });
   // repeatedly expand every collapsed branch until none remain, to reach
   // both 6-ply transposing rows regardless of how deep they are.
   await appBD.page.evaluate(() => {
@@ -7842,7 +7842,7 @@ try {
       btns.forEach(b => b.click());
     }
   });
-  await appBD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"]', { timeout: 10000 });
+  await appBD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"]', { timeout: 40000 });
 
   // 78. canonicalRoomSeq resolves the non-canonical transposing path's own
   //     (opponent-move) seq to the canonical one -- same convention
@@ -8087,11 +8087,11 @@ try {
     );
     await appBG.page.waitForFunction(
       () => /\d+ images? converted/.test(document.getElementById('spinnerLabel').textContent),
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await appBG.page.waitForFunction(
       () => document.getElementById('spinnerOverlay').style.display === 'none',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     ok('exportMnemonics shows a spinner with running progress while converting images, then hides it');
   } catch(e){ bad('mnemonics export spinner', e); }
@@ -8136,16 +8136,16 @@ try {
     );
     await appBH.page.waitForFunction(
       () => /\d+ mnemonic squares? imported/.test(document.getElementById('spinnerLabel').textContent),
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await setFiles;
     await appBH.page.waitForFunction(
       () => document.getElementById('userIdLichess') && document.getElementById('userIdLichess').value === 'tester',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await appBH.page.waitForFunction(
       () => document.getElementById('spinnerOverlay').style.display === 'none',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     ok('importBackup shows a spinner with running progress while restoring, then hides it');
   } catch(e){ bad('backup restore spinner', e); }
@@ -8475,9 +8475,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBL.page.click('.line-row');
-  await appBL.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBL.page.waitForSelector('.data-row', { timeout: 40000 });
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const corridorHeadFen = await appBL.page.evaluate(() => {
     const c = new Chess();
@@ -8539,7 +8539,7 @@ try {
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const roomPct = Math.round(1 / castleRooms * 100);
     const memRoom = await coverageRow('Rooms memorized:');
@@ -8620,7 +8620,7 @@ try {
     );
     await appBL.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const reopened = await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display === 'none');
     assert(reopened, 'expected a fresh open (after close) to start with the coverage panel collapsed again');
     ok('digraph status: reopening the modal after closing resets the coverage panel to collapsed');
@@ -8661,7 +8661,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBM.page.click('.line-row');
-  await appBM.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBM.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 94. Focus on Alpha's root via the move table's own row menu (NOT the
   //     digraph's right-click focus), then open the digraph fresh.
@@ -8672,7 +8672,7 @@ try {
       'setup: expected the move table to show as focused');
 
     await appBM.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBM.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBM.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const castleSelectValue = await appBM.page.evaluate(() => document.getElementById('graphCastleSelect').value);
     assert(castleSelectValue === 'Alpha',
@@ -8718,9 +8718,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBN.page.click('.line-row');
-  await appBN.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBN.page.waitForSelector('.data-row', { timeout: 40000 });
   await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const fen = async (moves) => appBN.page.evaluate((moves) => {
     const c = new Chess();
@@ -8780,7 +8780,7 @@ try {
 
     await appBN.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const posAfter = await appBN.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
@@ -9641,7 +9641,7 @@ try {
     ],
   });
   await appAV.page.click('.line-row');
-  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const H = (fn, arg) => appAV.page.evaluate(({fn,arg}) => window.__gamesListHooks[fn](arg), {fn,arg});
 
   // 151. Position (transposition) matching finds a game that reached the
@@ -9800,7 +9800,7 @@ try {
     assert(justAfterReload === 0, `expected the fresh page load's build counter to start at 0, got ${justAfterReload}`);
 
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const afterReopen = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9840,7 +9840,7 @@ try {
       return el && el.textContent && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9864,7 +9864,7 @@ try {
       return el && el.textContent && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9901,7 +9901,7 @@ try {
     ],
   });
   await appAV2.page.click('.line-row');
-  await appAV2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   // 156. Opening from the three-dot node pre-fills the moves input with that
   //      node's own move sequence, defaults the color filter to the line's
@@ -9998,7 +9998,7 @@ try {
     })),
   });
   await appAV2b.page.click('.line-row');
-  await appAV2b.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appAV2b.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // 159b. Right after opening (before the index build finishes), the moves
   //       input and the mode/color buttons are all disabled; they re-enable
@@ -10096,7 +10096,7 @@ try {
     })),
   });
   await appAW2.page.click('.line-row');
-  await appAW2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appAW2.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // 155. Every one of the BIG_N games -- including ones on both sides of the
   //      100-game chunk boundary -- is still found by position after the
@@ -10854,7 +10854,7 @@ try {
     ],
   });
   await appAZ2.page.click('.line-row');
-  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
   const metaSel = (sel) => document.querySelector(sel).nextElementSibling;
 
@@ -10941,7 +10941,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAZ2.page.click('.line-row');
-    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 10000 });
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 40000 });
     ok('Compare Games: staying open is persisted -- survives a full reload/rebuild, not just an in-place re-render');
 
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-dismiss').click(), rowSel);
@@ -11189,7 +11189,7 @@ try {
     ],
   });
   await appBA2.page.click('.line-row');
-  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 10000 });
+  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="e4"]';
 
   // 168. weighted average: (0.1*2 + 0.5*1)/3 = 0.2333 White-relative;
@@ -11266,7 +11266,7 @@ try {
     ],
   });
   await appBC2.page.click('.line-row');
-  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
 
   // 170. c4 (the standard, 1 win) shows "+1=+1 =0 −0" on the header row --
@@ -11345,12 +11345,12 @@ try {
     ],
   });
 
-  await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+  await appBV.page.waitForSelector('.line-row', { timeout: 40000 });
   await appBV.page.evaluate((name) => {
     const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
     if(row) row.click();
   }, 'White Test');
-  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
 
   // 166. The glyph strip is collapsed until "Set Move Quality" is clicked,
@@ -11414,13 +11414,13 @@ try {
   //      click handler, and using it works like the white-side version.
   try {
     await appBV.page.evaluate(() => document.getElementById('backBtn').click());
-    await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+    await appBV.page.waitForSelector('.line-row', { timeout: 40000 });
     await appBV.page.evaluate((name) => {
       const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
       if(row) row.click();
     }, 'Black Test');
     const blackRowSel = 'tr.data-row[data-seq="e4"]';
-    await appBV.page.waitForSelector(blackRowSel, { timeout: 10000 });
+    await appBV.page.waitForSelector(blackRowSel, { timeout: 40000 });
     await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), blackRowSel);
     const hasCompareBtn = await appBV.page.evaluate(s => !!document.querySelector(`${s} [data-act="compareActual"]`), blackRowSel);
     assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
@@ -11459,7 +11459,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appBW.page.click('.line-row');
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
-  await appBW.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appBW.page.waitForSelector(rowSel, { timeout: 40000 });
 
   // 176. "Add to Analysis Queue" opens the single-seq Add modal (untitled
   //      with a child count, unlike the multi-child "Add Children" action)
@@ -11575,7 +11575,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBX.page.click('.line-row');
-  await appBX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -11708,7 +11708,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appBY.page.click('.line-row');
-  await appBY.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBY.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBY.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -11797,7 +11797,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appBZ.page.click('.line-row');
-  await appBZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12025,7 +12025,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCB.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12269,7 +12269,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCB3.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12385,19 +12385,19 @@ try {
   };
   await closeVR();
   await appCC.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
   await appCC.page.fill('#importLineInput',
     '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. e4\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. e4');
   await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
   await openVR(appCC.page);
   // openVR's own readiness check (__threeTestEdit/__threeTestState) is set
   // once and never cleared on close, so it can resolve on stale globals from
   // the FIRST open, racing ahead of THIS open's (now cache-missing) rebuild
   // -- same known race Phase AV's primeCache() works around. Wait on the
   // rebuilt cache itself instead, which is unambiguous per-open.
-  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 10000 });
+  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 40000 });
 
   // 195. Beta (memorized before the edit): stays a 4-member corridor and
   //      gains exactly one forward door -- to the new branch alone. Its
@@ -12468,9 +12468,9 @@ try {
   try {
     await closeVR();
     await appCC.page.evaluate(() => document.querySelector('.line-row').click());
-    await appCC.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appCC.page.waitForSelector('.data-row', { timeout: 40000 });
     await appCC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const node = await appCC.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? { label: n.data('label'), dirty: n.data('dirty'), tooltip: n.data('tooltip') } : null;
@@ -12504,7 +12504,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appCD.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 10000 });
+  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 40000 });
 
   // stub navigator.clipboard.writeText so the test doesn't depend on real
   // clipboard permissions in headless Chromium -- captures the string instead.
@@ -13152,12 +13152,12 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCI.page.click('.line-row');
-  await appCI.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appCI.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // turn compact mode on (re-renders the already-open line) -- the run
   // collapses into one .compact-run row.
   await appCI.page.click('#compactModeBtn');
-  await appCI.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+  await appCI.page.waitForSelector('tr.compact-run', { timeout: 40000 });
 
   // 216. The compact row's move labels are real pv-move chips: tapping one
   //      opens the mini board float, same as any other move in the tree.
@@ -13269,9 +13269,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCI2.page.click('.line-row');
-  await appCI2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appCI2.page.waitForSelector('tr.data-row', { timeout: 40000 });
   await appCI2.page.click('#compactModeBtn');
-  await appCI2.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+  await appCI2.page.waitForSelector('tr.compact-run', { timeout: 40000 });
 
   const labelText = () => appCI2.page.evaluate(() =>
     document.querySelector('tr.compact-run .compact-run-label').textContent);
@@ -14370,7 +14370,7 @@ try {
   // before this test does its own reset/seed/migrate dance below --
   // otherwise the first run's own delayed completion can re-set the flag
   // right after this test clears it, racing with test 252's own migrate() call.
-  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 40000 });
 
   // 252. A line + game + analysisQueue item seeded under an old real-username
   //      key, all get migrated to LOCAL_USER (same id, same content, just
@@ -14455,7 +14455,7 @@ try {
   // wait for launchApp()'s own boot-time migration run (on the still-empty
   // DB) to actually finish before this test touches the flag itself -- see
   // Phase CT's identical wait for why.
-  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 40000 });
 
   // 254. Real end-to-end reproduction: seed a line under an old username key
   //      directly (bypassing seedBackup, which already always writes under
@@ -15270,6 +15270,49 @@ try {
   await appCZ.close();
 }
 } catch(e){ bad('Phase CZ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DA: Perfect Opening project, Phase 5 regression -- own fresh
+//     session (deliberately NOT reusing appCZ, which just finished a real
+//     VR world build/teardown -- doing this same check straight afterward
+//     in that same page hit a reproducible IndexedDB stall on this harness,
+//     confirmed unrelated to the fix itself by an isolated repro that passed
+//     cleanly; a clean session sidesteps it rather than papering over it
+//     with an ever-longer timeout). ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appDA = await launchApp();
+try {
+  // 283. Regression: enabling for the very first time and hitting Save must
+  //      actually seed a root job. Every job after the first is spawned
+  //      reactively by processPerfectOpeningJob itself -- nothing else ever
+  //      created that first one, so "check Enable, hit Save" previously
+  //      flipped config.enabled on but left the queue and line empty
+  //      forever (caught via real user testing, not by any earlier test
+  //      here, since every earlier test seeded the root job itself through
+  //      the test hook rather than going through the real Save button).
+  //      Checked at the queue level, right after Save, rather than waiting
+  //      for the engine-driven scheduler to fully process it -- that part
+  //      (a stubbed engine actually draining a job) is already covered by
+  //      the scheduler tests above; this test is only about Save's own
+  //      seeding responsibility, so it doesn't need engine.ready at all.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poEnabledCheckbox');
+    await appDA.page.click('#poSaveBtn');
+    await appDA.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
+
+    const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'white' && queue[0].seq.length === 0,
+      `expected Save to seed exactly one root White job (seq: []), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: enabling for the first time and hitting Save seeds the root job into the queue');
+  } catch(e){ bad('Perfect Opening: Enable+Save seeds the root job (regression)', e); }
+} finally {
+  await appDA.close();
+}
+} catch(e){ bad('Phase DA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

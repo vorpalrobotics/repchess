@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-304';
+const BUILD_TAG = '-305';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8939,6 +8939,16 @@ $('poSaveBtn').onclick = async () => {
   config.maxTotalVariations = maxTotalVariations;
   config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
   await setPerfectOpeningConfig(config);
+  // a genuinely fresh enable (never built a line, nothing already queued)
+  // needs its root job seeded -- every job after this one is spawned
+  // reactively by processPerfectOpeningJob itself, but nothing else ever
+  // creates the very first one. Guarded on an empty queue too so toggling
+  // enabled off and back on mid-run (queue still has leftover jobs) doesn't
+  // inject a redundant duplicate root job alongside them.
+  if(config.enabled && !config.lineId){
+    const queue = await getPerfectOpeningQueue();
+    if(!queue.length) await addPerfectOpeningQueueItems([{ id: poJobId('root'), kind: 'white', seq: [], createdAt: Date.now() }]);
+  }
   $('perfectOpeningOverlay').style.display = 'none';
   maybeResumePerfectOpening();
 };
