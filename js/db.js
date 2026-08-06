@@ -657,6 +657,10 @@ const PERFECT_OPENING_DEFAULT_CONFIG = {
   // comment) so it converges quickly after a depth/move-number transition
   // rather than staying skewed by a much slower or faster earlier move.
   avgJobMs: 0,
+  // recency-weighted average nodes/sec (Stockfish's own reported `nps`),
+  // same fast-adapting smoothing as avgJobMs -- feeds the Progress view's
+  // search-speed readout ("512k evals/sec" etc., same idea as lichess's).
+  avgNps: 0,
   // 0 means "use whatever the engine reports as its own cores-1 ceiling"
   // (engine.maxThreads), resolved at analyze()-call time rather than baked
   // in here, since the right number is a property of whatever device is

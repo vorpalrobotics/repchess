@@ -370,10 +370,18 @@ export class Engine {
 
     const lines = {};
     let curDepth = 0;
+    let lastNps = 0;   // nodes/sec from the most recent `info` line that reported one
 
     return new Promise(resolve => {
       this._listener = line => {
         if (line.startsWith('info')) {
+          // nps shows up on most periodic info lines independently of a full
+          // depth/multipv/score/pv match (e.g. it can arrive without a pv on
+          // some lines) -- parsed separately so a search's last-known speed
+          // survives even when this particular line doesn't otherwise qualify.
+          const npsMatch = line.match(/\bnps (\d+)/);
+          if (npsMatch) lastNps = parseInt(npsMatch[1], 10);
+
           const depthMatch = line.match(/\bdepth (\d+)/);
           const mpvMatch    = line.match(/\bmultipv (\d+)/);
           const cpMatch     = line.match(/score cp (-?\d+)/);
@@ -396,7 +404,7 @@ export class Engine {
         if (line.startsWith('bestmove')) {
           this._listener = null;
           console.debug(`[engine] bestmove received, final depth=${curDepth}`);
-          resolve(threadsFallback ? { depth: curDepth, lines, threadsFallback } : { depth: curDepth, lines });
+          resolve({ depth: curDepth, lines, nps: lastNps, ...(threadsFallback ? { threadsFallback } : {}) });
         }
       };
       const searchmovesPart = searchmoves?.length ? ` searchmoves ${searchmoves.join(' ')}` : '';

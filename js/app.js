@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260804-7';
+import { Engine } from './engine.js?v=20260804-8';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-311';
+const BUILD_TAG = '-312';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8974,6 +8974,13 @@ function formatDurationEstimate(ms){
   const m = totalMin % 60;
   return [d && `${d}d`, (d || h) && `${h}h`, `${m}m`].filter(Boolean).join(' ');
 }
+// e.g. 512400 -> "512k", 1420000 -> "1.4m" -- same shorthand lichess uses
+// for engine search speed.
+function formatEvalsPerSec(nps){
+  if(nps >= 1e6) return `${(nps / 1e6).toFixed(1)}m`;
+  if(nps >= 1e3) return `${Math.round(nps / 1e3)}k`;
+  return String(Math.round(nps));
+}
 async function renderPerfectOpeningProgress(config){
   if(!config.lineId){
     $('poProgressBody').innerHTML = poProgressRow('Status', 'Not started yet');
@@ -8992,6 +8999,7 @@ async function renderPerfectOpeningProgress(config){
     poProgressRow('Moves fully explored', config.deepestCompleteMove),
     poProgressRow('Positions queued for expansion', pending),
   ];
+  if(config.avgNps) rows.push(poProgressRow('Search speed', `${formatEvalsPerSec(config.avgNps)} evals/sec`));
   // the CURRENT move-in-progress is always exactly deepestCompleteMove+1 --
   // deepestCompleteMove is defined as the largest N with nothing queued at
   // ply <= 2N-1, so the shallowest ply actually in the queue always belongs
@@ -9188,7 +9196,7 @@ async function processPerfectOpeningJob(job, config){
 
     const childSeq = [...job.seq, san];
     await addPerfectOpeningQueueItems([{ id: poJobId(san), kind: 'black', seq: childSeq, createdAt: Date.now() }]);
-    return { ok: true, move: san, spawned: 1 };
+    return { ok: true, move: san, spawned: 1, nps: result.nps };
   }
 
   // Black job: multipv width comes from the move-number schedule (move
@@ -9233,7 +9241,7 @@ async function processPerfectOpeningJob(job, config){
   if(config.totalVariations >= config.maxTotalVariations) config.enabled = false;
   await setPerfectOpeningConfig(config);
 
-  return { ok: true, survivors: toSpawn, spawned: toSpawn.length, truncatedByBudget: toSpawn.length < survivors.length };
+  return { ok: true, survivors: toSpawn, spawned: toSpawn.length, truncatedByBudget: toSpawn.length < survivors.length, nps: result.nps };
 }
 
 let poProcessing = false;   // true while maybeResumePerfectOpening's loop is actively running
@@ -9282,6 +9290,7 @@ async function maybeResumePerfectOpening(){
       // earlier move for a long time.
       const elapsed = Date.now() - startedAt;
       config.avgJobMs = config.avgJobMs ? config.avgJobMs * 0.75 + elapsed * 0.25 : elapsed;
+      if(result.nps) config.avgNps = config.avgNps ? config.avgNps * 0.75 + result.nps * 0.25 : result.nps;
       // "move N is fully complete" once nothing queued sits at ply <= 2N-1
       // (White's move N is ply 2N-2, Black's reply is ply 2N-1) -- the FIFO
       // queue processes strictly in ply order (each job's children are
@@ -9969,7 +9978,7 @@ if(localStorage.getItem('threeTestDebug')){
       enabled: false, lineId: null,
       depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 }, toleranceCp: 50,
       maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
-      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0, avgJobMs: 0,
+      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0, avgJobMs: 0, avgNps: 0,
       threads: 0, hashMB: 512,
     })),
     getConfig: () => getPerfectOpeningConfig(),
@@ -9998,6 +10007,7 @@ if(localStorage.getItem('threeTestDebug')){
     // than duplicating (and risking drift from) this logic itself.
     moveNumberOfJob: (job) => poJobMoveNumber(job),
     formatDurationEstimate: (ms) => formatDurationEstimate(ms),
+    formatEvalsPerSec: (nps) => formatEvalsPerSec(nps),
   };
 }
 

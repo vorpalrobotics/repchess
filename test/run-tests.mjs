@@ -3098,6 +3098,32 @@ try {
     assert(!f.sentCommands.includes('isready'), `expected no isready sync when Hash didn't change, got: ${JSON.stringify(f.sentCommands)}`);
     ok('analyze() skips the Hash/isready sync when the size is already correct');
   } catch(e){ bad('engine: no redundant Hash sync when unchanged', e); }
+
+  // 63d. analyze() parses Stockfish's own `nps` field from info lines
+  //      (nodes/sec, same value lichess's own "evals/sec" readout shows)
+  //      and returns the LAST reported value alongside the result.
+  try {
+    await app22.page.evaluate((fen) => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = false;   // keep independent of the threads-handshake path above
+      engine.ready = true;
+      engine._currentHash = 512;
+      engine._send = (cmd) => {
+        if (/^go /.test(cmd)) {
+          setTimeout(() => {
+            engine._listener?.('info depth 10 seldepth 12 multipv 1 score cp 15 nodes 400000 nps 800000 pv e2e4');
+            engine._listener?.('info depth 12 seldepth 14 multipv 1 score cp 18 nodes 900000 nps 1234567 pv e2e4 e7e5');
+            engine._listener?.('bestmove e2e4');
+          }, 10);
+        } else if (cmd === 'stop') {
+          setTimeout(() => engine._listener?.('bestmove e2e4'), 10);
+        }
+      };
+    }, START_FEN);
+    const result = await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:12 }), START_FEN);
+    assert(result.nps === 1234567, `expected the LAST reported nps (1234567) captured, got ${result.nps}`);
+    ok("engine.analyze() parses Stockfish's own nps field, keeping the last reported value");
+  } catch(e){ bad('engine: nps parsing', e); }
 } finally {
   await app22.close();
 }
@@ -15671,6 +15697,42 @@ try {
     await appDA.page.click('#poProgressCloseBtn');
     ok('Perfect Opening: avgJobMs tracks real elapsed time, and Progress shows a matching ETA for the current move');
   } catch(e){ bad('Perfect Opening: avgJobMs + ETA display', e); }
+
+  // 288. The scheduler tracks a recency-weighted average nps (Stockfish's
+  //      own reported search speed) and Progress shows it formatted with
+  //      lichess-style k/m shorthand.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:nps:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        return Promise.resolve({ depth: opts.depth, nps: 1420000, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const avgNps = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig().then(c => c.avgNps));
+    assert(avgNps === 1420000, `expected avgNps to pick up the stubbed 1.42M nps on the very first sample, got ${avgNps}`);
+    const expected = await appDA.page.evaluate((n) => window.__perfectOpeningTestHooks.formatEvalsPerSec(n), avgNps);
+    assert(expected === '1.4m', `expected the formatter to render 1420000 as "1.4m", got "${expected}"`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows['Search speed'] === '1.4m evals/sec', `expected the Progress row to show "1.4m evals/sec", got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
+  } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
 } finally {
   await appDA.close();
 }
