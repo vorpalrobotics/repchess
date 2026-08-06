@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260731-6';
+import { Engine } from './engine.js?v=20260804-8';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-299';
+const BUILD_TAG = '-312';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -361,6 +361,23 @@ function replies(games,seq){
   for(const child of node.kids.values()){ counts[child.label]=child.pass; tot+=child.pass; }
   return {counts,tot};
 }
+/* Every consumer of replies() immediately merges in manualReplies (adding
+   any not already present, at count 0) before using `counts` -- call this
+   right after that merge to additionally strip anything NOT in
+   manualReplies, for a line that opted in (line.hideUnselectedGameMoves,
+   currently just Perfect Opening's own generated line). A real opponent's
+   move that the search itself didn't keep would otherwise clutter an
+   "objectively best" tree and, since games sort ahead of 0-count manual
+   replies, could even outrank the actually-recommended one. `tot` is
+   recomputed from the surviving counts so percentages stay meaningful
+   against what's actually shown, not the original (larger) total. A no-op
+   for every other line. */
+function filterCountsForLine(counts, tot, manualReplies, line){
+  if(!line?.hideUnselectedGameMoves) return {counts, tot};
+  const filtered = {};
+  for(const m of manualReplies) filtered[m] = counts[m] ?? 0;
+  return {counts: filtered, tot: Object.values(filtered).reduce((a,b)=>a+b, 0)};
+}
 /* "N (M%)" occurrence stat for one specific opponent reply out of a room,
    against `tot` (that room's total recorded continuations) -- same data the
    move table's own .cnt span uses (renderBranch), just rounded to a whole
@@ -379,9 +396,10 @@ function formatOccurrence(count, tot){
    don't contribute nodes of their own. Hidden branches (and everything
    nested under them) are excluded entirely, same as the eye-toggle filter. */
 function computeNodeStats(games,seq){
-  const counts = replies(games,seq).counts;
+  let counts = replies(games,seq).counts;
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manualReplies, CURRENT_LINE).counts;
 
   const visibleOpps = Object.keys(counts).filter(opp=>
     !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
@@ -1506,9 +1524,10 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
   }
   /* seq ends in OUR move; enumerate visible opponent replies and recurse */
   function walk(seq, roomId){
-    const {counts, tot} = replies(games,seq);
+    let {counts, tot} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    ({counts, tot} = filterCountsForLine(counts, tot, manualReplies, line));
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
     for(const opp of visibleOpps) processExit(roomId,seq,opp,counts[opp],tot);
@@ -1622,9 +1641,10 @@ function buildCastle(line, games, rootSeq){
   }
 
   function walk(seq, room){
-    const {counts} = replies(games,seq);
+    let {counts} = replies(games,seq);
     const manualReplies = PREFS[prefKey(line.id,seq)]?.manualReplies || [];
     manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+    counts = filterCountsForLine(counts, 0, manualReplies, line).counts;
     const visibleOpps = Object.keys(counts).filter(opp=>
       !PREFS[prefKey(line.id,[...seq,opp])]?.hidden);
 
@@ -3719,9 +3739,10 @@ $('expandAllBtn').onclick = () => {
    (single-reply) sequence should read as one hallway, not a room per ply.
    `seq` always ends in OUR move here, same convention as renderBranch. */
 function visibleOppsAt(games,seq){
-  const {counts} = replies(games,seq);
+  let {counts} = replies(games,seq);
   const manual = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manual, CURRENT_LINE).counts;
   let keys = Object.keys(counts);
   if(!showAllBranches){
     keys = keys.filter(opp=>!PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
@@ -4067,9 +4088,10 @@ function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
 // row (renderCompactRunRow) refreshes itself in response; nothing outside an
 // expansion ever sets this, so it's a no-op everywhere else.
 function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,notifyDirty=null){
-  const {counts,tot}=replies(games,seq);
+  let {counts,tot}=replies(games,seq);
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  ({counts,tot} = filterCountsForLine(counts, tot, manualReplies, CURRENT_LINE));
 
   // "complete to move N" for THIS position (seq, which ends in our move) --
   // same definition computeNodeStats uses (see its doc comment), computed as
@@ -5525,6 +5547,17 @@ migrateLegacyUserData(LOCAL_USER)
 // the engine.init().then(...) call below) -- no manual "start" step needed.
 refreshAnalysisQueue().then(() => maybeResumeAnalysisQueue());
 
+// Perfect Opening's own opportunistic boot kick, plus a periodic poll as the
+// robust catch-all: unlike the manual queue, nothing calls maybeResumeAnalysisQueue's
+// equivalent for it on every relevant state change (queue-drained, engine-idle,
+// etc.), so a 5s poll picks up any missed transition cheaply -- this is a
+// background research feature with no latency expectation. Deferred to a
+// microtask (not called bare here) since `engine` -- a later `const` in this
+// module -- isn't initialized yet at this point in top-to-bottom script
+// evaluation.
+Promise.resolve().then(() => maybeResumePerfectOpening());
+setInterval(() => maybeResumePerfectOpening(), 5000);
+
 // offer the default mnemonics bundle when there's nothing in the mnemonics
 // store yet (see maybeOfferDefaultMnemonics, defined below). Skipped under
 // the test harness, whose dialog handler auto-accepts every confirm() --
@@ -5649,6 +5682,7 @@ async function buildBackupData(){
     lines: await Promise.all(lines.map(async line=>({
       id: line.id,   // preserve the line id: VR decoration keys (cas:<instanceId>:…) embed it
       name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
+      hideUnselectedGameMoves: !!line.hideUnselectedGameMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
         seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
@@ -5744,7 +5778,7 @@ async function applyBackupData(data, onMnemProgress){
     // reuse the original line id when present (older backups omit it) so VR
     // decoration keys that embed it — castle rooms, building facades/signs —
     // still resolve against the restored threeLayout.
-    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves});
+    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
     if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
     for(const pref of (lineData.prefs||[])){
       await setPref(line.id, pref.seq, {
@@ -7384,9 +7418,10 @@ let OQ = null;     // {line, color, seq, expected, hits, misses, oppChoices, rep
 let oqBoard = null;
 
 function oqVisibleOpps(seq){
-  const {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
+  let {counts} = replies(gamesForLineColor(GAMES || [], OQ.line.color), seq);
   const manual = PREFS[prefKey(OQ.line.id, seq)]?.manualReplies || [];
   manual.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  counts = filterCountsForLine(counts, 0, manual, OQ.line).counts;
   return Object.keys(counts).filter(opp => !PREFS[prefKey(OQ.line.id, [...seq, opp])]?.hidden);
 }
 
@@ -8217,7 +8252,10 @@ function setEngineUI(state){
   }
   // the engine just freed up -- let the background analysis queue (if
   // anything's in it) claim it. No-op if nothing's queued or it's already running.
-  if(state === 'idle' || state === 'stopped') maybeResumeAnalysisQueue();
+  if(state === 'idle' || state === 'stopped'){
+    maybeResumeAnalysisQueue();
+    maybeResumePerfectOpening();
+  }
 }
 $('engineStopBtn').onclick = () => {
   if(engineState === 'running'){
@@ -8249,6 +8287,7 @@ engine.init().then(() => {
   populateEngineThreadsSelect();
   populateAqThreadsSelect();
   maybeResumeAnalysisQueue();
+  maybeResumePerfectOpening();
 }).catch(err => {
   console.error('[engine] init failed', err);
   $('engineDepth').textContent = 'Engine unavailable';
@@ -8852,6 +8891,438 @@ $('menuAnalysisQueue').onclick = async () => {
 };
 $('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
 
+/* ---------- Perfect Opening project control panel ----------
+   Phase 2 of the Perfect Opening project (see db.js's own section for the
+   data model): the control panel itself. Deliberately does NOT create the
+   generated line here, even when enabling for the first time -- the line's
+   openingMoves needs White's actual move 1, which isn't known until the
+   engine determines it (a later phase's job); the line gets created lazily
+   at that point instead of eagerly from a placeholder guess here. */
+async function renderPerfectOpeningStatus(config){
+  if(!config.lineId){
+    $('poStatus').textContent = 'Not started yet -- enable and Save to begin.';
+    return;
+  }
+  const pending = (await getPerfectOpeningQueue()).length;
+  const variations = `${config.totalVariations} variation${config.totalVariations === 1 ? '' : 's'} generated so far.`;
+  const queued = pending
+    ? ` ${pending} position${pending === 1 ? '' : 's'} queued for expansion.`
+    : (config.enabled ? ' Caught up -- waiting for the manual queue and live analysis to free up the engine.' : ' Paused (disabled).');
+  $('poStatus').textContent = variations + queued;
+}
+function poModalOpen(){ return $('perfectOpeningOverlay').style.display === 'flex'; }
+// mirrors renderAnalysisQueueModalIfOpen: called after every job the
+// scheduler processes so a control panel left open shows live progress
+// instead of only refreshing whenever it's next opened.
+function renderPerfectOpeningStatusIfOpen(){
+  if(!poModalOpen()) return;
+  getPerfectOpeningConfig().then(config => renderPerfectOpeningStatus(config));
+}
+// mirrors populateThreadsSelect (the live panel's/Analysis Queue's own
+// selectors), but sourced from Perfect Opening's own IDB-backed config
+// instead of localStorage, and with an extra "Max available" choice (value
+// 0) as the sensible default here -- see PERFECT_OPENING_DEFAULT_CONFIG's
+// own comment on why maxing out is right for this one, unlike the other two.
+function populatePoThreadsSelect(config){
+  if(!engine.multithreaded || engine.maxThreads <= 1){
+    $('poThreadsField').style.display = 'none';
+    return;
+  }
+  const sel = $('poThreadsSelect');
+  sel.innerHTML = [`<option value="0">Max available (${engine.maxThreads})</option>`]
+    .concat(Array.from({length: engine.maxThreads}, (_, i) => i + 1).map(n => `<option value="${n}">${n}</option>`))
+    .join('');
+  sel.value = String(config.threads || 0);
+  $('poThreadsField').style.display = '';
+}
+async function openPerfectOpeningPanel(){
+  $('menuList').style.display = 'none';
+  const config = await getPerfectOpeningConfig();
+  $('poEnabledCheckbox').checked = config.enabled;
+  $('poDepth1').value = config.depth[1];
+  $('poDepth2').value = config.depth[2];
+  $('poDepth3').value = config.depth[3];
+  $('poDepth4').value = config.depth[4];
+  $('poDepthDefault').value = config.depth.default;
+  $('poTolerance').value = config.toleranceCp;
+  $('poMaxVariations').value = config.maxTotalVariations;
+  $('poMaxLines1').value = config.maxLines[1];
+  $('poMaxLines2').value = config.maxLines[2];
+  $('poMaxLines3').value = config.maxLines[3];
+  $('poMaxLines4').value = config.maxLines[4];
+  $('poMaxLinesDefault').value = config.maxLines.default;
+  $('poHashMB').value = config.hashMB;
+  populatePoThreadsSelect(config);
+  $('poError').style.display = 'none';
+  $('perfectOpeningOverlay').style.display = 'flex';
+  await renderPerfectOpeningStatus(config);
+}
+$('menuPerfectOpeningManage').onclick = openPerfectOpeningPanel;
+$('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'none'; };
+
+function poProgressRow(label, value){
+  return `<div class="po-progress-row"><span class="po-progress-label">${escapeHtml(label)}</span><span class="po-progress-value">${escapeHtml(String(value))}</span></div>`;
+}
+// e.g. 232461000 -> "2d 16h 21m"; drops leading zero units (an estimate
+// under an hour just reads "21m", not "0d 0h 21m"), and floors to whole
+// minutes since anything finer isn't meaningful for a multi-job estimate.
+function formatDurationEstimate(ms){
+  const totalMin = Math.round(ms / 60000);
+  if(totalMin < 1) return 'less than a minute';
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  return [d && `${d}d`, (d || h) && `${h}h`, `${m}m`].filter(Boolean).join(' ');
+}
+// e.g. 512400 -> "512k", 1420000 -> "1.4m" -- same shorthand lichess uses
+// for engine search speed.
+function formatEvalsPerSec(nps){
+  if(nps >= 1e6) return `${(nps / 1e6).toFixed(1)}m`;
+  if(nps >= 1e3) return `${Math.round(nps / 1e3)}k`;
+  return String(Math.round(nps));
+}
+async function renderPerfectOpeningProgress(config){
+  if(!config.lineId){
+    $('poProgressBody').innerHTML = poProgressRow('Status', 'Not started yet');
+    return;
+  }
+  const queue = await getPerfectOpeningQueue();
+  const pending = queue.length;
+  // enabled is checked FIRST -- hitting the variation cap auto-disables the
+  // project but can still leave jobs queued (the batch that pushed it over
+  // the cap spawns children right up to the moment it disables), so a
+  // non-empty queue does not by itself mean the scheduler will touch it.
+  const status = !config.enabled ? 'Paused (disabled)' : (pending ? 'Running' : 'Caught up (waiting for the engine to free up)');
+  const rows = [
+    poProgressRow('Status', status),
+    poProgressRow('Variations generated', config.totalVariations),
+    poProgressRow('Moves fully explored', config.deepestCompleteMove),
+    poProgressRow('Positions queued for expansion', pending),
+  ];
+  if(config.avgNps) rows.push(poProgressRow('Search speed', `${formatEvalsPerSec(config.avgNps)} evals/sec`));
+  // the CURRENT move-in-progress is always exactly deepestCompleteMove+1 --
+  // deepestCompleteMove is defined as the largest N with nothing queued at
+  // ply <= 2N-1, so the shallowest ply actually in the queue always belongs
+  // to move deepestCompleteMove+1 (never anything shallower, by that same
+  // definition). No projection of future branching needed: every job that
+  // still has to run to finish this move already exists in the queue.
+  const targetMove = config.deepestCompleteMove + 1;
+  const pendingForTarget = queue.filter(j => poJobMoveNumber(j) === targetMove).length;
+  if(pendingForTarget && config.avgJobMs){
+    rows.push(poProgressRow(`Estimated time to complete move ${targetMove}`, formatDurationEstimate(pendingForTarget * config.avgJobMs)));
+  }
+  $('poProgressBody').innerHTML = rows.join('');
+}
+function poProgressModalOpen(){ return $('perfectOpeningProgressOverlay').style.display === 'flex'; }
+// mirrors renderPerfectOpeningStatusIfOpen -- keeps the Progress view live
+// while it's open instead of only refreshing whenever it's next opened.
+function renderPerfectOpeningProgressIfOpen(){
+  if(!poProgressModalOpen()) return;
+  getPerfectOpeningConfig().then(config => renderPerfectOpeningProgress(config));
+}
+async function openPerfectOpeningProgressPanel(){
+  $('menuList').style.display = 'none';
+  const config = await getPerfectOpeningConfig();
+  $('perfectOpeningProgressOverlay').style.display = 'flex';
+  await renderPerfectOpeningProgress(config);
+}
+$('menuPerfectOpeningProgress').onclick = openPerfectOpeningProgressPanel;
+$('poProgressCloseBtn').onclick = () => { $('perfectOpeningProgressOverlay').style.display = 'none'; };
+
+$('poSaveBtn').onclick = async () => {
+  const depth1 = +$('poDepth1').value;
+  const depth2 = +$('poDepth2').value;
+  const depth3 = +$('poDepth3').value;
+  const depth4 = +$('poDepth4').value;
+  const depthDefault = +$('poDepthDefault').value;
+  const toleranceCp = +$('poTolerance').value;
+  const maxTotalVariations = +$('poMaxVariations').value;
+  const maxLines1 = +$('poMaxLines1').value;
+  const maxLines2 = +$('poMaxLines2').value;
+  const maxLines3 = +$('poMaxLines3').value;
+  const maxLines4 = +$('poMaxLines4').value;
+  const maxLinesDefault = +$('poMaxLinesDefault').value;
+  const hashMB = +$('poHashMB').value;
+  // hidden (single-threaded build, or maxThreads<=1) means "no real choice
+  // to make" -- read whatever's already there so Save doesn't clobber a
+  // previously-saved value with 0 just because the field wasn't shown.
+  const threads = $('poThreadsField').style.display === 'none' ? undefined : +$('poThreadsSelect').value;
+
+  const showError = (msg) => { $('poError').textContent = msg; $('poError').style.display = ''; };
+  const positiveFields = { 'total variation cap': maxTotalVariations, 'hash (MB)': hashMB,
+    'move 1 depth': depth1, 'move 2 depth': depth2, 'move 3 depth': depth3, 'move 4 depth': depth4, 'beyond-move-4 depth': depthDefault,
+    'move 1 max lines': maxLines1, 'move 2 max lines': maxLines2, 'move 3 max lines': maxLines3,
+    'move 4 max lines': maxLines4, 'beyond-move-4 max lines': maxLinesDefault };
+  for(const [label, v] of Object.entries(positiveFields)){
+    if(!Number.isFinite(v) || v < 1){ showError(`"${label}" must be a positive number.`); return; }
+  }
+  if(!Number.isFinite(toleranceCp) || toleranceCp < 0){ showError('Pruning tolerance must be zero or a positive number.'); return; }
+
+  const config = await getPerfectOpeningConfig();
+  config.enabled = $('poEnabledCheckbox').checked;
+  config.depth = { 1: depth1, 2: depth2, 3: depth3, 4: depth4, default: depthDefault };
+  config.toleranceCp = toleranceCp;
+  config.maxTotalVariations = maxTotalVariations;
+  config.maxLines = { 1: maxLines1, 2: maxLines2, 3: maxLines3, 4: maxLines4, default: maxLinesDefault };
+  config.hashMB = hashMB;
+  if(threads !== undefined) config.threads = threads;
+  await setPerfectOpeningConfig(config);
+  // a genuinely fresh enable (never built a line, nothing already queued)
+  // needs its root job seeded -- every job after this one is spawned
+  // reactively by processPerfectOpeningJob itself, but nothing else ever
+  // creates the very first one. Guarded on an empty queue too so toggling
+  // enabled off and back on mid-run (queue still has leftover jobs) doesn't
+  // inject a redundant duplicate root job alongside them.
+  if(config.enabled && !config.lineId){
+    const queue = await getPerfectOpeningQueue();
+    if(!queue.length) await addPerfectOpeningQueueItems([{ id: poJobId('root'), kind: 'white', seq: [], createdAt: Date.now() }]);
+  }
+  $('perfectOpeningOverlay').style.display = 'none';
+  maybeResumePerfectOpening();
+};
+
+$('poResetBtn').onclick = async () => {
+  if(!confirm('This permanently deletes the generated "Perfect White Opening" line and all progress, and turns the project back off. This cannot be undone. Continue?')) return;
+  await resetPerfectOpening();
+  await openPerfectOpeningPanel();   // refreshes every field back to defaults, keeps the modal open
+};
+
+/* ---------- Perfect Opening project: core expansion logic (Phase 3) ----------
+   processPerfectOpeningJob(job, config) does the actual work for ONE pending
+   expansion job -- callable in isolation (no scheduler/loop yet, that's
+   Phase 4). `job.seq` is a full move-SAN sequence from the game start; a
+   White job's seq ends on Black's last move (or is empty, for the very
+   first move); a Black job's seq ends on White's last move. Deliberately
+   does NOT touch the job's own queue entry (dequeuing/deleting it is a
+   scheduling concern, not a per-job-processing one) -- the caller removes
+   it from perfectOpeningQueue once this resolves successfully.
+
+   Reuses saveAnalysisQueueResult (the same eval/evalLines persistence the
+   real background analysis queue uses) so every node this generates gets
+   the same rich eval display as a manually-analyzed one, "improves over
+   what's saved" gating included.
+*/
+function poJobId(tag){
+  return `po:${Date.now()}:${Math.random().toString(36).slice(2,8)}:${tag}`;
+}
+// The move NUMBER a job belongs to -- a White job's seq ends on Black's last
+// move (even length), a Black job's seq ends on White's last move (odd
+// length); both conventions agree that the very next ply played is move
+// floor(seq.length/2)+1.
+function poJobMoveNumber(job){
+  return Math.floor(job.seq.length / 2) + 1;
+}
+function poDepthForMove(config, moveNumber){
+  return config.depth[moveNumber] ?? config.depth.default;
+}
+// { threads, hash } for every engine.analyze() call this job processor
+// makes -- config.threads:0 means "use the hardware ceiling" (Perfect
+// Opening never runs while anything else needs the engine, so unlike the
+// live panel/analysis queue's own conservative selectors, maxing out is the
+// right default here). engine.maxThreads is 1 on a single-threaded build,
+// so this degrades to "no override" there without any special-casing.
+function poEngineOptions(config){
+  return { threads: config.threads || engine.maxThreads, hash: config.hashMB };
+}
+// A raw UCI move (e.g. "e2e4", "e7e8q") -> its SAN in `fen`, or null if it
+// doesn't parse as a legal move there (shouldn't happen for a move the
+// engine itself just reported, but a defensive null is cheap insurance
+// against silently corrupting the tree with a bogus move string).
+function uciMoveToSan(fen, uciMove){
+  const chess = new Chess(fen);
+  const from = uciMove.slice(0,2), to = uciMove.slice(2,4), promotion = uciMove.slice(4,5) || undefined;
+  const mv = chess.move({from,to,promotion},{sloppy:true});
+  return mv ? mv.san : null;
+}
+// A single comparable number for tolerance filtering, treating any mate
+// score as more extreme than any realistic centipawn score (shorter mates
+// ranking further from zero in the intuitive direction) -- opening-position
+// mate scores are vanishingly rare at any real search depth, so this only
+// needs to be reasonable, not exhaustively precise.
+function scoreToComparable(score){
+  if(score.type === 'mate') return score.value > 0 ? 100000 - score.value : -100000 - score.value;
+  return score.value;
+}
+// Same shape/semantics as addManualReply (js/app.js, near savePrefField),
+// but parameterized by lineId/seq instead of assuming CURRENT_LINE -- the
+// Perfect Opening line is background-generated and not necessarily the
+// line currently open in the UI.
+async function addManualReplyTo(lineId, seq, move){
+  const existing = (await getPref(lineId, seq))?.manualReplies || [];
+  if(existing.includes(move)) return;
+  await setPref(lineId, seq, { manualReplies: [...existing, move] });
+}
+
+async function processPerfectOpeningJob(job, config){
+  const fen = fenForSeq(job.seq);
+
+  if(job.kind === 'white'){
+    const whiteDepth = poDepthForMove(config, poJobMoveNumber(job));
+    const result = await engine.analyze(fen, { multipv: 1, depth: whiteDepth, ...poEngineOptions(config) });
+    // a higher-priority caller (manual queue, live analysis) can preempt the
+    // engine mid-search via its own internal _stopCurrent() -- that leaves a
+    // shallow result we must not treat as authoritative. Bail out before any
+    // persistence so the job stays queued for a later retry.
+    if(result.depth < whiteDepth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
+    const ranks = Object.keys(result.lines || {});
+    if(!ranks.length) return { ok: false, reason: 'engine returned no line' };
+    const best = result.lines[1] || result.lines[ranks[0]];
+    if(!best?.pv?.length) return { ok: false, reason: 'engine line has no PV' };
+    const san = uciMoveToSan(fen, best.pv[0]);
+    if(!san) return { ok: false, reason: `unparseable move "${best.pv[0]}"` };
+
+    let lineId = config.lineId;
+    if(job.seq.length === 0){
+      // the very first move: (re)creates the line, or -- resuming a project
+      // that already has one -- just confirms/keeps it. Reset always clears
+      // lineId first, so a fresh project always takes the create branch.
+      if(!lineId){
+        const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [san], hideUnselectedGameMoves: true });
+        lineId = line.id;
+        config.lineId = lineId;
+        await setPerfectOpeningConfig(config);
+        // the line just appeared out of nowhere from the user's perspective
+        // (this all runs in the background) -- if they're sitting on the
+        // home screen's opening-systems list right now, refresh it so the
+        // new line shows up without them needing to reload the page.
+        if($('homeScreen').style.display !== 'none') renderHome();
+      } else {
+        await updateLine(lineId, { openingMoves: [san] });
+      }
+    } else {
+      await setPref(lineId, job.seq, { reply: san });
+    }
+    await saveAnalysisQueueResult({ lineId, seq: job.seq }, fen, result);
+
+    const childSeq = [...job.seq, san];
+    await addPerfectOpeningQueueItems([{ id: poJobId(san), kind: 'black', seq: childSeq, createdAt: Date.now() }]);
+    return { ok: true, move: san, spawned: 1, nps: result.nps };
+  }
+
+  // Black job: multipv width comes from the move-number schedule (move
+  // number = how many full moves have been played so far, including this
+  // one -- a Black job's seq always ends on White's move, so seq.length is
+  // always odd and (seq.length+1)/2 is an integer).
+  const moveNumber = poJobMoveNumber(job);
+  const maxLines = config.maxLines[moveNumber] ?? config.maxLines.default;
+  const blackDepth = poDepthForMove(config, moveNumber);
+  const result = await engine.analyze(fen, { multipv: maxLines, depth: blackDepth, ...poEngineOptions(config) });
+  if(result.depth < blackDepth) return { ok: false, reason: 'interrupted before reaching target depth', preempted: true };
+  await saveAnalysisQueueResult({ lineId: config.lineId, seq: job.seq }, fen, result);
+
+  const ranks = Object.keys(result.lines || {}).map(Number).sort((a,b) => a-b);
+  if(!ranks.length) return { ok: false, reason: 'engine returned no lines' };
+  const bestScore = scoreToComparable(result.lines[ranks[0]].score);
+  const survivors = [];
+  for(const r of ranks){
+    const line = result.lines[r];
+    if(!line?.score || !line.pv?.length) continue;
+    // ranks are engine-ordered best-first for the side to move, so once one
+    // rank falls outside tolerance every rank after it is at least as far out.
+    if(bestScore - scoreToComparable(line.score) > config.toleranceCp) break;
+    const san = uciMoveToSan(fen, line.pv[0]);
+    if(san) survivors.push(san);
+  }
+
+  const remainingBudget = Math.max(0, config.maxTotalVariations - config.totalVariations);
+  const toSpawn = survivors.slice(0, remainingBudget);
+  const newJobs = [];
+  for(const san of toSpawn){
+    await addManualReplyTo(config.lineId, job.seq, san);
+    newJobs.push({ id: poJobId(san), kind: 'white', seq: [...job.seq, san], createdAt: Date.now() });
+  }
+  if(newJobs.length) await addPerfectOpeningQueueItems(newJobs);
+
+  config.totalVariations += toSpawn.length;
+  // capped this job (either by budget or the survivor list itself running
+  // past budget) -- turn the project off so the scheduler stops attempting
+  // further expansion against an exhausted budget, same "reset turns it
+  // off too" spirit as resetPerfectOpening.
+  if(config.totalVariations >= config.maxTotalVariations) config.enabled = false;
+  await setPerfectOpeningConfig(config);
+
+  return { ok: true, survivors: toSpawn, spawned: toSpawn.length, truncatedByBudget: toSpawn.length < survivors.length, nps: result.nps };
+}
+
+let poProcessing = false;   // true while maybeResumePerfectOpening's loop is actively running
+
+// Perfect Opening's own scheduler, mirroring processAnalysisQueueLoop's idiom
+// (reentrancy guard, re-check the gate every iteration, stop cleanly on the
+// first thing that isn't a plain success). It only ever runs when there's
+// truly nothing else for the engine to do: the manual analysis queue (any
+// depth/multipv, any priority) and live interactive analysis both take
+// precedence unconditionally, since Perfect Opening is a background research
+// project the user is deliberately never waiting on. Preemption itself is
+// free (engine.analyze() always stops whatever's running first) -- this loop
+// just has to notice when that happened (processPerfectOpeningJob's own
+// depth check) and back off instead of persisting a shallow result.
+async function maybeResumePerfectOpening(){
+  if(poProcessing) return;
+  poProcessing = true;
+  try {
+    while(true){
+      if(ANALYSIS_QUEUE.length || engineState === 'running' || !engine.ready) break;
+      const config = await getPerfectOpeningConfig();
+      if(!config.enabled) break;
+      const queue = await getPerfectOpeningQueue();
+      if(!queue.length) break;
+      const job = queue[0];
+      let result;
+      const startedAt = Date.now();
+      try {
+        result = await processPerfectOpeningJob(job, config);
+      } catch(err){
+        console.error('[perfectOpening] job failed', err);
+        break;
+      }
+      if(!result.ok){
+        // interrupted (preempted) or some other non-fatal problem -- leave
+        // the job queued for a later retry and stop for now rather than
+        // spinning on the same failure. Not timed -- a preempted job
+        // returns early by design, and folding that into the average would
+        // skew it toward "faster than a real completed search."
+        break;
+      }
+      await deletePerfectOpeningQueueItem(job.id);
+      // recency-weighted (not a plain running average) so the ETA below
+      // converges quickly after a move-number transition to a different
+      // configured depth, rather than staying skewed by a slower/faster
+      // earlier move for a long time.
+      const elapsed = Date.now() - startedAt;
+      config.avgJobMs = config.avgJobMs ? config.avgJobMs * 0.75 + elapsed * 0.25 : elapsed;
+      if(result.nps) config.avgNps = config.avgNps ? config.avgNps * 0.75 + result.nps * 0.25 : result.nps;
+      // "move N is fully complete" once nothing queued sits at ply <= 2N-1
+      // (White's move N is ply 2N-2, Black's reply is ply 2N-1) -- the FIFO
+      // queue processes strictly in ply order (each job's children are
+      // appended after every already-queued same-ply sibling), so the
+      // shallowest remaining ply is always a true floor on what's left.
+      // Only ever moves forward (a momentarily-empty queue holds the last
+      // known value, since there's nothing left to compute it from).
+      const freshQueue = await getPerfectOpeningQueue();
+      if(freshQueue.length){
+        const deepest = Math.floor(Math.min(...freshQueue.map(j => j.seq.length)) / 2);
+        if(deepest > config.deepestCompleteMove) config.deepestCompleteMove = deepest;
+      }
+      // one write covers avgJobMs (always updated above) plus deepestCompleteMove
+      // (only sometimes) -- config.lineId/totalVariations/enabled may also have
+      // just changed inside processPerfectOpeningJob itself; harmless to
+      // re-save the same already-persisted values alongside these.
+      await setPerfectOpeningConfig(config);
+      renderPerfectOpeningStatusIfOpen();
+      renderPerfectOpeningProgressIfOpen();
+    }
+  } finally {
+    poProcessing = false;
+    // covers the final state after the loop exits for a reason that didn't
+    // itself follow a completed job (disabled, preempted, engine claimed
+    // elsewhere) -- the per-job render above only fires after a SUCCESSFUL
+    // job, so without this the panel could be left showing a stale "queued"
+    // count from before the stopping condition was hit.
+    renderPerfectOpeningStatusIfOpen();
+    renderPerfectOpeningProgressIfOpen();
+  }
+}
+
 /* writes a completed (or partially-completed, if interrupted) search result
    for one queue item straight to IDB, gated by the same "never regress"
    rule as recordEvalIfDeeper -- but also treating "same depth, strictly more
@@ -8987,6 +9458,10 @@ async function processAnalysisQueueLoop(){
     aqCurrentItem = null;
     aqCurrentProgress = null;
   }
+  // the manual queue just drained (or yielded because nothing's left it can
+  // do) -- give Perfect Opening an immediate chance instead of waiting for
+  // its own poll. No-op if disabled/empty/engine unavailable.
+  maybeResumePerfectOpening();
 }
 
 function pvToSan(fen, uciMoves, maxPlies){
@@ -9488,6 +9963,51 @@ if(localStorage.getItem('threeTestDebug')){
     getLines: (user) => getLines(user),
     getGames: (user) => getGames(user),
     getAnalysisQueue: (user) => getAnalysisQueue(user),
+  };
+}
+
+// test-only hook for the Perfect Opening project's data layer (db.js) --
+// Phase 1: config storage + the expansion-job queue + reset. Phase 3 adds
+// the actual per-job processor, driven against `engine` -- monkey-patch
+// engine.analyze via window.__aqTestHooks.engine (the same real Engine
+// instance the analysis queue's own tests already fake out) before calling
+// processJob, for a fast/deterministic result instead of a real WASM search.
+if(localStorage.getItem('threeTestDebug')){
+  window.__perfectOpeningTestHooks = {
+    defaultConfig: () => JSON.parse(JSON.stringify({
+      enabled: false, lineId: null,
+      depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 }, toleranceCp: 50,
+      maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
+      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0, avgJobMs: 0, avgNps: 0,
+      threads: 0, hashMB: 512,
+    })),
+    getConfig: () => getPerfectOpeningConfig(),
+    setConfig: (config) => setPerfectOpeningConfig(config),
+    getQueue: () => getPerfectOpeningQueue(),
+    addQueueItems: (items) => addPerfectOpeningQueueItems(items),
+    deleteQueueItem: (id) => deletePerfectOpeningQueueItem(id),
+    clearQueueStore: () => clearPerfectOpeningQueueStore(),
+    reset: () => resetPerfectOpening(),
+    // reuses the exact same real line/pref helpers a genuinely-generated
+    // tree would, so tests can seed a stand-in "Perfect White Opening" line
+    // without needing Phase 3's actual engine-driven expansion logic yet.
+    seedLine: (opts) => createLine(LOCAL_USER, opts),
+    getLines: () => getLines(LOCAL_USER),
+    processJob: (job, config) => processPerfectOpeningJob(job, config),
+    getPref: (lineId, seq) => getPref(lineId, seq),
+    // drives the real scheduler directly, bypassing the 5s poll timer, so
+    // tests can deterministically resume/drain the queue. Same engine-stub
+    // pattern as __aqTestHooks.engine -- Perfect Opening's own engine.analyze()
+    // calls are stubbed by the test, so unlike processAnalysisQueueLoop this
+    // scheduler CAN run end-to-end in the offline harness.
+    maybeResume: () => maybeResumePerfectOpening(),
+    isProcessing: () => poProcessing,
+    // exposes the real formatter/move-number formula so a test can recompute
+    // the expected ETA string from the real persisted avgJobMs/queue rather
+    // than duplicating (and risking drift from) this logic itself.
+    moveNumberOfJob: (job) => poJobMoveNumber(job),
+    formatDurationEstimate: (ms) => formatDurationEstimate(ms),
+    formatEvalsPerSec: (nps) => formatEvalsPerSec(nps),
   };
 }
 

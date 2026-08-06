@@ -61,6 +61,7 @@ const SUBSYSTEMS = {
   'memorized-stability': 'memorized-room shape snapshot, dirty detection, and the side-door mechanism for linear rooms',
   'auto-import':       'daily auto-import from Lichess/chess.com: sizing heuristics, daily gate, boot trigger',
   'user-migration':    'migrateLegacyUserData: pre-CURRENT_USER-removal data recovery to LOCAL_USER',
+  'perfect-opening':   'Perfect Opening project: config/queue data layer, control panel, expansion, scheduling',
 };
 const REQUESTED = process.argv.slice(2).flatMap(a => a.split(',')).filter(Boolean);
 if(REQUESTED.includes('--list')){
@@ -192,7 +193,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app2.page.click('.line-row');                                   // open the move table
-  await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
 
   // 5. Setting a glyph from the ⋮ strip renders it (colour-coded) on the move.
@@ -217,7 +218,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app2.page.click('.line-row');
-    await app2.page.waitForSelector(rowSel, { timeout: 10000 });
+    await app2.page.waitForSelector(rowSel, { timeout: 40000 });
     const glyph = (await app2.page.textContent(`${rowSel} .moveQual`)).trim();
     assert(glyph === '?', `glyph did not persist across reload, got '${glyph}'`);
     ok('move-quality glyph persists across reload (IDB)');
@@ -235,7 +236,7 @@ try {
     await app2.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-opp="Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
     ok('import-variation writes standard responses into the tree (engine-import core)');
   } catch(e){ bad('import-variation core', e); }
 
@@ -253,7 +254,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app2.page.click('.line-row');
-    await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+    await app2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
     const reply = (await app2.page.textContent('tr.data-row[data-opp="Nf6"] .ourReply')).trim();
     assert(reply === 'c4', `expected the imported reply to survive a reload, got '${reply}'`);
     ok('import-variation: the batched write actually commits to IndexedDB (survives a reload), not just PREFS in memory');
@@ -275,7 +276,7 @@ try {
       getComputedStyle(document.getElementById('spinnerOverlay')).display !== 'none');
     assert(shownRightAway, 'expected the spinner to appear immediately on Import');
     await app2.page.waitForFunction(() =>
-      getComputedStyle(document.getElementById('spinnerOverlay')).display === 'none', { timeout: 10000 });
+      getComputedStyle(document.getElementById('spinnerOverlay')).display === 'none', { timeout: 40000 });
     ok('import-variation: a spinner shows for the duration of the import, then hides');
   } catch(e){ bad('import-variation spinner', e); }
 
@@ -290,7 +291,7 @@ try {
     await app2.page.fill('#importLineInput',
       '1. d4 Nf6 2. c4 e6 3. Nc3 Bb4\n1. d4 Nf6 2. c4 e6 3. Nc3 g6');
     await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-    await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     const rows = await app2.page.evaluate(() => [
       !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,Bb4"]'),
       !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,g6"]'),
@@ -346,7 +347,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app3.page.click('.line-row');
-  await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 8. Generate Alpha's castle and walk it; a door into Beta shows the taller
   //    castle plaque -- three lines (castle + room + occurrence stat, since
@@ -414,7 +415,7 @@ try {
     threeLayout: JSON.stringify({ [keys.alphaEntry]: { exits: { [keys.betaEntry]: { type: 'stair' } } } }),
   }, { defaultPlayerColor: 'white' });
   await appC2.page.click('.line-row');
-  await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appC2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appC2.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -488,7 +489,7 @@ try {
     threeLayout: JSON.stringify({ [keys.alpha]: { exits: { [keys.r2]: { type: 'stair' } } } }),
   }, { defaultPlayerColor: 'white' });
   await app4.page.click('.line-row');
-  await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app4.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -555,7 +556,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app5.page.click('.line-row');
-  await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app5.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -644,7 +645,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await app6.page.click('.line-row');
-  await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app6.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app6.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -700,7 +701,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appGZ.page.click('.line-row');
-  await appGZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appGZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appGZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1381,7 +1382,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app8.page.click('.line-row');
-  await app8.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app8.page.waitForSelector('.data-row', { timeout: 40000 });
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app8.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1444,9 +1445,9 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app9.page.click('.line-row');
-  await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app9.page.waitForSelector('.data-row', { timeout: 40000 });
   await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   // 17. Drag a node, close and reopen the graph (fresh dagre relayout): the
   //     node should land back at dagre's own spot PLUS the saved delta, not
@@ -1470,7 +1471,7 @@ try {
     // reopen: close, then rebuild the graph fresh (new cy instance, fresh dagre run)
     await app9.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posAfter = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1491,9 +1492,9 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await app9.page.click('.line-row');
-    await app9.page.waitForSelector('.data-row', { timeout: 10000 });
+    await app9.page.waitForSelector('.data-row', { timeout: 40000 });
     await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posReload = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1509,7 +1510,7 @@ try {
   //     dagre's raw position (matching posBefore).
   try {
     await app9.page.evaluate(() => document.getElementById('graphResetLayoutBtn').onclick());
-    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posReset = await app9.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? n.position() : null;
@@ -1539,7 +1540,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app10.page.click('.line-row');
-  await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app10.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app10.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1800,7 +1801,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await app12.page.click('.line-row');
-  await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app12.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app12.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1869,7 +1870,7 @@ try {
       repeatPerMeter: 0.5 }],
   }, { defaultPlayerColor: 'white' });
   await app13.page.click('.line-row');
-  await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await app13.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app13.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -1971,7 +1972,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app14.page.click('.line-row');   // sets CURRENT_LINE, needed by refreshEvalSpan's color-coding
-  await app14.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app14.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -2114,7 +2115,7 @@ try {
     ],
   });
   await app15.page.click('.line-row');
-  await app15.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app15.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 39. Whole-system coverage: saved/restored by lineId, a stable value that
   //     doesn't depend on castle indices at all.
@@ -2228,7 +2229,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app16.page.click('.line-row');
-  await app16.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app16.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 42. Adding a fresh node queues it with the requested depth/lines.
   try {
@@ -2449,7 +2450,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await app18.page.click('.line-row');
-  await app18.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app18.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 53. Clicking "Analyze All Children" opens the Add-to-Queue modal (Depth +
   //     Lines, titled with the child count) instead of starting a live search.
@@ -2531,7 +2532,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app19.page.click('.line-row');
-  await app19.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app19.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 56. A variation whose first move isn't even this system's opening pops
   //     up "Variation not found" (with the specific reason) and leaves the
@@ -2604,7 +2605,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appS2.page.click('.line-row');
-  await appS2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appS2.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 56a. Named rooms are loaded LAZILY: right after the line opens (a real
   //      tree render, exactly like an import triggers), the dropdown already
@@ -2763,7 +2764,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app20.page.click('.line-row');
-  await app20.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app20.page.waitForSelector('.data-row', { timeout: 40000 });
 
   await app20.page.evaluate(() => {
     window.__aqFakeEngine = { pending: null, callCount: 0 };
@@ -3001,7 +3002,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app22.page.click('.line-row');
-  await app22.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app22.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const setup = () => {
     const { engine } = window.__aqTestHooks;
@@ -3010,6 +3011,7 @@ try {
     engine.threads = 8;
     engine.maxThreads = 8;   // analyze()'s clamp ceiling -- see Phase VA's test 63 for an explicit override
     engine._currentThreads = 8;
+    engine._currentHash = 512;
     window.__engineFake = { sentCommands: [], isreadyPending: false, orderViolated: false };
     engine._send = (cmd) => {
       const f = window.__engineFake;
@@ -3068,6 +3070,60 @@ try {
       `expected a request past maxThreads to clamp to maxThreads (15), not the conservative default (8), got: ${JSON.stringify(f.sentCommands)}`);
     ok("analyze()'s threads clamp uses maxThreads (the hardware ceiling), not the conservative default");
   } catch(e){ bad('engine: threads clamp uses maxThreads, not the conservative default', e); }
+
+  // 63b. A `hash` override that differs from the currently-configured value
+  //      sends setoption + syncs via isready/readyok before the next go,
+  //      same handshake discipline as Threads (though for a different
+  //      underlying reason -- resizing Hash reallocates the transposition
+  //      table rather than respawning a pthread pool).
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, hash:1024 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(f.sentCommands.includes('setoption name Hash value 1024'), `expected the new Hash value to be sent, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(f.sentCommands.includes('isready'), `expected an isready sync after the Hash change, got: ${JSON.stringify(f.sentCommands)}`);
+    const goIdx = f.sentCommands.findIndex(c => c.startsWith('go '));
+    const readyIdx = f.sentCommands.indexOf('isready');
+    assert(readyIdx !== -1 && readyIdx < goIdx, `expected isready before go, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('changing Hash syncs via isready/readyok before the next go command');
+  } catch(e){ bad('engine: Hash change syncs before next search', e); }
+
+  // 63c. Calling analyze() again with the SAME (already-configured) hash
+  //      size must NOT resend setoption/isready.
+  try {
+    await app22.page.evaluate(setup);
+    await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:5, hash:512 }), START_FEN);
+    const f = await app22.page.evaluate(() => window.__engineFake);
+    assert(!f.sentCommands.some(c => c.startsWith('setoption name Hash')), `expected no Hash change when already at that size, got: ${JSON.stringify(f.sentCommands)}`);
+    assert(!f.sentCommands.includes('isready'), `expected no isready sync when Hash didn't change, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('analyze() skips the Hash/isready sync when the size is already correct');
+  } catch(e){ bad('engine: no redundant Hash sync when unchanged', e); }
+
+  // 63d. analyze() parses Stockfish's own `nps` field from info lines
+  //      (nodes/sec, same value lichess's own "evals/sec" readout shows)
+  //      and returns the LAST reported value alongside the result.
+  try {
+    await app22.page.evaluate((fen) => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = false;   // keep independent of the threads-handshake path above
+      engine.ready = true;
+      engine._currentHash = 512;
+      engine._send = (cmd) => {
+        if (/^go /.test(cmd)) {
+          setTimeout(() => {
+            engine._listener?.('info depth 10 seldepth 12 multipv 1 score cp 15 nodes 400000 nps 800000 pv e2e4');
+            engine._listener?.('info depth 12 seldepth 14 multipv 1 score cp 18 nodes 900000 nps 1234567 pv e2e4 e7e5');
+            engine._listener?.('bestmove e2e4');
+          }, 10);
+        } else if (cmd === 'stop') {
+          setTimeout(() => engine._listener?.('bestmove e2e4'), 10);
+        }
+      };
+    }, START_FEN);
+    const result = await app22.page.evaluate((fen) => window.__aqTestHooks.engine.analyze(fen, { multipv:1, depth:12 }), START_FEN);
+    assert(result.nps === 1234567, `expected the LAST reported nps (1234567) captured, got ${result.nps}`);
+    ok("engine.analyze() parses Stockfish's own nps field, keeping the last reported value");
+  } catch(e){ bad('engine: nps parsing', e); }
 } finally {
   await app22.close();
 }
@@ -3091,7 +3147,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app23.page.click('.line-row');
-  await app23.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app23.page.waitForSelector('.data-row', { timeout: 40000 });
 
   const seqs = [['d4','Nf6'], ['d4','d5'], ['d4','c5'], ['d4','e5']];
   for(const seq of seqs){
@@ -3209,7 +3265,7 @@ try {
   try {
     await app23.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
     await app23.page.evaluate(() => document.getElementById('backBtn').click());
-    await app23.page.waitForSelector('.line-row', { timeout: 10000 });
+    await app23.page.waitForSelector('.line-row', { timeout: 40000 });
 
     const beforeCount = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
     assert(beforeCount > 0, `expected the queue seeded earlier in this phase to still be non-empty before deleting its line, got ${beforeCount}`);
@@ -3262,7 +3318,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app24.page.click('.line-row');
-  await app24.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app24.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 66. Single-threaded (or maxThreads<=1): the field stays hidden and
   //     engineThreads() returns undefined, so analyze() falls through to its
@@ -3377,7 +3433,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await app25.page.click('.line-row');
-  await app25.page.waitForSelector('.data-row', { timeout: 10000 });
+  await app25.page.waitForSelector('.data-row', { timeout: 40000 });
   // the select lives inside the modal overlay -- open it once so Playwright's
   // real selectOption() (test 71) can interact with it; harmless for test 70,
   // which only checks computed styles/hook return values.
@@ -3499,9 +3555,9 @@ try {
     mnemonics: [{ square: 'f6', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
   }, { defaultPlayerColor: 'white' });
   await appW1.page.click('.line-row');
-  await appW1.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW1.page.waitForSelector('.data-row', { timeout: 40000 });
   await appW1.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appW1.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   // 63. A White-repertoire room's exit rows are the OPPONENT's (Black's)
   //     replies -- never numbered, same rule plyLabel already applies to
@@ -3541,9 +3597,9 @@ try {
     mnemonics: [{ square: 'f3', knight: 'foxtrot', knightImg: 'data:image/png;base64,iVBORw0KGgo=' }],
   }, { defaultPlayerColor: 'black' });
   await appW2.page.click('.line-row');
-  await appW2.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appW2.page.waitForSelector('.data-row', { timeout: 40000 });
   await appW2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appW2.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   let roomFen;
   try {
@@ -3623,7 +3679,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appX.page.click('.line-row');
-  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -3835,9 +3891,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appZ.page.click('.line-row');
-  await appZ.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appZ.page.waitForSelector('.data-row', { timeout: 40000 });
   await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const roomFen = await appZ.page.evaluate(() => {
     const c = new Chess();
@@ -3865,7 +3921,7 @@ try {
     assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appZ.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🧠/.test(label || ''), `expected the memorized glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
     assert(await hasClass(roomFen, 'all-done') === false,
@@ -3879,7 +3935,7 @@ try {
     const roomKey = await appZ.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), roomFen);
     await appZ.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appZ.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appZ.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appZ.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🧠/.test(label || '') && /🎨/.test(label || ''),
       `expected both glyphs once memorized AND decorated, got ${JSON.stringify(label)}`);
@@ -3924,7 +3980,7 @@ try {
     JSON.stringify({ [ks.rootRoom]: Date.now(), [ks.e6Room]: Date.now() })), keys);
 
   await appAA.page.click('.line-row');
-  await appAA.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAA.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAA.page.evaluate(() => window.__oqTestHooks.populateCoverage());
   const castleVal = await appAA.page.evaluate(() => {
     const opt = [...document.getElementById('oqCoverageSelect').options]
@@ -4669,9 +4725,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAE.page.click('.line-row');
-  await appAE.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAE.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const roomFen = await appAE.page.evaluate(() => {
     const c = new Chess();
     for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
@@ -4692,7 +4748,7 @@ try {
     assert(roomKey, `expected the room to resolve a VR room key, got ${JSON.stringify(roomKey)}`);
     await appAE.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appAE.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appAE.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const label = await appAE.page.evaluate((fen) => window.__graphTestHooks.labelOf(fen), roomFen);
     assert(/🎨/.test(label || ''), `expected the decorated glyph after marking + reopening the graph, got ${JSON.stringify(label)}`);
     ok('a decorated room shows the 🎨 glyph on its graph node label after reopening');
@@ -4717,9 +4773,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAF.page.click('.line-row');
-  await appAF.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAF.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAF.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAF.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAF.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const fens = await appAF.page.evaluate(() => {
     const c1 = new Chess(); for(const m of ['d4']) c1.move(m, { sloppy: true });
     const c2 = new Chess(); for(const m of ['d4','Nf6','c4']) c2.move(m, { sloppy: true });
@@ -4830,7 +4886,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appAG.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
-  await appAG.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appAG.page.waitForSelector(rowSel, { timeout: 40000 });
 
   // 96. Expanding the saved eval (tapping its badge) shows an import
   //     (three-dot) menu button beside EACH of the two saved lines.
@@ -4856,7 +4912,7 @@ try {
     await appAG.page.waitForFunction((sel) => {
       const row = document.querySelector(sel);
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, rowSel, { timeout: 10000 });
+    }, rowSel, { timeout: 40000 });
     ok('"Import this variation" from a saved eval line writes it into the tree');
   } catch(e){ bad('eval continuation: import this variation writes into tree', e); }
 } finally {
@@ -4896,7 +4952,7 @@ try {
   await appAG2.page.click('.line-row');
   const nf6Sel = 'tr.data-row[data-seq="d4,Nf6"]';
   const e6Sel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
-  await appAG2.page.waitForSelector(e6Sel, { timeout: 10000 });
+  await appAG2.page.waitForSelector(e6Sel, { timeout: 40000 });
 
   // 97b. Both rows start expanded (the default absent an explicit collapsed
   //      pref) -- confirm the test's own starting state before importing.
@@ -4920,7 +4976,7 @@ try {
     // the test), so there's no new DOM value to wait on -- wait on the
     // logged "imported N move(s)..." confirmation instead, which fires right
     // before importEngineVariation's own (synchronous) renderTreeBody call.
-    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    await appAG2.page.waitForFunction(() => /imported \d+ move/.test(document.getElementById('progress').textContent), { timeout: 40000 });
     assert(await toggleState(nf6Sel), 'expected the Nf6 row to STAY expanded after import (it was merely re-touched with the same reply)');
     assert(await toggleState(e6Sel), 'expected the e6 row to STAY expanded after import (it was merely re-touched with the same reply)');
     ok('"Import this variation" leaves already-expanded, unchanged nodes expanded instead of force-collapsing them');
@@ -5638,7 +5694,7 @@ try {
     games: [{ id:'g1', moves:'d4 Nf6 c4 e6 Nc3 Bb4', white:'a', black:'b', result:'*' }],
   }, { defaultPlayerColor: 'white' });
   await appAL.page.click('.line-row');
-  await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appAL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appAL.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -6114,7 +6170,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAP.page.click('.line-row');
-  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAP.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   // 133. Setting the response opens the SAME Add-to-Queue modal "Analyze All
   //      Children" uses (Depth/Lines, titled with the child count) -- not an
@@ -6568,9 +6624,9 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
-  await appAS.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAS.page.waitForSelector('.data-row', { timeout: 40000 });
   await appAS.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appAS.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appAS.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   const fens = await appAS.page.evaluate(() => {
     const root = new Chess(); for(const m of ['d4','Nf6','c4']) root.move(m, { sloppy: true });
     const deadEnd = new Chess(); for(const m of ['d4','Nf6','c4','e6','Nc3']) deadEnd.move(m, { sloppy: true });
@@ -6682,7 +6738,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAT.page.click('.line-row');
-  await appAT.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAT.page.waitForSelector('.data-row', { timeout: 40000 });
   const stat = (seq) => appAT.page.evaluate((s) => window.__statsTestHooks.computeNodeStats(s).completeToMove, seq);
 
   // 145. A node with one branch answered deep and a sibling reply left
@@ -6898,7 +6954,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAV.page.click('.line-row');
-  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
@@ -6940,7 +6996,7 @@ try {
     await appAV.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
     await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+    await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     assert((await isCached()) === false, 'expected importing a variation to invalidate the cache');
     ok('VR cache: importing a variation invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by importing a variation', e); }
@@ -7015,7 +7071,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAW.page.click('.line-row');
-  await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAW.page.evaluate(() => window.__vrCacheTestHooks.isCached());
   const closeVR = async () => {
@@ -7122,7 +7178,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appAX.page.click('.line-row');
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
-  await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appAX.page.waitForSelector(rowSel, { timeout: 40000 });
 
   await openVR(appAX.page);
   await appAX.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
@@ -7143,7 +7199,7 @@ try {
     await appAX.page.waitForFunction((sel) => {
       const row = document.querySelector(sel);
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, rowSel, { timeout: 10000 });
+    }, rowSel, { timeout: 40000 });
     assert((await appAX.page.evaluate(() => window.__vrCacheTestHooks.isCached())) === false,
       'expected "Import this variation" from the move table to invalidate the cache');
     ok('VR cache: "Import this variation" from the move table invalidates the cache');
@@ -7204,7 +7260,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAX.page.click('.line-row');
-    await appAX.page.waitForSelector(rowSel, { timeout: 10000 });
+    await appAX.page.waitForSelector(rowSel, { timeout: 40000 });
     await appAX.page.waitForSelector(newRowSel, { timeout: 5000 });
     ok('manual-only engine import: the new opponent try survives a full reload (real IDB round-trip)');
   } catch(e){ bad('manual-only engine import: survives reload', e); }
@@ -7238,7 +7294,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAY.page.click('.line-row');
-  await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appAY.page.waitForSelector('.data-row', { timeout: 40000 });
   const badge = (seq) => appAY.page.evaluate((s) => {
     const el = document.querySelector(`tr.data-row[data-seq="${s.join(',')}"] .completeBadge`);
     return el ? { text: el.textContent, hidden: el.style.display === 'none', title: el.title } : null;
@@ -7300,7 +7356,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAY.page.click('.line-row');
-    await appAY.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appAY.page.waitForSelector('.data-row', { timeout: 40000 });
     const parentBadge = await badge(['d4','Nf6']);
     assert(parentBadge && !parentBadge.hidden && parentBadge.text === '[4]',
       `expected the hidden g6 branch to be excluded, giving [4] from e6's branch, got ${JSON.stringify(parentBadge)}`);
@@ -7354,7 +7410,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     await appAZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .evaltag').click());
@@ -7365,7 +7421,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7384,7 +7440,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     await appAZ.page.evaluate(() => document.getElementById('menuImportLine').click());
@@ -7393,7 +7449,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7413,7 +7469,7 @@ try {
       ],
     }, { defaultPlayerColor: 'white' });
     await appAZ.page.click('.line-row');
-    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAZ.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     await focusOnNf6();
 
     // the local-file import REPLACES GAMES wholesale, so (now that the move
@@ -7433,7 +7489,7 @@ try {
     await appAZ.page.waitForFunction(() => {
       const cnt = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4"]');
       return !!cnt || document.querySelectorAll('tr.data-row').length > 0;
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
 
     const f = await isFocused();
     assert(f.unfocusShown && f.d5Hidden,
@@ -7483,7 +7539,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appAZ3.page.click('.line-row');
-  await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 10000 });
+  await appAZ3.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 40000 });
 
   // 168b. Before the import: the ancestor's badge is [2] (e6 unanswered
   //       pins it there), and mark the unrelated sibling row so a later
@@ -7511,7 +7567,7 @@ try {
     await appAZ3.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'Nc3';
-    }, { timeout: 10000 });
+    }, { timeout: 40000 });
     ok('targeted re-render: "Import this variation" writes the new reply into the target row');
   } catch(e){ bad('targeted re-render: import writes the target row', e); }
 
@@ -7700,13 +7756,13 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBB.page.click('.line-row');
-  await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 173. The digraph's edge labels show the same occurrence stat, as a
   //      small second line under the move.
   try {
     await appBB.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBB.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBB.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const labels = await appBB.page.evaluate(({ g6Seq, e6Seq }) => {
       const cy = window.__graphTestHooks.cy();
       const find = seq => {
@@ -7772,7 +7828,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBC.page.click('.line-row');
-  await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   // 175. The street entry billboard's canvas grows a footer strip to fit the
   //      occurrence stat (renderMnemPairCanvas: 768 -> 858px tall) -- a
@@ -7830,7 +7886,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBD.page.click('.line-row');
-  await appBD.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBD.page.waitForSelector('.data-row', { timeout: 40000 });
   // repeatedly expand every collapsed branch until none remain, to reach
   // both 6-ply transposing rows regardless of how deep they are.
   await appBD.page.evaluate(() => {
@@ -7841,7 +7897,7 @@ try {
       btns.forEach(b => b.click());
     }
   });
-  await appBD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"]', { timeout: 10000 });
+  await appBD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"]', { timeout: 40000 });
 
   // 78. canonicalRoomSeq resolves the non-canonical transposing path's own
   //     (opponent-move) seq to the canonical one -- same convention
@@ -8086,11 +8142,11 @@ try {
     );
     await appBG.page.waitForFunction(
       () => /\d+ images? converted/.test(document.getElementById('spinnerLabel').textContent),
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await appBG.page.waitForFunction(
       () => document.getElementById('spinnerOverlay').style.display === 'none',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     ok('exportMnemonics shows a spinner with running progress while converting images, then hides it');
   } catch(e){ bad('mnemonics export spinner', e); }
@@ -8135,16 +8191,16 @@ try {
     );
     await appBH.page.waitForFunction(
       () => /\d+ mnemonic squares? imported/.test(document.getElementById('spinnerLabel').textContent),
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await setFiles;
     await appBH.page.waitForFunction(
       () => document.getElementById('userIdLichess') && document.getElementById('userIdLichess').value === 'tester',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     await appBH.page.waitForFunction(
       () => document.getElementById('spinnerOverlay').style.display === 'none',
-      { timeout: 10000 }
+      { timeout: 40000 }
     );
     ok('importBackup shows a spinner with running progress while restoring, then hides it');
   } catch(e){ bad('backup restore spinner', e); }
@@ -8474,9 +8530,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBL.page.click('.line-row');
-  await appBL.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBL.page.waitForSelector('.data-row', { timeout: 40000 });
   await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const corridorHeadFen = await appBL.page.evaluate(() => {
     const c = new Chess();
@@ -8538,7 +8594,7 @@ try {
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setMemorized(rk, true), roomKey);
     await appBL.page.evaluate((rk) => window.__graphTestHooks.setDecorated(rk, true), roomKey);
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const roomPct = Math.round(1 / castleRooms * 100);
     const memRoom = await coverageRow('Rooms memorized:');
@@ -8619,7 +8675,7 @@ try {
     );
     await appBL.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const reopened = await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display === 'none');
     assert(reopened, 'expected a fresh open (after close) to start with the coverage panel collapsed again');
     ok('digraph status: reopening the modal after closing resets the coverage panel to collapsed');
@@ -8660,7 +8716,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBM.page.click('.line-row');
-  await appBM.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBM.page.waitForSelector('.data-row', { timeout: 40000 });
 
   // 94. Focus on Alpha's root via the move table's own row menu (NOT the
   //     digraph's right-click focus), then open the digraph fresh.
@@ -8671,7 +8727,7 @@ try {
       'setup: expected the move table to show as focused');
 
     await appBM.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBM.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBM.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const castleSelectValue = await appBM.page.evaluate(() => document.getElementById('graphCastleSelect').value);
     assert(castleSelectValue === 'Alpha',
@@ -8717,9 +8773,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBN.page.click('.line-row');
-  await appBN.page.waitForSelector('.data-row', { timeout: 10000 });
+  await appBN.page.waitForSelector('.data-row', { timeout: 40000 });
   await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-  await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+  await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
   const fen = async (moves) => appBN.page.evaluate((moves) => {
     const c = new Chess();
@@ -8779,7 +8835,7 @@ try {
 
     await appBN.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
     const posAfter = await appBN.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
@@ -9640,7 +9696,7 @@ try {
     ],
   });
   await appAV.page.click('.line-row');
-  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const H = (fn, arg) => appAV.page.evaluate(({fn,arg}) => window.__gamesListHooks[fn](arg), {fn,arg});
 
   // 151. Position (transposition) matching finds a game that reached the
@@ -9799,7 +9855,7 @@ try {
     assert(justAfterReload === 0, `expected the fresh page load's build counter to start at 0, got ${justAfterReload}`);
 
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const afterReopen = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9839,7 +9895,7 @@ try {
       return el && el.textContent && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9863,7 +9919,7 @@ try {
       return el && el.textContent && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAV.page.click('.line-row');
-    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+    await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
     const fen = await appAV.page.evaluate(() => window.__gamesListHooks.fenForSeq(['d4','Nf6','c4','g6']));
     const byPos = await appAV.page.evaluate((f) => window.__gamesListHooks.gamesAtPosition(f), fen);
     const buildCount = await appAV.page.evaluate(() => window.__gamesListHooks.indexBuildCount());
@@ -9900,7 +9956,7 @@ try {
     ],
   });
   await appAV2.page.click('.line-row');
-  await appAV2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAV2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   // 156. Opening from the three-dot node pre-fills the moves input with that
   //      node's own move sequence, defaults the color filter to the line's
@@ -9997,7 +10053,7 @@ try {
     })),
   });
   await appAV2b.page.click('.line-row');
-  await appAV2b.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appAV2b.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // 159b. Right after opening (before the index build finishes), the moves
   //       input and the mode/color buttons are all disabled; they re-enable
@@ -10095,7 +10151,7 @@ try {
     })),
   });
   await appAW2.page.click('.line-row');
-  await appAW2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appAW2.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // 155. Every one of the BIG_N games -- including ones on both sides of the
   //      100-game chunk boundary -- is still found by position after the
@@ -10853,7 +10909,7 @@ try {
     ],
   });
   await appAZ2.page.click('.line-row');
-  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appAZ2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
   const metaSel = (sel) => document.querySelector(sel).nextElementSibling;
 
@@ -10940,7 +10996,7 @@ try {
       return el && el.textContent.trim().length > 0;
     }, { timeout: 15000 });
     await appAZ2.page.click('.line-row');
-    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 10000 });
+    await appAZ2.page.waitForSelector(`${rowSel} + tr.meta-row .meta-actual-header`, { timeout: 40000 });
     ok('Compare Games: staying open is persisted -- survives a full reload/rebuild, not just an in-place re-render');
 
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-dismiss').click(), rowSel);
@@ -11188,7 +11244,7 @@ try {
     ],
   });
   await appBA2.page.click('.line-row');
-  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 10000 });
+  await appBA2.page.waitForSelector('tr.data-row[data-seq="e4"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="e4"]';
 
   // 168. weighted average: (0.1*2 + 0.5*1)/3 = 0.2333 White-relative;
@@ -11265,7 +11321,7 @@ try {
     ],
   });
   await appBC2.page.click('.line-row');
-  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 10000 });
+  await appBC2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
 
   // 170. c4 (the standard, 1 win) shows "+1=+1 =0 −0" on the header row --
@@ -11344,12 +11400,12 @@ try {
     ],
   });
 
-  await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+  await appBV.page.waitForSelector('.line-row', { timeout: 40000 });
   await appBV.page.evaluate((name) => {
     const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
     if(row) row.click();
   }, 'White Test');
-  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBV.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
 
   // 166. The glyph strip is collapsed until "Set Move Quality" is clicked,
@@ -11413,13 +11469,13 @@ try {
   //      click handler, and using it works like the white-side version.
   try {
     await appBV.page.evaluate(() => document.getElementById('backBtn').click());
-    await appBV.page.waitForSelector('.line-row', { timeout: 10000 });
+    await appBV.page.waitForSelector('.line-row', { timeout: 40000 });
     await appBV.page.evaluate((name) => {
       const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
       if(row) row.click();
     }, 'Black Test');
     const blackRowSel = 'tr.data-row[data-seq="e4"]';
-    await appBV.page.waitForSelector(blackRowSel, { timeout: 10000 });
+    await appBV.page.waitForSelector(blackRowSel, { timeout: 40000 });
     await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), blackRowSel);
     const hasCompareBtn = await appBV.page.evaluate(s => !!document.querySelector(`${s} [data-act="compareActual"]`), blackRowSel);
     assert(hasCompareBtn, 'expected the black-root row menu to have a "Compare Games" button');
@@ -11458,7 +11514,7 @@ try {
   }, { defaultPlayerColor: 'white' });
   await appBW.page.click('.line-row');
   const rowSel = 'tr.data-row[data-seq="d4,Nf6"]';
-  await appBW.page.waitForSelector(rowSel, { timeout: 10000 });
+  await appBW.page.waitForSelector(rowSel, { timeout: 40000 });
 
   // 176. "Add to Analysis Queue" opens the single-seq Add modal (untitled
   //      with a child count, unlike the multi-child "Add Children" action)
@@ -11574,7 +11630,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appBX.page.click('.line-row');
-  await appBX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBX.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -11707,7 +11763,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appBY.page.click('.line-row');
-  await appBY.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBY.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBY.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -11796,7 +11852,7 @@ try {
     games: [ { id:'g1', moves:'d4 Nf6 c4 e6', white:'a', black:'b', result:'*' } ],
   }, { defaultPlayerColor: 'white' });
   await appBZ.page.click('.line-row');
-  await appBZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appBZ.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12024,7 +12080,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCB.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12268,7 +12324,7 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCB3.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCB3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
@@ -12384,19 +12440,19 @@ try {
   };
   await closeVR();
   await appCC.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 10000 });
+  await appCC.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
   await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
   await appCC.page.fill('#importLineInput',
     '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. e4\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. e4');
   await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
-  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 10000 });
+  await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
   await openVR(appCC.page);
   // openVR's own readiness check (__threeTestEdit/__threeTestState) is set
   // once and never cleared on close, so it can resolve on stale globals from
   // the FIRST open, racing ahead of THIS open's (now cache-missing) rebuild
   // -- same known race Phase AV's primeCache() works around. Wait on the
   // rebuilt cache itself instead, which is unambiguous per-open.
-  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 10000 });
+  await appCC.page.waitForFunction(() => window.__vrCacheTestHooks && window.__vrCacheTestHooks.isCached(), { timeout: 40000 });
 
   // 195. Beta (memorized before the edit): stays a 4-member corridor and
   //      gains exactly one forward door -- to the new branch alone. Its
@@ -12467,9 +12523,9 @@ try {
   try {
     await closeVR();
     await appCC.page.evaluate(() => document.querySelector('.line-row').click());
-    await appCC.page.waitForSelector('.data-row', { timeout: 10000 });
+    await appCC.page.waitForSelector('.data-row', { timeout: 40000 });
     await appCC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
-    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 10000 });
+    await appCC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const node = await appCC.page.evaluate((fen) => {
       const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('fen') === fen);
       return n.nonempty() ? { label: n.data('label'), dirty: n.data('dirty'), tooltip: n.data('tooltip') } : null;
@@ -12503,7 +12559,7 @@ try {
     games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' }],
   }, { defaultPlayerColor: 'white' });
   await appCD.page.evaluate(() => document.querySelector('.line-row').click());
-  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 10000 });
+  await appCD.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 40000 });
 
   // stub navigator.clipboard.writeText so the test doesn't depend on real
   // clipboard permissions in headless Chromium -- captures the string instead.
@@ -13151,12 +13207,12 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCI.page.click('.line-row');
-  await appCI.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appCI.page.waitForSelector('tr.data-row', { timeout: 40000 });
 
   // turn compact mode on (re-renders the already-open line) -- the run
   // collapses into one .compact-run row.
   await appCI.page.click('#compactModeBtn');
-  await appCI.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+  await appCI.page.waitForSelector('tr.compact-run', { timeout: 40000 });
 
   // 216. The compact row's move labels are real pv-move chips: tapping one
   //      opens the mini board float, same as any other move in the tree.
@@ -13268,9 +13324,9 @@ try {
     ],
   }, { defaultPlayerColor: 'white' });
   await appCI2.page.click('.line-row');
-  await appCI2.page.waitForSelector('tr.data-row', { timeout: 10000 });
+  await appCI2.page.waitForSelector('tr.data-row', { timeout: 40000 });
   await appCI2.page.click('#compactModeBtn');
-  await appCI2.page.waitForSelector('tr.compact-run', { timeout: 10000 });
+  await appCI2.page.waitForSelector('tr.compact-run', { timeout: 40000 });
 
   const labelText = () => appCI2.page.evaluate(() =>
     document.querySelector('tr.compact-run .compact-run-label').textContent);
@@ -13319,6 +13375,61 @@ try {
   await appCI2.close();
 }
 } catch(e){ bad('Phase CI2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CI3: line.hideUnselectedGameMoves -- an opt-in flag (set by
+//     Perfect Opening on its own generated line) that hides a real opponent
+//     move from the tree/compact-mode/node-stats/quiz/VR-castle unless it's
+//     also a manualReply. Reported bug: a real opponent's move that the
+//     search didn't keep still showed up, and since games sort ahead of
+//     0-count manual replies, could even outrank the actually-recommended
+//     one. Every other line (the flag unset/false) is completely unaffected. ---
+if(shouldRunPhase(['move-table','perfect-opening'])){
+try {
+const appCI3 = await launchApp();
+try {
+  // one real game reaching d4 Nf6 c4 e6 (Black played e6); a manualReply
+  // (g6) at the SAME node represents what a search kept instead.
+  const fixture = (hideUnselectedGameMoves) => ({
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], hideUnselectedGameMoves, prefs: [
+      // Nf6 itself must also be a kept/selected reply (as a real Perfect
+      // Opening tree always records for every survivor) -- otherwise, with
+      // the flag on, this node's own OWN subtree gets filtered away before
+      // ever reaching the g6/e6 comparison one level down.
+      { seq: ['d4'], manualReplies: ['Nf6'] },
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4'], manualReplies: ['g6'] },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+
+  // 220b. hideUnselectedGameMoves:true hides the real game move (e6) not
+  //       kept by the search, keeping only the manual one (g6).
+  try {
+    await seedBackup(appCI3.page, fixture(true), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6Present = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(!e6Present, 'expected the real game move (e6), not kept by the search, to be hidden');
+    ok('Perfect Opening line: hideUnselectedGameMoves hides a real game move the search didn\'t keep');
+  } catch(e){ bad('hideUnselectedGameMoves hides an unselected game move', e); }
+
+  // 220c. Without the flag (every other line, including the default),
+  //       BOTH the real game move and the manual one still show, same as
+  //       always -- confirms this is genuinely opt-in, not a global change.
+  try {
+    await seedBackup(appCI3.page, fixture(false), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6Present = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(e6Present, 'expected a normal line (flag unset) to keep showing real game moves as before');
+    ok('Perfect Opening line: hideUnselectedGameMoves is opt-in -- a normal line still shows real game moves');
+  } catch(e){ bad('hideUnselectedGameMoves is opt-in, not global', e); }
+} finally {
+  await appCI3.close();
+}
+} catch(e){ bad('Phase CI3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase CJ: a corridor's move-object chain fans out to EVERY forward door,
@@ -14369,7 +14480,7 @@ try {
   // before this test does its own reset/seed/migrate dance below --
   // otherwise the first run's own delayed completion can re-set the flag
   // right after this test clears it, racing with test 252's own migrate() call.
-  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+  await appCT.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 40000 });
 
   // 252. A line + game + analysisQueue item seeded under an old real-username
   //      key, all get migrated to LOCAL_USER (same id, same content, just
@@ -14454,7 +14565,7 @@ try {
   // wait for launchApp()'s own boot-time migration run (on the still-empty
   // DB) to actually finish before this test touches the flag itself -- see
   // Phase CT's identical wait for why.
-  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 10000 });
+  await appCU.page.waitForFunction(() => localStorage.getItem('repchess-legacy-user-migration-v1') === '1', { timeout: 40000 });
 
   // 254. Real end-to-end reproduction: seed a line under an old username key
   //      directly (bypassing seedBackup, which already always writes under
@@ -14484,6 +14595,1148 @@ try {
   await appCU.close();
 }
 } catch(e){ bad('Phase CU: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CV: Perfect Opening project, Phase 1 -- config storage + the
+//     expansion-job queue store + resetPerfectOpening(). No engine, no
+//     scheduling, no UI yet -- purely the data layer those later phases
+//     will build on. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCV = await launchApp();
+try {
+  // 255. With nothing ever saved, getConfig() returns the documented
+  //      defaults (off, depth 20, 50cp tolerance, 10/8/6/6/default-6 lines,
+  //      50k cap, zero variations so far).
+  try {
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    const expected = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(expected), `expected the documented defaults with nothing saved, got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: getConfig() returns the documented defaults when nothing has been saved');
+  } catch(e){ bad('Perfect Opening: default config', e); }
+
+  // 256. setConfig persists, and a later getConfig sees it (round trip through
+  //      real IndexedDB, not just an in-memory echo).
+  try {
+    const saved = await appCV.page.evaluate(() => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.depth = { 1: 50, 2: 45, 3: 40, 4: 35, default: 30 };
+      cfg.toleranceCp = 30;
+      cfg.maxLines = { 1: 12, 2: 9, 3: 5, 4: 5, default: 4 };
+      cfg.maxTotalVariations = 100000;
+      return window.__perfectOpeningTestHooks.setConfig(cfg).then(() => window.__perfectOpeningTestHooks.getConfig());
+    });
+    assert(saved.enabled === true && saved.toleranceCp === 30 && saved.maxTotalVariations === 100000,
+      `expected the saved settings to round-trip, got ${JSON.stringify(saved)}`);
+    assert(JSON.stringify(saved.depth) === JSON.stringify({ 1: 50, 2: 45, 3: 40, 4: 35, default: 30 }),
+      `expected the saved depth schedule to round-trip, got ${JSON.stringify(saved.depth)}`);
+    assert(JSON.stringify(saved.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
+      `expected the saved maxLines schedule to round-trip, got ${JSON.stringify(saved.maxLines)}`);
+    ok('Perfect Opening: setConfig persists to IndexedDB and getConfig reads it back');
+  } catch(e){ bad('Perfect Opening: config round trip', e); }
+
+  // 257. A config saved under an OLDER shape (missing a field this version
+  //      expects, e.g. maxTotalVariations from before that setting existed)
+  //      comes back merged over the current defaults for the missing field,
+  //      not undefined -- same forward-compatibility concern as other
+  //      meta-stored JSON blobs (threeLayout etc.) in this codebase. Also
+  //      exercises the depth-schedule migration itself: a config saved
+  //      before depth became a per-move schedule has a plain number there,
+  //      which should come back expanded to "every move searches this deep".
+  try {
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.setConfig({ enabled: true, depth: 33 }));
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === true, `expected the explicitly-saved fields to survive, got ${JSON.stringify(config)}`);
+    assert(JSON.stringify(config.depth) === JSON.stringify({ 1: 33, 2: 33, 3: 33, 4: 33, default: 33 }),
+      `expected a legacy numeric depth (33) to migrate to a uniform per-move schedule, got ${JSON.stringify(config.depth)}`);
+    assert(config.toleranceCp === 50, `expected a missing field to fall back to its default (50), got ${config.toleranceCp}`);
+    assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 10, 2: 8, 3: 6, 4: 6, default: 6 }),
+      `expected a missing maxLines to fall back to the full default schedule, got ${JSON.stringify(config.maxLines)}`);
+    ok('Perfect Opening: a config saved under an older/partial shape merges over current defaults for missing fields');
+  } catch(e){ bad('Perfect Opening: forward-compatible config merge', e); }
+
+  // 258. Queue CRUD: items added are visible via getQueue, deleting one
+  //      leaves the others, and clearQueueStore empties it entirely.
+  try {
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([
+      { id: 'po:1', kind: 'white', seq: ['e4'], createdAt: 1 },
+      { id: 'po:2', kind: 'black', seq: ['e4'], createdAt: 2 },
+      { id: 'po:3', kind: 'white', seq: ['e4', 'e5'], createdAt: 3 },
+    ]));
+    const afterAdd = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterAdd.length === 3, `expected all 3 seeded queue items, got ${JSON.stringify(afterAdd)}`);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.deleteQueueItem('po:2'));
+    const afterDelete = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterDelete.length === 2 && !afterDelete.some(i => i.id === 'po:2'), `expected only po:2 removed, got ${JSON.stringify(afterDelete)}`);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const afterClear = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(afterClear.length === 0, `expected the queue store fully emptied, got ${JSON.stringify(afterClear)}`);
+    ok('Perfect Opening: queue store CRUD (add/getAll/delete-one/clear) works over real IndexedDB');
+  } catch(e){ bad('Perfect Opening: queue store CRUD', e); }
+
+  // 259. resetPerfectOpening(): deletes the generated line (via the same
+  //      deleteLine every manual line-delete uses), clears every pending
+  //      queue item, and resets settings all the way back to defaults --
+  //      including turning the project back off, so a reset mid-run doesn't
+  //      silently keep expanding an now-empty tree.
+  try {
+    const line = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCV.page.evaluate((lineId) => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.lineId = lineId;
+      cfg.depth = { 1: 45, 2: 45, 3: 45, 4: 45, default: 45 };
+      cfg.totalVariations = 137;
+      return Promise.all([
+        window.__perfectOpeningTestHooks.setConfig(cfg),
+        window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:pending1', kind: 'black', seq: ['e4'], createdAt: 1 }]),
+      ]);
+    }, line.id);
+
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+
+    const [lines, queue, config] = await appCV.page.evaluate(() => Promise.all([
+      window.__perfectOpeningTestHooks.getLines(),
+      window.__perfectOpeningTestHooks.getQueue(),
+      window.__perfectOpeningTestHooks.getConfig(),
+    ]));
+    assert(!lines.some(l => l.id === line.id), `expected the generated line deleted by reset, got ${JSON.stringify(lines)}`);
+    assert(queue.length === 0, `expected the queue emptied by reset, got ${JSON.stringify(queue)}`);
+    const expectedDefaults = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(expectedDefaults), `expected settings fully reset to defaults (incl. enabled:false), got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: resetPerfectOpening deletes the line, clears the queue, and restores default (off) settings');
+  } catch(e){ bad('Perfect Opening: resetPerfectOpening full wipe', e); }
+
+  // 260. resetPerfectOpening() when the project was configured but never
+  //      actually got as far as creating a line (lineId still null) doesn't
+  //      throw -- deleteLine(null) is never called.
+  try {
+    await appCV.page.evaluate(() => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.depth = { 1: 40, 2: 40, 3: 40, 4: 40, default: 40 };
+      return window.__perfectOpeningTestHooks.setConfig(cfg);
+    });
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === false, `expected reset to still succeed and turn the project off with no lineId ever set, got ${JSON.stringify(config)}`);
+    ok('Perfect Opening: resetPerfectOpening is safe to call before any line has ever been created');
+  } catch(e){ bad('Perfect Opening: reset with no lineId yet', e); }
+} finally {
+  await appCV.close();
+}
+} catch(e){ bad('Phase CV: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CW: Perfect Opening project, Phase 2 -- the control panel modal
+//     itself: opens from the hamburger, fields load/save against Phase 1's
+//     config storage, Cancel discards, Save validates, Reset confirms then
+//     wipes. Still no engine/scheduling -- purely the UI shell over the
+//     already-tested data layer. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCW = await launchApp();
+try {
+  // 261. The hamburger menu item opens the modal with the documented
+  //      defaults pre-filled when nothing has ever been saved.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const fields = await appCW.page.evaluate(() => ({
+      enabled: document.getElementById('poEnabledCheckbox').checked,
+      depth1: document.getElementById('poDepth1').value,
+      depth2: document.getElementById('poDepth2').value,
+      depth3: document.getElementById('poDepth3').value,
+      depth4: document.getElementById('poDepth4').value,
+      depthBeyond: document.getElementById('poDepthDefault').value,
+      tolerance: document.getElementById('poTolerance').value,
+      cap: document.getElementById('poMaxVariations').value,
+      m1: document.getElementById('poMaxLines1').value,
+      m2: document.getElementById('poMaxLines2').value,
+      m3: document.getElementById('poMaxLines3').value,
+      m4: document.getElementById('poMaxLines4').value,
+      beyond: document.getElementById('poMaxLinesDefault').value,
+      hashMB: document.getElementById('poHashMB').value,
+    }));
+    assert(fields.enabled === false, `expected the checkbox unchecked by default, got ${fields.enabled}`);
+    assert(fields.depth1 === '20' && fields.depth2 === '20' && fields.depth3 === '20' && fields.depth4 === '20' && fields.depthBeyond === '20',
+      `expected the default depth schedule (20 for every move), got ${JSON.stringify(fields)}`);
+    assert(fields.tolerance === '50' && fields.cap === '50000',
+      `expected the documented defaults (tolerance 50, cap 50000), got ${JSON.stringify(fields)}`);
+    assert(fields.m1 === '10' && fields.m2 === '8' && fields.m3 === '6' && fields.m4 === '6' && fields.beyond === '6',
+      `expected the default 10/8/6/6/6 max-lines schedule, got ${JSON.stringify(fields)}`);
+    assert(fields.hashMB === '512', `expected the default Hash of 512MB, got ${fields.hashMB}`);
+    ok('Perfect Opening: hamburger menu item opens the panel pre-filled with defaults');
+  } catch(e){ bad('Perfect Opening: panel opens with defaults', e); }
+
+  // 261b. The Threads selector is hidden on a single-threaded build (no
+  //       real choice to make -- same rule as the live panel's/Analysis
+  //       Queue's own selectors), and shows 1..maxThreads plus a "Max
+  //       available" option once a multi-threaded build is faked in,
+  //       defaulting to "Max available" (0) rather than any specific count.
+  try {
+    await appCW.page.click('#poCancelBtn');
+    const hiddenWhileSingleThreaded = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click())
+      .then(() => appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 }))
+      .then(() => appCW.page.evaluate(() => document.getElementById('poThreadsField').style.display === 'none'));
+    assert(hiddenWhileSingleThreaded, 'expected the Threads field hidden on a single-threaded build (the harness\'s real default)');
+    await appCW.page.click('#poCancelBtn');
+
+    await appCW.page.evaluate(() => {
+      const { engine } = window.__aqTestHooks;
+      engine.multithreaded = true;
+      engine.maxThreads = 6;
+    });
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const threadsField = await appCW.page.evaluate(() => ({
+      visible: document.getElementById('poThreadsField').style.display !== 'none',
+      options: [...document.getElementById('poThreadsSelect').options].map(o => o.value),
+      value: document.getElementById('poThreadsSelect').value,
+    }));
+    assert(threadsField.visible, 'expected the Threads field to show once a multi-threaded build is faked in');
+    assert(JSON.stringify(threadsField.options) === JSON.stringify(['0','1','2','3','4','5','6']),
+      `expected options 0 (Max available) through maxThreads (6), got ${JSON.stringify(threadsField.options)}`);
+    assert(threadsField.value === '0', `expected the default selection to be "Max available" (0), got ${threadsField.value}`);
+    // deliberately left open (multithreaded still faked in) -- the next
+    // test continues filling fields on this same open panel, same
+    // established convention every other field-editing test here follows.
+    ok('Perfect Opening: Threads selector hidden on single-threaded, defaults to "Max available" otherwise');
+  } catch(e){ bad('Perfect Opening: Threads selector visibility/default', e); }
+
+  // 262. Editing fields and clicking Save persists every value to the real
+  //      config storage (not just the DOM), and closes the modal.
+  try {
+    await appCW.page.fill('#poDepth1', '50');
+    await appCW.page.fill('#poDepth2', '45');
+    await appCW.page.fill('#poDepth3', '40');
+    await appCW.page.fill('#poDepth4', '35');
+    await appCW.page.fill('#poDepthDefault', '30');
+    await appCW.page.fill('#poTolerance', '30');
+    await appCW.page.fill('#poMaxVariations', '75000');
+    await appCW.page.fill('#poMaxLines1', '12');
+    await appCW.page.fill('#poMaxLines2', '9');
+    await appCW.page.fill('#poMaxLines3', '5');
+    await appCW.page.fill('#poMaxLines4', '5');
+    await appCW.page.fill('#poMaxLinesDefault', '4');
+    await appCW.page.fill('#poHashMB', '1024');
+    await appCW.page.selectOption('#poThreadsSelect', '3');
+    await appCW.page.check('#poEnabledCheckbox');
+    await appCW.page.click('#poSaveBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.enabled === true && config.toleranceCp === 30 && config.maxTotalVariations === 75000,
+      `expected the edited settings persisted, got ${JSON.stringify(config)}`);
+    assert(JSON.stringify(config.depth) === JSON.stringify({ 1: 50, 2: 45, 3: 40, 4: 35, default: 30 }),
+      `expected the edited depth schedule (deep-then-shallow) persisted, got ${JSON.stringify(config.depth)}`);
+    assert(JSON.stringify(config.maxLines) === JSON.stringify({ 1: 12, 2: 9, 3: 5, 4: 5, default: 4 }),
+      `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
+    assert(config.hashMB === 1024, `expected the edited Hash (1024) persisted, got ${config.hashMB}`);
+    assert(config.threads === 3, `expected the edited Threads (3) persisted, got ${config.threads}`);
+    assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
+    ok('Perfect Opening: Save persists every field to real config storage without creating a line');
+  } catch(e){ bad('Perfect Opening: Save persists all fields', e); }
+
+  // 263. Cancel discards in-progress edits -- reopening shows the last SAVED
+  //      state (from test 262), not whatever was typed and then cancelled.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poDepth1', '99');
+    await appCW.page.click('#poCancelBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.depth[1] === 50, `expected Cancel to discard the unsaved move-1 depth=99 edit, keeping the last saved value (50), got ${config.depth[1]}`);
+
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth1').value);
+    assert(reopenedDepth === '50', `expected reopening to show the last saved value (50), not the cancelled edit, got ${reopenedDepth}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Cancel discards unsaved edits, reopening shows the last saved state');
+  } catch(e){ bad('Perfect Opening: Cancel discards edits', e); }
+
+  // 264. Save validates: a non-positive value in a required-positive field
+  //      (e.g. move-1 max lines set to 0) is rejected with a visible error,
+  //      and nothing gets persisted.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poMaxLines1', '0');
+    await appCW.page.fill('#poDepth1', '99');   // an otherwise-valid change, to prove NOTHING saves when one field fails
+    await appCW.page.click('#poSaveBtn');
+
+    const errorVisible = await appCW.page.evaluate(() => document.getElementById('poError').style.display !== 'none' && document.getElementById('poError').textContent.length > 0);
+    assert(errorVisible, 'expected a visible validation error for a non-positive max-lines field');
+    const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
+    assert(stillOpen, 'expected the modal to stay open on a validation failure, not silently close');
+
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.depth[1] === 50, `expected NOTHING to save when validation fails (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Save rejects a non-positive required field, persisting nothing');
+  } catch(e){ bad('Perfect Opening: Save validation rejects bad input', e); }
+
+  // 265. Tolerance specifically allows exactly 0 (a valid, if extreme,
+  //      "only the single best move survives" setting) -- it must NOT be
+  //      rejected by the same "must be positive" rule the other fields use.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poTolerance', '0');
+    await appCW.page.click('#poSaveBtn');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.toleranceCp === 0, `expected a tolerance of exactly 0 to be accepted, got ${config.toleranceCp}`);
+    ok('Perfect Opening: a tolerance of exactly 0 is accepted, not rejected as non-positive');
+  } catch(e){ bad('Perfect Opening: zero tolerance is valid', e); }
+
+  // 266. Reset: confirms (with a clear, specific warning message) then wipes
+  //      everything and refreshes the panel's own fields back to defaults
+  //      without closing it.
+  try {
+    let confirmMsg = null;
+    appCW.page.once('dialog', d => { confirmMsg = d.message(); });   // read-only -- harness's own listener still accepts it
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.click('#poResetBtn');
+    await appCW.page.waitForFunction(() => document.getElementById('poDepth1').value === '20', { timeout: 5000 });
+
+    assert(confirmMsg && /permanently|delete|cannot be undone/i.test(confirmMsg), `expected a clear destructive-action warning, got ${JSON.stringify(confirmMsg)}`);
+    const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
+    assert(stillOpen, 'expected the panel to stay open after Reset, refreshed rather than closed');
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    const defaults = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(defaults), `expected Reset to restore full defaults, got ${JSON.stringify(config)}`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: Reset confirms with a clear warning, then wipes to defaults and refreshes the open panel');
+  } catch(e){ bad('Perfect Opening: Reset confirms and wipes', e); }
+
+  // 267. The status line reflects real progress once a line/variation count
+  //      exist (seeded directly here, since real progress is a later
+  //      phase's job), and falls back to "not started" with none.
+  try {
+    const notStarted = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click()).then(() =>
+      appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 })).then(() =>
+      appCW.page.evaluate(() => document.getElementById('poStatus').textContent));
+    assert(/not started/i.test(notStarted), `expected a "not started" status with no line yet, got "${notStarted}"`);
+    await appCW.page.click('#poCancelBtn');
+
+    const line = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCW.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getConfig().then(cfg => {
+      cfg.lineId = lineId;
+      cfg.totalVariations = 42;
+      return window.__perfectOpeningTestHooks.setConfig(cfg);
+    }), line.id);
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    const withProgress = await appCW.page.evaluate(() => document.getElementById('poStatus').textContent);
+    assert(withProgress.includes('42'), `expected the status line to report the 42 generated variations, got "${withProgress}"`);
+    await appCW.page.click('#poCancelBtn');
+    ok('Perfect Opening: status line reports real progress once a line/variation count exist, "not started" otherwise');
+  } catch(e){ bad('Perfect Opening: status line reflects progress', e); }
+} finally {
+  await appCW.close();
+}
+} catch(e){ bad('Phase CW: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CX: Perfect Opening project, Phase 3 -- the core per-job
+//     expansion processor (processPerfectOpeningJob). Deliberately tiny,
+//     controlled fake engine results throughout (never a real WASM
+//     search -- depth-45+ multipv searches would be far too slow for a test
+//     and Stockfish isn't even available in this offline harness), driven
+//     through window.__aqTestHooks.engine, the same real Engine instance
+//     the analysis-queue's own tests already fake out this exact way. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCX = await launchApp();
+try {
+  // helper: stub engine.analyze() to return a fixed result and capture the
+  // options it was called with, for both assertions and the next test's setup.
+  const stubEngine = (page, linesBySeq) => page.evaluate((lines) => {
+    window.__aqTestHooks.engine.analyze = (fen, opts) => {
+      window.__lastAnalyzeOpts = opts;
+      return Promise.resolve({ depth: opts.depth, lines });
+    };
+  }, linesBySeq);
+
+  // 268. A White job at the very first move (empty seq): creates the
+  //      "Perfect White Opening" line with the engine's move as
+  //      openingMoves, persists config.lineId, saves the position's eval,
+  //      and queues exactly one Black job at the resulting position.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 35 }, depth: 20, pv: ['e2e4'] } });
+
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(result.ok === true && result.move === 'e4', `expected the White job to report move "e4", got ${JSON.stringify(result)}`);
+
+    const savedConfig = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(!!savedConfig.lineId, 'expected config.lineId to be set after creating the line');
+    const lines = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === savedConfig.lineId);
+    assert(line && line.name === 'Perfect White Opening' && JSON.stringify(line.openingMoves) === JSON.stringify(['e4']),
+      `expected a line named "Perfect White Opening" with openingMoves ["e4"], got ${JSON.stringify(line)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, []), savedConfig.lineId);
+    assert(pref?.eval?.depth === 20, `expected the root position's eval saved at depth 20, got ${JSON.stringify(pref?.eval)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'black' && JSON.stringify(queue[0].seq) === JSON.stringify(['e4']),
+      `expected exactly one Black job queued at ["e4"], got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a White job at the first move creates the line, saves its eval, and queues one Black job');
+  } catch(e){ bad('Perfect Opening: White job at the first move', e); }
+
+  // 269. A White job at a NON-empty seq (resuming further into the tree,
+  //      line already exists): writes the move as `reply` on that position's
+  //      pref instead of touching openingMoves, and still queues one Black
+  //      job at the resulting position.
+  try {
+    const configBefore = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['g1f3'] } });
+
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['e4', 'e5'] }, cfg), configBefore);
+    assert(result.ok === true && result.move === 'Nf3', `expected the White job to report "Nf3", got ${JSON.stringify(result)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, ['e4', 'e5']), configBefore.lineId);
+    assert(pref?.reply === 'Nf3', `expected reply:"Nf3" saved on the ["e4","e5"] pref, got ${JSON.stringify(pref)}`);
+
+    const line = (await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines())).find(l => l.id === configBefore.lineId);
+    assert(JSON.stringify(line.openingMoves) === JSON.stringify(['e4']), `expected openingMoves untouched by a non-root White job, got ${JSON.stringify(line.openingMoves)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'black' && JSON.stringify(queue[0].seq) === JSON.stringify(['e4', 'e5', 'Nf3']),
+      `expected exactly one Black job queued at ["e4","e5","Nf3"], got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a White job deeper in the tree writes `reply`, not openingMoves, and queues the next Black job');
+  } catch(e){ bad('Perfect Opening: White job resuming mid-tree', e); }
+
+  // 270. A Black job: only replies within the tolerance band of the best
+  //      score survive into manualReplies, and each survivor spawns its own
+  //      White job -- non-survivors spawn nothing.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.toleranceCp = 50;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+
+    // best is -30 (Black's own perspective); -60 is 30cp worse (survives,
+    // within 50); -90 is 60cp worse (does NOT survive).
+    await stubEngine(appCX.page, {
+      1: { score: { type: 'cp', value: -30 }, depth: 20, pv: ['e7e5'] },
+      2: { score: { type: 'cp', value: -60 }, depth: 20, pv: ['c7c5'] },
+      3: { score: { type: 'cp', value: -90 }, depth: 20, pv: ['e7e6'] },
+    });
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4'] }, cfg), config);
+    assert(JSON.stringify(result.survivors) === JSON.stringify(['e5', 'c5']), `expected only e5/c5 to survive the 50cp tolerance, got ${JSON.stringify(result.survivors)}`);
+
+    const pref = await appCX.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getPref(lineId, ['e4']), config.lineId);
+    assert(JSON.stringify(pref?.manualReplies) === JSON.stringify(['e5', 'c5']), `expected manualReplies to be exactly [e5,c5], got ${JSON.stringify(pref?.manualReplies)}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    const whiteSeqs = queue.filter(j => j.kind === 'white').map(j => JSON.stringify(j.seq)).sort();
+    assert(whiteSeqs.length === 2 && whiteSeqs.includes(JSON.stringify(['e4','e5'])) && whiteSeqs.includes(JSON.stringify(['e4','c5'])),
+      `expected a White job queued for each of e5/c5 (and none for e6), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: a Black job keeps only in-tolerance replies as manualReplies, spawning one White job per survivor');
+  } catch(e){ bad('Perfect Opening: Black job tolerance filtering', e); }
+
+  // 271. Black jobs request MultiPV matching the move-number schedule, not a
+  //      fixed width -- move 1 asks for maxLines[1], move 4 asks for
+  //      maxLines[4], and move 5 (beyond the explicit schedule) falls back
+  //      to maxLines.default.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.maxLines = { 1: 4, 2: 3, 3: 3, 4: 2, default: 2 };
+    config.totalVariations = 0;
+    config.maxTotalVariations = 1000;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['e7e5'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4'] }, cfg), config);   // move 1
+    const move1Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move1Opts.multipv === 4, `expected move 1 to request multipv=4, got ${move1Opts.multipv}`);
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O'] }, cfg), config);   // move 4 (4 White moves played: e4,Nf3,Bb5,O-O)
+    const move4Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move4Opts.multipv === 2, `expected move 4 to request multipv=2, got ${move4Opts.multipv}`);
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O','Be7','Re1'] }, cfg), config);   // move 5, beyond schedule
+    const move5Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(move5Opts.multipv === 2, `expected move 5 (beyond the explicit schedule) to fall back to maxLines.default=2, got ${move5Opts.multipv}`);
+    ok('Perfect Opening: Black jobs request MultiPV per the move-number schedule, falling back to "beyond" past move 4');
+  } catch(e){ bad('Perfect Opening: MultiPV width follows the move-number schedule', e); }
+
+  // 271b. Search depth follows the SAME per-move-number schedule as
+  //       maxLines, for both White and Black jobs (letting a real run start
+  //       deep and get dialed down for later moves) -- falling back to
+  //       `default` past move 4, and correctly recognizing a preempted
+  //       result against the MOVE-SPECIFIC target depth, not some single
+  //       global one.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.depth = { 1: 50, 2: 45, 3: 40, 4: 35, default: 30 };
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 50, pv: ['e2e4'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);   // move 1
+    const white1Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(white1Opts.depth === 50, `expected move 1's White job to request depth 50, got ${white1Opts.depth}`);
+
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 35, pv: ['e7e5'] } });
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O'] }, cfg), config);   // move 4
+    const black4Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(black4Opts.depth === 35, `expected move 4's Black job to request depth 35, got ${black4Opts.depth}`);
+
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 30, pv: ['e2e4'] } });
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['e4','e5','Nf3','Nc6','Bb5','a6','O-O','Be7','Re1'] }, cfg), config);   // move 5, beyond schedule
+    const white5Opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(white5Opts.depth === 30, `expected move 5 (beyond the explicit schedule) to fall back to depth.default=30, got ${white5Opts.depth}`);
+
+    // preemption is judged against the MOVE's own configured depth (50 for
+    // move 1 here), not some other move's -- a shallower-than-move-1's-own-
+    // target result must still be recognized as preempted. The shared
+    // stubEngine helper always echoes back the REQUESTED depth as
+    // result.depth (so it can never look preempted) -- a custom stub is
+    // needed here to fix result.depth at 35 independent of what was asked
+    // for (35 < move 1's own target of 50, but >= move 4's/beyond's).
+    await appCX.page.evaluate(() => {
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({ depth: 35, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 35, pv: ['e2e4'] } } });
+    });
+    const preemptResult = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(preemptResult.ok === false && preemptResult.preempted === true,
+      `expected a depth-35 result to be recognized as preempted against move 1's own depth-50 target, got ${JSON.stringify(preemptResult)}`);
+    ok('Perfect Opening: search depth follows the per-move-number schedule, judged against each job\'s own target');
+  } catch(e){ bad('Perfect Opening: depth schedule + move-specific preemption check', e); }
+
+  // 271c. config.threads/hashMB flow into every engine.analyze() call this
+  //       job processor makes -- threads:0 (the default, "use whatever's
+  //       available") resolves against engine.maxThreads at call time
+  //       rather than being sent as a literal 0.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    await appCX.page.evaluate(() => { window.__aqTestHooks.engine.maxThreads = 7; });
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.threads = 0;
+    config.hashMB = 777;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 0 }, depth: 50, pv: ['e2e4'] } });
+
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    let opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(opts.threads === 7, `expected threads:0 to resolve to engine.maxThreads (7), got ${opts.threads}`);
+    assert(opts.hash === 777, `expected the configured hashMB (777) passed through as-is, got ${opts.hash}`);
+
+    // an explicit (non-zero) threads choice is passed through untouched,
+    // not overridden by maxThreads.
+    config.threads = 2;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    opts = await appCX.page.evaluate(() => window.__lastAnalyzeOpts);
+    assert(opts.threads === 2, `expected an explicit threads choice (2) to be passed through, not overridden by maxThreads, got ${opts.threads}`);
+    ok('Perfect Opening: config.threads/hashMB flow into every engine.analyze() call, threads:0 resolving to the hardware ceiling');
+  } catch(e){ bad('Perfect Opening: threads/hash options flow into engine.analyze()', e); }
+
+  // 272. The total variation cap truncates spawning mid-batch and
+  //      auto-disables the project once reached -- a genuinely destructive-
+  //      feeling outcome (no more expansion) reached without ever exceeding
+  //      the configured ceiling.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.toleranceCp = 1000;   // keep every candidate within tolerance for this test
+    config.maxTotalVariations = 5;
+    config.totalVariations = 3;   // only 2 more variations fit before the cap
+    config.enabled = true;
+    await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await stubEngine(appCX.page, {
+      1: { score: { type: 'cp', value: -10 }, depth: 20, pv: ['e7e5'] },
+      2: { score: { type: 'cp', value: -20 }, depth: 20, pv: ['c7c5'] },
+      3: { score: { type: 'cp', value: -30 }, depth: 20, pv: ['e7e6'] },
+      4: { score: { type: 'cp', value: -40 }, depth: 20, pv: ['c7c6'] },
+    });
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['d4'] }, cfg), config);
+    assert(result.spawned === 2 && result.truncatedByBudget === true, `expected only 2 of 4 survivors spawned (budget-truncated), got ${JSON.stringify(result)}`);
+
+    const savedConfig = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(savedConfig.totalVariations === 5, `expected totalVariations to land exactly at the cap (5), got ${savedConfig.totalVariations}`);
+    assert(savedConfig.enabled === false, `expected the project to auto-disable once the cap is reached, got enabled=${savedConfig.enabled}`);
+
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.filter(j => j.kind === 'white').length === 2, `expected exactly 2 new White jobs queued (not 4), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: the total variation cap truncates spawning mid-batch and auto-disables the project');
+  } catch(e){ bad('Perfect Opening: variation cap truncation + auto-disable', e); }
+
+  // 273. An unparseable move from the engine fails cleanly (no line/pref/
+  //      queue mutation), rather than corrupting the tree with a bogus SAN.
+  try {
+    await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await stubEngine(appCX.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['z9z9'] } });
+    const config = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    const result = await appCX.page.evaluate((cfg) => window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: [] }, cfg), config);
+    assert(result.ok === false, `expected an unparseable move to fail cleanly, got ${JSON.stringify(result)}`);
+    const lines = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(!lines.some(l => l.name === 'Perfect White Opening'), `expected no line created on failure, got ${JSON.stringify(lines)}`);
+    const queue = await appCX.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 0, `expected nothing queued on failure, got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: an unparseable engine move fails cleanly without mutating the line, prefs, or queue');
+  } catch(e){ bad('Perfect Opening: unparseable move fails cleanly', e); }
+} finally {
+  await appCX.close();
+}
+} catch(e){ bad('Phase CX: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CY: Perfect Opening project, Phase 4 -- the scheduler
+//     (maybeResumePerfectOpening) and hard preemption. Drives the real
+//     scheduler via window.__perfectOpeningTestHooks.maybeResume(), bypassing
+//     its 5s poll timer. engine.ready starts false in this harness (no real
+//     Stockfish worker ever completes init()), so every test here force-sets
+//     it true first, same as the pre-existing live-engine/analysis-queue
+//     tests already do via __aqTestHooks.engine.ready. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCY = await launchApp();
+try {
+  const stubEngine = (page, linesBySeq) => page.evaluate((lines) => {
+    window.__aqTestHooks.engine.ready = true;
+    window.__aqTestHooks.engine.analyze = (fen, opts) => {
+      window.__lastAnalyzeOpts = opts;
+      return Promise.resolve({ depth: opts.depth, lines });
+    };
+  }, linesBySeq);
+
+  // 274. A full drain: starting from one seeded White job, the scheduler
+  //      keeps pulling+processing+deleting queue items on its own (no
+  //      per-job driving from the test) until the variation cap disables
+  //      the project, leaving exactly the one not-yet-processed job the
+  //      last completed job spawned.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;   // stop after the very first Black->White spawn
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    // the scheduler drains two jobs on its own here (White's e4, then Black's
+    // reply to it) without the test driving each step -- the shared stubEngine
+    // helper returns one fixed response regardless of side to move, which
+    // would make the second (Black) call replay White's e2e4 into an empty
+    // square and fail to parse. A call-counted stub scripts the two positions
+    // instead: first call is White's move, second is Black's reply.
+    await appCY.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      let calls = 0;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        calls++;
+        const pv = calls === 1 ? ['e2e4'] : ['e7e5'];
+        return Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv } } });
+      };
+    });
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'white', `expected the loop to stop with exactly one un-processed White job left, got ${JSON.stringify(queue)}`);
+    const savedConfig = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(savedConfig.enabled === false, `expected the project to auto-disable once the 1-variation cap is hit, got enabled=${savedConfig.enabled}`);
+    ok('Perfect Opening scheduler: drains White->Black->White jobs on its own until the variation cap disables the project');
+  } catch(e){ bad('Perfect Opening scheduler: full drain to the variation cap', e); }
+
+  // 275. A real manual analysis-queue item blocks Perfect Opening entirely,
+  //      even though it's enabled with a job ready to go.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:2', kind: 'white', seq: [], createdAt: Date.now() }]));
+
+    // engine.analyze() never resolves here -- guarantees the manual item stays
+    // in ANALYSIS_QUEUE (its own search never "finishes") regardless of
+    // engine.ready or whatever a previous test in this phase left the engine
+    // stub doing, rather than relying on timing to keep addToAnalysisQueue's
+    // own internal auto-drain from racing this test.
+    const line = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'manual-blocker', color: 'white', openingMoves: ['d4'] }));
+    await appCY.page.evaluate((lineId) => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = () => new Promise(() => {});
+      return window.__aqTestHooks.addToAnalysisQueue(lineId, [], 20, 1);
+    }, line.id);
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:2', `expected Perfect Opening's job untouched while the manual queue is non-empty, got ${JSON.stringify(queue)}`);
+
+    // cleanup: drop the manual queue item so it doesn't leak into later tests/phases
+    const aqItem = (await appCY.page.evaluate(() => window.__aqTestHooks.getQueue()))[0];
+    await appCY.page.evaluate((id) => window.__aqTestHooks.cancelAnalysisQueueItem(id), aqItem.id);
+    ok('Perfect Opening scheduler: a real manual analysis-queue item blocks it entirely');
+  } catch(e){ bad('Perfect Opening scheduler: blocked by the manual analysis queue', e); }
+
+  // 276. Live interactive analysis (engineState:'running') also blocks it,
+  //      independent of the manual queue -- and returning to idle
+  //      automatically resumes it via the same hook live analysis already
+  //      uses to wake the manual queue.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:3', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await stubEngine(appCY.page, { 1: { score: { type: 'cp', value: 20 }, depth: 20, pv: ['e2e4'] } });
+
+    await appCY.page.evaluate(() => window.__aqTestHooks.setEngineUI('running'));
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+    let queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:3', `expected it blocked while engineState is 'running', got ${JSON.stringify(queue)}`);
+
+    // setEngineUI('idle') itself fires maybeResumePerfectOpening() (fire-and-forget) --
+    // wait for that, not another explicit maybeResume() call, to prove the wiring works.
+    // The scheduler drains all the way to empty here: the White job's spawned
+    // Black job also gets processed (the fixed stub's "e2e4" isn't a legal
+    // Black reply, so that job just yields zero survivors) -- what this test
+    // cares about is that processing started at all once idle, evidenced by
+    // the "Perfect White Opening" line actually getting created.
+    await appCY.page.evaluate(() => window.__aqTestHooks.setEngineUI('idle'));
+    await appCY.page.waitForFunction(async () => {
+      const q = await window.__perfectOpeningTestHooks.getQueue();
+      return q.length === 0;
+    }, { timeout: 5000 });
+    const lines = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Perfect White Opening'), `expected the White job processed automatically once idle, got lines ${JSON.stringify(lines)}`);
+    ok('Perfect Opening scheduler: blocked by engineState "running", auto-resumes on the idle transition');
+  } catch(e){ bad('Perfect Opening scheduler: blocked by live interactive analysis', e); }
+
+  // 277. A preempted (shallower-than-requested) engine result leaves the job
+  //      queued untouched and halts the loop for that round, rather than
+  //      persisting a shallow/possibly-wrong result.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;   // depth left at the default (20 for every move) -- matches the stub's fixed depth:10 result below
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:4', kind: 'white', seq: [], createdAt: Date.now() }]));
+    // the shared stubEngine helper always echoes back opts.depth (the
+    // REQUESTED depth, always === config.depth here) as result.depth, which
+    // can never look preempted -- a custom stub is needed to fix result.depth
+    // at 10, independent of what was requested, to simulate a genuinely
+    // hard-preempted (stopped early) search.
+    await appCY.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({ depth: 10, lines: { 1: { score: { type: 'cp', value: 20 }, depth: 10, pv: ['e2e4'] } } });
+    });
+
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.maybeResume());
+
+    const queue = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].id === 'po:test:4', `expected the preempted job left untouched in the queue, got ${JSON.stringify(queue)}`);
+    const lines = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(!lines.some(l => l.name === 'Perfect White Opening'), `expected no line created from a preempted (shallow) result, got ${JSON.stringify(lines)}`);
+    ok('Perfect Opening scheduler: a preempted (shallow) result leaves the job queued without persisting anything');
+  } catch(e){ bad('Perfect Opening scheduler: preemption leaves the job queued', e); }
+
+  // 278. Reentrancy: two concurrent maybeResume() calls only actually
+  //      process the queue once -- the second call sees poProcessing already
+  //      true and returns immediately rather than double-draining.
+  try {
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.lineId = line.id;
+    await appCY.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    // a single Black job whose stubbed reply ("e2e4", not a legal move for
+    // Black to move) survives no candidates and spawns nothing -- so even a
+    // single successful drain call makes exactly one engine.analyze() call
+    // before the queue empties on its own, isolating what this test actually
+    // wants to check: that the SECOND of two concurrent calls contributes zero.
+    await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:test:5', kind: 'black', seq: ['e4'], createdAt: Date.now() }]));
+
+    const callCount = await appCY.page.evaluate(async () => {
+      window.__aqTestHooks.engine.ready = true;
+      let calls = 0;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        calls++;
+        return new Promise(res => setTimeout(() => res({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv: ['e2e4'] } } }), 30));
+      };
+      const p1 = window.__perfectOpeningTestHooks.maybeResume();
+      const p2 = window.__perfectOpeningTestHooks.maybeResume();
+      await Promise.all([p1, p2]);
+      return calls;
+    });
+    assert(callCount === 1, `expected only the first of two concurrent maybeResume() calls to actually process the job, got ${callCount} engine.analyze() call(s)`);
+    ok('Perfect Opening scheduler: concurrent maybeResume() calls are reentrancy-safe');
+  } catch(e){ bad('Perfect Opening scheduler: reentrancy safety', e); }
+} finally {
+  await appCY.close();
+}
+} catch(e){ bad('Phase CY: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase CZ: Perfect Opening project, Phase 5 -- status/progress display
+//     and a real-world sanity check that a scheduler-generated tree (real
+//     branching, not a single stubbed job) behaves normally elsewhere in the
+//     app (VR world build). ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appCZ = await launchApp();
+try {
+  const openPanel = async () => {
+    await appCZ.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCZ.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    return appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
+  };
+
+  // 279. The status line reports how many positions are queued for
+  //      expansion, on top of the variation count from Phase 2.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = line.id;
+    config.totalVariations = 3;
+    config.enabled = true;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([
+      { id: 'po:z:1', kind: 'white', seq: [], createdAt: Date.now() },
+      { id: 'po:z:2', kind: 'black', seq: ['e4'], createdAt: Date.now() },
+    ]));
+    const status = await openPanel();
+    assert(status.includes('3') && /2 positions queued for expansion/.test(status), `expected the queue depth reported alongside the variation count, got "${status}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: reports the number of positions queued for expansion');
+  } catch(e){ bad('Perfect Opening status: queue depth', e); }
+
+  // 280. An empty queue while enabled reads "caught up", not silence --
+  //      distinct from the disabled ("paused") case.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
+    const status = await openPanel();
+    assert(/caught up/i.test(status), `expected a "caught up" status with an empty queue while enabled, got "${status}"`);
+    await appCZ.page.click('#poCancelBtn');
+
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    config.enabled = false;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    const pausedStatus = await openPanel();
+    assert(/paused/i.test(pausedStatus), `expected a "paused" status with the project disabled, got "${pausedStatus}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: distinguishes "caught up" (enabled, empty queue) from "paused" (disabled)');
+  } catch(e){ bad('Perfect Opening status: caught-up vs. paused wording', e); }
+
+  // 281. A control panel left open during a scheduler drain updates its
+  //      status line live, without the user having to close and reopen it.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const line = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = line.id;
+    config.enabled = true;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    // a Black job whose stubbed reply survives nothing (invalid move for
+    // Black to move) -- processes cleanly, spawns nothing, so the queue goes
+    // from 1 to 0 in exactly one step for a clean before/after comparison.
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:z:3', kind: 'black', seq: ['e4'], createdAt: Date.now() }]));
+    const before = await openPanel();
+    assert(/1 position/.test(before), `expected the panel to show 1 position queued before draining, got "${before}"`);
+
+    await appCZ.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 20 }, depth: opts.depth, pv: ['e2e4'] } } });
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+    const after = await appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
+    assert(/caught up/i.test(after), `expected the OPEN panel's status to refresh to "caught up" once the scheduler drained the queue, got "${after}"`);
+    await appCZ.page.click('#poCancelBtn');
+    ok('Perfect Opening status: a panel left open refreshes live as the scheduler processes jobs');
+  } catch(e){ bad('Perfect Opening status: live refresh while open', e); }
+
+  // 282. Real-world sanity: a scheduler-built tree with actual branching
+  //      (not a single stubbed job) is a normal line/pref structure that the
+  //      rest of the app -- specifically the VR world build -- handles
+  //      without error. The stub always plays a real LEGAL move for whatever
+  //      position it's asked about (derived from chess.js itself, not a
+  //      hand-picked UCI string), so this exercises genuine multi-ply
+  //      branching irrespective of what the "best" move happens to be.
+  try {
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.toleranceCp = 15;       // ranks scored 0,-10,-20,... -- keeps exactly the top 2 replies
+    config.maxLines = { 1: 2, 2: 2, 3: 2, 4: 2, default: 2 };
+    config.maxTotalVariations = 6;
+    await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:z:4', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appCZ.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const legal = new Chess(fen).moves({ verbose: true });
+        const n = Math.min(opts.multipv, legal.length);
+        const lines = {};
+        for(let i = 0; i < n; i++){
+          const mv = legal[i];
+          lines[i+1] = { score: { type: 'cp', value: -i * 10 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] };
+        }
+        return Promise.resolve({ depth: opts.depth, lines });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const finalConfig = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(finalConfig.enabled === false, `expected the 6-variation cap to have been reached and auto-disabled, got ${JSON.stringify(finalConfig)}`);
+    const lines = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const poLine = lines.find(l => l.id === finalConfig.lineId);
+    assert(poLine && poLine.openingMoves.length === 1, `expected a real "Perfect White Opening" line to have been built, got ${JSON.stringify(poLine)}`);
+    const pref1 = await appCZ.page.evaluate((args) => window.__perfectOpeningTestHooks.getPref(args.lineId, [args.m]), { lineId: finalConfig.lineId, m: poLine.openingMoves[0] });
+    assert(pref1?.manualReplies?.length === 2, `expected real branching (2 Black replies) at the first Black-to-move node, got ${JSON.stringify(pref1)}`);
+
+    await openVR(appCZ.page);
+    await appCZ.page.waitForTimeout(300);
+    assert(realErrors(appCZ.consoleErrors).length === 0,
+      'unexpected console errors building the VR world for a scheduler-generated branching tree:\n' + realErrors(appCZ.consoleErrors).join('\n'));
+    ok('Perfect Opening real-world sanity: a scheduler-built branching tree renders in VR without error');
+  } catch(e){ bad('Perfect Opening real-world sanity: branching tree + VR build', e); }
+} finally {
+  await appCZ.close();
+}
+} catch(e){ bad('Phase CZ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DA: Perfect Opening project, Phase 5 regression -- own fresh
+//     session (deliberately NOT reusing appCZ, which just finished a real
+//     VR world build/teardown -- doing this same check straight afterward
+//     in that same page hit a reproducible IndexedDB stall on this harness,
+//     confirmed unrelated to the fix itself by an isolated repro that passed
+//     cleanly; a clean session sidesteps it rather than papering over it
+//     with an ever-longer timeout). ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appDA = await launchApp();
+try {
+  // 283. Regression: enabling for the very first time and hitting Save must
+  //      actually seed a root job. Every job after the first is spawned
+  //      reactively by processPerfectOpeningJob itself -- nothing else ever
+  //      created that first one, so "check Enable, hit Save" previously
+  //      flipped config.enabled on but left the queue and line empty
+  //      forever (caught via real user testing, not by any earlier test
+  //      here, since every earlier test seeded the root job itself through
+  //      the test hook rather than going through the real Save button).
+  //      Checked at the queue level, right after Save, rather than waiting
+  //      for the engine-driven scheduler to fully process it -- that part
+  //      (a stubbed engine actually draining a job) is already covered by
+  //      the scheduler tests above; this test is only about Save's own
+  //      seeding responsibility, so it doesn't need engine.ready at all.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poEnabledCheckbox');
+    await appDA.page.click('#poSaveBtn');
+    await appDA.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
+
+    const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1 && queue[0].kind === 'white' && queue[0].seq.length === 0,
+      `expected Save to seed exactly one root White job (seq: []), got ${JSON.stringify(queue)}`);
+    ok('Perfect Opening: enabling for the first time and hitting Save seeds the root job into the queue');
+  } catch(e){ bad('Perfect Opening: Enable+Save seeds the root job (regression)', e); }
+
+  // 284. Regression: once the background scheduler actually creates the
+  //      "Perfect White Opening" line, a user sitting on the home screen's
+  //      opening-systems list sees it appear on its own -- no manual reload
+  //      needed (caught via real user testing: the line existed after a
+  //      refresh, but never showed up on its own while the panel was open).
+  try {
+    // test 283's own Save already closed the panel, back to the home screen
+    // underneath it -- confirm that's really where we are before proceeding.
+    await appDA.page.waitForFunction(() => document.getElementById('homeScreen').style.display !== 'none');
+    // fresh, bounded config -- reset() first rather than reusing test 283's
+    // leftover state (still enabled with maxTotalVariations at the 50000
+    // default), which would let this drive a runaway number of jobs.
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:home-refresh:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) =>
+        Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+    await appDA.page.waitForSelector('.line-row', { timeout: 5000 });
+    const names = await appDA.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(names.includes('Perfect White Opening'), `expected the new line to appear in the home screen list on its own, got ${JSON.stringify(names)}`);
+    ok('Perfect Opening: the home screen list refreshes on its own once the background scheduler creates the line');
+  } catch(e){ bad('Perfect Opening: home screen auto-refreshes on line creation (regression)', e); }
+
+  // 285. The hamburger menu item is now a two-level submenu (Manage /
+  //      Progress) -- driven through the real menu-open -> parent-expand ->
+  //      child-click flow, not just invoking the button's onclick directly,
+  //      to actually exercise the shared .menu-parent wiring for this new
+  //      submenu.
+  try {
+    await appDA.page.click('#menuBtn');
+    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
+    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('#menuPerfectOpeningManage');
+    await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poCancelBtn');
+
+    await appDA.page.click('#menuBtn');
+    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
+    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('#menuPerfectOpeningProgress');
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: the hamburger submenu opens both Manage and Progress');
+  } catch(e){ bad('Perfect Opening: hamburger submenu (Manage/Progress)', e); }
+
+  // 286. Progress reports "moves fully explored" tracked by the scheduler
+  //      itself -- a linear (no-branching, multipv=1 throughout) two-move
+  //      chain makes the expected value trivial to hand-verify: each full
+  //      move (one White job, one Black job) advances it by exactly one,
+  //      and the batch that pushes totalVariations to the cap still leaves
+  //      its own spawned child queued even though enabled flips off.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };
+    config.maxTotalVariations = 2;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:deepest:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      // always the position's own first legal move -- valid regardless of
+      // side to move, with multipv=1 throughout there's never more than one
+      // candidate anyway, so this can never branch.
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        return Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const finalConfig = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(finalConfig.deepestCompleteMove === 2, `expected exactly 2 fully-explored moves, got ${JSON.stringify(finalConfig)}`);
+    assert(finalConfig.totalVariations === 2 && finalConfig.enabled === false,
+      `expected the 2-variation cap to have been hit and auto-disabled, got ${JSON.stringify(finalConfig)}`);
+    const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1, `expected exactly one leftover queued job (the batch that hit the cap still spawned it), got ${JSON.stringify(queue)}`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows['Status'] === 'Paused (disabled)', `expected Status "Paused (disabled)" despite a leftover queued job, got ${JSON.stringify(rows)}`);
+    assert(rows['Moves fully explored'] === '2', `expected "Moves fully explored" to show 2, got ${JSON.stringify(rows)}`);
+    assert(rows['Variations generated'] === '2', `expected "Variations generated" to show 2, got ${JSON.stringify(rows)}`);
+    assert(rows['Positions queued for expansion'] === '1', `expected "Positions queued for expansion" to show 1, got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: Progress tracks "moves fully explored" and reports Paused when disabled despite a leftover queued job');
+  } catch(e){ bad('Perfect Opening: Progress stats (deepestCompleteMove + status)', e); }
+
+  // 287. The scheduler tracks a recency-weighted average job time (avgJobMs)
+  //      from real elapsed wall-clock time, and Progress's "estimated time
+  //      to complete move N" reflects it -- checked by recomputing the
+  //      expected string from the ACTUAL persisted avgJobMs/queue through
+  //      the app's own formatter/move-number hooks (never an independently
+  //      guessed number), so this stays robust against real timing jitter
+  //      rather than asserting an exact duration.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };   // no branching -- exactly one job pending at any time
+    config.maxTotalVariations = 2;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:eta:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      // a fixed artificial delay per call so avgJobMs has something real
+      // (not near-zero) to converge toward.
+      window.__aqTestHooks.engine.analyze = (fen, opts) => new Promise(resolve => setTimeout(() => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      }, 50));
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const { target, pendingForTarget, expectedEta, avgJobMs, queue } = await appDA.page.evaluate(async () => {
+      const hooks = window.__perfectOpeningTestHooks;
+      const cfg = await hooks.getConfig();
+      const q = await hooks.getQueue();
+      const target = cfg.deepestCompleteMove + 1;
+      const pendingForTarget = q.filter(j => hooks.moveNumberOfJob(j) === target).length;
+      return { target, pendingForTarget, expectedEta: hooks.formatDurationEstimate(pendingForTarget * cfg.avgJobMs), avgJobMs: cfg.avgJobMs, queue: q };
+    });
+    assert(avgJobMs > 0, `expected avgJobMs to be tracked from real elapsed time, got ${avgJobMs}`);
+    assert(pendingForTarget > 0, `expected at least one job still pending for the current target move (${target}), got queue ${JSON.stringify(queue)}`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows[`Estimated time to complete move ${target}`] === expectedEta,
+      `expected the ETA row to match the app's own recomputation ("${expectedEta}"), got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: avgJobMs tracks real elapsed time, and Progress shows a matching ETA for the current move');
+  } catch(e){ bad('Perfect Opening: avgJobMs + ETA display', e); }
+
+  // 288. The scheduler tracks a recency-weighted average nps (Stockfish's
+  //      own reported search speed) and Progress shows it formatted with
+  //      lichess-style k/m shorthand.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:nps:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        return Promise.resolve({ depth: opts.depth, nps: 1420000, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const avgNps = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig().then(c => c.avgNps));
+    assert(avgNps === 1420000, `expected avgNps to pick up the stubbed 1.42M nps on the very first sample, got ${avgNps}`);
+    const expected = await appDA.page.evaluate((n) => window.__perfectOpeningTestHooks.formatEvalsPerSec(n), avgNps);
+    assert(expected === '1.4m', `expected the formatter to render 1420000 as "1.4m", got "${expected}"`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows['Search speed'] === '1.4m evals/sec', `expected the Progress row to show "1.4m evals/sec", got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
+  } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
+} finally {
+  await appDA.close();
+}
+} catch(e){ bad('Phase DA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

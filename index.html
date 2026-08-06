@@ -195,6 +195,23 @@
      modal's own content (two platforms + a checkbox) makes it wide enough. */
   #downloadOverlay .field{display:flex}
   #autoImportField label{flex:1 1 auto;display:flex;align-items:center;gap:.4rem}
+  /* Perfect Opening panel: same "stack one per line" fix as the download
+     modal, plus its own checkbox label (same reasoning as #autoImportField)
+     and a compact override for the 5-mini-field "max lines per move" row,
+     whose short labels would otherwise each be squeezed into the global
+     100px label width and wrap badly. */
+  #perfectOpeningOverlay .field{display:flex}
+  #perfectOpeningOverlay .field > label{flex:0 0 auto;white-space:nowrap}
+  #poEnabledField label{flex:1 1 auto;display:flex;align-items:center;gap:.4rem;white-space:normal}
+  #poMaxLinesRow{flex-wrap:wrap;row-gap:.5rem}
+  #poMaxLinesRow label{margin-right:.3rem}
+  #poDepthRow{flex-wrap:wrap;row-gap:.5rem}
+  #poDepthRow label{margin-right:.3rem}
+
+  .po-progress-row{display:flex;justify-content:space-between;gap:1rem;padding:.35rem 0;border-bottom:1px solid #eee}
+  .po-progress-row:last-child{border-bottom:none}
+  .po-progress-label{color:#555}
+  .po-progress-value{font-weight:600}
 
   #roomInfoOverlay .modal{display:flex;flex-direction:column;max-height:85vh}
   #roomInfoOverlay .modal h2,#roomInfoOverlay .modal-actions{flex:none}
@@ -714,6 +731,11 @@
       </div>
       <hr class="row-menu-sep">
       <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
+      <button class="menu-parent" data-sub="subPerfectOpening" title="Deep-search the objectively best opening line for White in the background">Perfect Opening</button>
+      <div id="subPerfectOpening" class="menu-sub">
+        <button id="menuPerfectOpeningManage" title="Turn the project on/off and tune its search settings">Manage</button>
+        <button id="menuPerfectOpeningProgress" title="See how far the background search has gotten">Progress</button>
+      </div>
       <hr class="row-menu-sep">
       <button id="menuSearchLine">Search for a Variation</button>
       <button id="menuBrowseGames">Browse Games</button>
@@ -1168,6 +1190,79 @@
   </div>
 </div>
 
+<!-- Perfect Opening project control panel -- a research feature: exhaustively
+     deep-searches the objectively best line for White (single best move each
+     ply, all Black replies within a tolerance band explored as branches),
+     running only when the real analysis queue above is idle. See db.js's
+     "Perfect Opening project" section for the data model. -->
+<div id="perfectOpeningOverlay" class="overlay">
+  <div class="modal" style="width:min(32em,92vw)">
+    <h2>Perfect Opening Project</h2>
+    <p class="objlist-hint" style="margin-top:0">Deep-searches the objectively best line for White: one best move each ply, every Black reply within the tolerance band explored as its own branch. Runs in the background, only when the Analysis Queue above is empty.</p>
+
+    <div class="field" id="poEnabledField">
+      <label><input type="checkbox" id="poEnabledCheckbox"> Enable Perfect Opening searching</label>
+    </div>
+
+    <h3 class="modal-h3">Search settings</h3>
+    <div class="field">
+      <label>Pruning tolerance (cp):</label><input id="poTolerance" type="number" min="0" style="width:70px">
+    </div>
+    <div class="field">
+      <label>Total variation cap:</label><input id="poMaxVariations" type="number" min="1" style="width:100px">
+    </div>
+
+    <h3 class="modal-h3">Search depth, per move</h3>
+    <div class="field" id="poDepthRow">
+      <label>Move 1:</label><input id="poDepth1" type="number" min="1" max="99" style="width:55px">
+      <label>Move 2:</label><input id="poDepth2" type="number" min="1" max="99" style="width:55px">
+      <label>Move 3:</label><input id="poDepth3" type="number" min="1" max="99" style="width:55px">
+      <label>Move 4:</label><input id="poDepth4" type="number" min="1" max="99" style="width:55px">
+      <label>Beyond:</label><input id="poDepthDefault" type="number" min="1" max="99" style="width:55px">
+    </div>
+
+    <h3 class="modal-h3">Max Black replies kept, per move</h3>
+    <div class="field" id="poMaxLinesRow">
+      <label>Move 1:</label><input id="poMaxLines1" type="number" min="1" max="50" style="width:55px">
+      <label>Move 2:</label><input id="poMaxLines2" type="number" min="1" max="50" style="width:55px">
+      <label>Move 3:</label><input id="poMaxLines3" type="number" min="1" max="50" style="width:55px">
+      <label>Move 4:</label><input id="poMaxLines4" type="number" min="1" max="50" style="width:55px">
+      <label>Beyond:</label><input id="poMaxLinesDefault" type="number" min="1" max="50" style="width:55px">
+    </div>
+
+    <h3 class="modal-h3">Engine resources</h3>
+    <p class="objlist-hint" style="margin-top:0">Perfect Opening never runs while the Analysis Queue or live analysis needs the engine, so it's safe to let it use everything available while it has the engine to itself.</p>
+    <div class="field">
+      <label>Hash (MB):</label><input id="poHashMB" type="number" min="16" max="8192" style="width:90px">
+    </div>
+    <div class="field" id="poThreadsField">
+      <label>Threads:</label>
+      <select id="poThreadsSelect"></select>
+    </div>
+
+    <p id="poStatus" class="objlist-hint"></p>
+    <p id="poError" class="objlist-hint" style="color:#c62828;display:none"></p>
+
+    <div class="modal-actions" style="display:flex;justify-content:space-between">
+      <button id="poResetBtn" style="color:#c62828">Reset Perfect Opening…</button>
+      <span>
+        <button id="poCancelBtn">Cancel</button>
+        <button id="poSaveBtn">Save</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div id="perfectOpeningProgressOverlay" class="overlay">
+  <div class="modal" style="width:min(28em,92vw)">
+    <h2 style="margin-top:0">Perfect Opening Progress</h2>
+    <div id="poProgressBody"></div>
+    <div class="modal-actions" style="justify-content:flex-end">
+      <button id="poProgressCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- manage mnemonics modal (full-screen grid) -->
 <div id="mnemonicsOverlay" class="overlay">
   <div class="modal">
@@ -1429,7 +1524,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-50"></script>
+<script src="js/db.js?v=20260804-54"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1446,6 +1541,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-299"></script>
+<script type="module" src="js/app.js?v=20260804-312"></script>
 </body>
 </html>

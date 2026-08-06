@@ -3,7 +3,7 @@
    history and per-line repertoire preferences (reply / note / mnemonic).
 */
 const DB_NAME = 'repchess-db';
-const DB_VERSION = 7;   // v7 adds safetyBackup (crash-surviving pre-restore snapshot)
+const DB_VERSION = 8;   // v7 adds safetyBackup (crash-surviving pre-restore snapshot); v8 adds perfectOpeningQueue
 
 /* ---------- one-time wipe of pre-release test data ----------
    No legacy data is worth preserving; localStorage is no longer read
@@ -69,6 +69,15 @@ function openDB(){
         const aq = db.createObjectStore('analysisQueue', {keyPath:'id'});
         aq.createIndex('status','status');
         aq.createIndex('user','user');
+      }
+      // Perfect Opening project's own pending-expansion-job queue -- kept
+      // separate from analysisQueue (see app.js's Perfect Opening section):
+      // its jobs are reactively self-spawning (one result creates several
+      // more), a different processing model than analysisQueue's flat,
+      // user-curated list, and mixing thousands of these into that queue's
+      // own UI would bury the user's own manually-added items.
+      if(!db.objectStoreNames.contains('perfectOpeningQueue')){
+        db.createObjectStore('perfectOpeningQueue', {keyPath:'id'});
       }
       // Deliberately NOT in clearAllData()'s store list -- its whole purpose
       // is a pre-restore snapshot that survives the exact wipe that store
@@ -194,10 +203,16 @@ async function getGames(user){
 // a backup) — VR decoration keys embed the line id via castleInstanceId(), so a
 // regenerated id would orphan every castle room + building facade/sign in
 // threeLayout. Left unset, a fresh unique id is minted as before.
-async function createLine(user, {name, color, openingMoves, id}){
+async function createLine(user, {name, color, openingMoves, id, hideUnselectedGameMoves}){
   const db = await openDB();
   const lineId = id || `${user}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
   const line = {id: lineId, user, name, color, openingMoves: openingMoves || [], createdAt: Date.now()};
+  // opt-in only -- Perfect Opening sets this on its own generated line so a
+  // real opponent's move that the search itself didn't keep never shows up
+  // (and, since games sort first, never outranks an actually-recommended
+  // reply); every other line keeps showing real game moves as normal, since
+  // that's how a repertoire gets built from actual play.
+  if(hideUnselectedGameMoves) line.hideUnselectedGameMoves = true;
   return new Promise((resolve,reject)=>{
     const txn = db.transaction('lines','readwrite');
     txn.objectStore('lines').put(line);
@@ -597,13 +612,148 @@ async function clearMnemonics(){
 /* ---------- full wipe, used before restoring a complete backup ---------- */
 async function clearAllData(){
   const db = await openDB();
-  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists','analysisQueue'];
+  const stores = ['games','lines','prefs','mnemonics','meta','assets','objectLists','analysisQueue','perfectOpeningQueue'];
   return new Promise((resolve,reject)=>{
     const txn = db.transaction(stores,'readwrite');
     for(const s of stores) txn.objectStore(s).clear();
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });
+}
+
+/* ---------- Perfect Opening project ----------
+   Settings + progress live as one JSON blob in the existing meta store
+   (small, rewritten wholesale on every save -- same pattern as threeLayout/
+   graphLayout); pending expansion jobs get their own real object store
+   (perfectOpeningQueue) since that can grow into the thousands, where a
+   single-blob approach would mean rewriting the whole thing on every job
+   processed.
+*/
+const PERFECT_OPENING_DEFAULT_CONFIG = {
+  enabled: false,
+  lineId: null,            // the generated "Perfect White Opening" line's id, once created
+  // search depth per move NUMBER (not ply -- same convention as maxLines
+  // below), falling back to `default` beyond the ones explicitly listed --
+  // lets a real run start deep (e.g. 50) and be dialed down for later moves
+  // as the tree's branching makes that no longer time-feasible.
+  depth: { 1: 20, 2: 20, 3: 20, 4: 20, default: 20 },
+  toleranceCp: 50,
+  // max candidate replies kept per move NUMBER (not ply -- move 1 covers
+  // both the White and Black half-move at that number), falling back to
+  // `default` for any move beyond the ones explicitly listed here.
+  maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
+  maxTotalVariations: 50000,
+  totalVariations: 0,      // running count of surviving leaf lines so far
+  // highest move NUMBER with no queued job at or before it -- i.e. every
+  // White move and every kept Black reply up through this move number has
+  // already been searched. Maintained by the scheduler (maybeResumePerfectOpening
+  // in app.js) as a running high-water mark, not recomputed from scratch,
+  // since the queue alone can't answer this once it's fully drained (either
+  // paused mid-run or genuinely finished).
+  deepestCompleteMove: 0,
+  // recency-weighted average wall-clock ms per completed job, maintained by
+  // the scheduler -- feeds the Progress view's "estimated time to complete
+  // move N" readout. Fast-adapting (see maybeResumePerfectOpening's own
+  // comment) so it converges quickly after a depth/move-number transition
+  // rather than staying skewed by a much slower or faster earlier move.
+  avgJobMs: 0,
+  // recency-weighted average nodes/sec (Stockfish's own reported `nps`),
+  // same fast-adapting smoothing as avgJobMs -- feeds the Progress view's
+  // search-speed readout ("512k evals/sec" etc., same idea as lichess's).
+  avgNps: 0,
+  // 0 means "use whatever the engine reports as its own cores-1 ceiling"
+  // (engine.maxThreads), resolved at analyze()-call time rather than baked
+  // in here, since the right number is a property of whatever device is
+  // actually running the search, not something that should travel as a
+  // fixed number across a backup restored onto a different machine. Perfect
+  // Opening never runs while anything else needs the engine, so unlike the
+  // live panel/analysis queue's own (conservative, shared-with-the-user)
+  // thread selectors, defaulting to the hardware ceiling is the right
+  // default here, not just an option.
+  threads: 0,
+  // MB -- see engine.js's own Hash-related comments for why bigger helps a
+  // long unattended run (the transposition table stays warm across every
+  // job) and why this should be treated as a "set once" value: changing it
+  // reallocates (and therefore empties) the table.
+  hashMB: 512,
+};
+function cloneDefaultPerfectOpeningConfig(){
+  return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines }, depth: { ...PERFECT_OPENING_DEFAULT_CONFIG.depth } };
+}
+async function getPerfectOpeningConfig(){
+  const raw = await getMeta('perfectOpeningConfig');
+  if(!raw) return cloneDefaultPerfectOpeningConfig();
+  try {
+    const parsed = JSON.parse(raw);
+    // a config saved before depth became a per-move schedule has a plain
+    // number here -- treat it as "every move searches this deep", same
+    // effective behavior as before this change.
+    const parsedDepth = typeof parsed.depth === 'number'
+      ? { 1: parsed.depth, 2: parsed.depth, 3: parsed.depth, 4: parsed.depth, default: parsed.depth }
+      : (parsed.depth || {});
+    // merge over the defaults (not just trust what's stored) so a field
+    // added to this shape in a later version doesn't come back undefined
+    // for a config saved before that field existed.
+    return { ...cloneDefaultPerfectOpeningConfig(), ...parsed,
+      maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines, ...(parsed.maxLines || {}) },
+      depth: { ...PERFECT_OPENING_DEFAULT_CONFIG.depth, ...parsedDepth } };
+  } catch(e){
+    console.warn('[db] perfectOpeningConfig was corrupt JSON, using defaults', e);
+    return cloneDefaultPerfectOpeningConfig();
+  }
+}
+async function setPerfectOpeningConfig(config){
+  await setMeta('perfectOpeningConfig', JSON.stringify(config));
+}
+
+async function getPerfectOpeningQueue(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('perfectOpeningQueue','readonly').objectStore('perfectOpeningQueue').getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+async function addPerfectOpeningQueueItems(items){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    const store = txn.objectStore('perfectOpeningQueue');
+    for(const item of items) store.put(item);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+async function deletePerfectOpeningQueueItem(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    txn.objectStore('perfectOpeningQueue').delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+async function clearPerfectOpeningQueueStore(){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction('perfectOpeningQueue','readwrite');
+    txn.objectStore('perfectOpeningQueue').clear();
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+// Wipes the Perfect Opening project back to a clean slate: deletes the
+// generated line (and its prefs/analysisQueue rows, via the exact same
+// deleteLine every manual line-delete already goes through), clears every
+// pending expansion job, and resets settings to their defaults -- including
+// turning the project back off, since a reset mid-run should stop it rather
+// than silently keep going against a now-empty tree.
+async function resetPerfectOpening(){
+  const config = await getPerfectOpeningConfig();
+  if(config.lineId) await deleteLine(config.lineId);
+  await clearPerfectOpeningQueueStore();
+  await setPerfectOpeningConfig(cloneDefaultPerfectOpeningConfig());
 }
 
 /* ---------- safety backup (crash-surviving pre-restore snapshot) ----------
