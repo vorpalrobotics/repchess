@@ -14626,7 +14626,7 @@ try {
   // 261. The hamburger menu item opens the modal with the documented
   //      defaults pre-filled when nothing has ever been saved.
   try {
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const fields = await appCW.page.evaluate(() => ({
       enabled: document.getElementById('poEnabledCheckbox').checked,
@@ -14674,7 +14674,7 @@ try {
   // 263. Cancel discards in-progress edits -- reopening shows the last SAVED
   //      state (from test 262), not whatever was typed and then cancelled.
   try {
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poDepth', '99');
     await appCW.page.click('#poCancelBtn');
@@ -14683,7 +14683,7 @@ try {
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     assert(config.depth === 45, `expected Cancel to discard the unsaved depth=99 edit, keeping the last saved value (45), got ${config.depth}`);
 
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth').value);
     assert(reopenedDepth === '45', `expected reopening to show the last saved value (45), not the cancelled edit, got ${reopenedDepth}`);
@@ -14695,7 +14695,7 @@ try {
   //      (e.g. move-1 max lines set to 0) is rejected with a visible error,
   //      and nothing gets persisted.
   try {
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poMaxLines1', '0');
     await appCW.page.fill('#poDepth', '50');   // an otherwise-valid change, to prove NOTHING saves when one field fails
@@ -14716,7 +14716,7 @@ try {
   //      "only the single best move survives" setting) -- it must NOT be
   //      rejected by the same "must be positive" rule the other fields use.
   try {
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poTolerance', '0');
     await appCW.page.click('#poSaveBtn');
@@ -14732,7 +14732,7 @@ try {
   try {
     let confirmMsg = null;
     appCW.page.once('dialog', d => { confirmMsg = d.message(); });   // read-only -- harness's own listener still accepts it
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.click('#poResetBtn');
     await appCW.page.waitForFunction(() => document.getElementById('poDepth').value === '20', { timeout: 5000 });
@@ -14751,7 +14751,7 @@ try {
   //      exist (seeded directly here, since real progress is a later
   //      phase's job), and falls back to "not started" with none.
   try {
-    const notStarted = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click()).then(() =>
+    const notStarted = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click()).then(() =>
       appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 })).then(() =>
       appCW.page.evaluate(() => document.getElementById('poStatus').textContent));
     assert(/not started/i.test(notStarted), `expected a "not started" status with no line yet, got "${notStarted}"`);
@@ -14763,7 +14763,7 @@ try {
       cfg.totalVariations = 42;
       return window.__perfectOpeningTestHooks.setConfig(cfg);
     }), line.id);
-    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const withProgress = await appCW.page.evaluate(() => document.getElementById('poStatus').textContent);
     assert(withProgress.includes('42'), `expected the status line to report the 42 generated variations, got "${withProgress}"`);
@@ -15152,7 +15152,7 @@ try {
 const appCZ = await launchApp();
 try {
   const openPanel = async () => {
-    await appCZ.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appCZ.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCZ.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     return appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
   };
@@ -15298,7 +15298,7 @@ try {
   //      seeding responsibility, so it doesn't need engine.ready at all.
   try {
     await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
-    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpening').click());
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDA.page.click('#poEnabledCheckbox');
     await appDA.page.click('#poSaveBtn');
@@ -15339,6 +15339,75 @@ try {
     assert(names.includes('Perfect White Opening'), `expected the new line to appear in the home screen list on its own, got ${JSON.stringify(names)}`);
     ok('Perfect Opening: the home screen list refreshes on its own once the background scheduler creates the line');
   } catch(e){ bad('Perfect Opening: home screen auto-refreshes on line creation (regression)', e); }
+
+  // 285. The hamburger menu item is now a two-level submenu (Manage /
+  //      Progress) -- driven through the real menu-open -> parent-expand ->
+  //      child-click flow, not just invoking the button's onclick directly,
+  //      to actually exercise the shared .menu-parent wiring for this new
+  //      submenu.
+  try {
+    await appDA.page.click('#menuBtn');
+    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
+    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('#menuPerfectOpeningManage');
+    await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poCancelBtn');
+
+    await appDA.page.click('#menuBtn');
+    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
+    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('#menuPerfectOpeningProgress');
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: the hamburger submenu opens both Manage and Progress');
+  } catch(e){ bad('Perfect Opening: hamburger submenu (Manage/Progress)', e); }
+
+  // 286. Progress reports "moves fully explored" tracked by the scheduler
+  //      itself -- a linear (no-branching, multipv=1 throughout) two-move
+  //      chain makes the expected value trivial to hand-verify: each full
+  //      move (one White job, one Black job) advances it by exactly one,
+  //      and the batch that pushes totalVariations to the cap still leaves
+  //      its own spawned child queued even though enabled flips off.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxLines = { 1: 1, 2: 1, 3: 1, 4: 1, default: 1 };
+    config.maxTotalVariations = 2;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:deepest:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      // always the position's own first legal move -- valid regardless of
+      // side to move, with multipv=1 throughout there's never more than one
+      // candidate anyway, so this can never branch.
+      window.__aqTestHooks.engine.analyze = (fen, opts) => {
+        const mv = new Chess(fen).moves({ verbose: true })[0];
+        return Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: [mv.from + mv.to + (mv.promotion || '')] } } });
+      };
+      return window.__perfectOpeningTestHooks.maybeResume();
+    });
+
+    const finalConfig = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(finalConfig.deepestCompleteMove === 2, `expected exactly 2 fully-explored moves, got ${JSON.stringify(finalConfig)}`);
+    assert(finalConfig.totalVariations === 2 && finalConfig.enabled === false,
+      `expected the 2-variation cap to have been hit and auto-disabled, got ${JSON.stringify(finalConfig)}`);
+    const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    assert(queue.length === 1, `expected exactly one leftover queued job (the batch that hit the cap still spawned it), got ${JSON.stringify(queue)}`);
+
+    await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appDA.page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('#poProgressBody .po-progress-row')].map(
+        row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
+    ));
+    assert(rows['Status'] === 'Paused (disabled)', `expected Status "Paused (disabled)" despite a leftover queued job, got ${JSON.stringify(rows)}`);
+    assert(rows['Moves fully explored'] === '2', `expected "Moves fully explored" to show 2, got ${JSON.stringify(rows)}`);
+    assert(rows['Variations generated'] === '2', `expected "Variations generated" to show 2, got ${JSON.stringify(rows)}`);
+    assert(rows['Positions queued for expansion'] === '1', `expected "Positions queued for expansion" to show 1, got ${JSON.stringify(rows)}`);
+    await appDA.page.click('#poProgressCloseBtn');
+    ok('Perfect Opening: Progress tracks "moves fully explored" and reports Paused when disabled despite a leftover queued job');
+  } catch(e){ bad('Perfect Opening: Progress stats (deepestCompleteMove + status)', e); }
 } finally {
   await appDA.close();
 }

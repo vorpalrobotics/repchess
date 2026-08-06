@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-306';
+const BUILD_TAG = '-307';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8910,8 +8910,45 @@ async function openPerfectOpeningPanel(){
   $('perfectOpeningOverlay').style.display = 'flex';
   await renderPerfectOpeningStatus(config);
 }
-$('menuPerfectOpening').onclick = openPerfectOpeningPanel;
+$('menuPerfectOpeningManage').onclick = openPerfectOpeningPanel;
 $('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'none'; };
+
+function poProgressRow(label, value){
+  return `<div class="po-progress-row"><span class="po-progress-label">${escapeHtml(label)}</span><span class="po-progress-value">${escapeHtml(String(value))}</span></div>`;
+}
+async function renderPerfectOpeningProgress(config){
+  if(!config.lineId){
+    $('poProgressBody').innerHTML = poProgressRow('Status', 'Not started yet');
+    return;
+  }
+  const pending = (await getPerfectOpeningQueue()).length;
+  // enabled is checked FIRST -- hitting the variation cap auto-disables the
+  // project but can still leave jobs queued (the batch that pushed it over
+  // the cap spawns children right up to the moment it disables), so a
+  // non-empty queue does not by itself mean the scheduler will touch it.
+  const status = !config.enabled ? 'Paused (disabled)' : (pending ? 'Running' : 'Caught up (waiting for the engine to free up)');
+  $('poProgressBody').innerHTML = [
+    poProgressRow('Status', status),
+    poProgressRow('Variations generated', config.totalVariations),
+    poProgressRow('Moves fully explored', config.deepestCompleteMove),
+    poProgressRow('Positions queued for expansion', pending),
+  ].join('');
+}
+function poProgressModalOpen(){ return $('perfectOpeningProgressOverlay').style.display === 'flex'; }
+// mirrors renderPerfectOpeningStatusIfOpen -- keeps the Progress view live
+// while it's open instead of only refreshing whenever it's next opened.
+function renderPerfectOpeningProgressIfOpen(){
+  if(!poProgressModalOpen()) return;
+  getPerfectOpeningConfig().then(config => renderPerfectOpeningProgress(config));
+}
+async function openPerfectOpeningProgressPanel(){
+  $('menuList').style.display = 'none';
+  const config = await getPerfectOpeningConfig();
+  $('perfectOpeningProgressOverlay').style.display = 'flex';
+  await renderPerfectOpeningProgress(config);
+}
+$('menuPerfectOpeningProgress').onclick = openPerfectOpeningProgressPanel;
+$('poProgressCloseBtn').onclick = () => { $('perfectOpeningProgressOverlay').style.display = 'none'; };
 
 $('poSaveBtn').onclick = async () => {
   const depth = +$('poDepth').value;
@@ -9132,7 +9169,23 @@ async function maybeResumePerfectOpening(){
         break;
       }
       await deletePerfectOpeningQueueItem(job.id);
+      // "move N is fully complete" once nothing queued sits at ply <= 2N-1
+      // (White's move N is ply 2N-2, Black's reply is ply 2N-1) -- the FIFO
+      // queue processes strictly in ply order (each job's children are
+      // appended after every already-queued same-ply sibling), so the
+      // shallowest remaining ply is always a true floor on what's left.
+      // Only ever moves forward (a momentarily-empty queue holds the last
+      // known value, since there's nothing left to compute it from).
+      const freshQueue = await getPerfectOpeningQueue();
+      if(freshQueue.length){
+        const deepest = Math.floor(Math.min(...freshQueue.map(j => j.seq.length)) / 2);
+        if(deepest > config.deepestCompleteMove){
+          config.deepestCompleteMove = deepest;
+          await setPerfectOpeningConfig(config);
+        }
+      }
       renderPerfectOpeningStatusIfOpen();
+      renderPerfectOpeningProgressIfOpen();
     }
   } finally {
     poProcessing = false;
@@ -9142,6 +9195,7 @@ async function maybeResumePerfectOpening(){
     // job, so without this the panel could be left showing a stale "queued"
     // count from before the stopping condition was hit.
     renderPerfectOpeningStatusIfOpen();
+    renderPerfectOpeningProgressIfOpen();
   }
 }
 
@@ -9799,7 +9853,7 @@ if(localStorage.getItem('threeTestDebug')){
     defaultConfig: () => JSON.parse(JSON.stringify({
       enabled: false, lineId: null, depth: 20, toleranceCp: 50,
       maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
-      maxTotalVariations: 50000, totalVariations: 0,
+      maxTotalVariations: 50000, totalVariations: 0, deepestCompleteMove: 0,
     })),
     getConfig: () => getPerfectOpeningConfig(),
     setConfig: (config) => setPerfectOpeningConfig(config),

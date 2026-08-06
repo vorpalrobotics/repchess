@@ -206,6 +206,11 @@
   #poMaxLinesRow{flex-wrap:wrap;row-gap:.5rem}
   #poMaxLinesRow label{margin-right:.3rem}
 
+  .po-progress-row{display:flex;justify-content:space-between;gap:1rem;padding:.35rem 0;border-bottom:1px solid #eee}
+  .po-progress-row:last-child{border-bottom:none}
+  .po-progress-label{color:#555}
+  .po-progress-value{font-weight:600}
+
   #roomInfoOverlay .modal{display:flex;flex-direction:column;max-height:85vh}
   #roomInfoOverlay .modal h2,#roomInfoOverlay .modal-actions{flex:none}
 
@@ -724,7 +729,11 @@
       </div>
       <hr class="row-menu-sep">
       <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
-      <button id="menuPerfectOpening" title="Deep-search the objectively best opening line for White in the background">Perfect Opening Project</button>
+      <button class="menu-parent" data-sub="subPerfectOpening" title="Deep-search the objectively best opening line for White in the background">Perfect Opening Project</button>
+      <div id="subPerfectOpening" class="menu-sub">
+        <button id="menuPerfectOpeningManage" title="Turn the project on/off and tune its search settings">Manage</button>
+        <button id="menuPerfectOpeningProgress" title="See how far the background search has gotten">Progress</button>
+      </div>
       <hr class="row-menu-sep">
       <button id="menuSearchLine">Search for a Variation</button>
       <button id="menuBrowseGames">Browse Games</button>
@@ -1226,6 +1235,16 @@
   </div>
 </div>
 
+<div id="perfectOpeningProgressOverlay" class="overlay">
+  <div class="modal" style="width:min(28em,92vw)">
+    <h2 style="margin-top:0">Perfect Opening Progress</h2>
+    <div id="poProgressBody"></div>
+    <div class="modal-actions" style="justify-content:flex-end">
+      <button id="poProgressCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- manage mnemonics modal (full-screen grid) -->
 <div id="mnemonicsOverlay" class="overlay">
   <div class="modal">
@@ -1504,6 +1523,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-306"></script>
+<script type="module" src="js/app.js?v=20260804-307"></script>
 </body>
 </html>

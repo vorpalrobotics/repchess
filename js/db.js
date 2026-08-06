@@ -634,6 +634,13 @@ const PERFECT_OPENING_DEFAULT_CONFIG = {
   maxLines: { 1: 10, 2: 8, 3: 6, 4: 6, default: 6 },
   maxTotalVariations: 50000,
   totalVariations: 0,      // running count of surviving leaf lines so far
+  // highest move NUMBER with no queued job at or before it -- i.e. every
+  // White move and every kept Black reply up through this move number has
+  // already been searched. Maintained by the scheduler (maybeResumePerfectOpening
+  // in app.js) as a running high-water mark, not recomputed from scratch,
+  // since the queue alone can't answer this once it's fully drained (either
+  // paused mid-run or genuinely finished).
+  deepestCompleteMove: 0,
 };
 function cloneDefaultPerfectOpeningConfig(){
   return { ...PERFECT_OPENING_DEFAULT_CONFIG, maxLines: { ...PERFECT_OPENING_DEFAULT_CONFIG.maxLines } };
