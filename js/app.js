@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-320';
+const BUILD_TAG = '-321';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2284,6 +2284,15 @@ async function loadMemorizedRooms(){
   try { MEMORIZED_ROOMS = JSON.parse(await getMeta('threeMemorizedRooms') || '{}'); }
   catch { MEMORIZED_ROOMS = {}; }
 }
+// re-reads memorized-room progress and, if the move table is the screen
+// underneath, re-renders it so a room just memorized/unmemorized in VR shows
+// its new green/plain state (refreshBranchName) the moment you close VR,
+// rather than only after the digraph is next opened (which does its own
+// independent loadMemorizedRooms call) or the line is reopened.
+async function refreshMemorizedRoomsAndTree(){
+  await loadMemorizedRooms();
+  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
+}
 // "fully decorated" room progress (see js/threeVR.js's own DECORATED, which
 // this mirrors) -- same independent-read pattern as MEMORIZED_ROOMS above.
 let DECORATED_ROOMS = {};
@@ -3185,7 +3194,7 @@ $('castleWalkBtn').onclick = async () => {
     linkedCastles,
     piecesFile: PIECES_FILE,
     onRoomRename: makeRoomRenamer(roomNameIndex),
-    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
   });
 };
@@ -3403,6 +3412,24 @@ function inheritedCastle(lineSeq, lineId = CURRENT_LINE?.id){
     if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
   }
   return '';
+}
+/* The VR room key a pref's own room (one ply past it, via its `reply`) maps
+   to -- for badging a move-table row's room name green when memorized. Takes
+   the pref record itself (not a bare seq) since it already carries both
+   `seq` (every pref does, see db.js's setPref) and `reply`, so no separate
+   lookup is needed. Unlike canonicalRoomSeq, this does NOT need
+   buildCastleGraph's transposition-merge resolution: the room key is keyed
+   on positionKey(fen), which is already transposition-safe on its own (two
+   move orders reaching the identical position hash to the same key), so any
+   seq that reaches the room resolves to the same key a canonical seq would.
+   Returns null when there's no room here at all (no reply yet, or not part
+   of any castle). */
+function roomKeyForSaved(saved){
+  if(!saved?.seq || !saved?.reply) return null;
+  const roomSeq = [...saved.seq, saved.reply];
+  const castle = inheritedCastle(roomSeq, CURRENT_LINE?.id);
+  if(!castle) return null;
+  return castleRoomKey(castleInstanceId(CURRENT_LINE.id, castle), positionKey(fenForSeq(roomSeq)));
 }
 /* resolves `seq` (the OPPONENT-move seq a row's own attributes pref is keyed
    on -- same convention genRoomMeta uses, one ply back from the room itself,
@@ -5142,6 +5169,7 @@ async function openLine(line){
     }
 
     PREFS = await getAllPrefs(line.id);
+    await loadMemorizedRooms();   // so a room's name shows green (refreshBranchName) from the very first render, not only after the digraph has separately loaded it
 
     board?.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
 
@@ -6601,7 +6629,7 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     piecesFile: PIECES_FILE,
     startRoomKey,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
-    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); },
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
   });
 }
@@ -8574,6 +8602,8 @@ function refreshBranchName(nameSpan, saved){
   if(!text){ nameSpan.style.display='none'; return; }
   nameSpan.textContent = text;
   nameSpan.style.display='';
+  const roomKey = roomKeyForSaved(saved);
+  nameSpan.classList.toggle('branchName-memorized', !!(roomKey && MEMORIZED_ROOMS[roomKey]));
 }
 
 function refreshBranchStats(statsSpan, games, childrenSeq){
