@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-314';
+const BUILD_TAG = '-315';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9200,7 +9200,20 @@ function scoreToComparable(score){
 async function addManualReplyTo(lineId, seq, move){
   const existing = (await getPref(lineId, seq))?.manualReplies || [];
   if(existing.includes(move)) return;
-  await setPref(lineId, seq, { manualReplies: [...existing, move] });
+  const manualReplies = [...existing, move];
+  await setPref(lineId, seq, { manualReplies });
+  // if this line happens to be open right now, sync the in-memory PREFS
+  // mirror and re-render -- unlike processPerfectOpeningJob's own reply
+  // write (above), nothing runs after this call in the same job to trigger
+  // that render, so without this a newly-discovered Black survivor would
+  // stay invisible in the tree until some other job happens to touch this
+  // same line, or the line is reopened.
+  if(CURRENT_LINE && CURRENT_LINE.id === lineId){
+    invalidateBuiltCastlesCache();   // a new opponent try can open a new exit/room, same as addManualReply
+    const key = prefKey(lineId, seq);
+    PREFS[key] = {...(PREFS[key] ?? {key, lineId, seq, reply:'', note:'', mnemonic:'', hidden:false}), manualReplies};
+    renderTreeBody(CURRENT_LINE);
+  }
 }
 
 async function processPerfectOpeningJob(job, config){
@@ -9238,9 +9251,23 @@ async function processPerfectOpeningJob(job, config){
         if($('homeScreen').style.display !== 'none') renderHome();
       } else {
         await updateLine(lineId, { openingMoves: [san] });
+        // this line's own openingMoves lives on CURRENT_LINE itself, not a
+        // pref -- updateLine alone leaves the in-memory object (and the tree
+        // rendered from it) showing the old value until the line is reopened,
+        // same staleness saveAnalysisQueueResult's own PREFS sync (below)
+        // exists to avoid for eval writes.
+        if(CURRENT_LINE && CURRENT_LINE.id === lineId) CURRENT_LINE.openingMoves = [san];
       }
     } else {
       await setPref(lineId, job.seq, { reply: san });
+      // setPref writes straight to IndexedDB, bypassing the in-memory PREFS
+      // mirror the open tree actually renders from -- sync it here (like
+      // savePrefField does for a manual edit) so this reply shows up on the
+      // very next render rather than staying invisible until a reload.
+      if(CURRENT_LINE && CURRENT_LINE.id === lineId){
+        const key = prefKey(lineId, job.seq);
+        PREFS[key] = {...(PREFS[key] ?? {key, lineId, seq: job.seq, reply:'', note:'', mnemonic:'', hidden:false}), reply: san};
+      }
     }
     await saveAnalysisQueueResult({ lineId, seq: job.seq }, fen, result);
 

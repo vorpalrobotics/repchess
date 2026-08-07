@@ -13453,6 +13453,71 @@ try {
     assert(e6Present, 'expected a normal line (flag unset) to keep showing real game moves as before');
     ok('Perfect Opening line: hideUnselectedGameMoves is opt-in -- a normal line still shows real game moves');
   } catch(e){ bad('hideUnselectedGameMoves is opt-in, not global', e); }
+
+  // 220d. Regression: while a Perfect Opening line is the one currently open
+  //       in the tree view, a Black job's own manualReplies write
+  //       (addManualReplyTo) went straight to IndexedDB, bypassing the
+  //       in-memory PREFS mirror renderTreeBody actually reads from -- so a
+  //       newly-discovered candidate reply stayed invisible in the open tree
+  //       (despite plenty of background activity) until the line was closed
+  //       and reopened, which re-fetched PREFS from scratch and "suddenly"
+  //       showed everything that had piled up. Exercised via processJob (the
+  //       real per-job processor, same one the background scheduler drives)
+  //       rather than the scheduler loop, so the fake engine result lands
+  //       deterministically in one call. Doubles as a check that a real game
+  //       move (e6, hidden by hideUnselectedGameMoves since it isn't a
+  //       manualReply yet) flips to visible the instant the search actually
+  //       keeps it, live, with no reopen.
+  try {
+    await seedBackup(appCI3.page, fixture(true), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6HiddenBefore = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(!e6HiddenBefore, 'expected e6 still hidden before the Black job runs (sanity check on the fixture)');
+    const lineId = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.getLines().then(ls => ls.find(l => l.name === 'Test').id));
+
+    const config = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = lineId;
+    await appCI3.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCI3.page.evaluate(() => {
+      // d4,Nf6,c4 (Black to move) -- e7e6 is a legal reply, and the sole
+      // returned line is trivially its own "best" (tolerance always clears).
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({
+        depth: 20, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['e7e6'] } },
+      });
+    });
+    await appCI3.page.evaluate((cfg) =>
+      window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['d4','Nf6','c4'] }, cfg), config);
+
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="e6"]', { timeout: 5000 });
+    ok('Perfect Opening: a Black job\'s new manualReply shows up in the currently-open tree immediately, without reopening the line');
+  } catch(e){ bad('Perfect Opening: live tree refresh on background writes (regression)', e); }
+
+  // 220e. Same regression, the other write site: a White job's own `reply`
+  //       (setPref) also went straight to IndexedDB bypassing PREFS -- the
+  //       g6 row (already on screen, no reply chosen for it yet) should show
+  //       its new standard reply the instant a White job finds one.
+  try {
+    const g6ReplyBefore = await appCI3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="g6"] .ourReply')?.textContent.trim());
+    assert(g6ReplyBefore === '...', `expected the unfilled reply placeholder for g6 (sanity check on the fixture), got "${g6ReplyBefore}"`);
+
+    const lineId = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.getLines().then(ls => ls.find(l => l.name === 'Test').id));
+    const config = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = lineId;
+    await appCI3.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCI3.page.evaluate(() => {
+      // d4,Nf6,c4,g6 (White to move) -- Nf3 is a legal reply.
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({
+        depth: 20, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['g1f3'] } },
+      });
+    });
+    await appCI3.page.evaluate((cfg) =>
+      window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['d4','Nf6','c4','g6'] }, cfg), config);
+
+    await appCI3.page.waitForFunction(() =>
+      document.querySelector('tr.data-row[data-opp="g6"] .ourReply')?.textContent.trim().includes('Nf3'), { timeout: 5000 });
+    ok('Perfect Opening: a White job\'s new reply shows up in the currently-open tree immediately, without reopening the line');
+  } catch(e){ bad('Perfect Opening: live tree refresh on a White job\'s reply write (regression)', e); }
 } finally {
   await appCI3.close();
 }
