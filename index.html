@@ -950,6 +950,28 @@
   </div>
 </div>
 
+<!-- boot-time offer to install the default mnemonics/assets bundles into a
+     blank environment -- each row only shows for a store that's actually
+     empty (see maybeOfferDefaultContent in app.js), both checked by default -->
+<div id="defaultContentOverlay" class="overlay">
+  <div class="modal" style="max-width:28em">
+    <h2>Install Starter Content?</h2>
+    <p>You don't have this set up yet. REPchess can install a ready-made set to get you started — you can edit or replace any of it later.</p>
+    <div class="field" style="text-align:left">
+      <label id="defaultContentMnemRow" style="display:block;margin:.6em 0">
+        <input type="checkbox" id="defaultContentMnemChk"> Default Mnemonics (memory-palace words &amp; images)
+      </label>
+      <label id="defaultContentAssetsRow" style="display:block;margin:.6em 0">
+        <input type="checkbox" id="defaultContentAssetsChk"> Default Assets (VR props &amp; object lists)
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="defaultContentSkipBtn">Skip</button>
+      <button id="defaultContentInstallBtn">Install Selected</button>
+    </div>
+  </div>
+</div>
+
 <!-- add note / mnemonic modal -->
 <div id="fieldOverlay" class="overlay">
   <div class="modal">
@@ -1579,6 +1601,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-317"></script>
+<script type="module" src="js/app.js?v=20260804-318"></script>
 </body>
 </html>

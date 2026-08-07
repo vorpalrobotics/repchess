@@ -58,7 +58,7 @@ function startServer(){
 // threeTestDebug=false boots the app the way a REAL user's browser does --
 // no localStorage.threeTestDebug flag, so no __xTestHooks are exposed and
 // every `if(!localStorage.getItem('threeTestDebug'))`-guarded boot path
-// (there's exactly one today: maybeOfferDefaultMnemonics) actually runs.
+// (there's exactly one today: maybeOfferDefaultContent) actually runs.
 // Every other test in this suite wants the flag ON (default), since that's
 // what exposes the hooks tests drive things through -- this mode exists
 // specifically to catch bugs that only manifest in real boot code the

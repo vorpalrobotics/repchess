@@ -8500,68 +8500,162 @@ try {
 
 } catch(e){ bad('Phase BI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BJ: boot-time "install default mnemonics?" offer
-//     (json/repchess-mnemonics-DEFAULT.json.gz), driven via
-//     __mnemDefaultTestHooks. The real auto-run on boot is skipped under
-//     threeTestDebug (see the guarded call near renderHome() in app.js) so
-//     ordinary tests that boot with an empty mnemonics store don't all pay
-//     for a real fetch+decompress+import -- only this dedicated test drives
-//     it, end to end, against the real committed file. ---
+// --- Phase BJ: boot-time "install starter content?" offer -- one combined
+//     modal for the default mnemonics (json/repchess-mnemonics-DEFAULT.json.gz)
+//     and default assets (json/repchess-assets-DEFAULT.json.gz) bundles,
+//     driven via __defaultContentTestHooks. The real auto-run on boot is
+//     skipped under threeTestDebug (see the guarded call near renderHome() in
+//     app.js) so ordinary tests that boot with empty stores don't all pay for
+//     a real fetch+decompress+import, and don't have to fight a full-screen
+//     modal they never asked for -- only these dedicated tests drive it, end
+//     to end, against the real committed files. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBJ = await launchApp();
 try {
-  // 87. A fresh browser has no mnemonics and hasn't been offered yet;
-  //     accepting the offer installs the real default bundle and remembers
-  //     the decision so it won't ask again.
+  // 295. A fresh browser has neither store populated and hasn't been offered
+  //      yet; the modal shows both rows, both checked by default. Accepting
+  //      installs both real bundles and remembers both decisions.
   try {
-    const before = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(before).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(before).length} square(s)`);
-    const offeredBefore = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!offeredBefore, 'expected the offer to not have been made yet on a fresh boot');
+    const beforeMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const beforeAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(beforeMnem).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(beforeMnem).length} square(s)`);
+    assert(beforeAssets.length === 0, `expected an empty assets store on a fresh boot, got ${beforeAssets.length} asset(s)`);
+    const mnemOfferedBefore = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOfferedBefore = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!mnemOfferedBefore && !assetsOfferedBefore, 'expected neither offer to have been made yet on a fresh boot');
 
-    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    await appBJ.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBJ.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    const rowState = await appBJ.page.evaluate(() => ({
+      mnemRow: document.getElementById('defaultContentMnemRow').style.display,
+      assetsRow: document.getElementById('defaultContentAssetsRow').style.display,
+      mnemChecked: document.getElementById('defaultContentMnemChk').checked,
+      assetsChecked: document.getElementById('defaultContentAssetsChk').checked,
+    }));
+    assert(rowState.mnemRow !== 'none' && rowState.assetsRow !== 'none', `expected both rows shown, got ${JSON.stringify(rowState)}`);
+    assert(rowState.mnemChecked && rowState.assetsChecked, `expected both checkboxes checked by default, got ${JSON.stringify(rowState)}`);
 
-    const after = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(after).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
-    const offeredAfter = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!!offeredAfter, 'expected the offer to be marked as made after accepting');
-    ok('accepting the default-mnemonics offer installs the real bundle and remembers the decision');
-  } catch(e){ bad('default mnemonics offer: accept installs the real bundle', e); }
+    await appBJ.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
 
-  // 88. Once offered, a later call is a silent no-op -- no confirm(), no re-install.
+    const afterMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const afterAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(afterMnem).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
+    assert(afterAssets.length > 0, 'expected accepting the offer to install the default assets bundle');
+    const mnemOfferedAfter = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOfferedAfter = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!mnemOfferedAfter && !!assetsOfferedAfter, 'expected both offers to be marked as made after accepting');
+    ok('accepting the starter-content offer installs both real bundles and remembers both decisions');
+  } catch(e){ bad('starter-content offer: accepting both installs both real bundles', e); }
+
+  // 296. Once both are offered, a later call is a silent no-op -- the modal
+  //      never even shows.
   try {
-    await appBJ.page.evaluate(() => { window.confirm = () => { throw new Error('confirm() should not be called again'); }; });
-    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
-    ok('default mnemonics offer: already-offered is a silent no-op on a later boot');
-  } catch(e){ bad('default mnemonics offer: no re-prompt once already offered', e); }
+    await appBJ.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBJ.page.waitForTimeout(200);
+    const display = await appBJ.page.evaluate(() => document.getElementById('defaultContentOverlay').style.display);
+    assert(display !== 'flex', `expected no re-prompt once both are already offered, got display=${JSON.stringify(display)}`);
+    ok('starter-content offer: already-offered (both) is a silent no-op on a later boot');
+  } catch(e){ bad('starter-content offer: no re-prompt once both already offered', e); }
 } finally {
   await appBJ.close();
 }
 
 } catch(e){ bad("phase @ line 6605 (tags: ['mnemonics'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BK: declining the default-mnemonics offer leaves the store empty
-//     but still remembers the decision, so it doesn't nag on every boot. ---
+// --- Phase BK: declining (Skip) the starter-content offer leaves both
+//     stores empty but still remembers both decisions, so it doesn't nag on
+//     every boot. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBK = await launchApp();
 try {
-  // 89. Decline -> nothing installed, but the offer is still marked made.
+  // 297. Skip -> nothing installed, but both offers are still marked made.
   try {
-    await appBK.page.evaluate(() => { window.confirm = () => false; });
-    await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
-    const stored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(stored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(stored).length} square(s)`);
-    const offered = await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!!offered, 'expected declining to still mark the offer as made (so it does not nag again)');
-    ok('declining the default-mnemonics offer installs nothing but remembers the decision');
-  } catch(e){ bad('default mnemonics offer: decline leaves store empty but remembers decision', e); }
+    await appBK.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK.page.evaluate(() => document.getElementById('defaultContentSkipBtn').onclick());
+    const mnemStored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length === 0, `expected Skip to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
+    assert(assetsStored.length === 0, `expected Skip to leave the assets store empty, got ${assetsStored.length} asset(s)`);
+    const mnemOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!mnemOffered && !!assetsOffered, 'expected Skip to still mark both offers as made (so it does not nag again)');
+    ok('Skip on the starter-content offer installs nothing but remembers both decisions');
+  } catch(e){ bad('starter-content offer: Skip leaves both stores empty but remembers both decisions', e); }
 } finally {
   await appBK.close();
 }
 
 } catch(e){ bad('Phase BK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase BK2: a store that already has content (e.g. mnemonics installed
+//     some other way before this ever ran) doesn't get its row shown or its
+//     offer re-asked, but a genuinely empty sibling store still gets its own
+//     row -- the two are independent despite sharing one modal. ---
+if(shouldRunPhase(['mnemonics'])){
+try {
+const appBK2 = await launchApp();
+try {
+  // 298. Mnemonics already populated, assets empty -> only the assets row
+  //      shows; accepting only installs assets, and mnemonics is marked
+  //      offered without ever being asked about.
+  try {
+    await appBK2.page.evaluate(() => setMnemonicSquare('e4', { queen: 'seeded-before-offer' }));
+    await appBK2.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK2.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    const rowState = await appBK2.page.evaluate(() => ({
+      mnemRow: document.getElementById('defaultContentMnemRow').style.display,
+      assetsRow: document.getElementById('defaultContentAssetsRow').style.display,
+    }));
+    assert(rowState.mnemRow === 'none', `expected the mnemonics row hidden (store already has content), got ${JSON.stringify(rowState)}`);
+    assert(rowState.assetsRow !== 'none', `expected the assets row shown (store is empty), got ${JSON.stringify(rowState)}`);
+
+    await appBK2.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+
+    const mnemStored = await appBK2.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK2.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length === 1 && mnemStored.e4?.queen === 'seeded-before-offer',
+      `expected the pre-existing mnemonic left untouched, got ${JSON.stringify(mnemStored)}`);
+    assert(assetsStored.length > 0, 'expected the assets row being checked to still install the default assets bundle');
+    const mnemOffered = await appBK2.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    assert(!!mnemOffered, 'expected mnemonics to be marked offered even though its row was never shown');
+    ok('starter-content offer: a store that already has content is skipped silently while its empty sibling is still offered');
+  } catch(e){ bad('starter-content offer: independent per-store eligibility', e); }
+} finally {
+  await appBK2.close();
+}
+
+} catch(e){ bad('Phase BK2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase BK3: unchecking one of the two checkboxes before clicking
+//     Install only installs the other one -- the checkboxes are real,
+//     independent per-item choices, not an all-or-nothing accept. ---
+if(shouldRunPhase(['mnemonics'])){
+try {
+const appBK3 = await launchApp();
+try {
+  // 299. Uncheck Assets, leave Mnemonics checked -> only mnemonics installs.
+  try {
+    await appBK3.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK3.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK3.page.evaluate(() => { document.getElementById('defaultContentAssetsChk').checked = false; });
+    await appBK3.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+
+    const mnemStored = await appBK3.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK3.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length > 0, 'expected the still-checked mnemonics box to install the default bundle');
+    assert(assetsStored.length === 0, 'expected the unchecked assets box to install nothing');
+    const assetsOffered = await appBK3.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!assetsOffered, 'expected assets to still be marked offered even though it was unchecked, not installed');
+    ok('starter-content offer: unchecking one item installs only the other, and still marks both offered');
+  } catch(e){ bad('starter-content offer: per-checkbox install selection', e); }
+} finally {
+  await appBK3.close();
+}
+
+} catch(e){ bad('Phase BK3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BL: the digraph modal's status line leads with the real VR
 //     "castle room(s)" count (a corridor/two-track room collapses several

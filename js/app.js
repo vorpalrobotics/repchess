@@ -31,6 +31,8 @@ const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof Decompression
 // synchronous top-level call, on every real (non-threeTestDebug) page load.
 const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
 const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+const ASSETS_DEFAULT_URL = 'json/repchess-assets-DEFAULT.json.gz';
+const ASSETS_DEFAULT_OFFERED_KEY = 'assetsDefaultOffered';
 const MNEM_NOTES_KEY = 'mnemonicsNotes';
 const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
 const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
@@ -77,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-317';
+const BUILD_TAG = '-318';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5597,14 +5599,14 @@ document.addEventListener('visibilitychange', () => {
   maybeResumePerfectOpening();
 });
 
-// offer the default mnemonics bundle when there's nothing in the mnemonics
-// store yet (see maybeOfferDefaultMnemonics, defined below). Skipped under
-// the test harness, whose dialog handler auto-accepts every confirm() --
-// without this guard, any test that boots with an empty mnemonics store
-// would silently trigger a real fetch+decompress+import of the (large)
-// bundle. The dedicated test for this feature drives it explicitly via
-// __mnemDefaultTestHooks instead.
-if(!localStorage.getItem('threeTestDebug')) maybeOfferDefaultMnemonics();
+// offer the default mnemonics/assets bundles when there's nothing in their
+// stores yet (see maybeOfferDefaultContent, defined below). Skipped under the
+// test harness -- without this guard, any test that boots with an empty
+// mnemonics/assets store would pop the (real, full-screen) offer modal over
+// every other test's UI, and accepting it would trigger a real
+// fetch+decompress+import of the (large) bundles. The dedicated tests for
+// this feature drive it explicitly via __defaultContentTestHooks instead.
+if(!localStorage.getItem('threeTestDebug')) maybeOfferDefaultContent();
 
 /* ---------- hamburger menu ---------- */
 function collapseMenuSubs(){
@@ -6098,29 +6100,49 @@ async function importMnemonicsBundle(data, onProgress){
   log(`replaced mnemonics — imported ${data.mnemonics.length} square(s)`);
 }
 
-/* ---------- default mnemonics bundle (offered on boot) ----------
-   json/repchess-mnemonics-DEFAULT.json.gz is a standalone mnemonics bundle
-   (same repchessMnemonics shape as an exported bundle) committed to the repo,
-   so a brand-new user can start with a ready-made set of memory-palace
-   words/images instead of a blank grid. Offered once: the decision (install
-   or skip) is remembered in meta so it doesn't nag on every boot after that.
-   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY are declared near the top of the
-   file now (a boot-time TDZ fix). */
-async function maybeOfferDefaultMnemonics(){
-  if(!GZIP_OK) return;   // the bundle is gzipped; can't read it without DecompressionStream
-  if(await getMeta(MNEM_DEFAULT_OFFERED_KEY)) return;
-  const existing = await getAllMnemonics();
-  if(Object.keys(existing).length){ await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1'); return; }
+/* ---------- default mnemonics / assets bundles (offered on boot) ----------
+   json/repchess-mnemonics-DEFAULT.json.gz and json/repchess-assets-DEFAULT.json.gz
+   are standalone bundles (same shape an export produces) committed to the
+   repo, so a brand-new user can start with a ready-made memory-palace
+   word/image set and prop library instead of a blank slate. Each is offered
+   independently -- only shown (and only checked by default) when its own
+   store is still empty -- but through ONE combined modal with a checkbox per
+   offered item, so installing both at once (the common case) is a single
+   confirmation. Each is asked about at most once ever: the decision (install
+   or skip) is remembered in meta so neither nags on a later boot, whether or
+   not that particular checkbox was shown this time.
+   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY/ASSETS_DEFAULT_URL/
+   ASSETS_DEFAULT_OFFERED_KEY are declared near the top of the file now (a
+   boot-time TDZ fix -- see the comment there). */
+async function maybeOfferDefaultContent(){
+  if(!GZIP_OK) return;   // both bundles are gzipped; can't read them without DecompressionStream
+  const mnemAlreadyOffered = await getMeta(MNEM_DEFAULT_OFFERED_KEY);
+  const assetsAlreadyOffered = await getMeta(ASSETS_DEFAULT_OFFERED_KEY);
+  const offerMnem = !mnemAlreadyOffered && Object.keys(await getAllMnemonics()).length === 0;
+  const offerAssets = !assetsAlreadyOffered && (await getAllAssets()).length === 0;
 
-  await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1');
-  if(!confirm(
-    'INSTALL DEFAULT MNEMONICS?\n\n' +
-    'You don\'t have any mnemonics (memory-palace words/images) set up yet. ' +
-    'REPchess can install a ready-made set to get you started — you can edit ' +
-    'or replace any of it later from Manage Mnemonics.\n\n' +
-    'Install the default set now?'
-  )) return;
+  // mark both as offered now, before showing anything -- a closed tab or
+  // crash mid-modal can't cause either to re-nag on the next boot, and a
+  // store that already has content (so its own checkbox won't be shown) is
+  // marked done without ever asking, same as before.
+  if(!mnemAlreadyOffered) await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1');
+  if(!assetsAlreadyOffered) await setMeta(ASSETS_DEFAULT_OFFERED_KEY, '1');
+  if(!offerMnem && !offerAssets) return;
 
+  $('defaultContentMnemRow').style.display = offerMnem ? '' : 'none';
+  $('defaultContentAssetsRow').style.display = offerAssets ? '' : 'none';
+  $('defaultContentMnemChk').checked = true;
+  $('defaultContentAssetsChk').checked = true;
+  $('defaultContentOverlay').style.display = 'flex';
+  $('defaultContentSkipBtn').onclick = () => { $('defaultContentOverlay').style.display = 'none'; };
+  $('defaultContentInstallBtn').onclick = async () => {
+    $('defaultContentOverlay').style.display = 'none';
+    if(offerMnem && $('defaultContentMnemChk').checked) await installDefaultMnemonics();
+    if(offerAssets && $('defaultContentAssetsChk').checked) await installDefaultAssets();
+  };
+}
+
+async function installDefaultMnemonics(){
   const spinner = showSpinner('Downloading default mnemonics…');
   await nextPaint();
   try{
@@ -6141,6 +6163,26 @@ async function maybeOfferDefaultMnemonics(){
   }catch(err){
     console.error('[default mnemonics] install failed',err);
     log('failed to install default mnemonics: '+err.message,true);
+  }finally{
+    hideSpinner(spinner);
+  }
+}
+
+async function installDefaultAssets(){
+  const spinner = showSpinner('Downloading default assets…');
+  await nextPaint();
+  try{
+    const resp = await fetch(ASSETS_DEFAULT_URL);
+    if(!resp.ok) throw new Error(`fetch failed (${resp.status})`);
+    const text = await gunzipToText(await resp.blob());
+    const data = JSON.parse(text);
+    if(!isAssetBundle(data)) throw new Error('default assets file is not a valid bundle');
+    $('spinnerLabel').textContent = 'Installing default assets…';
+    await importAssetBundle(data);
+    log('installed default assets');
+  }catch(err){
+    console.error('[default assets] install failed',err);
+    log('failed to install default assets: '+err.message,true);
   }finally{
     hideSpinner(spinner);
   }
@@ -10013,16 +10055,23 @@ if(localStorage.getItem('threeTestDebug')){
   };
 }
 
-// test-only hook for the boot-time "install default mnemonics?" offer, which
-// is skipped from the real auto-run under threeTestDebug (see the guarded
-// call up near renderHome()) so a test can drive it explicitly instead --
-// exercises the real committed json/repchess-mnemonics-DEFAULT.json.gz file
-// end to end (fetch, gunzip, parse, import).
+// test-only hook for the boot-time "install starter content?" offer (default
+// mnemonics + default assets, one combined modal), skipped from the real
+// auto-run under threeTestDebug (see the guarded call up near renderHome())
+// so a test can drive it explicitly instead. offer() only shows the modal and
+// wires its buttons -- it resolves as soon as that's done, WITHOUT waiting for
+// a click, so a test must await it, then interact with the real
+// #defaultContentOverlay checkboxes/buttons itself (exactly like a real user),
+// then wait on whatever effect it expects (store contents, log line, etc).
+// Exercises the real committed json/repchess-*-DEFAULT.json.gz files end to
+// end (fetch, gunzip, parse, import) when a checkbox is left checked.
 if(localStorage.getItem('threeTestDebug')){
-  window.__mnemDefaultTestHooks = {
-    offer: () => maybeOfferDefaultMnemonics(),
-    offeredKey: MNEM_DEFAULT_OFFERED_KEY,
-    getOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+  window.__defaultContentTestHooks = {
+    offer: () => maybeOfferDefaultContent(),
+    mnemOfferedKey: MNEM_DEFAULT_OFFERED_KEY,
+    assetsOfferedKey: ASSETS_DEFAULT_OFFERED_KEY,
+    getMnemOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+    getAssetsOffered: () => getMeta(ASSETS_DEFAULT_OFFERED_KEY),
   };
 }
 
