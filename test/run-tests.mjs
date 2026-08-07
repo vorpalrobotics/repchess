@@ -3940,6 +3940,95 @@ try {
 
 } catch(e){ bad('Phase Y2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase Y3: the move table colors a room's name BLUE instead of green
+//     when the room is behind a locked door (threeVR.js's isRoomEmpty: no
+//     forward exit and no wall content of its own) -- that room can never
+//     actually be walked into in VR, so it can never be memorized either,
+//     and a stale memorized flag on it (e.g. left over from before its
+//     continuation was deleted back down to a dead end) must not paint it
+//     green anyway. A CASTLE ROOT is exempt -- it's reached from the street,
+//     not a parent room's door, so there's no door to lock -- these are all
+//     deeper (non-root) rows inside one castle. Pure PREFS/games-tree
+//     computation -- no VR/digraph needed to exercise it. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appY3 = await launchApp();
+try {
+  // Off the same castle root (Alpha, d4 Nf6 c4), three sibling inner rooms:
+  //   InnerLocked  (e6/Nc3):  no further game move at all -> locked
+  //   InnerUnbuilt (d5/Bg5):  next move (h6) recorded but never answered -> locked
+  //   InnerOpen    (g6/e4):   next move (Bg7) recorded AND answered (Nc3) -> not locked
+  const keys = await appY3.page.evaluate(() => {
+    const pk = (mv) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { innerLocked: pk(['d4','Nf6','c4','e6','Nc3']) };
+  });
+  await seedBackup(appY3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3', name: 'InnerLocked' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'Bg5', name: 'InnerUnbuilt' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'e4',  name: 'InnerOpen' },
+      { seq: ['d4','Nf6','c4','g6','e4','Bg7'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3',          white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 d5 Bg5 h6',       white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 g6 e4 Bg7 Nc3',   white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  // InnerLocked is (incorrectly/stalely) marked memorized too -- must still
+  // show locked (blue), not memorized (green).
+  await appY3.page.evaluate((map) => setMeta('threeMemorizedRooms', JSON.stringify(map)), { [keys.innerLocked]: Date.now() });
+  await appY3.page.click('.line-row');
+  await appY3.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"] .branchName', { timeout: 40000 });
+
+  const classesOf = (seq) => appY3.page.evaluate((s) => {
+    const el = document.querySelector(`tr.data-row[data-seq="${s}"] .branchName`);
+    return { locked: el.classList.contains('branchName-locked'), memorized: el.classList.contains('branchName-memorized'), title: el.title };
+  }, seq);
+
+  // 73. The castle root itself (Alpha) is exempt from locking regardless of
+  //     its own continuation -- reached from the street, not a locked door.
+  try {
+    const alpha = await classesOf('d4,Nf6');
+    assert(alpha.locked === false, `expected the castle root to never be locked, got ${JSON.stringify(alpha)}`);
+    ok('move table: a castle root is never locked (reached from the street, not a parent room\'s door)');
+  } catch(e){ bad('move table: locked room coloring -- castle root exempt', e); }
+
+  // 74. InnerLocked: zero further moves at all -> locked (blue), and its
+  //     stale memorized flag is overridden -- locked wins, not green.
+  try {
+    const inner = await classesOf('d4,Nf6,c4,e6');
+    assert(inner.locked === true, `expected InnerLocked (zero further moves) locked, got ${JSON.stringify(inner)}`);
+    assert(inner.memorized === false, `expected locked to override a stale memorized flag, got ${JSON.stringify(inner)}`);
+    assert(inner.title.includes('locked door'), `expected an explanatory title on a locked room, got "${inner.title}"`);
+    ok('move table: an inner room with no further moves at all is locked (blue), overriding a stale memorized flag');
+  } catch(e){ bad('move table: locked room coloring -- InnerLocked overrides stale memorized', e); }
+
+  // 75. InnerUnbuilt: the next move is recorded (via games) but never
+  //     answered (no reply chosen) -- still locked, matching isRoomEmpty's
+  //     own "unbuilt continuation never gets a real exit" rule.
+  try {
+    const inner = await classesOf('d4,Nf6,c4,d5');
+    assert(inner.locked === true, `expected InnerUnbuilt (unbuilt next move) locked, got ${JSON.stringify(inner)}`);
+    ok('move table: an inner room whose only next move is unbuilt (no reply chosen) is still locked');
+  } catch(e){ bad('move table: locked room coloring -- InnerUnbuilt still locked', e); }
+
+  // 76. InnerOpen: a real, answered continuation -> not locked, even though
+  //     it's a deeper (non-root) room, same as the castle root case above.
+  try {
+    const inner = await classesOf('d4,Nf6,c4,g6');
+    assert(inner.locked === false, `expected InnerOpen (real continuation) NOT locked, got ${JSON.stringify(inner)}`);
+    ok('move table: an inner room with a real built continuation is not locked');
+  } catch(e){ bad('move table: locked room coloring -- InnerOpen not locked', e); }
+} finally {
+  await appY3.close();
+}
+
+} catch(e){ bad('Phase Y3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase Z: "memorized" rooms (Phase 2) get a 🧠 label glyph in the
 //     network digraph (mirroring the VR toolbar's fa-brain icon), and the
 //     thick green border is reserved for "all done" -- memorized AND fully
