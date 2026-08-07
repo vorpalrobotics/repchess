@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-313';
+const BUILD_TAG = '-314';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4126,12 +4126,36 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     const ctxTr = document.createElement('tr');
     ctxTr.className = 'context-row';
     ctxTr.innerHTML =
-      `<td class="resp"></td>
+      `<td class="resp">
+         <div class="row-menu-wrap">
+           <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+           <div class="row-menu">
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           </div>
+         </div>
+       </td>
        <td class="move" style="padding-left:${depth}em">${depth+1}. ${pvChip(seq.at(-1), fenForSeq(seq))}</td>
        <td class="cnt-col"></td>
        <td class="eval-col"></td>
        <td class="name-col"></td>`;
     tb.appendChild(ctxTr);
+    // this row is a real node (white's own trigger move) but has no
+    // opp/lineSeq structure like a data-row -- computeSystemStats already
+    // treats a white root the same way (computeNodeStats(games,[trigger])),
+    // so Node Statistics here just reuses that same seq directly.
+    const ctxRowMenuBtn = ctxTr.querySelector('.rowMenuBtn');
+    const ctxRowMenu = ctxTr.querySelector('.row-menu');
+    ctxRowMenuBtn.onclick = e => {
+      e.stopPropagation();
+      const showing = ctxRowMenu.classList.contains('show');
+      closeAllRowMenus();
+      if(!showing) ctxRowMenu.classList.add('show');
+    };
+    ctxRowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      showNodeStats(games, seq);
+    };
   }
 
   const indentLevel = flip ? depth : depth+1;
@@ -9083,12 +9107,23 @@ $('poSaveBtn').onclick = async () => {
   if(threads !== undefined) config.threads = threads;
   await setPerfectOpeningConfig(config);
   // a genuinely fresh enable (never built a line, nothing already queued)
-  // needs its root job seeded -- every job after this one is spawned
-  // reactively by processPerfectOpeningJob itself, but nothing else ever
-  // creates the very first one. Guarded on an empty queue too so toggling
-  // enabled off and back on mid-run (queue still has leftover jobs) doesn't
-  // inject a redundant duplicate root job alongside them.
+  // needs its line and root job seeded -- every job after this one is
+  // spawned reactively by processPerfectOpeningJob itself, but nothing else
+  // ever creates the very first one. The line is created here (empty
+  // openingMoves) rather than waiting for that first job to resolve, so it
+  // shows up in the home list right away instead of only once the White
+  // root move is actually found; processPerfectOpeningJob's own white-job
+  // create branch is still what fires for a queue seeded some other way
+  // (e.g. directly via test hooks), since it only takes the create path
+  // when config.lineId is still unset by the time that job runs. Guarded on
+  // an empty queue too so toggling enabled off and back on mid-run (queue
+  // still has leftover jobs) doesn't inject a redundant duplicate root job
+  // alongside them.
   if(config.enabled && !config.lineId){
+    const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [], hideUnselectedGameMoves: true });
+    config.lineId = line.id;
+    await setPerfectOpeningConfig(config);
+    if($('homeScreen').style.display !== 'none') renderHome();
     const queue = await getPerfectOpeningQueue();
     if(!queue.length) await addPerfectOpeningQueueItems([{ id: poJobId('root'), kind: 'white', seq: [], createdAt: Date.now() }]);
   }

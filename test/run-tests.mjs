@@ -11544,6 +11544,33 @@ try {
     ok('row menu: "Node Statistics" shows the node-count/branch-factor alert');
   } catch(e){ bad('row menu: Node Statistics', e); }
 
+  // 177b. Regression: move 1's own row (the "context-row" -- a bare heading
+  //       for the line's own opening move, not a normal opponent-reply
+  //       data-row) previously had no three-dot menu at all (an empty
+  //       .resp cell), so there was no way to get Node Statistics for the
+  //       whole system from that row. It now has a minimal menu with just
+  //       that one action, calling computeNodeStats on the trigger move's
+  //       own seq directly (mirroring computeSystemStats's treatment of a
+  //       white root: computeNodeStats(games,[trigger])).
+  try {
+    let alertMsg = null;
+    appBW.page.once('dialog', d => { alertMsg = d.message(); });
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.waitForSelector(ctxRowSel, { timeout: 5000 });
+    const hasMenu = await appBW.page.evaluate(s => !!document.querySelector(`${s} .rowMenuBtn`), ctxRowSel);
+    assert(hasMenu, 'expected a three-dot menu button on move 1\'s context-row');
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
+    const hasOnlyNodeStats = await appBW.page.evaluate(s => {
+      const acts = [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act);
+      return JSON.stringify(acts) === JSON.stringify(['nodeStats']);
+    }, ctxRowSel);
+    assert(hasOnlyNodeStats, 'expected move 1\'s context-row menu to offer exactly "Node Statistics"');
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="nodeStats"]`).click(), ctxRowSel);
+    await appBW.page.waitForTimeout(400);
+    assert(alertMsg && /Nodes below this point/.test(alertMsg), `expected the node-stats alert for move 1, got: ${alertMsg}`);
+    ok('row menu: move 1\'s context-row now has a three-dot menu offering Node Statistics');
+  } catch(e){ bad('row menu: move 1 context-row Node Statistics (regression)', e); }
+
   // 178. "Quiz this Variation" calls openOpeningQuiz -- in this harness the
   //      cm-chessboard widget is deliberately unmocked (see test/README.md),
   //      so the reachable, real behavior is the same "could not be loaded"
@@ -14837,8 +14864,13 @@ try {
       `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
     assert(config.hashMB === 1024, `expected the edited Hash (1024) persisted, got ${config.hashMB}`);
     assert(config.threads === 3, `expected the edited Threads (3) persisted, got ${config.threads}`);
-    assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
-    ok('Perfect Opening: Save persists every field to real config storage without creating a line');
+    assert(config.lineId !== null, 'expected Save (with enabled checked) to create the line right away, rather than waiting for White\'s move 1 to be found, so it shows up in the home list immediately');
+    const lines = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === config.lineId);
+    assert(line, `expected a line record for the newly-created lineId, got ${JSON.stringify(lines)}`);
+    assert(line.name === 'Perfect White Opening' && line.color === 'white' && JSON.stringify(line.openingMoves) === '[]',
+      `expected an empty placeholder line (no move 1 discovered yet), got ${JSON.stringify(line)}`);
+    ok('Perfect Opening: Save persists every field to real config storage and creates an empty placeholder line right away');
   } catch(e){ bad('Perfect Opening: Save persists all fields', e); }
 
   // 263. Cancel discards in-progress edits -- reopening shows the last SAVED
@@ -15795,6 +15827,49 @@ try {
   await appDA.close();
 }
 } catch(e){ bad('Phase DA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DB: a fresh session, isolated from Phase DA's leftover
+//     engine.ready/queue state (several of its tests leave engine.ready
+//     true with an active stub), for one test that needs a clean slate. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appDB = await launchApp();
+try {
+  // 290. UX: hitting Save (enabled checked, no prior line) creates the
+  //      "Perfect White Opening" line right away, empty (openingMoves: []),
+  //      and shows it on the home screen immediately -- rather than the
+  //      user staring at an unchanged home list until the background
+  //      scheduler eventually finds White's move 1 (which, at real search
+  //      depths, can be minutes away). engine.ready is left false throughout
+  //      so nothing can process the seeded root job -- this test is only
+  //      about Save's own eager-create responsibility, already isolated
+  //      from the scheduler's create-path (test 284, above).
+  try {
+    await appDB.page.evaluate(() => window.__aqTestHooks.engine.ready = false);
+    await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await appDB.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appDB.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDB.page.click('#poEnabledCheckbox');
+    await appDB.page.click('#poSaveBtn');
+    await appDB.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
+
+    const config = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.lineId, `expected Save to assign a lineId immediately, got ${JSON.stringify(config)}`);
+    const lines = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === config.lineId);
+    assert(line && line.name === 'Perfect White Opening' && JSON.stringify(line.openingMoves) === '[]',
+      `expected an empty placeholder line created immediately by Save, got ${JSON.stringify(line)}`);
+
+    await appDB.page.waitForSelector('.line-row', { timeout: 5000 });
+    const names = await appDB.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(names.includes('Perfect White Opening'), `expected the empty placeholder line to appear on the home screen right after Save, got ${JSON.stringify(names)}`);
+    ok('Perfect Opening: Save creates an empty placeholder line and shows it on the home screen immediately, rather than waiting for move 1');
+  } catch(e){ bad('Perfect Opening: Save eagerly creates and shows an empty line (UX regression)', e); }
+} finally {
+  await appDB.close();
+}
+} catch(e){ bad('Phase DB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
