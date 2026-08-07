@@ -2,7 +2,7 @@ import { Engine } from './engine.js?v=20260804-8';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-78';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
 
@@ -31,6 +31,8 @@ const GZIP_OK = typeof CompressionStream !== 'undefined' && typeof Decompression
 // synchronous top-level call, on every real (non-threeTestDebug) page load.
 const MNEM_DEFAULT_URL = 'json/repchess-mnemonics-DEFAULT.json.gz';
 const MNEM_DEFAULT_OFFERED_KEY = 'mnemDefaultOffered';
+const ASSETS_DEFAULT_URL = 'json/repchess-assets-DEFAULT.json.gz';
+const ASSETS_DEFAULT_OFFERED_KEY = 'assetsDefaultOffered';
 const MNEM_NOTES_KEY = 'mnemonicsNotes';
 const MNEM_DISAMBIG_KEY = 'moveDisambiguatorImg';
 const MNEM_PIECES = ['pawn','knight','bishop','rook','queen','king'];
@@ -77,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-312';
+const BUILD_TAG = '-318';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4126,12 +4128,36 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     const ctxTr = document.createElement('tr');
     ctxTr.className = 'context-row';
     ctxTr.innerHTML =
-      `<td class="resp"></td>
+      `<td class="resp">
+         <div class="row-menu-wrap">
+           <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+           <div class="row-menu">
+             <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           </div>
+         </div>
+       </td>
        <td class="move" style="padding-left:${depth}em">${depth+1}. ${pvChip(seq.at(-1), fenForSeq(seq))}</td>
        <td class="cnt-col"></td>
        <td class="eval-col"></td>
        <td class="name-col"></td>`;
     tb.appendChild(ctxTr);
+    // this row is a real node (white's own trigger move) but has no
+    // opp/lineSeq structure like a data-row -- computeSystemStats already
+    // treats a white root the same way (computeNodeStats(games,[trigger])),
+    // so Node Statistics here just reuses that same seq directly.
+    const ctxRowMenuBtn = ctxTr.querySelector('.rowMenuBtn');
+    const ctxRowMenu = ctxTr.querySelector('.row-menu');
+    ctxRowMenuBtn.onclick = e => {
+      e.stopPropagation();
+      const showing = ctxRowMenu.classList.contains('show');
+      closeAllRowMenus();
+      if(!showing) ctxRowMenu.classList.add('show');
+    };
+    ctxRowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      showNodeStats(games, seq);
+    };
   }
 
   const indentLevel = flip ? depth : depth+1;
@@ -5558,14 +5584,29 @@ refreshAnalysisQueue().then(() => maybeResumeAnalysisQueue());
 Promise.resolve().then(() => maybeResumePerfectOpening());
 setInterval(() => maybeResumePerfectOpening(), 5000);
 
-// offer the default mnemonics bundle when there's nothing in the mnemonics
-// store yet (see maybeOfferDefaultMnemonics, defined below). Skipped under
-// the test harness, whose dialog handler auto-accepts every confirm() --
-// without this guard, any test that boots with an empty mnemonics store
-// would silently trigger a real fetch+decompress+import of the (large)
-// bundle. The dedicated test for this feature drives it explicitly via
-// __mnemDefaultTestHooks instead.
-if(!localStorage.getItem('threeTestDebug')) maybeOfferDefaultMnemonics();
+// locking the screen (or just switching tabs/windows) backgrounds the page --
+// Chrome (and the OS, for a locked session) throttles a hidden page hard to
+// save power, so both background consumers can end up crawling or stalled
+// between ticks of their own polling. Nothing can (or should) fight that
+// throttling while genuinely hidden, but the moment the page is visible
+// again, kick both immediately rather than waiting out whatever's left of
+// the current poll interval (5s for Perfect Opening; the manual queue has
+// no periodic poll of its own at all, so this is its only recovery path
+// after a stall like this).
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState !== 'visible') return;
+  maybeResumeAnalysisQueue();
+  maybeResumePerfectOpening();
+});
+
+// offer the default mnemonics/assets bundles when there's nothing in their
+// stores yet (see maybeOfferDefaultContent, defined below). Skipped under the
+// test harness -- without this guard, any test that boots with an empty
+// mnemonics/assets store would pop the (real, full-screen) offer modal over
+// every other test's UI, and accepting it would trigger a real
+// fetch+decompress+import of the (large) bundles. The dedicated tests for
+// this feature drive it explicitly via __defaultContentTestHooks instead.
+if(!localStorage.getItem('threeTestDebug')) maybeOfferDefaultContent();
 
 /* ---------- hamburger menu ---------- */
 function collapseMenuSubs(){
@@ -5920,17 +5961,28 @@ async function maybeRecoverFromInterruptedRestore(){
 
 /* A standalone asset bundle (from the asset manager's "Export All as JSON"),
    distinct from a full backup. A full backup carries an opening-systems `lines`
-   array; an asset bundle is just the assets, tagged with `repchessAssets`. */
+   array; an asset bundle is just the assets (plus, now, object lists), tagged
+   with `repchessAssets`. */
 const isAssetBundle = d =>
   !!d && (d.repchessAssets != null || (Array.isArray(d.assets) && !Array.isArray(d.lines)));
 
 /* asset-only REPLACE: clears the asset store and writes the bundle's assets,
-   leaving games/lines/mnemonics untouched. Destructive; caller confirms first. */
+   leaving games/lines/mnemonics untouched. Destructive; caller confirms first.
+   Object lists replace the same way when the bundle carries them -- older
+   asset-only exports (before object lists were bundled in) won't have the
+   field, so an old file's import leaves existing object lists untouched
+   rather than silently wiping them. */
 async function importAssetBundle(data){
   if(!Array.isArray(data.assets)) throw new Error('not a valid asset export file');
   await clearAssets();
   for(const a of data.assets) await setAsset(a.id, a);
-  log(`replaced assets — imported ${data.assets.length} asset(s)`);
+  let listMsg = '';
+  if(Array.isArray(data.objectLists)){
+    await clearObjectLists();
+    for(const list of data.objectLists) await setObjectList(list.id, list);
+    listMsg = `, ${data.objectLists.length} object list(s)`;
+  }
+  log(`replaced assets — imported ${data.assets.length} asset(s)${listMsg}`);
 }
 
 /* ---------- mnemonics-only export / import ----------
@@ -5999,13 +6051,25 @@ async function exportMnemonics(){
 /* assets-only export: same bundle shape the asset manager's "Export All as
    JSON" produces (tagged `repchessAssets` so the unified importer recognises
    it), but callable straight from the hamburger menu without opening the asset
-   manager. Reads assets from IndexedDB rather than the manager's in-memory list. */
+   manager. Reads assets and object lists from IndexedDB rather than the
+   manager's in-memory list -- object lists ride along too since they're the
+   room word-list assignments that bind back to these assets via assetId, and
+   a bundle missing them would leave those bindings dangling on restore.
+   Split into a pure data-assembly half (no download), mirroring
+   buildBackupData/exportBackup, so a test can inspect the bundle directly. */
+async function buildAssetsExportData(){
+  return {
+    repchessAssets: 1,
+    exportedAt: new Date().toISOString(),
+    assets: await getAllAssets(),
+    objectLists: await getAllObjectLists()
+  };
+}
 async function exportAssets(){
-  const assets = await getAllAssets();
-  if(!assets.length){ log('no assets to export',true); return; }
-  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets };
-  await downloadJsonBackup(bundle, `repchess-assets-${new Date().toISOString().slice(0,10)}`);
-  log(`exported ${assets.length} asset(s)`);
+  const data = await buildAssetsExportData();
+  if(!data.assets.length){ log('no assets to export',true); return; }
+  await downloadJsonBackup(data, `repchess-assets-${new Date().toISOString().slice(0,10)}`);
+  log(`exported ${data.assets.length} asset(s), ${data.objectLists.length} object list(s)`);
 }
 
 /* isMnemonicsBundle is declared near the top of the file now -- see the
@@ -6036,29 +6100,49 @@ async function importMnemonicsBundle(data, onProgress){
   log(`replaced mnemonics — imported ${data.mnemonics.length} square(s)`);
 }
 
-/* ---------- default mnemonics bundle (offered on boot) ----------
-   json/repchess-mnemonics-DEFAULT.json.gz is a standalone mnemonics bundle
-   (same repchessMnemonics shape as an exported bundle) committed to the repo,
-   so a brand-new user can start with a ready-made set of memory-palace
-   words/images instead of a blank grid. Offered once: the decision (install
-   or skip) is remembered in meta so it doesn't nag on every boot after that.
-   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY are declared near the top of the
-   file now (a boot-time TDZ fix). */
-async function maybeOfferDefaultMnemonics(){
-  if(!GZIP_OK) return;   // the bundle is gzipped; can't read it without DecompressionStream
-  if(await getMeta(MNEM_DEFAULT_OFFERED_KEY)) return;
-  const existing = await getAllMnemonics();
-  if(Object.keys(existing).length){ await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1'); return; }
+/* ---------- default mnemonics / assets bundles (offered on boot) ----------
+   json/repchess-mnemonics-DEFAULT.json.gz and json/repchess-assets-DEFAULT.json.gz
+   are standalone bundles (same shape an export produces) committed to the
+   repo, so a brand-new user can start with a ready-made memory-palace
+   word/image set and prop library instead of a blank slate. Each is offered
+   independently -- only shown (and only checked by default) when its own
+   store is still empty -- but through ONE combined modal with a checkbox per
+   offered item, so installing both at once (the common case) is a single
+   confirmation. Each is asked about at most once ever: the decision (install
+   or skip) is remembered in meta so neither nags on a later boot, whether or
+   not that particular checkbox was shown this time.
+   MNEM_DEFAULT_URL/MNEM_DEFAULT_OFFERED_KEY/ASSETS_DEFAULT_URL/
+   ASSETS_DEFAULT_OFFERED_KEY are declared near the top of the file now (a
+   boot-time TDZ fix -- see the comment there). */
+async function maybeOfferDefaultContent(){
+  if(!GZIP_OK) return;   // both bundles are gzipped; can't read them without DecompressionStream
+  const mnemAlreadyOffered = await getMeta(MNEM_DEFAULT_OFFERED_KEY);
+  const assetsAlreadyOffered = await getMeta(ASSETS_DEFAULT_OFFERED_KEY);
+  const offerMnem = !mnemAlreadyOffered && Object.keys(await getAllMnemonics()).length === 0;
+  const offerAssets = !assetsAlreadyOffered && (await getAllAssets()).length === 0;
 
-  await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1');
-  if(!confirm(
-    'INSTALL DEFAULT MNEMONICS?\n\n' +
-    'You don\'t have any mnemonics (memory-palace words/images) set up yet. ' +
-    'REPchess can install a ready-made set to get you started — you can edit ' +
-    'or replace any of it later from Manage Mnemonics.\n\n' +
-    'Install the default set now?'
-  )) return;
+  // mark both as offered now, before showing anything -- a closed tab or
+  // crash mid-modal can't cause either to re-nag on the next boot, and a
+  // store that already has content (so its own checkbox won't be shown) is
+  // marked done without ever asking, same as before.
+  if(!mnemAlreadyOffered) await setMeta(MNEM_DEFAULT_OFFERED_KEY, '1');
+  if(!assetsAlreadyOffered) await setMeta(ASSETS_DEFAULT_OFFERED_KEY, '1');
+  if(!offerMnem && !offerAssets) return;
 
+  $('defaultContentMnemRow').style.display = offerMnem ? '' : 'none';
+  $('defaultContentAssetsRow').style.display = offerAssets ? '' : 'none';
+  $('defaultContentMnemChk').checked = true;
+  $('defaultContentAssetsChk').checked = true;
+  $('defaultContentOverlay').style.display = 'flex';
+  $('defaultContentSkipBtn').onclick = () => { $('defaultContentOverlay').style.display = 'none'; };
+  $('defaultContentInstallBtn').onclick = async () => {
+    $('defaultContentOverlay').style.display = 'none';
+    if(offerMnem && $('defaultContentMnemChk').checked) await installDefaultMnemonics();
+    if(offerAssets && $('defaultContentAssetsChk').checked) await installDefaultAssets();
+  };
+}
+
+async function installDefaultMnemonics(){
   const spinner = showSpinner('Downloading default mnemonics…');
   await nextPaint();
   try{
@@ -6079,6 +6163,26 @@ async function maybeOfferDefaultMnemonics(){
   }catch(err){
     console.error('[default mnemonics] install failed',err);
     log('failed to install default mnemonics: '+err.message,true);
+  }finally{
+    hideSpinner(spinner);
+  }
+}
+
+async function installDefaultAssets(){
+  const spinner = showSpinner('Downloading default assets…');
+  await nextPaint();
+  try{
+    const resp = await fetch(ASSETS_DEFAULT_URL);
+    if(!resp.ok) throw new Error(`fetch failed (${resp.status})`);
+    const text = await gunzipToText(await resp.blob());
+    const data = JSON.parse(text);
+    if(!isAssetBundle(data)) throw new Error('default assets file is not a valid bundle');
+    $('spinnerLabel').textContent = 'Installing default assets…';
+    await importAssetBundle(data);
+    log('installed default assets');
+  }catch(err){
+    console.error('[default assets] install failed',err);
+    log('failed to install default assets: '+err.message,true);
   }finally{
     hideSpinner(spinner);
   }
@@ -6163,11 +6267,14 @@ $('backupImport').addEventListener('change', async e=>{
   // An asset-only export gets a different, asset-scoped replace flow.
   if(isAssetBundle(data)){
     const n = Array.isArray(data.assets) ? data.assets.length : 0;
+    const hasLists = Array.isArray(data.objectLists);
+    const listsClause = hasLists ? ` and ${data.objectLists.length} object list(s)` : '';
+    const listsWipeClause = hasLists ? ' and object lists' : '';
     if(!confirm(
       'IMPORT ASSETS (REPLACE)?\n\n' +
-      `This file contains ${n} asset(s).\n\n` +
-      'Importing assets is currently a REPLACE operation: every asset currently ' +
-      'stored in this browser will be DELETED and replaced with the assets in this ' +
+      `This file contains ${n} asset(s)${listsClause}.\n\n` +
+      `Importing assets is currently a REPLACE operation: every asset${listsWipeClause} currently ` +
+      'stored in this browser will be DELETED and replaced with the contents of this ' +
       'file. (Merge imports are not supported yet.) Your games, opening systems, and ' +
       'mnemonics are not affected.\n\n' +
       'This cannot be undone. Continue?'
@@ -6640,6 +6747,51 @@ $('menuAbout').onclick = ()=>{
   $('aboutOverlay').style.display='flex';
 };
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
+
+/* ---------- Reset to Factory ----------
+   A hidden-in-plain-sight escape hatch (small link at the bottom of the
+   About modal, past a scroll) for wiping a demo/test browser back to a
+   clean install: the whole IndexedDB database plus every localStorage key
+   this app has ever written, gone, then a hard reload so nothing from the
+   old session lingers in memory. Two confirmation steps on the way there --
+   a scary warning (with an escape hatch of its own, a one-click full
+   backup) and then a typed "TOTAL DELETE" phrase -- since there is no undo
+   once deleteEntireDatabase() runs. */
+const RESET_FACTORY_PHRASE = 'TOTAL DELETE';
+$('resetToFactoryLink').onclick = (e) => {
+  e.preventDefault();
+  $('aboutOverlay').style.display = 'none';
+  $('resetFactoryWarnOverlay').style.display = 'flex';
+};
+$('resetFactoryBackupLink').onclick = (e) => {
+  e.preventDefault();
+  exportBackup();
+};
+$('resetFactoryWarnCancelBtn').onclick = () => { $('resetFactoryWarnOverlay').style.display = 'none'; };
+$('resetFactoryWarnContinueBtn').onclick = () => {
+  $('resetFactoryWarnOverlay').style.display = 'none';
+  $('resetFactoryConfirmInput').value = '';
+  $('resetFactoryConfirmError').style.display = 'none';
+  $('resetFactoryConfirmDeleteBtn').disabled = true;
+  $('resetFactoryConfirmOverlay').style.display = 'flex';
+  $('resetFactoryConfirmInput').focus();
+};
+$('resetFactoryConfirmInput').addEventListener('input', () => {
+  $('resetFactoryConfirmError').style.display = 'none';
+  $('resetFactoryConfirmDeleteBtn').disabled = $('resetFactoryConfirmInput').value !== RESET_FACTORY_PHRASE;
+});
+$('resetFactoryConfirmCancelBtn').onclick = () => { $('resetFactoryConfirmOverlay').style.display = 'none'; };
+$('resetFactoryConfirmDeleteBtn').onclick = async () => {
+  if($('resetFactoryConfirmInput').value !== RESET_FACTORY_PHRASE){
+    $('resetFactoryConfirmError').textContent = `Type exactly "${RESET_FACTORY_PHRASE}" to confirm.`;
+    $('resetFactoryConfirmError').style.display = '';
+    return;
+  }
+  $('resetFactoryConfirmDeleteBtn').disabled = true;
+  await deleteEntireDatabase();
+  localStorage.clear();
+  location.reload();
+};
 
 /* ---------- manage mnemonics ---------- */
 // MNEM_PIECES/MNEMONICS are declared near the top of the file now (a
@@ -9068,12 +9220,23 @@ $('poSaveBtn').onclick = async () => {
   if(threads !== undefined) config.threads = threads;
   await setPerfectOpeningConfig(config);
   // a genuinely fresh enable (never built a line, nothing already queued)
-  // needs its root job seeded -- every job after this one is spawned
-  // reactively by processPerfectOpeningJob itself, but nothing else ever
-  // creates the very first one. Guarded on an empty queue too so toggling
-  // enabled off and back on mid-run (queue still has leftover jobs) doesn't
-  // inject a redundant duplicate root job alongside them.
+  // needs its line and root job seeded -- every job after this one is
+  // spawned reactively by processPerfectOpeningJob itself, but nothing else
+  // ever creates the very first one. The line is created here (empty
+  // openingMoves) rather than waiting for that first job to resolve, so it
+  // shows up in the home list right away instead of only once the White
+  // root move is actually found; processPerfectOpeningJob's own white-job
+  // create branch is still what fires for a queue seeded some other way
+  // (e.g. directly via test hooks), since it only takes the create path
+  // when config.lineId is still unset by the time that job runs. Guarded on
+  // an empty queue too so toggling enabled off and back on mid-run (queue
+  // still has leftover jobs) doesn't inject a redundant duplicate root job
+  // alongside them.
   if(config.enabled && !config.lineId){
+    const line = await createLine(LOCAL_USER, { name: 'Perfect White Opening', color: 'white', openingMoves: [], hideUnselectedGameMoves: true });
+    config.lineId = line.id;
+    await setPerfectOpeningConfig(config);
+    if($('homeScreen').style.display !== 'none') renderHome();
     const queue = await getPerfectOpeningQueue();
     if(!queue.length) await addPerfectOpeningQueueItems([{ id: poJobId('root'), kind: 'white', seq: [], createdAt: Date.now() }]);
   }
@@ -9150,7 +9313,20 @@ function scoreToComparable(score){
 async function addManualReplyTo(lineId, seq, move){
   const existing = (await getPref(lineId, seq))?.manualReplies || [];
   if(existing.includes(move)) return;
-  await setPref(lineId, seq, { manualReplies: [...existing, move] });
+  const manualReplies = [...existing, move];
+  await setPref(lineId, seq, { manualReplies });
+  // if this line happens to be open right now, sync the in-memory PREFS
+  // mirror and re-render -- unlike processPerfectOpeningJob's own reply
+  // write (above), nothing runs after this call in the same job to trigger
+  // that render, so without this a newly-discovered Black survivor would
+  // stay invisible in the tree until some other job happens to touch this
+  // same line, or the line is reopened.
+  if(CURRENT_LINE && CURRENT_LINE.id === lineId){
+    invalidateBuiltCastlesCache();   // a new opponent try can open a new exit/room, same as addManualReply
+    const key = prefKey(lineId, seq);
+    PREFS[key] = {...(PREFS[key] ?? {key, lineId, seq, reply:'', note:'', mnemonic:'', hidden:false}), manualReplies};
+    renderTreeBody(CURRENT_LINE);
+  }
 }
 
 async function processPerfectOpeningJob(job, config){
@@ -9188,9 +9364,23 @@ async function processPerfectOpeningJob(job, config){
         if($('homeScreen').style.display !== 'none') renderHome();
       } else {
         await updateLine(lineId, { openingMoves: [san] });
+        // this line's own openingMoves lives on CURRENT_LINE itself, not a
+        // pref -- updateLine alone leaves the in-memory object (and the tree
+        // rendered from it) showing the old value until the line is reopened,
+        // same staleness saveAnalysisQueueResult's own PREFS sync (below)
+        // exists to avoid for eval writes.
+        if(CURRENT_LINE && CURRENT_LINE.id === lineId) CURRENT_LINE.openingMoves = [san];
       }
     } else {
       await setPref(lineId, job.seq, { reply: san });
+      // setPref writes straight to IndexedDB, bypassing the in-memory PREFS
+      // mirror the open tree actually renders from -- sync it here (like
+      // savePrefField does for a manual edit) so this reply shows up on the
+      // very next render rather than staying invisible until a reload.
+      if(CURRENT_LINE && CURRENT_LINE.id === lineId){
+        const key = prefKey(lineId, job.seq);
+        PREFS[key] = {...(PREFS[key] ?? {key, lineId, seq: job.seq, reply:'', note:'', mnemonic:'', hidden:false}), reply: san};
+      }
     }
     await saveAnalysisQueueResult({ lineId, seq: job.seq }, fen, result);
 
@@ -9865,16 +10055,23 @@ if(localStorage.getItem('threeTestDebug')){
   };
 }
 
-// test-only hook for the boot-time "install default mnemonics?" offer, which
-// is skipped from the real auto-run under threeTestDebug (see the guarded
-// call up near renderHome()) so a test can drive it explicitly instead --
-// exercises the real committed json/repchess-mnemonics-DEFAULT.json.gz file
-// end to end (fetch, gunzip, parse, import).
+// test-only hook for the boot-time "install starter content?" offer (default
+// mnemonics + default assets, one combined modal), skipped from the real
+// auto-run under threeTestDebug (see the guarded call up near renderHome())
+// so a test can drive it explicitly instead. offer() only shows the modal and
+// wires its buttons -- it resolves as soon as that's done, WITHOUT waiting for
+// a click, so a test must await it, then interact with the real
+// #defaultContentOverlay checkboxes/buttons itself (exactly like a real user),
+// then wait on whatever effect it expects (store contents, log line, etc).
+// Exercises the real committed json/repchess-*-DEFAULT.json.gz files end to
+// end (fetch, gunzip, parse, import) when a checkbox is left checked.
 if(localStorage.getItem('threeTestDebug')){
-  window.__mnemDefaultTestHooks = {
-    offer: () => maybeOfferDefaultMnemonics(),
-    offeredKey: MNEM_DEFAULT_OFFERED_KEY,
-    getOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+  window.__defaultContentTestHooks = {
+    offer: () => maybeOfferDefaultContent(),
+    mnemOfferedKey: MNEM_DEFAULT_OFFERED_KEY,
+    assetsOfferedKey: ASSETS_DEFAULT_OFFERED_KEY,
+    getMnemOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
+    getAssetsOffered: () => getMeta(ASSETS_DEFAULT_OFFERED_KEY),
   };
 }
 
@@ -10041,6 +10238,23 @@ if(localStorage.getItem('threeTestDebug')){
     persistSafetyBackup: (snapshot) => persistSafetyBackup(snapshot),
     hasSafetyBackup: async () => !!(await getSafetyBackup()),
     maybeRecoverFromInterruptedRestore: () => maybeRecoverFromInterruptedRestore(),
+  };
+}
+
+// test-only hook for the assets-only export/import round trip (the
+// hamburger-menu shortcut and the asset manager's "Export All as JSON" share
+// this same bundle shape) -- buildAssetsExportData is the pure data-assembly
+// half of exportAssets (no download involved), and importAssetBundle is the
+// real REPLACE path the file-input handler calls after its confirm() dialog.
+if(localStorage.getItem('threeTestDebug')){
+  window.__assetsTestHooks = {
+    buildExportData: () => buildAssetsExportData(),
+    importBundle: (data) => importAssetBundle(data),
+    isAssetBundle: (data) => isAssetBundle(data),
+    getAllAssets: () => getAllAssets(),
+    setAsset: (id, patch) => setAsset(id, patch),
+    getAllObjectLists: () => getAllObjectLists(),
+    setObjectList: (id, patch) => setObjectList(id, patch),
   };
 }
 

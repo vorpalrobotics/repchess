@@ -6602,6 +6602,75 @@ try {
 }
 } catch(e){ bad('Phase AR3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+
+// --- Phase AR4: an "Assets" backup/import bundles object lists alongside
+//     the asset images/props, not just the images -- object lists are the
+//     room word-list assignments that bind back to assets via assetId, and a
+//     bundle missing them left those bindings dangling on restore into a
+//     fresh browser. Exercises the pure data-assembly half (buildExportData,
+//     mirroring buildBackupData) and the real REPLACE path (importBundle,
+//     the same function the hamburger menu's file-input handler calls after
+//     its confirm() dialog) directly via __assetsTestHooks. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appAR4 = await launchApp();
+try {
+  await appAR4.page.evaluate(async () => {
+    await window.__assetsTestHooks.setAsset('asset-1', { type: 'billboard-cylindrical', image: 'data:image/png;base64,AAA', size: { w: 0.5, h: 1, d: 0.5 } });
+    await window.__assetsTestHooks.setObjectList('list-1', { name: 'Alpha Room', roomName: 'Alpha', items: [{ name: 'anvil', assetId: 'asset-1' }] });
+  });
+
+  // 145. The export bundle carries both assets and object lists together.
+  try {
+    const data = await appAR4.page.evaluate(() => window.__assetsTestHooks.buildExportData());
+    assert(data.repchessAssets === 1, `expected the repchessAssets marker, got ${JSON.stringify(data.repchessAssets)}`);
+    assert(Array.isArray(data.assets) && data.assets.length === 1, `expected 1 asset, got ${JSON.stringify(data.assets)}`);
+    assert(Array.isArray(data.objectLists) && data.objectLists.length === 1, `expected 1 object list, got ${JSON.stringify(data.objectLists)}`);
+    assert(data.objectLists[0].items[0].assetId === 'asset-1', 'expected the object list item to keep its assetId binding');
+    ok('Assets export: bundle carries both assets and object lists');
+  } catch(e){ bad('Assets export: bundle includes object lists', e); }
+
+  // 146. Importing a bundle that has object lists REPLACES the object lists
+  //      store too (not just assets) -- a stale pre-existing list is gone
+  //      afterward, and the imported one is present.
+  try {
+    await appAR4.page.evaluate(async () => {
+      await window.__assetsTestHooks.setObjectList('stale-list', { name: 'Stale', roomName: 'Stale' });
+    });
+    const bundle = {
+      repchessAssets: 1,
+      assets: [{ id: 'asset-2', type: 'billboard-cylindrical', image: 'data:image/png;base64,BBB', size: { w: 0.5, h: 1, d: 0.5 } }],
+      objectLists: [{ id: 'list-2', name: 'Beta Room', roomName: 'Beta', items: [{ name: 'lantern', assetId: 'asset-2' }] }],
+    };
+    await appAR4.page.evaluate((b) => window.__assetsTestHooks.importBundle(b), bundle);
+    const [assets, lists] = await appAR4.page.evaluate(() => Promise.all([
+      window.__assetsTestHooks.getAllAssets(),
+      window.__assetsTestHooks.getAllObjectLists(),
+    ]));
+    assert(assets.length === 1 && assets[0].id === 'asset-2', `expected only the imported asset to remain, got ${JSON.stringify(assets)}`);
+    assert(lists.length === 1 && lists[0].id === 'list-2', `expected only the imported object list to remain (stale-list gone), got ${JSON.stringify(lists)}`);
+    ok('Assets import (REPLACE): a bundle with object lists replaces the object-lists store too, not just assets');
+  } catch(e){ bad('Assets import: object lists replaced alongside assets', e); }
+
+  // 147. An OLDER asset-only bundle (no objectLists field at all, from before
+  //      this change) must not silently wipe existing object lists on import
+  //      -- only assets get replaced when the file doesn't carry the field.
+  try {
+    await appAR4.page.evaluate(async () => {
+      await window.__assetsTestHooks.setObjectList('kept-list', { name: 'Keep Me', roomName: 'Keep' });
+    });
+    const oldBundle = { repchessAssets: 1, assets: [{ id: 'asset-3', type: 'billboard-cylindrical', image: 'data:image/png;base64,CCC', size: { w: 0.5, h: 1, d: 0.5 } }] };
+    await appAR4.page.evaluate((b) => window.__assetsTestHooks.importBundle(b), oldBundle);
+    const lists = await appAR4.page.evaluate(() => window.__assetsTestHooks.getAllObjectLists());
+    assert(lists.some(l => l.id === 'kept-list'), `expected an old asset-only bundle (no objectLists field) to leave existing object lists untouched, got ${JSON.stringify(lists)}`);
+    ok('Assets import: an old asset-only bundle with no objectLists field leaves existing object lists untouched');
+  } catch(e){ bad('Assets import: backward-compat with an objectLists-less bundle', e); }
+} finally {
+  await appAR4.close();
+}
+} catch(e){ bad('Phase AR4: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
 //     in the walk is a locked door. Jumping inside a room you can otherwise
@@ -8431,68 +8500,162 @@ try {
 
 } catch(e){ bad('Phase BI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BJ: boot-time "install default mnemonics?" offer
-//     (json/repchess-mnemonics-DEFAULT.json.gz), driven via
-//     __mnemDefaultTestHooks. The real auto-run on boot is skipped under
-//     threeTestDebug (see the guarded call near renderHome() in app.js) so
-//     ordinary tests that boot with an empty mnemonics store don't all pay
-//     for a real fetch+decompress+import -- only this dedicated test drives
-//     it, end to end, against the real committed file. ---
+// --- Phase BJ: boot-time "install starter content?" offer -- one combined
+//     modal for the default mnemonics (json/repchess-mnemonics-DEFAULT.json.gz)
+//     and default assets (json/repchess-assets-DEFAULT.json.gz) bundles,
+//     driven via __defaultContentTestHooks. The real auto-run on boot is
+//     skipped under threeTestDebug (see the guarded call near renderHome() in
+//     app.js) so ordinary tests that boot with empty stores don't all pay for
+//     a real fetch+decompress+import, and don't have to fight a full-screen
+//     modal they never asked for -- only these dedicated tests drive it, end
+//     to end, against the real committed files. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBJ = await launchApp();
 try {
-  // 87. A fresh browser has no mnemonics and hasn't been offered yet;
-  //     accepting the offer installs the real default bundle and remembers
-  //     the decision so it won't ask again.
+  // 295. A fresh browser has neither store populated and hasn't been offered
+  //      yet; the modal shows both rows, both checked by default. Accepting
+  //      installs both real bundles and remembers both decisions.
   try {
-    const before = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(before).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(before).length} square(s)`);
-    const offeredBefore = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!offeredBefore, 'expected the offer to not have been made yet on a fresh boot');
+    const beforeMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const beforeAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(beforeMnem).length === 0, `expected an empty mnemonics store on a fresh boot, got ${Object.keys(beforeMnem).length} square(s)`);
+    assert(beforeAssets.length === 0, `expected an empty assets store on a fresh boot, got ${beforeAssets.length} asset(s)`);
+    const mnemOfferedBefore = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOfferedBefore = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!mnemOfferedBefore && !assetsOfferedBefore, 'expected neither offer to have been made yet on a fresh boot');
 
-    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
+    await appBJ.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBJ.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    const rowState = await appBJ.page.evaluate(() => ({
+      mnemRow: document.getElementById('defaultContentMnemRow').style.display,
+      assetsRow: document.getElementById('defaultContentAssetsRow').style.display,
+      mnemChecked: document.getElementById('defaultContentMnemChk').checked,
+      assetsChecked: document.getElementById('defaultContentAssetsChk').checked,
+    }));
+    assert(rowState.mnemRow !== 'none' && rowState.assetsRow !== 'none', `expected both rows shown, got ${JSON.stringify(rowState)}`);
+    assert(rowState.mnemChecked && rowState.assetsChecked, `expected both checkboxes checked by default, got ${JSON.stringify(rowState)}`);
 
-    const after = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(after).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
-    const offeredAfter = await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!!offeredAfter, 'expected the offer to be marked as made after accepting');
-    ok('accepting the default-mnemonics offer installs the real bundle and remembers the decision');
-  } catch(e){ bad('default mnemonics offer: accept installs the real bundle', e); }
+    await appBJ.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
 
-  // 88. Once offered, a later call is a silent no-op -- no confirm(), no re-install.
+    const afterMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const afterAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(afterMnem).length > 0, 'expected accepting the offer to install the default mnemonics bundle');
+    assert(afterAssets.length > 0, 'expected accepting the offer to install the default assets bundle');
+    const mnemOfferedAfter = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOfferedAfter = await appBJ.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!mnemOfferedAfter && !!assetsOfferedAfter, 'expected both offers to be marked as made after accepting');
+    ok('accepting the starter-content offer installs both real bundles and remembers both decisions');
+  } catch(e){ bad('starter-content offer: accepting both installs both real bundles', e); }
+
+  // 296. Once both are offered, a later call is a silent no-op -- the modal
+  //      never even shows.
   try {
-    await appBJ.page.evaluate(() => { window.confirm = () => { throw new Error('confirm() should not be called again'); }; });
-    await appBJ.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
-    ok('default mnemonics offer: already-offered is a silent no-op on a later boot');
-  } catch(e){ bad('default mnemonics offer: no re-prompt once already offered', e); }
+    await appBJ.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBJ.page.waitForTimeout(200);
+    const display = await appBJ.page.evaluate(() => document.getElementById('defaultContentOverlay').style.display);
+    assert(display !== 'flex', `expected no re-prompt once both are already offered, got display=${JSON.stringify(display)}`);
+    ok('starter-content offer: already-offered (both) is a silent no-op on a later boot');
+  } catch(e){ bad('starter-content offer: no re-prompt once both already offered', e); }
 } finally {
   await appBJ.close();
 }
 
 } catch(e){ bad("phase @ line 6605 (tags: ['mnemonics'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BK: declining the default-mnemonics offer leaves the store empty
-//     but still remembers the decision, so it doesn't nag on every boot. ---
+// --- Phase BK: declining (Skip) the starter-content offer leaves both
+//     stores empty but still remembers both decisions, so it doesn't nag on
+//     every boot. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBK = await launchApp();
 try {
-  // 89. Decline -> nothing installed, but the offer is still marked made.
+  // 297. Skip -> nothing installed, but both offers are still marked made.
   try {
-    await appBK.page.evaluate(() => { window.confirm = () => false; });
-    await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.offer());
-    const stored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
-    assert(Object.keys(stored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(stored).length} square(s)`);
-    const offered = await appBK.page.evaluate(() => window.__mnemDefaultTestHooks.getOffered());
-    assert(!!offered, 'expected declining to still mark the offer as made (so it does not nag again)');
-    ok('declining the default-mnemonics offer installs nothing but remembers the decision');
-  } catch(e){ bad('default mnemonics offer: decline leaves store empty but remembers decision', e); }
+    await appBK.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK.page.evaluate(() => document.getElementById('defaultContentSkipBtn').onclick());
+    const mnemStored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length === 0, `expected Skip to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
+    assert(assetsStored.length === 0, `expected Skip to leave the assets store empty, got ${assetsStored.length} asset(s)`);
+    const mnemOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    const assetsOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!mnemOffered && !!assetsOffered, 'expected Skip to still mark both offers as made (so it does not nag again)');
+    ok('Skip on the starter-content offer installs nothing but remembers both decisions');
+  } catch(e){ bad('starter-content offer: Skip leaves both stores empty but remembers both decisions', e); }
 } finally {
   await appBK.close();
 }
 
 } catch(e){ bad('Phase BK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase BK2: a store that already has content (e.g. mnemonics installed
+//     some other way before this ever ran) doesn't get its row shown or its
+//     offer re-asked, but a genuinely empty sibling store still gets its own
+//     row -- the two are independent despite sharing one modal. ---
+if(shouldRunPhase(['mnemonics'])){
+try {
+const appBK2 = await launchApp();
+try {
+  // 298. Mnemonics already populated, assets empty -> only the assets row
+  //      shows; accepting only installs assets, and mnemonics is marked
+  //      offered without ever being asked about.
+  try {
+    await appBK2.page.evaluate(() => setMnemonicSquare('e4', { queen: 'seeded-before-offer' }));
+    await appBK2.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK2.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    const rowState = await appBK2.page.evaluate(() => ({
+      mnemRow: document.getElementById('defaultContentMnemRow').style.display,
+      assetsRow: document.getElementById('defaultContentAssetsRow').style.display,
+    }));
+    assert(rowState.mnemRow === 'none', `expected the mnemonics row hidden (store already has content), got ${JSON.stringify(rowState)}`);
+    assert(rowState.assetsRow !== 'none', `expected the assets row shown (store is empty), got ${JSON.stringify(rowState)}`);
+
+    await appBK2.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+
+    const mnemStored = await appBK2.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK2.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length === 1 && mnemStored.e4?.queen === 'seeded-before-offer',
+      `expected the pre-existing mnemonic left untouched, got ${JSON.stringify(mnemStored)}`);
+    assert(assetsStored.length > 0, 'expected the assets row being checked to still install the default assets bundle');
+    const mnemOffered = await appBK2.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
+    assert(!!mnemOffered, 'expected mnemonics to be marked offered even though its row was never shown');
+    ok('starter-content offer: a store that already has content is skipped silently while its empty sibling is still offered');
+  } catch(e){ bad('starter-content offer: independent per-store eligibility', e); }
+} finally {
+  await appBK2.close();
+}
+
+} catch(e){ bad('Phase BK2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase BK3: unchecking one of the two checkboxes before clicking
+//     Install only installs the other one -- the checkboxes are real,
+//     independent per-item choices, not an all-or-nothing accept. ---
+if(shouldRunPhase(['mnemonics'])){
+try {
+const appBK3 = await launchApp();
+try {
+  // 299. Uncheck Assets, leave Mnemonics checked -> only mnemonics installs.
+  try {
+    await appBK3.page.evaluate(() => window.__defaultContentTestHooks.offer());
+    await appBK3.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK3.page.evaluate(() => { document.getElementById('defaultContentAssetsChk').checked = false; });
+    await appBK3.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+
+    const mnemStored = await appBK3.page.evaluate(() => window.__mnemExportTestHooks.getStored());
+    const assetsStored = await appBK3.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
+    assert(Object.keys(mnemStored).length > 0, 'expected the still-checked mnemonics box to install the default bundle');
+    assert(assetsStored.length === 0, 'expected the unchecked assets box to install nothing');
+    const assetsOffered = await appBK3.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
+    assert(!!assetsOffered, 'expected assets to still be marked offered even though it was unchecked, not installed');
+    ok('starter-content offer: unchecking one item installs only the other, and still marks both offered');
+  } catch(e){ bad('starter-content offer: per-checkbox install selection', e); }
+} finally {
+  await appBK3.close();
+}
+
+} catch(e){ bad('Phase BK3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase BL: the digraph modal's status line leads with the real VR
 //     "castle room(s)" count (a corridor/two-track room collapses several
@@ -11544,6 +11707,33 @@ try {
     ok('row menu: "Node Statistics" shows the node-count/branch-factor alert');
   } catch(e){ bad('row menu: Node Statistics', e); }
 
+  // 177b. Regression: move 1's own row (the "context-row" -- a bare heading
+  //       for the line's own opening move, not a normal opponent-reply
+  //       data-row) previously had no three-dot menu at all (an empty
+  //       .resp cell), so there was no way to get Node Statistics for the
+  //       whole system from that row. It now has a minimal menu with just
+  //       that one action, calling computeNodeStats on the trigger move's
+  //       own seq directly (mirroring computeSystemStats's treatment of a
+  //       white root: computeNodeStats(games,[trigger])).
+  try {
+    let alertMsg = null;
+    appBW.page.once('dialog', d => { alertMsg = d.message(); });
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.waitForSelector(ctxRowSel, { timeout: 5000 });
+    const hasMenu = await appBW.page.evaluate(s => !!document.querySelector(`${s} .rowMenuBtn`), ctxRowSel);
+    assert(hasMenu, 'expected a three-dot menu button on move 1\'s context-row');
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
+    const hasOnlyNodeStats = await appBW.page.evaluate(s => {
+      const acts = [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act);
+      return JSON.stringify(acts) === JSON.stringify(['nodeStats']);
+    }, ctxRowSel);
+    assert(hasOnlyNodeStats, 'expected move 1\'s context-row menu to offer exactly "Node Statistics"');
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="nodeStats"]`).click(), ctxRowSel);
+    await appBW.page.waitForTimeout(400);
+    assert(alertMsg && /Nodes below this point/.test(alertMsg), `expected the node-stats alert for move 1, got: ${alertMsg}`);
+    ok('row menu: move 1\'s context-row now has a three-dot menu offering Node Statistics');
+  } catch(e){ bad('row menu: move 1 context-row Node Statistics (regression)', e); }
+
   // 178. "Quiz this Variation" calls openOpeningQuiz -- in this harness the
   //      cm-chessboard widget is deliberately unmocked (see test/README.md),
   //      so the reachable, real behavior is the same "could not be loaded"
@@ -13426,6 +13616,71 @@ try {
     assert(e6Present, 'expected a normal line (flag unset) to keep showing real game moves as before');
     ok('Perfect Opening line: hideUnselectedGameMoves is opt-in -- a normal line still shows real game moves');
   } catch(e){ bad('hideUnselectedGameMoves is opt-in, not global', e); }
+
+  // 220d. Regression: while a Perfect Opening line is the one currently open
+  //       in the tree view, a Black job's own manualReplies write
+  //       (addManualReplyTo) went straight to IndexedDB, bypassing the
+  //       in-memory PREFS mirror renderTreeBody actually reads from -- so a
+  //       newly-discovered candidate reply stayed invisible in the open tree
+  //       (despite plenty of background activity) until the line was closed
+  //       and reopened, which re-fetched PREFS from scratch and "suddenly"
+  //       showed everything that had piled up. Exercised via processJob (the
+  //       real per-job processor, same one the background scheduler drives)
+  //       rather than the scheduler loop, so the fake engine result lands
+  //       deterministically in one call. Doubles as a check that a real game
+  //       move (e6, hidden by hideUnselectedGameMoves since it isn't a
+  //       manualReply yet) flips to visible the instant the search actually
+  //       keeps it, live, with no reopen.
+  try {
+    await seedBackup(appCI3.page, fixture(true), { defaultPlayerColor: 'white' });
+    await appCI3.page.click('.line-row');
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="g6"]', { timeout: 40000 });
+    const e6HiddenBefore = await appCI3.page.evaluate(() => !!document.querySelector('tr.data-row[data-opp="e6"]'));
+    assert(!e6HiddenBefore, 'expected e6 still hidden before the Black job runs (sanity check on the fixture)');
+    const lineId = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.getLines().then(ls => ls.find(l => l.name === 'Test').id));
+
+    const config = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = lineId;
+    await appCI3.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCI3.page.evaluate(() => {
+      // d4,Nf6,c4 (Black to move) -- e7e6 is a legal reply, and the sole
+      // returned line is trivially its own "best" (tolerance always clears).
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({
+        depth: 20, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['e7e6'] } },
+      });
+    });
+    await appCI3.page.evaluate((cfg) =>
+      window.__perfectOpeningTestHooks.processJob({ kind: 'black', seq: ['d4','Nf6','c4'] }, cfg), config);
+
+    await appCI3.page.waitForSelector('tr.data-row[data-opp="e6"]', { timeout: 5000 });
+    ok('Perfect Opening: a Black job\'s new manualReply shows up in the currently-open tree immediately, without reopening the line');
+  } catch(e){ bad('Perfect Opening: live tree refresh on background writes (regression)', e); }
+
+  // 220e. Same regression, the other write site: a White job's own `reply`
+  //       (setPref) also went straight to IndexedDB bypassing PREFS -- the
+  //       g6 row (already on screen, no reply chosen for it yet) should show
+  //       its new standard reply the instant a White job finds one.
+  try {
+    const g6ReplyBefore = await appCI3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="g6"] .ourReply')?.textContent.trim());
+    assert(g6ReplyBefore === '...', `expected the unfilled reply placeholder for g6 (sanity check on the fixture), got "${g6ReplyBefore}"`);
+
+    const lineId = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.getLines().then(ls => ls.find(l => l.name === 'Test').id));
+    const config = await appCI3.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.lineId = lineId;
+    await appCI3.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appCI3.page.evaluate(() => {
+      // d4,Nf6,c4,g6 (White to move) -- Nf3 is a legal reply.
+      window.__aqTestHooks.engine.analyze = () => Promise.resolve({
+        depth: 20, lines: { 1: { score: { type: 'cp', value: 0 }, depth: 20, pv: ['g1f3'] } },
+      });
+    });
+    await appCI3.page.evaluate((cfg) =>
+      window.__perfectOpeningTestHooks.processJob({ kind: 'white', seq: ['d4','Nf6','c4','g6'] }, cfg), config);
+
+    await appCI3.page.waitForFunction(() =>
+      document.querySelector('tr.data-row[data-opp="g6"] .ourReply')?.textContent.trim().includes('Nf3'), { timeout: 5000 });
+    ok('Perfect Opening: a White job\'s new reply shows up in the currently-open tree immediately, without reopening the line');
+  } catch(e){ bad('Perfect Opening: live tree refresh on a White job\'s reply write (regression)', e); }
 } finally {
   await appCI3.close();
 }
@@ -14837,8 +15092,13 @@ try {
       `expected the edited max-lines schedule persisted, got ${JSON.stringify(config.maxLines)}`);
     assert(config.hashMB === 1024, `expected the edited Hash (1024) persisted, got ${config.hashMB}`);
     assert(config.threads === 3, `expected the edited Threads (3) persisted, got ${config.threads}`);
-    assert(config.lineId === null, 'expected Save to NOT create a line just from enabling -- that\'s deferred to when the engine actually determines White\'s move 1');
-    ok('Perfect Opening: Save persists every field to real config storage without creating a line');
+    assert(config.lineId !== null, 'expected Save (with enabled checked) to create the line right away, rather than waiting for White\'s move 1 to be found, so it shows up in the home list immediately');
+    const lines = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === config.lineId);
+    assert(line, `expected a line record for the newly-created lineId, got ${JSON.stringify(lines)}`);
+    assert(line.name === 'Perfect White Opening' && line.color === 'white' && JSON.stringify(line.openingMoves) === '[]',
+      `expected an empty placeholder line (no move 1 discovered yet), got ${JSON.stringify(line)}`);
+    ok('Perfect Opening: Save persists every field to real config storage and creates an empty placeholder line right away');
   } catch(e){ bad('Perfect Opening: Save persists all fields', e); }
 
   // 263. Cancel discards in-progress edits -- reopening shows the last SAVED
@@ -15733,10 +15993,233 @@ try {
     await appDA.page.click('#poProgressCloseBtn');
     ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
   } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
+
+  // 289. Regression: locking the screen (or just backgrounding the tab)
+  //      hides the page, and both background consumers (the manual queue,
+  //      Perfect Opening) can stall between ticks of their own polling while
+  //      hidden -- a visibilitychange listener kicks both immediately once
+  //      the page is visible again, rather than waiting out whatever's left
+  //      of Perfect Opening's 5s poll (and the manual queue has no periodic
+  //      poll of its own at all, so this is its only recovery path).
+  //      document.visibilityState is read-only in a real browser, so this
+  //      test overrides it directly (a standard technique for this exact
+  //      API) rather than needing genuine OS-level backgrounding.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:vis:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+
+    // engine.ready is still true from an earlier test in this same session,
+    // and Perfect Opening's OWN 5s poll keeps ticking in the background
+    // regardless of this test's simulated visibility (faking
+    // document.visibilityState doesn't make Playwright's headless Chromium
+    // actually throttle timers) -- force ready false while seeding so
+    // NOTHING (that poll included) can drain either queue early, rather
+    // than relying on a timing window to observe "untouched while hidden".
+    await appDA.page.evaluate(() => { window.__aqTestHooks.engine.ready = false; });
+    const line = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'manual-vis', color: 'white', openingMoves: ['d4'] }));
+    await appDA.page.evaluate((lineId) => window.__aqTestHooks.addToAnalysisQueue(lineId, [], 20, 1), line.id);
+
+    const setVisibility = (state) => appDA.page.evaluate((s) => {
+      Object.defineProperty(document, 'visibilityState', { value: s, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+
+    // simulates the page being hidden (screen locked) while both jobs sit
+    // queued -- still gated by engine.ready=false, so this can't do anything
+    // either way; just exercises the "not visible" branch of the listener.
+    await setVisibility('hidden');
+    let poQueue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    let aqQueue = await appDA.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(poQueue.length === 1 && aqQueue.length === 1, `expected both queues untouched while hidden, got PO=${JSON.stringify(poQueue)} AQ=${JSON.stringify(aqQueue)}`);
+
+    // now let the engine actually work, and simulate coming back --
+    // visibilitychange to "visible" should immediately kick both consumers.
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
+    });
+    await setVisibility('visible');
+    await appDA.page.waitForFunction(async () => {
+      const q = await window.__perfectOpeningTestHooks.getQueue();
+      return q.length === 0;
+    }, { timeout: 5000 });
+    aqQueue = await appDA.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(aqQueue.length === 0, `expected the manual queue item processed once visible, got ${JSON.stringify(aqQueue)}`);
+    ok('Perfect Opening + Analysis Queue: a visibilitychange to "visible" immediately resumes both, rather than waiting out their own polling');
+  } catch(e){ bad('visibilitychange resume regression', e); }
 } finally {
   await appDA.close();
 }
 } catch(e){ bad('Phase DA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DB: a fresh session, isolated from Phase DA's leftover
+//     engine.ready/queue state (several of its tests leave engine.ready
+//     true with an active stub), for one test that needs a clean slate. ---
+if(shouldRunPhase(['perfect-opening'])){
+try {
+const appDB = await launchApp();
+try {
+  // 290. UX: hitting Save (enabled checked, no prior line) creates the
+  //      "Perfect White Opening" line right away, empty (openingMoves: []),
+  //      and shows it on the home screen immediately -- rather than the
+  //      user staring at an unchanged home list until the background
+  //      scheduler eventually finds White's move 1 (which, at real search
+  //      depths, can be minutes away). engine.ready is left false throughout
+  //      so nothing can process the seeded root job -- this test is only
+  //      about Save's own eager-create responsibility, already isolated
+  //      from the scheduler's create-path (test 284, above).
+  try {
+    await appDB.page.evaluate(() => window.__aqTestHooks.engine.ready = false);
+    await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    await appDB.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appDB.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appDB.page.click('#poEnabledCheckbox');
+    await appDB.page.click('#poSaveBtn');
+    await appDB.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
+
+    const config = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.lineId, `expected Save to assign a lineId immediately, got ${JSON.stringify(config)}`);
+    const lines = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    const line = lines.find(l => l.id === config.lineId);
+    assert(line && line.name === 'Perfect White Opening' && JSON.stringify(line.openingMoves) === '[]',
+      `expected an empty placeholder line created immediately by Save, got ${JSON.stringify(line)}`);
+
+    await appDB.page.waitForSelector('.line-row', { timeout: 5000 });
+    const names = await appDB.page.evaluate(() => [...document.querySelectorAll('.line-row .line-name')].map(el => el.textContent));
+    assert(names.includes('Perfect White Opening'), `expected the empty placeholder line to appear on the home screen right after Save, got ${JSON.stringify(names)}`);
+    ok('Perfect Opening: Save creates an empty placeholder line and shows it on the home screen immediately, rather than waiting for move 1');
+  } catch(e){ bad('Perfect Opening: Save eagerly creates and shows an empty line (UX regression)', e); }
+} finally {
+  await appDB.close();
+}
+} catch(e){ bad('Phase DB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DC: "Reset to Factory" -- a hidden-in-plain-sight link at the
+//     bottom of the About modal (past a scroll) for wiping a demo/test
+//     browser back to a clean install: the whole IndexedDB database plus
+//     every localStorage key, then a hard reload. Two confirmation gates on
+//     the way there (a scary warning with its own "make a backup first"
+//     escape hatch, then a typed "TOTAL DELETE" phrase) since there's no
+//     undo once it actually runs. ---
+if(shouldRunPhase(['import-export'])){
+try {
+const appDC = await launchApp();
+try {
+  const backup = {
+    version: 6, user: 'tester', lichessUser: 'tester123',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  };
+  await seedBackup(appDC.page, backup, { defaultPlayerColor: 'white' });
+  const lichessUserBefore = await appDC.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+  assert(lichessUserBefore === 'tester123', `expected the seeded backup to set a real localStorage key (sanity check on the fixture), got ${JSON.stringify(lichessUserBefore)}`);
+
+  // 291. The link lives at the bottom of the About modal (after the
+  //      attributions list, right before the Close button) and opens the
+  //      warning step; "Make a Full Backup" there triggers a real download
+  //      via the existing export path, without dismissing the warning.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    assert((await appDC.page.evaluate(() => document.getElementById('aboutOverlay').style.display)) === 'none',
+      'expected the About modal to close behind the warning step');
+
+    const [download] = await Promise.all([
+      appDC.page.waitForEvent('download', { timeout: 5000 }),
+      appDC.page.click('#resetFactoryBackupLink'),
+    ]);
+    assert(/repchess-backup-/.test(download.suggestedFilename()), `expected a real backup download, got "${download.suggestedFilename()}"`);
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryWarnOverlay').style.display)) === 'flex',
+      'expected "Make a Full Backup" to leave the warning step open, not dismiss it');
+    ok('Reset to Factory: the About modal link opens the warning step, and its backup link exports a real backup without dismissing it');
+  } catch(e){ bad('Reset to Factory: About link + warning step + backup-first', e); }
+
+  // 292. Cancelling the warning step leaves every store untouched (sanity:
+  //      nothing destructive can be triggered by the warning step itself).
+  try {
+    await appDC.page.click('#resetFactoryWarnCancelBtn');
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryWarnOverlay').style.display)) === 'none',
+      'expected Cancel to close the warning step');
+    const lines = await appDC.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Test'), 'expected Cancel to leave existing data untouched');
+    ok('Reset to Factory: Cancel on the warning step closes it without touching any data');
+  } catch(e){ bad('Reset to Factory: warning-step Cancel is a no-op', e); }
+
+  // 293. The typed-confirmation step: Delete Everything starts disabled,
+  //      stays disabled for anything short of an exact "TOTAL DELETE" match
+  //      (case- and whitespace-sensitive), and only enables on the exact
+  //      phrase.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetFactoryWarnContinueBtn');
+    await appDC.page.waitForSelector('#resetFactoryConfirmOverlay', { state: 'visible', timeout: 5000 });
+
+    const initiallyDisabled = await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled);
+    assert(initiallyDisabled, 'expected Delete Everything to start disabled');
+
+    await appDC.page.fill('#resetFactoryConfirmInput', 'total delete');
+    assert(await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled),
+      'expected a case-mismatched phrase to leave Delete Everything disabled');
+
+    await appDC.page.fill('#resetFactoryConfirmInput', 'TOTAL DELETE');
+    assert(!(await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled)),
+      'expected the exact phrase to enable Delete Everything');
+
+    await appDC.page.click('#resetFactoryConfirmCancelBtn');
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmOverlay').style.display)) === 'none',
+      'expected Cancel to close the confirmation step');
+    const lines = await appDC.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Test'), 'expected Cancel on the confirmation step to leave existing data untouched too');
+    ok('Reset to Factory: Delete Everything only enables on an exact "TOTAL DELETE" match, and Cancel is a no-op');
+  } catch(e){ bad('Reset to Factory: typed-confirmation gating', e); }
+
+  // 294. Confirming for real wipes IndexedDB and localStorage, then reloads
+  //      to a clean-install home screen -- the actual destructive path, run
+  //      last in this phase since nothing after it can assume any prior
+  //      state survives.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetFactoryWarnContinueBtn');
+    await appDC.page.waitForSelector('#resetFactoryConfirmOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.fill('#resetFactoryConfirmInput', 'TOTAL DELETE');
+    await appDC.page.click('#resetFactoryConfirmDeleteBtn');
+
+    // the click triggers a real page navigation (location.reload()) --
+    // wait for the reloaded app to finish booting the same way launchApp()
+    // itself does, rather than assuming any particular timing.
+    await appDC.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+
+    await appDC.page.waitForSelector('#homeScreen', { state: 'visible', timeout: 5000 });
+    await appDC.page.waitForFunction(() => document.getElementById('linesList').textContent.trim().length > 0, { timeout: 5000 });
+    const listHtml = await appDC.page.evaluate(() => document.getElementById('linesList').textContent);
+    assert(/no opening systems/i.test(listHtml), `expected a clean-install home screen after reload, got ${JSON.stringify(listHtml)}`);
+
+    const lichessUserAfter = await appDC.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    assert(lichessUserAfter === null, `expected localStorage fully cleared, got lichess_lastUser=${JSON.stringify(lichessUserAfter)}`);
+    ok('Reset to Factory: confirming wipes IndexedDB + localStorage and reloads to a clean install');
+  } catch(e){ bad('Reset to Factory: confirming actually wipes everything and reloads', e); }
+} finally {
+  await appDC.close();
+}
+} catch(e){ bad('Phase DC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

@@ -1522,12 +1522,14 @@ function assetToJson(a){
   return json;
 }
 
-// Bundles every asset (full records, base64 images included) into a single
-// JSON file. The `repchessAssets` marker lets the hamburger-menu importer
-// recognize it as an asset bundle (vs a full backup) and offer a replace.
-function exportAllAsJson(){
+// Bundles every asset (full records, base64 images included) plus every
+// object list (the room word-list assignments that bind back to these assets
+// via assetId) into a single JSON file. The `repchessAssets` marker lets the
+// hamburger-menu importer recognize it as an asset bundle (vs a full backup)
+// and offer a replace.
+async function exportAllAsJson(){
   if(!ASSETS.length){ alert('no assets to export'); return; }
-  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets: ASSETS };
+  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets: ASSETS, objectLists: await getAllObjectLists() };
   const stamp = new Date().toISOString().slice(0,10);
   downloadBlob(new Blob([JSON.stringify(bundle, null, 2)], {type:'application/json'}),
     `repchess-assets-${stamp}.json`);

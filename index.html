@@ -216,6 +216,8 @@
   #roomInfoOverlay .modal{display:flex;flex-direction:column;max-height:85vh}
   #roomInfoOverlay .modal h2,#roomInfoOverlay .modal-actions{flex:none}
 
+  #resetFactoryConfirmDeleteBtn:disabled{opacity:.4;cursor:not-allowed}
+
   .help-modal{display:flex;flex-direction:column;width:44em;max-width:92vw;height:70vh;max-height:80vh}
   .help-modal h2,.help-modal .modal-actions{flex:none}
   .help-body{flex:1;display:flex;gap:1rem;overflow:hidden;min-height:0}
@@ -906,8 +908,66 @@
       <li><b>three.js</b> — 3D/WebGL rendering for the VR memory-palace walkthrough (MIT License).</li>
       <li><b>Font Awesome Free</b> — icons (icons: CC BY 4.0; fonts: SIL OFL 1.1; code: MIT License).</li>
     </ul>
+    <hr style="margin:2em 0 1em;border:none;border-top:1px solid #ddd">
+    <p style="text-align:center;margin-bottom:0"><a href="#" id="resetToFactoryLink" style="font-size:.75em;color:#999">Reset to Factory</a></p>
     <div class="modal-actions">
       <button id="aboutCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset to Factory: step 1, the scary warning -->
+<div id="resetFactoryWarnOverlay" class="overlay">
+  <div class="modal" style="max-width:28em">
+    <h2 style="color:#b00">⚠ Reset to Factory</h2>
+    <p><b>This permanently and irreversibly deletes everything this app has stored in this browser:</b></p>
+    <ul style="padding-left:1.2em;line-height:1.5">
+      <li>Every opening system, move, note, and mnemonic (including images)</li>
+      <li>Every downloaded game</li>
+      <li>The VR memory-palace layout and room progress</li>
+      <li>All saved settings (engine, analysis queue, quiz, auto-import, remembered usernames, etc.)</li>
+    </ul>
+    <p><b>There is no undo.</b> Once this runs, none of it can be recovered.</p>
+    <p>If you want a copy first: <a href="#" id="resetFactoryBackupLink">Make a Full Backup</a></p>
+    <div class="modal-actions">
+      <button id="resetFactoryWarnCancelBtn">Cancel</button>
+      <button id="resetFactoryWarnContinueBtn" style="color:#b00">Continue&hellip;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset to Factory: step 2, typed confirmation -->
+<div id="resetFactoryConfirmOverlay" class="overlay">
+  <div class="modal" style="max-width:26em">
+    <h2 style="color:#b00">Final Confirmation</h2>
+    <p>Type <b>TOTAL DELETE</b> below to permanently erase all data and reset this app to a fresh install.</p>
+    <input id="resetFactoryConfirmInput" style="width:100%;box-sizing:border-box" autocomplete="off" spellcheck="false" placeholder="TOTAL DELETE">
+    <p id="resetFactoryConfirmError" style="color:#b00;display:none"></p>
+    <div class="modal-actions">
+      <button id="resetFactoryConfirmCancelBtn">Cancel</button>
+      <button id="resetFactoryConfirmDeleteBtn" disabled style="color:#fff;background:#b00;border-color:#b00">Delete Everything</button>
+    </div>
+  </div>
+</div>
+
+<!-- boot-time offer to install the default mnemonics/assets bundles into a
+     blank environment -- each row only shows for a store that's actually
+     empty (see maybeOfferDefaultContent in app.js), both checked by default -->
+<div id="defaultContentOverlay" class="overlay">
+  <div class="modal" style="max-width:28em">
+    <h2>Install Starter Content?</h2>
+    <p>You don't have this set up yet. REPchess can install a ready-made set to get you started — you can edit or replace any of it later.</p>
+    <div class="field" style="text-align:left">
+      <label id="defaultContentMnemRow" style="display:block;margin:.6em 0">
+        <input type="checkbox" id="defaultContentMnemChk"> Default Mnemonics (memory-palace words &amp; images)
+      </label>
+      <label id="defaultContentAssetsRow" style="display:block;margin:.6em 0">
+        <input type="checkbox" id="defaultContentAssetsChk"> Default Assets (VR props &amp; object lists)
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="defaultContentSkipBtn">Skip</button>
+      <button id="defaultContentInstallBtn">Install Selected</button>
     </div>
   </div>
 </div>
@@ -1524,7 +1584,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-54"></script>
+<script src="js/db.js?v=20260804-55"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1541,6 +1601,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-312"></script>
+<script type="module" src="js/app.js?v=20260804-318"></script>
 </body>
 </html>
