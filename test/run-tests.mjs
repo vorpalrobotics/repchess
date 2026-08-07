@@ -15733,6 +15733,64 @@ try {
     await appDA.page.click('#poProgressCloseBtn');
     ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
   } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
+
+  // 289. Regression: locking the screen (or just backgrounding the tab)
+  //      hides the page, and both background consumers (the manual queue,
+  //      Perfect Opening) can stall between ticks of their own polling while
+  //      hidden -- a visibilitychange listener kicks both immediately once
+  //      the page is visible again, rather than waiting out whatever's left
+  //      of Perfect Opening's 5s poll (and the manual queue has no periodic
+  //      poll of its own at all, so this is its only recovery path).
+  //      document.visibilityState is read-only in a real browser, so this
+  //      test overrides it directly (a standard technique for this exact
+  //      API) rather than needing genuine OS-level backgrounding.
+  try {
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.reset());
+    const config = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.maxTotalVariations = 1;
+    await appDA.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
+    await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:vis:1', kind: 'white', seq: [], createdAt: Date.now() }]));
+
+    // engine.ready is still true from an earlier test in this same session,
+    // and Perfect Opening's OWN 5s poll keeps ticking in the background
+    // regardless of this test's simulated visibility (faking
+    // document.visibilityState doesn't make Playwright's headless Chromium
+    // actually throttle timers) -- force ready false while seeding so
+    // NOTHING (that poll included) can drain either queue early, rather
+    // than relying on a timing window to observe "untouched while hidden".
+    await appDA.page.evaluate(() => { window.__aqTestHooks.engine.ready = false; });
+    const line = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'manual-vis', color: 'white', openingMoves: ['d4'] }));
+    await appDA.page.evaluate((lineId) => window.__aqTestHooks.addToAnalysisQueue(lineId, [], 20, 1), line.id);
+
+    const setVisibility = (state) => appDA.page.evaluate((s) => {
+      Object.defineProperty(document, 'visibilityState', { value: s, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+
+    // simulates the page being hidden (screen locked) while both jobs sit
+    // queued -- still gated by engine.ready=false, so this can't do anything
+    // either way; just exercises the "not visible" branch of the listener.
+    await setVisibility('hidden');
+    let poQueue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    let aqQueue = await appDA.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(poQueue.length === 1 && aqQueue.length === 1, `expected both queues untouched while hidden, got PO=${JSON.stringify(poQueue)} AQ=${JSON.stringify(aqQueue)}`);
+
+    // now let the engine actually work, and simulate coming back --
+    // visibilitychange to "visible" should immediately kick both consumers.
+    await appDA.page.evaluate(() => {
+      window.__aqTestHooks.engine.ready = true;
+      window.__aqTestHooks.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
+    });
+    await setVisibility('visible');
+    await appDA.page.waitForFunction(async () => {
+      const q = await window.__perfectOpeningTestHooks.getQueue();
+      return q.length === 0;
+    }, { timeout: 5000 });
+    aqQueue = await appDA.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(aqQueue.length === 0, `expected the manual queue item processed once visible, got ${JSON.stringify(aqQueue)}`);
+    ok('Perfect Opening + Analysis Queue: a visibilitychange to "visible" immediately resumes both, rather than waiting out their own polling');
+  } catch(e){ bad('visibilitychange resume regression', e); }
 } finally {
   await appDA.close();
 }

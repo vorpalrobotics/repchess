@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-312';
+const BUILD_TAG = '-313';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5557,6 +5557,21 @@ refreshAnalysisQueue().then(() => maybeResumeAnalysisQueue());
 // evaluation.
 Promise.resolve().then(() => maybeResumePerfectOpening());
 setInterval(() => maybeResumePerfectOpening(), 5000);
+
+// locking the screen (or just switching tabs/windows) backgrounds the page --
+// Chrome (and the OS, for a locked session) throttles a hidden page hard to
+// save power, so both background consumers can end up crawling or stalled
+// between ticks of their own polling. Nothing can (or should) fight that
+// throttling while genuinely hidden, but the moment the page is visible
+// again, kick both immediately rather than waiting out whatever's left of
+// the current poll interval (5s for Perfect Opening; the manual queue has
+// no periodic poll of its own at all, so this is its only recovery path
+// after a stall like this).
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState !== 'visible') return;
+  maybeResumeAnalysisQueue();
+  maybeResumePerfectOpening();
+});
 
 // offer the default mnemonics bundle when there's nothing in the mnemonics
 // store yet (see maybeOfferDefaultMnemonics, defined below). Skipped under
