@@ -3000,6 +3000,14 @@ function moveObjectWordLabelPos(slot, xform){
 // the bare image and must recall the word/move yourself. Follows the object's
 // nudge (xform dx/dz) so the caption stays under it. Not a click target — the
 // object above it owns the edit-mode picker.
+// depthTest is deliberately off: the caption sits at the SAME x/z as the
+// object above it (moveObjectSubtitlePos), just lower, which usually falls
+// well within that object's own opaque, alphaTest-cut image plane -- an
+// opaque surface and a same-depth transparent sprite competing for the same
+// pixels z-fights, occluding a different slice of the text as the viewing
+// angle (and each pixel's exact depth comparison) shifts while walking past
+// it. Skipping the depth test entirely makes the caption always draw on top
+// of the image it names, which is the whole point of it being there.
 function buildMoveObjectSubtitle(slot, word, xform){
   xform = xform || {};
   const W = 512, H = 128;
@@ -3020,7 +3028,7 @@ function buildMoveObjectSubtitle(slot, word, xform){
   ctx.fillText(word, W / 2, H / 2 + 2);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
   sprite.scale.set(0.95, 0.24, 1);
   const p = moveObjectSubtitlePos(slot, xform);
   sprite.position.set(p.x, p.y, p.z);
@@ -8868,6 +8876,18 @@ export async function openThreeTest(containerEl, opts){
         buildRoom(currentRoomKey);
       },
       scan: () => { const out=[]; scene.traverse(o=>{ if(o.userData&&o.userData.kind) out.push({ kind:o.userData.kind, slotId:o.userData.slotId, wall:o.userData.wall, roomKey:o.userData.roomKey, buildingKey:o.userData.buildingKey, w:o.userData.w, h:o.userData.h, doorKey:o.userData.doorKey }); }); return out; },
+      // buildMoveObjectSubtitle's caption sprite has no userData.kind (so scan()
+      // above and findInteractive() both skip it -- purely decorative, not a
+      // click target), so it needs its own lookup by userData.subtitleFor. Its
+      // material must render on top of the (opaque) image it captions -- see
+      // that function's own comment on why depthTest is off -- so a test can
+      // confirm the render-queue settings directly, same pattern as
+      // selectionRenderInfo above.
+      moveObjectSubtitleRenderInfo: (slotId) => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.subtitleFor === slotId) found = o; });
+        return found ? { transparent: found.material.transparent, depthWrite: found.material.depthWrite, depthTest: found.material.depthTest } : null;
+      },
       // a room's own resolved exits, incl. the fromSide/fromOrder tagging
       // (which member each door originates from) that continuationListItem
       // relies on -- for pinning that the graph-generation -> render-time
