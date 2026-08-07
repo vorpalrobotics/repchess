@@ -3874,6 +3874,72 @@ try {
 
 } catch(e){ bad('Phase Y: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase Y2: the move table itself colors a room's name green once it's
+//     memorized -- requested live so a room worth re-walking stands out at a
+//     glance while browsing the tree, without opening the digraph or VR. ---
+if(shouldRunPhase(['move-table','vr-castle'])){
+try {
+const appY2 = await launchApp();
+try {
+  // two independent castle roots (their own room each) under move 1 -- one
+  // memorized ahead of time (before the line is even opened), the other not,
+  // so the test can tell "this room is green" from "everything is green".
+  const keys = await appY2.page.evaluate(() => {
+    const pk = (mv, inst) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return `cas:${inst}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4'], 'L1_Alpha'), beta: pk(['d4','d5','c4'], 'L1_Beta') };
+  });
+  await seedBackup(appY2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','d5'],  reply: 'c4', isCastleRoot: true, castleName: 'Beta',  castleStreetNumber: 2 },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4 e6',  white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appY2.page.evaluate((map) => setMeta('threeMemorizedRooms', JSON.stringify(map)), { [keys.alpha]: Date.now() });
+
+  // 71. Opening the line for the first time already shows Alpha's room name
+  //     in green (openLine's own loadMemorizedRooms, not only the digraph's).
+  try {
+    await appY2.page.click('.line-row');
+    await appY2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"] .branchName', { timeout: 40000 });
+    const alphaMemorized = await appY2.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,Nf6"] .branchName').classList.contains('branchName-memorized'));
+    const betaMemorized = await appY2.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,d5"] .branchName').classList.contains('branchName-memorized'));
+    assert(alphaMemorized === true, 'expected Alpha (pre-memorized before ever opening the line) to show green');
+    assert(betaMemorized === false, 'expected Beta (never memorized) to NOT show green');
+    ok('move table: a memorized room\'s name is colored green from the very first render');
+  } catch(e){ bad('move table: memorized room name green on first render', e); }
+
+  // 72. Memorizing a room from a real VR visit, then closing VR, refreshes
+  //     the still-open move table underneath immediately -- no need to
+  //     reopen the line or visit the digraph first.
+  try {
+    await openVR(appY2.page);
+    await appY2.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.beta);
+    await appY2.page.waitForTimeout(200);
+    await appY2.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    await appY2.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appY2.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+    const betaMemorizedNow = await appY2.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="d4,d5"] .branchName').classList.contains('branchName-memorized'));
+    assert(betaMemorizedNow === true, 'expected closing VR to immediately refresh the move table\'s memorized coloring');
+    ok('move table: closing VR after memorizing a room refreshes its green coloring immediately');
+  } catch(e){ bad('move table: VR close refreshes memorized coloring', e); }
+} finally {
+  await appY2.close();
+}
+
+} catch(e){ bad('Phase Y2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase Z: "memorized" rooms (Phase 2) get a 🧠 label glyph in the
 //     network digraph (mirroring the VR toolbar's fa-brain icon), and the
 //     thick green border is reserved for "all done" -- memorized AND fully
