@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-321';
+const BUILD_TAG = '-322';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3430,6 +3430,39 @@ function roomKeyForSaved(saved){
   const castle = inheritedCastle(roomSeq, CURRENT_LINE?.id);
   if(!castle) return null;
   return castleRoomKey(castleInstanceId(CURRENT_LINE.id, castle), positionKey(fenForSeq(roomSeq)));
+}
+/* Whether a pref's own room (same roomSeq roomKeyForSaved resolves) is a
+   genuine dead end -- threeVR.js's isRoomEmpty: no forward exit AND no wall
+   content of its own, which VR renders as a LOCKED door into it (see
+   threeVR.js's own doc comment). A room behind a locked door can never
+   actually be walked into, so it can never be memorized either -- badging it
+   distinctly (blue, not the default color) in the move table flags it as
+   structurally exempt rather than something that just hasn't been visited
+   yet in VR.
+   Mirrors isRoomEmpty's own logic against the PREFS/games tree directly
+   (this is app.js, not threeVR.js -- no live DEMO_MNEMONICS/room registry to
+   read) rather than needing a real castle-graph build: the room has a real
+   forward exit or wall content the moment ANY of its own immediate opponent
+   replies has an "our reply" chosen -- that reply either starts a new room
+   (a forward exit) or continues this same corridor (a wall pair), and either
+   way the room is not empty. An unbuilt opponent reply (games has the move,
+   but no reply chosen yet) contributes neither, same as threeVR.js's own
+   "unbuilt continuation never gets a real exit" rule -- so it does NOT save
+   the room from reading as empty.
+   A CASTLE ROOT is never locked regardless of its own continuation: it's
+   reached directly from the street, not through a parent room's door, so
+   there's no door to lock in the first place (same exemption Phase AS's
+   "Jump to VR" visibility and threeVR.js's own isRoomEmpty callers give it --
+   see the door-naming loop's own comment: "the castle root, which is also
+   empty until built out yet is reached from the street, not a locked door"). */
+function roomIsLockedForSaved(saved){
+  if(!saved?.seq || !saved?.reply || saved.isCastleRoot) return false;
+  const roomSeq = [...saved.seq, saved.reply];
+  if(!inheritedCastle(roomSeq, CURRENT_LINE?.id)) return false;   // not part of any castle -- no real VR room to lock
+  const {counts} = replies(gamesForLineColor(GAMES, CURRENT_LINE.color), roomSeq);
+  const manualReplies = PREFS[prefKey(CURRENT_LINE.id, roomSeq)]?.manualReplies || [];
+  manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
+  return !Object.keys(counts).some(opp => !!PREFS[prefKey(CURRENT_LINE.id,[...roomSeq,opp])]?.reply);
 }
 /* resolves `seq` (the OPPONENT-move seq a row's own attributes pref is keyed
    on -- same convention genRoomMeta uses, one ply back from the room itself,
@@ -8602,8 +8635,15 @@ function refreshBranchName(nameSpan, saved){
   if(!text){ nameSpan.style.display='none'; return; }
   nameSpan.textContent = text;
   nameSpan.style.display='';
+  // locked takes priority over memorized: a room behind a locked door can
+  // never actually be walked into, so any memorized flag on it is stale
+  // (e.g. its continuation existed, and was memorized, before getting
+  // deleted back down to a dead end) rather than something still true.
+  const locked = roomIsLockedForSaved(saved);
   const roomKey = roomKeyForSaved(saved);
-  nameSpan.classList.toggle('branchName-memorized', !!(roomKey && MEMORIZED_ROOMS[roomKey]));
+  nameSpan.classList.toggle('branchName-locked', locked);
+  nameSpan.classList.toggle('branchName-memorized', !locked && !!(roomKey && MEMORIZED_ROOMS[roomKey]));
+  nameSpan.title = locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '';
 }
 
 function refreshBranchStats(statsSpan, games, childrenSeq){
