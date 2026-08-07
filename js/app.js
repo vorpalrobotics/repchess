@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-315';
+const BUILD_TAG = '-316';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6679,6 +6679,51 @@ $('menuAbout').onclick = ()=>{
   $('aboutOverlay').style.display='flex';
 };
 $('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
+
+/* ---------- Reset to Factory ----------
+   A hidden-in-plain-sight escape hatch (small link at the bottom of the
+   About modal, past a scroll) for wiping a demo/test browser back to a
+   clean install: the whole IndexedDB database plus every localStorage key
+   this app has ever written, gone, then a hard reload so nothing from the
+   old session lingers in memory. Two confirmation steps on the way there --
+   a scary warning (with an escape hatch of its own, a one-click full
+   backup) and then a typed "TOTAL DELETE" phrase -- since there is no undo
+   once deleteEntireDatabase() runs. */
+const RESET_FACTORY_PHRASE = 'TOTAL DELETE';
+$('resetToFactoryLink').onclick = (e) => {
+  e.preventDefault();
+  $('aboutOverlay').style.display = 'none';
+  $('resetFactoryWarnOverlay').style.display = 'flex';
+};
+$('resetFactoryBackupLink').onclick = (e) => {
+  e.preventDefault();
+  exportBackup();
+};
+$('resetFactoryWarnCancelBtn').onclick = () => { $('resetFactoryWarnOverlay').style.display = 'none'; };
+$('resetFactoryWarnContinueBtn').onclick = () => {
+  $('resetFactoryWarnOverlay').style.display = 'none';
+  $('resetFactoryConfirmInput').value = '';
+  $('resetFactoryConfirmError').style.display = 'none';
+  $('resetFactoryConfirmDeleteBtn').disabled = true;
+  $('resetFactoryConfirmOverlay').style.display = 'flex';
+  $('resetFactoryConfirmInput').focus();
+};
+$('resetFactoryConfirmInput').addEventListener('input', () => {
+  $('resetFactoryConfirmError').style.display = 'none';
+  $('resetFactoryConfirmDeleteBtn').disabled = $('resetFactoryConfirmInput').value !== RESET_FACTORY_PHRASE;
+});
+$('resetFactoryConfirmCancelBtn').onclick = () => { $('resetFactoryConfirmOverlay').style.display = 'none'; };
+$('resetFactoryConfirmDeleteBtn').onclick = async () => {
+  if($('resetFactoryConfirmInput').value !== RESET_FACTORY_PHRASE){
+    $('resetFactoryConfirmError').textContent = `Type exactly "${RESET_FACTORY_PHRASE}" to confirm.`;
+    $('resetFactoryConfirmError').style.display = '';
+    return;
+  }
+  $('resetFactoryConfirmDeleteBtn').disabled = true;
+  await deleteEntireDatabase();
+  localStorage.clear();
+  location.reload();
+};
 
 /* ---------- manage mnemonics ---------- */
 // MNEM_PIECES/MNEMONICS are declared near the top of the file now (a

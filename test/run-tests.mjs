@@ -15937,5 +15937,127 @@ try {
 } catch(e){ bad('Phase DB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DC: "Reset to Factory" -- a hidden-in-plain-sight link at the
+//     bottom of the About modal (past a scroll) for wiping a demo/test
+//     browser back to a clean install: the whole IndexedDB database plus
+//     every localStorage key, then a hard reload. Two confirmation gates on
+//     the way there (a scary warning with its own "make a backup first"
+//     escape hatch, then a typed "TOTAL DELETE" phrase) since there's no
+//     undo once it actually runs. ---
+if(shouldRunPhase(['import-export'])){
+try {
+const appDC = await launchApp();
+try {
+  const backup = {
+    version: 6, user: 'tester', lichessUser: 'tester123',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [{ id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' }],
+  };
+  await seedBackup(appDC.page, backup, { defaultPlayerColor: 'white' });
+  const lichessUserBefore = await appDC.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+  assert(lichessUserBefore === 'tester123', `expected the seeded backup to set a real localStorage key (sanity check on the fixture), got ${JSON.stringify(lichessUserBefore)}`);
+
+  // 291. The link lives at the bottom of the About modal (after the
+  //      attributions list, right before the Close button) and opens the
+  //      warning step; "Make a Full Backup" there triggers a real download
+  //      via the existing export path, without dismissing the warning.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    assert((await appDC.page.evaluate(() => document.getElementById('aboutOverlay').style.display)) === 'none',
+      'expected the About modal to close behind the warning step');
+
+    const [download] = await Promise.all([
+      appDC.page.waitForEvent('download', { timeout: 5000 }),
+      appDC.page.click('#resetFactoryBackupLink'),
+    ]);
+    assert(/repchess-backup-/.test(download.suggestedFilename()), `expected a real backup download, got "${download.suggestedFilename()}"`);
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryWarnOverlay').style.display)) === 'flex',
+      'expected "Make a Full Backup" to leave the warning step open, not dismiss it');
+    ok('Reset to Factory: the About modal link opens the warning step, and its backup link exports a real backup without dismissing it');
+  } catch(e){ bad('Reset to Factory: About link + warning step + backup-first', e); }
+
+  // 292. Cancelling the warning step leaves every store untouched (sanity:
+  //      nothing destructive can be triggered by the warning step itself).
+  try {
+    await appDC.page.click('#resetFactoryWarnCancelBtn');
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryWarnOverlay').style.display)) === 'none',
+      'expected Cancel to close the warning step');
+    const lines = await appDC.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Test'), 'expected Cancel to leave existing data untouched');
+    ok('Reset to Factory: Cancel on the warning step closes it without touching any data');
+  } catch(e){ bad('Reset to Factory: warning-step Cancel is a no-op', e); }
+
+  // 293. The typed-confirmation step: Delete Everything starts disabled,
+  //      stays disabled for anything short of an exact "TOTAL DELETE" match
+  //      (case- and whitespace-sensitive), and only enables on the exact
+  //      phrase.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetFactoryWarnContinueBtn');
+    await appDC.page.waitForSelector('#resetFactoryConfirmOverlay', { state: 'visible', timeout: 5000 });
+
+    const initiallyDisabled = await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled);
+    assert(initiallyDisabled, 'expected Delete Everything to start disabled');
+
+    await appDC.page.fill('#resetFactoryConfirmInput', 'total delete');
+    assert(await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled),
+      'expected a case-mismatched phrase to leave Delete Everything disabled');
+
+    await appDC.page.fill('#resetFactoryConfirmInput', 'TOTAL DELETE');
+    assert(!(await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmDeleteBtn').disabled)),
+      'expected the exact phrase to enable Delete Everything');
+
+    await appDC.page.click('#resetFactoryConfirmCancelBtn');
+    assert((await appDC.page.evaluate(() => document.getElementById('resetFactoryConfirmOverlay').style.display)) === 'none',
+      'expected Cancel to close the confirmation step');
+    const lines = await appDC.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
+    assert(lines.some(l => l.name === 'Test'), 'expected Cancel on the confirmation step to leave existing data untouched too');
+    ok('Reset to Factory: Delete Everything only enables on an exact "TOTAL DELETE" match, and Cancel is a no-op');
+  } catch(e){ bad('Reset to Factory: typed-confirmation gating', e); }
+
+  // 294. Confirming for real wipes IndexedDB and localStorage, then reloads
+  //      to a clean-install home screen -- the actual destructive path, run
+  //      last in this phase since nothing after it can assume any prior
+  //      state survives.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.click('#resetToFactoryLink');
+    await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.click('#resetFactoryWarnContinueBtn');
+    await appDC.page.waitForSelector('#resetFactoryConfirmOverlay', { state: 'visible', timeout: 5000 });
+    await appDC.page.fill('#resetFactoryConfirmInput', 'TOTAL DELETE');
+    await appDC.page.click('#resetFactoryConfirmDeleteBtn');
+
+    // the click triggers a real page navigation (location.reload()) --
+    // wait for the reloaded app to finish booting the same way launchApp()
+    // itself does, rather than assuming any particular timing.
+    await appDC.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+
+    await appDC.page.waitForSelector('#homeScreen', { state: 'visible', timeout: 5000 });
+    await appDC.page.waitForFunction(() => document.getElementById('linesList').textContent.trim().length > 0, { timeout: 5000 });
+    const listHtml = await appDC.page.evaluate(() => document.getElementById('linesList').textContent);
+    assert(/no opening systems/i.test(listHtml), `expected a clean-install home screen after reload, got ${JSON.stringify(listHtml)}`);
+
+    const lichessUserAfter = await appDC.page.evaluate(() => localStorage.getItem('lichess_lastUser'));
+    assert(lichessUserAfter === null, `expected localStorage fully cleared, got lichess_lastUser=${JSON.stringify(lichessUserAfter)}`);
+    ok('Reset to Factory: confirming wipes IndexedDB + localStorage and reloads to a clean install');
+  } catch(e){ bad('Reset to Factory: confirming actually wipes everything and reloads', e); }
+} finally {
+  await appDC.close();
+}
+} catch(e){ bad('Phase DC: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

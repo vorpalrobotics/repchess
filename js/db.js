@@ -621,6 +621,28 @@ async function clearAllData(){
   });
 }
 
+/* ---------- Reset to Factory: delete the whole database outright ----------
+   Unlike clearAllData() above (which deliberately spares safetyBackup so an
+   interrupted restore can recover), this is the opposite: an explicit,
+   user-confirmed "erase everything", including safetyBackup and any store
+   added in a future version that this list doesn't yet know about. Closes
+   the cached connection first -- indexedDB.deleteDatabase() otherwise sits
+   in "blocked" state behind this tab's own still-open handle and never
+   resolves. Best-effort on the delete itself (resolves either way) since the
+   caller clears localStorage and reloads immediately after regardless. */
+async function deleteEntireDatabase(){
+  if(dbPromise){
+    try { (await dbPromise).close(); } catch(e){}
+  }
+  dbPromise = null;
+  return new Promise(resolve => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = resolve;
+    req.onerror = resolve;
+    req.onblocked = resolve;
+  });
+}
+
 /* ---------- Perfect Opening project ----------
    Settings + progress live as one JSON blob in the existing meta store
    (small, rewritten wholesale on every save -- same pattern as threeLayout/
