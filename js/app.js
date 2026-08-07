@@ -2,7 +2,7 @@ import { Engine } from './engine.js?v=20260804-8';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-267';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-78';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
 
@@ -77,7 +77,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-316';
+const BUILD_TAG = '-317';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5959,17 +5959,28 @@ async function maybeRecoverFromInterruptedRestore(){
 
 /* A standalone asset bundle (from the asset manager's "Export All as JSON"),
    distinct from a full backup. A full backup carries an opening-systems `lines`
-   array; an asset bundle is just the assets, tagged with `repchessAssets`. */
+   array; an asset bundle is just the assets (plus, now, object lists), tagged
+   with `repchessAssets`. */
 const isAssetBundle = d =>
   !!d && (d.repchessAssets != null || (Array.isArray(d.assets) && !Array.isArray(d.lines)));
 
 /* asset-only REPLACE: clears the asset store and writes the bundle's assets,
-   leaving games/lines/mnemonics untouched. Destructive; caller confirms first. */
+   leaving games/lines/mnemonics untouched. Destructive; caller confirms first.
+   Object lists replace the same way when the bundle carries them -- older
+   asset-only exports (before object lists were bundled in) won't have the
+   field, so an old file's import leaves existing object lists untouched
+   rather than silently wiping them. */
 async function importAssetBundle(data){
   if(!Array.isArray(data.assets)) throw new Error('not a valid asset export file');
   await clearAssets();
   for(const a of data.assets) await setAsset(a.id, a);
-  log(`replaced assets — imported ${data.assets.length} asset(s)`);
+  let listMsg = '';
+  if(Array.isArray(data.objectLists)){
+    await clearObjectLists();
+    for(const list of data.objectLists) await setObjectList(list.id, list);
+    listMsg = `, ${data.objectLists.length} object list(s)`;
+  }
+  log(`replaced assets — imported ${data.assets.length} asset(s)${listMsg}`);
 }
 
 /* ---------- mnemonics-only export / import ----------
@@ -6038,13 +6049,25 @@ async function exportMnemonics(){
 /* assets-only export: same bundle shape the asset manager's "Export All as
    JSON" produces (tagged `repchessAssets` so the unified importer recognises
    it), but callable straight from the hamburger menu without opening the asset
-   manager. Reads assets from IndexedDB rather than the manager's in-memory list. */
+   manager. Reads assets and object lists from IndexedDB rather than the
+   manager's in-memory list -- object lists ride along too since they're the
+   room word-list assignments that bind back to these assets via assetId, and
+   a bundle missing them would leave those bindings dangling on restore.
+   Split into a pure data-assembly half (no download), mirroring
+   buildBackupData/exportBackup, so a test can inspect the bundle directly. */
+async function buildAssetsExportData(){
+  return {
+    repchessAssets: 1,
+    exportedAt: new Date().toISOString(),
+    assets: await getAllAssets(),
+    objectLists: await getAllObjectLists()
+  };
+}
 async function exportAssets(){
-  const assets = await getAllAssets();
-  if(!assets.length){ log('no assets to export',true); return; }
-  const bundle = { repchessAssets: 1, exportedAt: new Date().toISOString(), assets };
-  await downloadJsonBackup(bundle, `repchess-assets-${new Date().toISOString().slice(0,10)}`);
-  log(`exported ${assets.length} asset(s)`);
+  const data = await buildAssetsExportData();
+  if(!data.assets.length){ log('no assets to export',true); return; }
+  await downloadJsonBackup(data, `repchess-assets-${new Date().toISOString().slice(0,10)}`);
+  log(`exported ${data.assets.length} asset(s), ${data.objectLists.length} object list(s)`);
 }
 
 /* isMnemonicsBundle is declared near the top of the file now -- see the
@@ -6202,11 +6225,14 @@ $('backupImport').addEventListener('change', async e=>{
   // An asset-only export gets a different, asset-scoped replace flow.
   if(isAssetBundle(data)){
     const n = Array.isArray(data.assets) ? data.assets.length : 0;
+    const hasLists = Array.isArray(data.objectLists);
+    const listsClause = hasLists ? ` and ${data.objectLists.length} object list(s)` : '';
+    const listsWipeClause = hasLists ? ' and object lists' : '';
     if(!confirm(
       'IMPORT ASSETS (REPLACE)?\n\n' +
-      `This file contains ${n} asset(s).\n\n` +
-      'Importing assets is currently a REPLACE operation: every asset currently ' +
-      'stored in this browser will be DELETED and replaced with the assets in this ' +
+      `This file contains ${n} asset(s)${listsClause}.\n\n` +
+      `Importing assets is currently a REPLACE operation: every asset${listsWipeClause} currently ` +
+      'stored in this browser will be DELETED and replaced with the contents of this ' +
       'file. (Merge imports are not supported yet.) Your games, opening systems, and ' +
       'mnemonics are not affected.\n\n' +
       'This cannot be undone. Continue?'
@@ -10163,6 +10189,23 @@ if(localStorage.getItem('threeTestDebug')){
     persistSafetyBackup: (snapshot) => persistSafetyBackup(snapshot),
     hasSafetyBackup: async () => !!(await getSafetyBackup()),
     maybeRecoverFromInterruptedRestore: () => maybeRecoverFromInterruptedRestore(),
+  };
+}
+
+// test-only hook for the assets-only export/import round trip (the
+// hamburger-menu shortcut and the asset manager's "Export All as JSON" share
+// this same bundle shape) -- buildAssetsExportData is the pure data-assembly
+// half of exportAssets (no download involved), and importAssetBundle is the
+// real REPLACE path the file-input handler calls after its confirm() dialog.
+if(localStorage.getItem('threeTestDebug')){
+  window.__assetsTestHooks = {
+    buildExportData: () => buildAssetsExportData(),
+    importBundle: (data) => importAssetBundle(data),
+    isAssetBundle: (data) => isAssetBundle(data),
+    getAllAssets: () => getAllAssets(),
+    setAsset: (id, patch) => setAsset(id, patch),
+    getAllObjectLists: () => getAllObjectLists(),
+    setObjectList: (id, patch) => setObjectList(id, patch),
   };
 }
 

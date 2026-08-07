@@ -6602,6 +6602,75 @@ try {
 }
 } catch(e){ bad('Phase AR3: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+
+// --- Phase AR4: an "Assets" backup/import bundles object lists alongside
+//     the asset images/props, not just the images -- object lists are the
+//     room word-list assignments that bind back to assets via assetId, and a
+//     bundle missing them left those bindings dangling on restore into a
+//     fresh browser. Exercises the pure data-assembly half (buildExportData,
+//     mirroring buildBackupData) and the real REPLACE path (importBundle,
+//     the same function the hamburger menu's file-input handler calls after
+//     its confirm() dialog) directly via __assetsTestHooks. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appAR4 = await launchApp();
+try {
+  await appAR4.page.evaluate(async () => {
+    await window.__assetsTestHooks.setAsset('asset-1', { type: 'billboard-cylindrical', image: 'data:image/png;base64,AAA', size: { w: 0.5, h: 1, d: 0.5 } });
+    await window.__assetsTestHooks.setObjectList('list-1', { name: 'Alpha Room', roomName: 'Alpha', items: [{ name: 'anvil', assetId: 'asset-1' }] });
+  });
+
+  // 145. The export bundle carries both assets and object lists together.
+  try {
+    const data = await appAR4.page.evaluate(() => window.__assetsTestHooks.buildExportData());
+    assert(data.repchessAssets === 1, `expected the repchessAssets marker, got ${JSON.stringify(data.repchessAssets)}`);
+    assert(Array.isArray(data.assets) && data.assets.length === 1, `expected 1 asset, got ${JSON.stringify(data.assets)}`);
+    assert(Array.isArray(data.objectLists) && data.objectLists.length === 1, `expected 1 object list, got ${JSON.stringify(data.objectLists)}`);
+    assert(data.objectLists[0].items[0].assetId === 'asset-1', 'expected the object list item to keep its assetId binding');
+    ok('Assets export: bundle carries both assets and object lists');
+  } catch(e){ bad('Assets export: bundle includes object lists', e); }
+
+  // 146. Importing a bundle that has object lists REPLACES the object lists
+  //      store too (not just assets) -- a stale pre-existing list is gone
+  //      afterward, and the imported one is present.
+  try {
+    await appAR4.page.evaluate(async () => {
+      await window.__assetsTestHooks.setObjectList('stale-list', { name: 'Stale', roomName: 'Stale' });
+    });
+    const bundle = {
+      repchessAssets: 1,
+      assets: [{ id: 'asset-2', type: 'billboard-cylindrical', image: 'data:image/png;base64,BBB', size: { w: 0.5, h: 1, d: 0.5 } }],
+      objectLists: [{ id: 'list-2', name: 'Beta Room', roomName: 'Beta', items: [{ name: 'lantern', assetId: 'asset-2' }] }],
+    };
+    await appAR4.page.evaluate((b) => window.__assetsTestHooks.importBundle(b), bundle);
+    const [assets, lists] = await appAR4.page.evaluate(() => Promise.all([
+      window.__assetsTestHooks.getAllAssets(),
+      window.__assetsTestHooks.getAllObjectLists(),
+    ]));
+    assert(assets.length === 1 && assets[0].id === 'asset-2', `expected only the imported asset to remain, got ${JSON.stringify(assets)}`);
+    assert(lists.length === 1 && lists[0].id === 'list-2', `expected only the imported object list to remain (stale-list gone), got ${JSON.stringify(lists)}`);
+    ok('Assets import (REPLACE): a bundle with object lists replaces the object-lists store too, not just assets');
+  } catch(e){ bad('Assets import: object lists replaced alongside assets', e); }
+
+  // 147. An OLDER asset-only bundle (no objectLists field at all, from before
+  //      this change) must not silently wipe existing object lists on import
+  //      -- only assets get replaced when the file doesn't carry the field.
+  try {
+    await appAR4.page.evaluate(async () => {
+      await window.__assetsTestHooks.setObjectList('kept-list', { name: 'Keep Me', roomName: 'Keep' });
+    });
+    const oldBundle = { repchessAssets: 1, assets: [{ id: 'asset-3', type: 'billboard-cylindrical', image: 'data:image/png;base64,CCC', size: { w: 0.5, h: 1, d: 0.5 } }] };
+    await appAR4.page.evaluate((b) => window.__assetsTestHooks.importBundle(b), oldBundle);
+    const lists = await appAR4.page.evaluate(() => window.__assetsTestHooks.getAllObjectLists());
+    assert(lists.some(l => l.id === 'kept-list'), `expected an old asset-only bundle (no objectLists field) to leave existing object lists untouched, got ${JSON.stringify(lists)}`);
+    ok('Assets import: an old asset-only bundle with no objectLists field leaves existing object lists untouched');
+  } catch(e){ bad('Assets import: backward-compat with an objectLists-less bundle', e); }
+} finally {
+  await appAR4.close();
+}
+} catch(e){ bad('Phase AR4: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase AS: "Jump to VR" is hidden for a locked-door dead-end room -- a
 //     built room with no forward continuation of its own, whose only entrance
 //     in the walk is a locked door. Jumping inside a room you can otherwise
