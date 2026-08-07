@@ -4402,6 +4402,76 @@ try {
 
 } catch(e){ bad('Phase AC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AC2: regression -- a wall-list item's caption (buildMoveObjectSubtitle)
+//     sits at the SAME x/z as the image-backed object it names (just lower),
+//     which usually falls inside that object's own opaque, alphaTest-cut image
+//     plane. An opaque surface and a same-depth transparent sprite competing
+//     for the same pixels z-fights: reported live as "the name tag is being
+//     obscured partially by the list object image... if I turn from side to
+//     side different parts of the name tag show through". The fix renders the
+//     caption with depthTest off so it always draws on top of the image
+//     regardless of viewing angle. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appAC2 = await launchApp();
+try {
+  // same single-lane, 2-slot room shape as Phase AC, but the object comes
+  // from a WALL LIST item with a real assetId bound -- only that path
+  // (moveObjectListResolved's `resolved.asset` branch) ever builds a
+  // subtitle caption; a plain per-slot asset override (setSlotAsset) does not.
+  await seedBackup(appAC2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'testProp1', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } }],
+    objectLists: [
+      { id: 'captioned_list', name: 'Captioned List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'CaptionWord', assetId: 'testProp1' }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAC2.page);
+  const roomKey = await appAC2.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAC2.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAC2.page.waitForTimeout(300);
+  const slotIds = await appAC2.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const leftSlot = slotIds.filter(id => id !== 'obj-C1').sort()[0];
+
+  // 85b. Assigning the wall list resolves the slot to the list's image asset
+  //      -- the setup step, confirmed before checking the caption itself.
+  try {
+    await appAC2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'captioned_list'), roomKey);
+    await appAC2.page.waitForTimeout(300);
+    const info = await appAC2.page.evaluate((sid) => window.__threeTestEdit.moveObjectSubtitleRenderInfo(sid), leftSlot);
+    assert(info, `test setup issue: expected a caption sprite for slot ${leftSlot} once the wall list is assigned, got null`);
+    ok('wall-list item with an image asset: caption sprite exists once the list is assigned');
+  } catch(e){ bad('caption regression setup: wall-list item resolves and captions', e); }
+
+  // 85c. The caption's material renders on top of the (opaque) image it names
+  //      regardless of viewing angle: transparent (so its own background is
+  //      see-through) with depthTest off (so it never loses a same-depth,
+  //      angle-sensitive depth comparison against the opaque image plane).
+  try {
+    const info = await appAC2.page.evaluate((sid) => window.__threeTestEdit.moveObjectSubtitleRenderInfo(sid), leftSlot);
+    assert(info.transparent === true, `expected the caption material to be transparent, got ${JSON.stringify(info)}`);
+    assert(info.depthTest === false, `expected the caption material to have depthTest off (so it always draws on top of the image, not z-fighting with it), got ${JSON.stringify(info)}`);
+    ok('wall-list item caption: depthTest is off so it always renders on top of the image it names');
+  } catch(e){ bad('caption regression: depthTest off (always-on-top over the image)', e); }
+} finally {
+  await appAC2.close();
+}
+
+} catch(e){ bad('Phase AC2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AD: "fully decorated" -- the door-naming half of the check
 //     (only for a door whose target is NOT empty/locked -- see isRoomEmpty
 //     and the locked-doors feature), and the vacuous-true case. ---
