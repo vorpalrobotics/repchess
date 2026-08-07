@@ -11710,29 +11710,100 @@ try {
   // 177b. Regression: move 1's own row (the "context-row" -- a bare heading
   //       for the line's own opening move, not a normal opponent-reply
   //       data-row) previously had no three-dot menu at all (an empty
-  //       .resp cell), so there was no way to get Node Statistics for the
-  //       whole system from that row. It now has a minimal menu with just
-  //       that one action, calling computeNodeStats on the trigger move's
-  //       own seq directly (mirroring computeSystemStats's treatment of a
-  //       white root: computeNodeStats(games,[trigger])).
+  //       .resp cell). It now offers the handful of actions that make sense
+  //       against a real position with no opponent-reply framing -- Add
+  //       Children to Analysis Queue, Add Opponent Move, Browse Games, and
+  //       Node Statistics -- in that order, but none of the data-row-only
+  //       actions (focus/hide a "variation", standard reply, quality,
+  //       attributes, etc.) that don't apply to the trigger move itself.
   try {
-    let alertMsg = null;
-    appBW.page.once('dialog', d => { alertMsg = d.message(); });
     const ctxRowSel = 'tr.context-row';
     await appBW.page.waitForSelector(ctxRowSel, { timeout: 5000 });
     const hasMenu = await appBW.page.evaluate(s => !!document.querySelector(`${s} .rowMenuBtn`), ctxRowSel);
     assert(hasMenu, 'expected a three-dot menu button on move 1\'s context-row');
     await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
-    const hasOnlyNodeStats = await appBW.page.evaluate(s => {
-      const acts = [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act);
-      return JSON.stringify(acts) === JSON.stringify(['nodeStats']);
-    }, ctxRowSel);
-    assert(hasOnlyNodeStats, 'expected move 1\'s context-row menu to offer exactly "Node Statistics"');
+    const acts = await appBW.page.evaluate(s =>
+      [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act), ctxRowSel);
+    assert(JSON.stringify(acts) === JSON.stringify(['analyzeChildren','addMove','gamesHere','nodeStats']),
+      `expected move 1's context-row menu to offer exactly these 4 actions in order, got ${JSON.stringify(acts)}`);
+    ok('row menu: move 1\'s context-row now has a three-dot menu offering the actions that apply to it');
+  } catch(e){ bad('row menu: move 1 context-row menu contents (regression)', e); }
+
+  // 177c. "Add Children to Analysis Queue" from move 1's context-row queues
+  //       move 1's own opponent replies -- which, unlike a deeper data-row,
+  //       are already rendered as this SAME table's top-level data-rows (no
+  //       separate collapsed branchDiv to expand first).
+  try {
+    // test 176 (above) already queued d4,Nf6 and nothing in this phase's
+    // engine-less harness ever drains it -- clear it first so this test's own
+    // length===1 check isn't testing leftover state from a different action.
+    const leftover = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
+    for(const it of leftover) await appBW.page.evaluate(id => window.__aqTestHooks.cancelAnalysisQueueItem(id), it.id);
+
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="analyzeChildren"]`).click(), ctxRowSel);
+    await appBW.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
+    const title = await appBW.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+    // openAnalysisQueueAddModal's title only calls out the count for 2+
+    // children -- with move 1's single opponent reply (Nf6) here, it collapses
+    // to the same generic title the single-node action uses.
+    assert(title === 'Add to Analysis Queue', `expected the generic (1-child) title, got "${title}"`);
+    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
+    const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
+    assert(q[0].seq.join(',') === 'd4,Nf6', `expected move 1's own opponent reply (d4,Nf6) queued, got ${JSON.stringify(q[0].seq)}`);
+    ok('row menu: move 1\'s "Add Children to Analysis Queue" queues its own opponent replies');
+  } catch(e){ bad('row menu: move 1 context-row Add Children to Analysis Queue', e); }
+
+  // 177d. "Browse Games" from move 1's context-row opens the games list
+  //       pre-filtered to games reaching move 1 itself (seq=['d4']).
+  try {
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="gamesHere"]`).click(), ctxRowSel);
+    await appBW.page.waitForSelector('#gamesListOverlay', { state: 'visible', timeout: 5000 });
+    await appBW.page.waitForFunction(() => document.querySelectorAll('#gamesListBody .games-row').length > 0, { timeout: 5000 });
+    const info = await appBW.page.evaluate(() => ({
+      rows: document.querySelectorAll('#gamesListBody .games-row').length,
+      movesInput: document.getElementById('gamesListMovesInput').value,
+    }));
+    assert(info.rows === 1, `expected the 1 game reaching move 1 (d4), got ${info.rows}`);
+    assert(/d4/.test(info.movesInput), `expected the moves filter pre-filled with move 1, got "${info.movesInput}"`);
+    ok('row menu: move 1\'s "Browse Games" opens filtered to move 1 itself');
+    await appBW.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+  } catch(e){ bad('row menu: move 1 context-row Browse Games', e); }
+
+  // 177e. "Add Opponent Move" from move 1's context-row adds a manual reply
+  //       to move 1 itself and re-renders in place -- a new data-row for it
+  //       appears in the SAME table the context-row heads (there's no nested
+  //       branchDiv to expand into the way a deeper row's own Add Opponent
+  //       Move re-renders one).
+  try {
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
+    await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="addMove"]`).click(), ctxRowSel);
+    await appBW.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+    // it's Black to move right after move 1 (d4) -- c5 is a legal reply,
+    // unlike the 'c4' used elsewhere in this suite for a WHITE reply at a
+    // different (White-to-move) node.
+    await appBW.page.fill('#fieldModalInput', 'c5');
+    await appBW.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appBW.page.waitForSelector('tr.data-row[data-seq="d4,c5"]', { timeout: 5000 });
+    ok('row menu: move 1\'s "Add Opponent Move" adds a manual reply to move 1, re-rendered in place');
+  } catch(e){ bad('row menu: move 1 context-row Add Opponent Move', e); }
+
+  // 177f. Node Statistics still works exactly as before this menu grew.
+  try {
+    let alertMsg = null;
+    appBW.page.once('dialog', d => { alertMsg = d.message(); });
+    const ctxRowSel = 'tr.context-row';
+    await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
     await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="nodeStats"]`).click(), ctxRowSel);
     await appBW.page.waitForTimeout(400);
     assert(alertMsg && /Nodes below this point/.test(alertMsg), `expected the node-stats alert for move 1, got: ${alertMsg}`);
-    ok('row menu: move 1\'s context-row now has a three-dot menu offering Node Statistics');
-  } catch(e){ bad('row menu: move 1 context-row Node Statistics (regression)', e); }
+    ok('row menu: move 1\'s context-row "Node Statistics" still works alongside the new actions');
+  } catch(e){ bad('row menu: move 1 context-row Node Statistics', e); }
 
   // 178. "Quiz this Variation" calls openOpeningQuiz -- in this harness the
   //      cm-chessboard widget is deliberately unmocked (see test/README.md),

@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-318';
+const BUILD_TAG = '-319';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4132,6 +4132,12 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
          <div class="row-menu-wrap">
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
+             <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
+             <hr class="row-menu-sep">
+             <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
+             <hr class="row-menu-sep">
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
            </div>
          </div>
@@ -4144,7 +4150,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     // this row is a real node (white's own trigger move) but has no
     // opp/lineSeq structure like a data-row -- computeSystemStats already
     // treats a white root the same way (computeNodeStats(games,[trigger])),
-    // so Node Statistics here just reuses that same seq directly.
+    // so every action here just reuses that same seq directly. Most of the
+    // full data-row menu doesn't apply (there's no "this variation" to
+    // focus/hide, no standard-reply/quality/attributes on the trigger move
+    // itself, etc.) -- only the handful of actions that make sense against a
+    // real position with no opponent-reply framing are offered.
     const ctxRowMenuBtn = ctxTr.querySelector('.rowMenuBtn');
     const ctxRowMenu = ctxTr.querySelector('.row-menu');
     ctxRowMenuBtn.onclick = e => {
@@ -4157,6 +4167,37 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       ctxRowMenu.classList.remove('show');
       showNodeStats(games, seq);
+    };
+    ctxRowMenu.querySelector('[data-act="gamesHere"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      showGamesAtNode(seq);
+    };
+    ctxRowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      // move 1's own opponent replies are already rendered as this SAME
+      // table's data-rows (no separate collapsed branchDiv the way a deeper
+      // row's children have) -- `parent` is that table's direct parent, so
+      // it matches collectChildEntries' own ":scope > table > tbody > tr.data-row" lookup.
+      queueChildrenForAnalysis(seq, parent);
+    };
+    ctxRowMenu.querySelector('[data-act="addMove"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      openFieldModal('addMove', '', v=>{
+        addManualReply(seq,v);
+        parent.innerHTML='';
+        renderBranch(parent,games,seq,depth,flip,noCompactUntil,notifyDirty);
+        notifyDirty?.();
+      }, v=>{
+        if(!v) return {ok:false, error:'enter a move'};
+        v = canonicalizeMoveCase(v);
+        const chess = new Chess(fenForSeq(seq));
+        const mv = chess.move(v,{sloppy:true});
+        if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
+        return {ok:true, value:mv.san};
+      });
     };
   }
 
