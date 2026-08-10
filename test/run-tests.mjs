@@ -11192,6 +11192,13 @@ try {
   });
   await appLU.page.evaluate(() => document.getElementById('menuObjectLists').click());
   await appLU.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+  // the grid renders immediately with "…" placeholders (objlist-card-usage-
+  // loading) while loadUsage() scans every castle in the background -- can
+  // take several seconds for real, per its own doc comment -- then patches
+  // the real summaries in via patchUsageDom(). Wait for that patch, not just
+  // the cards existing, or a slow/loaded run reads the "…" placeholder
+  // instead of the real usage text (the exact flake this caused).
+  await appLU.page.waitForSelector('#objlistGrid .objlist-card-usage-loading', { state: 'detached', timeout: 15000 });
 
   const cardUsage = (name) => appLU.page.evaluate((n) => {
     const card = [...document.querySelectorAll('#objlistGrid .objlist-card')]
@@ -12757,7 +12764,13 @@ try {
     await appCB2b.page.fill('#ol_name', 'Test List Two');
     await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
-    await appCB2b.page.waitForTimeout(150);
+    // the bucket's <select> is repopulated asynchronously after the new list
+    // is created -- poll for the real value instead of a fixed sleep, which
+    // is exactly the kind of guess that only fails under a slow/loaded run.
+    await appCB2b.page.waitForFunction((b) => {
+      const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
+      return sel && sel.value === 'test_list_2';
+    }, bucket, { timeout: 5000 });
     const selectedVal = await appCB2b.page.evaluate((b) => {
       const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
       return sel ? sel.value : null;
