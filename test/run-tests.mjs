@@ -11192,6 +11192,13 @@ try {
   });
   await appLU.page.evaluate(() => document.getElementById('menuObjectLists').click());
   await appLU.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+  // the grid renders immediately with "…" placeholders (objlist-card-usage-
+  // loading) while loadUsage() scans every castle in the background -- can
+  // take several seconds for real, per its own doc comment -- then patches
+  // the real summaries in via patchUsageDom(). Wait for that patch, not just
+  // the cards existing, or a slow/loaded run reads the "…" placeholder
+  // instead of the real usage text (the exact flake this caused).
+  await appLU.page.waitForSelector('#objlistGrid .objlist-card-usage-loading', { state: 'detached', timeout: 15000 });
 
   const cardUsage = (name) => appLU.page.evaluate((n) => {
     const card = [...document.querySelectorAll('#objlistGrid .objlist-card')]
@@ -12757,7 +12764,13 @@ try {
     await appCB2b.page.fill('#ol_name', 'Test List Two');
     await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
-    await appCB2b.page.waitForTimeout(150);
+    // the bucket's <select> is repopulated asynchronously after the new list
+    // is created -- poll for the real value instead of a fixed sleep, which
+    // is exactly the kind of guess that only fails under a slow/loaded run.
+    await appCB2b.page.waitForFunction((b) => {
+      const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
+      return sel && sel.value === 'test_list_2';
+    }, bucket, { timeout: 5000 });
     const selectedVal = await appCB2b.page.evaluate((b) => {
       const sel = document.querySelector(`#wallListsOverlay .wl-select[data-bucket="${b}"]`);
       return sel ? sel.value : null;
@@ -15276,6 +15289,89 @@ try {
     assert(config.enabled === false, `expected reset to still succeed and turn the project off with no lineId ever set, got ${JSON.stringify(config)}`);
     ok('Perfect Opening: resetPerfectOpening is safe to call before any line has ever been created');
   } catch(e){ bad('Perfect Opening: reset with no lineId yet', e); }
+
+  // 261. deleteLine() itself (not just resetPerfectOpening's own call to it)
+  //      clears Perfect Opening's queue/config when the line being deleted
+  //      IS its own generated line -- the Home screen's ordinary trash-icon
+  //      delete flow has no special case for it, so this has to happen
+  //      inside deleteLine() to avoid leaving the scheduler running against
+  //      a deleted line forever.
+  try {
+    const line = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCV.page.evaluate((lineId) => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.lineId = lineId;
+      return Promise.all([
+        window.__perfectOpeningTestHooks.setConfig(cfg),
+        window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:ordinary-delete', kind: 'black', seq: ['e4'], createdAt: 1 }]),
+      ]);
+    }, line.id);
+    await appCV.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCV.page.waitForSelector('.line-row', { timeout: 20000 });
+
+    // the ORDINARY per-line trash icon, same as a user deleting any opening
+    // system -- not resetPerfectOpening()'s own call.
+    await appCV.page.evaluate((name) => {
+      const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name').textContent === name);
+      row.querySelector('.line-delete').click();
+    }, 'Perfect White Opening');
+    await appCV.page.waitForFunction((name) =>
+      ![...document.querySelectorAll('.line-row .line-name')].some(el => el.textContent === name),
+      'Perfect White Opening', { timeout: 5000 });
+
+    const [queue, config] = await appCV.page.evaluate(() => Promise.all([
+      window.__perfectOpeningTestHooks.getQueue(),
+      window.__perfectOpeningTestHooks.getConfig(),
+    ]));
+    assert(queue.length === 0, `expected the queue cleared by an ordinary line delete, got ${JSON.stringify(queue)}`);
+    const expectedDefaults = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    assert(JSON.stringify(config) === JSON.stringify(expectedDefaults), `expected settings reset to defaults by an ordinary line delete, got ${JSON.stringify(config)}`);
+    ok('deleteLine: deleting Perfect Opening\'s own line through the ordinary Home-screen trash icon also clears its queue/config');
+  } catch(e){ bad('deleteLine: cleans up Perfect Opening state when its own line is deleted', e); }
+
+  // 262. Deleting an UNRELATED line (not Perfect Opening's own) leaves its
+  //      config/queue completely untouched -- the cleanup above is scoped to
+  //      exactly config.lineId, not triggered by every delete.
+  try {
+    const poLine = await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
+    await appCV.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Unrelated System', color: 'black', openingMoves: ['e4'] }));
+    await appCV.page.evaluate((lineId) => {
+      const cfg = window.__perfectOpeningTestHooks.defaultConfig();
+      cfg.enabled = true;
+      cfg.lineId = lineId;
+      return Promise.all([
+        window.__perfectOpeningTestHooks.setConfig(cfg),
+        window.__perfectOpeningTestHooks.addQueueItems([{ id: 'po:unrelated-delete', kind: 'black', seq: ['e4'], createdAt: 1 }]),
+      ]);
+    }, poLine.id);
+    await appCV.page.reload({ waitUntil: 'domcontentloaded' });
+    await appCV.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await appCV.page.waitForSelector('.line-row', { timeout: 20000 });
+
+    await appCV.page.evaluate((name) => {
+      const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name').textContent === name);
+      row.querySelector('.line-delete').click();
+    }, 'Unrelated System');
+    await appCV.page.waitForFunction((name) =>
+      ![...document.querySelectorAll('.line-row .line-name')].some(el => el.textContent === name),
+      'Unrelated System', { timeout: 5000 });
+
+    const [queue, config] = await appCV.page.evaluate(() => Promise.all([
+      window.__perfectOpeningTestHooks.getQueue(),
+      window.__perfectOpeningTestHooks.getConfig(),
+    ]));
+    assert(queue.length === 1 && queue[0].id === 'po:unrelated-delete', `expected the PO queue untouched by an unrelated line's delete, got ${JSON.stringify(queue)}`);
+    assert(config.lineId === poLine.id && config.enabled === true, `expected PO config untouched by an unrelated line's delete, got ${JSON.stringify(config)}`);
+    ok('deleteLine: deleting an unrelated line leaves Perfect Opening\'s config/queue untouched');
+  } catch(e){ bad('deleteLine: unrelated line delete does not disturb Perfect Opening state', e); }
 } finally {
   await appCV.close();
 }
