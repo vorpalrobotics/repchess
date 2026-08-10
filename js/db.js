@@ -29,7 +29,12 @@ function ensureFreshStart(){
     const done = () => { localStorage.setItem(FRESH_START_FLAG,'1'); resolve(); };
     req.onsuccess = done;
     req.onerror   = done;
-    req.onblocked = done;
+    // onblocked means the delete has NOT happened yet -- another open tab is
+    // still holding a connection to the old database -- so it must NOT set
+    // the flag (that would permanently claim the wipe finished when it may
+    // never actually complete). The request stays alive and still fires
+    // onsuccess for real once every blocking connection closes; just wait.
+    req.onblocked = () => console.warn('[db] fresh start: delete blocked by another open tab, waiting for it to close');
   });
   return freshStartPromise;
 }
@@ -130,9 +135,17 @@ async function migrateLegacyUserData(localUser){
   if(localStorage.getItem(LEGACY_USER_MIGRATION_FLAG)) return;
   const db = await openDB();
 
-  // lines + analysisQueue: `user` is a plain attribute, not part of the
-  // primary key -- an in-place put() under the SAME id, with the corrected
-  // user field, is enough.
+  // lines + analysisQueue: an in-place put() under the SAME id, with the
+  // corrected user field, is enough to make the record findable again --
+  // `id` is treated as an opaque string everywhere else in the app (no code
+  // parses or reconstructs one), so it doesn't matter that it isn't fully
+  // corrected too. analysisQueue's own id (app.js's aqJobId-style
+  // `aq:<timestamp>:<random>`) never embedded the old user at all, but a
+  // line's id DOES: createLine() mints a fresh one as `${user}:${timestamp}:
+  // ${random}` when none is supplied, so a migrated line's id permanently
+  // keeps the PRE-migration username as its own first segment even after
+  // this fixes its `user` field -- a cosmetic wart, not a correctness bug,
+  // since nothing ever splits a line id back apart.
   for(const storeName of ['lines', 'analysisQueue']){
     await new Promise((resolve, reject) => {
       const txn = db.transaction(storeName, 'readwrite');
@@ -254,7 +267,7 @@ async function updateLine(id, patch){
 async function deleteLine(id){
   const db = await openDB();
   return new Promise((resolve,reject)=>{
-    const txn = db.transaction(['lines','prefs','analysisQueue'],'readwrite');
+    const txn = db.transaction(['lines','prefs','analysisQueue','perfectOpeningQueue','meta'],'readwrite');
     txn.objectStore('lines').delete(id);
     const prefStore = txn.objectStore('prefs');
     const idxReq = prefStore.index('lineId').getAllKeys(id);
@@ -271,6 +284,53 @@ async function deleteLine(id){
       if(cursor.value.lineId === id) cursor.delete();
       cursor.continue();
     };
+    // The Home screen's ordinary delete flow has no special case for Perfect
+    // Opening's own generated line -- deleting it that way (instead of via
+    // "Reset Perfect Opening", which already does this cleanup in the other
+    // order: deleteLine() THEN clear the queue/config) would otherwise leave
+    // config.enabled true and the queue untouched, so the scheduler keeps
+    // running jobs against a deleted line indefinitely, resurrecting orphaned
+    // prefs rows just like an un-swept analysisQueue item would. Read/write
+    // 'meta' directly (not via getMeta/setMeta, which each open their own
+    // transaction) so this stays part of the SAME atomic delete.
+    const metaStore = txn.objectStore('meta');
+    const metaReq = metaStore.get('perfectOpeningConfig');
+    metaReq.onsuccess = () => {
+      const raw = metaReq.result && metaReq.result.value;
+      if(!raw) return;
+      let config;
+      try { config = JSON.parse(raw); } catch { return; }
+      if(config.lineId !== id) return;
+      txn.objectStore('perfectOpeningQueue').clear();
+      metaStore.put({ key:'perfectOpeningConfig', value: JSON.stringify(cloneDefaultPerfectOpeningConfig()) });
+    };
+    txn.oncomplete = () => resolve();
+    txn.onerror    = () => reject(txn.error);
+  });
+}
+
+/* ---------- shared "one row per key, patch-merged over a blank default"
+   write idiom -- every store below (prefs, mnemonics, assets, objectLists)
+   is read-existing-or-default, merge `patch` on top, put it back. `extra`
+   (e.g. a freshly stamped id/updatedAt) is merged in AFTER patch, so it
+   always wins even if patch happens to carry the same field. ---------- */
+// operates on an ALREADY-OPEN store (mid-transaction) so a caller merging
+// many keys in one transaction (setPrefsBatch) can call this once per key
+// without paying for a separate transaction per write.
+function mergeAndPut(store, key, blank, patch, extra){
+  const getReq = store.get(key);
+  getReq.onsuccess = () => {
+    const existing = getReq.result || blank;
+    store.put({...existing, ...patch, ...(extra || {})});
+  };
+}
+// same idiom, opening its own single-key transaction -- the common case for
+// every store here except setPrefsBatch's own multi-key transaction.
+async function putMerged(storeName, key, blank, patch, extra){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const txn = db.transaction(storeName,'readwrite');
+    mergeAndPut(txn.objectStore(storeName), key, blank, patch, extra);
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
   });
@@ -303,20 +363,11 @@ async function getPref(lineId, seq){
   });
 }
 
+const blankPref = (key,lineId,seq) => ({key,lineId,seq,reply:'',note:'',mnemonic:''});
+
 async function setPref(lineId, seq, patch){
-  const db = await openDB();
   const key = prefKey(lineId,seq);
-  return new Promise((resolve,reject)=>{
-    const txn = db.transaction('prefs','readwrite');
-    const store = txn.objectStore('prefs');
-    const getReq = store.get(key);
-    getReq.onsuccess = () => {
-      const existing = getReq.result || {key,lineId,seq,reply:'',note:'',mnemonic:''};
-      store.put({...existing, ...patch});
-    };
-    txn.oncomplete = () => resolve();
-    txn.onerror    = () => reject(txn.error);
-  });
+  return putMerged('prefs', key, blankPref(key,lineId,seq), patch);
 }
 
 /* Writes many pref patches (each { seq, patch }) in ONE transaction instead
@@ -342,11 +393,7 @@ async function setPrefsBatch(lineId, entries){
     const store = txn.objectStore('prefs');
     for(const {seq, patch} of entries){
       const key = prefKey(lineId,seq);
-      const getReq = store.get(key);
-      getReq.onsuccess = () => {
-        const existing = getReq.result || {key,lineId,seq,reply:'',note:'',mnemonic:''};
-        store.put({...existing, ...patch});
-      };
+      mergeAndPut(store, key, blankPref(key,lineId,seq), patch);
     }
     txn.oncomplete = () => resolve();
     txn.onerror    = () => reject(txn.error);
@@ -375,18 +422,7 @@ async function getAllMnemonics(){
 }
 
 async function setMnemonicSquare(square, patch){
-  const db = await openDB();
-  return new Promise((resolve,reject)=>{
-    const txn = db.transaction('mnemonics','readwrite');
-    const store = txn.objectStore('mnemonics');
-    const getReq = store.get(square);
-    getReq.onsuccess = () => {
-      const existing = getReq.result || {square, ...BLANK_MNEMONIC_SQUARE};
-      store.put({...existing, ...patch});
-    };
-    txn.oncomplete = () => resolve();
-    txn.onerror    = () => reject(txn.error);
-  });
+  return putMerged('mnemonics', square, {square, ...BLANK_MNEMONIC_SQUARE}, patch);
 }
 
 /* ---------- assets (three.js prop/surface staging registry) ----------
@@ -424,19 +460,8 @@ async function getAllAssets(){
 }
 
 async function setAsset(id, patch){
-  const db = await openDB();
-  return new Promise((resolve,reject)=>{
-    const txn = db.transaction('assets','readwrite');
-    const store = txn.objectStore('assets');
-    const getReq = store.get(id);
-    getReq.onsuccess = () => {
-      const now = Date.now();
-      const existing = getReq.result || {...BLANK_ASSET, id, createdAt:now};
-      store.put({...existing, ...patch, id, updatedAt:now});
-    };
-    txn.oncomplete = () => resolve();
-    txn.onerror    = () => reject(txn.error);
-  });
+  const now = Date.now();
+  return putMerged('assets', id, {...BLANK_ASSET, id, createdAt:now}, patch, {id, updatedAt:now});
 }
 
 async function deleteAsset(id){
@@ -474,19 +499,8 @@ async function getAllObjectLists(){
 }
 
 async function setObjectList(id, patch){
-  const db = await openDB();
-  return new Promise((resolve,reject)=>{
-    const txn = db.transaction('objectLists','readwrite');
-    const store = txn.objectStore('objectLists');
-    const getReq = store.get(id);
-    getReq.onsuccess = () => {
-      const now = Date.now();
-      const existing = getReq.result || {...BLANK_OBJECT_LIST, id, createdAt:now};
-      store.put({...existing, ...patch, id, updatedAt:now});
-    };
-    txn.oncomplete = () => resolve();
-    txn.onerror    = () => reject(txn.error);
-  });
+  const now = Date.now();
+  return putMerged('objectLists', id, {...BLANK_OBJECT_LIST, id, createdAt:now}, patch, {id, updatedAt:now});
 }
 
 async function deleteObjectList(id){
