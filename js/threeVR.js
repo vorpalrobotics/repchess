@@ -3421,42 +3421,60 @@ function elevatorFloorListItem(carRoomKey, i){
   const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
   return { word: item.name, asset };
 }
-// clears every per-slot manual override (asset, word, nudge/scale) on a
-// bucket's own move-object slots -- called whenever that bucket's wall list is
-// freshly assigned or swapped, so the pick actually takes effect immediately
-// instead of being silently blocked by stale per-slot overrides left over
-// from before the list existed (e.g. test props hand-placed on individual
-// slots). moveObjectListResolved is still checked LAST in the render order
-// (see the moveObject case above), so a slot you deliberately override AFTER
-// this point continues to win over the list, same as always.
-function clearBucketSlotOverrides(roomKey, bucket){
-  const r = ensureRoomLayout(roomKey);
-  for(const slot of moveObjectSlots(roomKey)){
-    const ctx = slotListContext(roomKey, slot);
-    if(!ctx || ctx.bucket !== bucket) continue;
-    delete r.slots[slot.id];
-    delete r.slotWords[slot.id];
-    delete r.slotXform[slot.id];
-  }
-  // an elevator car's own move-object slots (just its center anchor) never
-  // include its FLOORS -- each floor's head object lives on that floor's own
-  // TARGET room instead (see elevatorFloorListItem/doorPairContent's
-  // listFallback), a room this loop above can't reach at all. A freshly
-  // (re)assigned list needs this separate sweep of every floor target to
-  // actually take effect, for the exact same "don't stay silently blocked by
-  // a stale per-slot override" reason as the loop above -- reported live:
-  // manually-assigned floor objects from before a list existed had no way to
-  // be bulk-cleared, so a newly assigned list's items all showed unused.
-  if(isElevatorCar(roomKey) && bucket === 'all'){
-    for(const fe of elevatorCarLayout(mergedRoom(roomKey)).floors){
+// every (ownerRoomKey, slotId) pair a bucket's list actually drives, in list-
+// index order -- shared by clearBucketSlotOverrides (wipe every override in
+// the bucket) and bucketOverrideFlags (report which ones currently have one,
+// for the wall-lists dialog preview). An ordinary room's bucket drives its
+// own moveObjectSlots; an elevator car's single 'all' bucket instead drives
+// each of its FLOOR TARGETS' own center slot -- a different room's LAYOUT
+// entry per floor (see elevatorFloorListItem/doorPairContent's listFallback)
+// that moveObjectSlots(roomKey) itself can never reach, since those slots
+// don't belong to the car room at all.
+function bucketSlotOwners(roomKey, bucket){
+  if(isElevatorCar(roomKey)){
+    if(bucket !== 'all') return [];
+    return elevatorCarLayout(mergedRoom(roomKey)).floors.map(fe => {
       const headSlot = moveObjectSlots(fe.target).find(s => s.side === 'center');
-      const slotId = headSlot ? headSlot.id : 'obj-C1';
-      const tr = ensureRoomLayout(fe.target);
-      delete tr.slots[slotId];
-      delete tr.slotWords[slotId];
-      delete tr.slotXform[slotId];
-    }
+      return { roomKey: fe.target, slotId: headSlot ? headSlot.id : 'obj-C1' };
+    });
   }
+  return moveObjectSlots(roomKey)
+    .map(slot => ({ slot, ctx: slotListContext(roomKey, slot) }))
+    .filter(x => x.ctx && x.ctx.bucket === bucket)
+    .sort((a, b) => a.ctx.index - b.ctx.index)
+    .map(x => ({ roomKey, slotId: x.slot.id }));
+}
+// clears every per-slot manual override (asset, word, nudge/scale) on a
+// bucket's own driven slots (see bucketSlotOwners) -- called whenever that
+// bucket's wall list is freshly assigned or swapped, so the pick actually
+// takes effect immediately instead of being silently blocked by stale
+// per-slot overrides left over from before the list existed (e.g. test props
+// hand-placed on individual slots, or -- for an elevator -- floor objects
+// hand-assigned before any list existed). moveObjectListResolved /
+// elevatorFloorListItem are still checked LAST in the render order, so a
+// slot you deliberately override AFTER this point continues to win over the
+// list, same as always. Also exposed directly as the wall-lists dialog's own
+// "Clear overrides" button, for wiping stale overrides WITHOUT needing to
+// (re)assign a different list id first -- reported live: replacing an
+// existing list's own ITEMS in place, rather than swapping to a different
+// list, never changes the assigned id, so the automatic sweep above never
+// ran and old per-slot overrides stayed stuck with no other way to bulk-clear
+// them (Room Geometry's per-floor picker only clears one floor at a time).
+function clearBucketSlotOverrides(roomKey, bucket){
+  for(const {roomKey: ownerKey, slotId} of bucketSlotOwners(roomKey, bucket)){
+    const r = ensureRoomLayout(ownerKey);
+    delete r.slots[slotId];
+    delete r.slotWords[slotId];
+    delete r.slotXform[slotId];
+  }
+}
+// which of a bucket's driven slots currently have a manual override
+// shadowing the list -- powers the wall-lists dialog preview's "overridden"
+// flag, so it's visible AT A GLANCE why a slot isn't showing its list item,
+// instead of only discoverable by noticing the panel doesn't match.
+function bucketOverrideFlags(roomKey, bucket){
+  return bucketSlotOwners(roomKey, bucket).map(({roomKey: ownerKey, slotId}) =>
+    !!(slotAssetFor(ownerKey, slotId) || slotWordFor(ownerKey, slotId)));
 }
 
 function mnemonicSlots(roomKey){
@@ -7693,7 +7711,12 @@ function wallListOptionsHtml(roomKey, bucket){
   });
   return `<option value="">— none —</option>` + groups.join('');
 }
-// preview of how the chosen list's items land on this bucket's slots, in order.
+// preview of how the chosen list's items land on this bucket's slots, in
+// order -- a slot with a manual override shadowing the list is struck
+// through and flagged (bucketOverrideFlags), so it's clear AT A GLANCE why
+// that slot isn't showing its list item instead of only discoverable by
+// noticing the panel doesn't match (the reported "still see the old
+// hard-coded items" confusion).
 function wallListPreviewHtml(roomKey, bucket){
   const id = wallListId(roomKey, bucket);
   const need = bucketSlotCount(roomKey, bucket);
@@ -7701,14 +7724,22 @@ function wallListPreviewHtml(roomKey, bucket){
   const list = OBJECT_LISTS[id];
   if(!list) return `<span style="color:#c62828">List no longer exists.</span>`;
   const items = list.items || [];
+  const overridden = bucketOverrideFlags(roomKey, bucket);
   const rows = [];
+  let anyOverridden = false;
   for(let i = 0; i < need; i++){
     const it = items[i];
     const label = it ? (it.assetId && ASSET_BY_ID[it.assetId] ? `🖼 ${escHtml(it.name)}` : escHtml(it.name)) : '<span style="color:#c62828">(list too short)</span>';
-    rows.push(`<div>${i + 1}. ${label}</div>`);
+    if(overridden[i]){
+      anyOverridden = true;
+      rows.push(`<div style="color:#999">${i + 1}. <s>${label}</s> — hidden by a manual object</div>`);
+    } else {
+      rows.push(`<div>${i + 1}. ${label}</div>`);
+    }
   }
   let extra = '';
   if(items.length > need) extra = `<div style="color:#999">+${items.length - need} more item(s) unused here</div>`;
+  if(anyOverridden) extra += `<div style="color:#c62828">Some slots are hidden by a manual object override — use "Clear overrides" below to remove them and show the list instead.</div>`;
   if(list.mnemonic && list.mnemonic.phrase) extra += `<div style="margin-top:.3rem;font-style:italic;color:#1565c0">“${escHtml(list.mnemonic.phrase)}”</div>`;
   return rows.join('') + extra;
 }
@@ -7725,11 +7756,12 @@ function renderWallListsDialog(ov, roomKey){
           <strong>${WALL_BUCKET_LABEL[bucket] || bucket}</strong>
           <span style="font-size:.78rem;color:#666">${need} move-pair slot${need === 1 ? '' : 's'}</span>
         </div>
-        <div style="display:flex;gap:.4rem;align-items:center;margin-top:.4rem">
+        <div style="display:flex;gap:.4rem;align-items:center;margin-top:.4rem;flex-wrap:wrap">
           <select class="wl-select" data-bucket="${bucket}" style="flex:1;font-size:.85rem;padding:.3rem">
             ${wallListOptionsHtml(roomKey, bucket)}
           </select>
           <button class="wl-newlist" data-bucket="${bucket}" style="font-size:.78rem;white-space:nowrap" title="Create a new object list and assign it here">+ New…</button>
+          ${need > 0 ? `<button class="wl-clearoverrides" data-bucket="${bucket}" style="font-size:.78rem;white-space:nowrap" title="Wipe every manual object override in this bucket, so its slots show the assigned list's items (or numbered placeholders, if none) instead">Clear overrides</button>` : ''}
         </div>
         <div class="wl-preview" data-bucket="${bucket}" style="margin-top:.45rem;font-size:.8rem;line-height:1.5">
           ${wallListPreviewHtml(roomKey, bucket)}
@@ -7800,6 +7832,25 @@ function renderWallListsDialog(ov, roomKey){
   ov.querySelectorAll('.wl-newlist').forEach(btn => { btn.onclick = () => afterNewList(btn.dataset.bucket); });
   const emptyBtn = ov.querySelector('#wlEmptyNewBtn');
   if(emptyBtn) emptyBtn.onclick = () => afterNewList(null);
+  // explicit bulk-clear, independent of (re)assigning a list -- the same
+  // sweep clearBucketSlotOverrides already runs automatically on a fresh
+  // pick, but reached directly rather than only as an assignment side
+  // effect. Needed when the assigned list's own ITEMS change in place
+  // (editing an existing list, not swapping to a different one) -- the
+  // bucket's assigned id never changes in that case, so the automatic sweep
+  // never fires, and stale per-slot/per-floor overrides (an elevator's
+  // hand-assigned floor objects, say) had no other way to be bulk-cleared.
+  ov.querySelectorAll('.wl-clearoverrides').forEach(btn => {
+    btn.onclick = () => {
+      const bucket = btn.dataset.bucket;
+      if(!confirm('Clear every manual object override in this bucket?\n\nEach of its slots will fall back to the assigned list\'s own item (or a numbered placeholder, if no list is assigned) instead. This cannot be undone.')) return;
+      clearBucketSlotOverrides(roomKey, bucket);
+      persistLayout();
+      const pv = ov.querySelector(`.wl-preview[data-bucket="${bucket}"]`);
+      if(pv) pv.innerHTML = wallListPreviewHtml(roomKey, bucket);
+      buildRoom(currentRoomKey);
+    };
+  });
 }
 
 const ROOM_GEOM_MIN = 2;
