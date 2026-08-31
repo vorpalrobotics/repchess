@@ -9711,6 +9711,166 @@ try {
 }
 } catch(e){ bad("phase @ line 7161 (tags: ['vr-decorating'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase BQ2: an elevator car's floors can be driven by an object list
+//     assigned to its own bucket, the SAME mechanism an ordinary door's
+//     source lane already gets via continuationListItem -- previously an
+//     elevator floor had NO route to list-driven content at all (its bucket
+//     slot count fell through to the ordinary moveObjectSlots-based count,
+//     which excludes the center anchor slot -- a car's own only slot -- and
+//     so read 0, making any list assigned there look entirely unused).
+//     (Re)assigning the bucket's list also clears stale per-floor manual
+//     overrides left over from before -- reported live: hand-assigned floor
+//     objects from before a list existed had no way to be bulk-cleared, so a
+//     freshly assigned list's items all showed unused. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appBQ2 = await launchApp();
+try {
+  // same 5-way branch car shape as Phase BQ.
+  await seedBackup(appBQ2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'a3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bd6'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Be7'], reply: 'Bg5' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','d5'],  reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','c5'],  reply: 'a3' },
+    ]}],
+    games: [
+      { id: 'g0', moves: 'd4 Nf6 c4 g6 Nc3 Bg7', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 Bd6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Be7 Bg5', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 e6 Nc3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 Nf6 c4 e6 Nc3 c5 a3', white: 'a', black: 'b', result: '*' },
+    ],
+    assets: [
+      { id: 'frying-pan', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.4, h: 0.2, d: 0.4 } },
+      { id: 'toaster', type: 'extruded', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.3, h: 0.3, d: 0.3 } },
+    ],
+    objectLists: [
+      { id: 'floor_list', name: 'Floor List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [
+          { name: 'Anvil', assetId: null },
+          { name: 'Bucket', assetId: null },
+          { name: 'Candle', assetId: 'frying-pan' },
+          { name: 'Drum', assetId: null },
+          { name: 'Egg', assetId: null },
+        ],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+      { id: 'floor_list_2', name: 'Floor List Two', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [
+          { name: 'Zebra', assetId: null },
+          { name: 'Yak', assetId: null },
+          { name: 'Xray', assetId: 'toaster' },
+          { name: 'Wolf', assetId: null },
+          { name: 'Vole', assetId: null },
+        ],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appBQ2.page);
+  const keyFor = (moves) => appBQ2.page.evaluate((mv) => {
+    const c = new Chess();
+    for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const root = await keyFor(['d4','Nf6','c4']);
+  const carKey = await keyFor(['d4','Nf6','c4','e6','Nc3']);
+  await appBQ2.page.evaluate((args) => window.__threeTestEdit.setExitType(args.root, args.car, 'elevator'), { root, car: carKey });
+  await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+  await appBQ2.page.waitForTimeout(200);
+  const byOrdinal = async () => {
+    const info = await appBQ2.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const map = {};
+    for(const f of info.forward[0]) map[f.ordinal] = f;
+    return map;
+  };
+
+  // 300. Before any list is assigned, the bucket's own slot count is the
+  //       floor count (5), not the ordinary moveObjectSlots-based count
+  //       (which reads 0 for a car -- its own only slot, the center anchor,
+  //       is excluded -- making any list assigned there look entirely
+  //       unused, the exact reported symptom).
+  try {
+    const need = await appBQ2.page.evaluate((k) => window.__threeTestEdit.wallBucketSlotCount(k, 'all'), carKey);
+    assert(need === 5, `expected the car's bucket slot count to be its floor count (5), got ${need}`);
+    ok('elevator: the car\'s wall-list bucket slot count is its floor count, not 0');
+  } catch(e){ bad('elevator: bucket slot count is the floor count', e); }
+
+  // 301. Assigning a list to the car's bucket feeds each floor's head
+  //       object in order -- previously an elevator floor had no route to
+  //       any list-driven content at all.
+  try {
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'floor_list'), carKey);
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ2.page.waitForTimeout(150);
+    const f = await byOrdinal();
+    assert(f[1] && f[1].objWord === 'Anvil' && !f[1].objAssetId, `expected floor 1 = "Anvil" (word), got ${JSON.stringify(f[1])}`);
+    assert(f[2] && f[2].objWord === 'Bucket' && !f[2].objAssetId, `expected floor 2 = "Bucket" (word), got ${JSON.stringify(f[2])}`);
+    assert(f[3] && f[3].objAssetId === 'frying-pan', `expected floor 3 = "Candle" -> frying-pan (asset), got ${JSON.stringify(f[3])}`);
+    assert(f[4] && f[4].objWord === 'Drum' && !f[4].objAssetId, `expected floor 4 = "Drum" (word), got ${JSON.stringify(f[4])}`);
+    assert(f[5] && f[5].objWord === 'Egg' && !f[5].objAssetId, `expected floor 5 = "Egg" (word), got ${JSON.stringify(f[5])}`);
+    ok('elevator: an assigned list feeds each floor\'s head object in order');
+  } catch(e){ bad('elevator: list-driven floor objects', e); }
+
+  // 302. A manual per-floor override still wins over the list for that one
+  //       floor -- same "manual override wins" rule as any other move-object
+  //       slot, moveObjectListResolved is checked LAST.
+  let floor1Target;
+  try {
+    const info = await appBQ2.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    floor1Target = info.forward[0].find(fl => fl.ordinal === 1).target;
+    await appBQ2.page.evaluate((t) => window.__threeTestEdit.setSlotAsset(t, 'obj-C1', 'toaster'), floor1Target);
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ2.page.waitForTimeout(150);
+    const f = await byOrdinal();
+    assert(f[1].objAssetId === 'toaster', `expected the manual override (toaster) to win over the list's "Anvil", got ${JSON.stringify(f[1])}`);
+    assert(f[2].objWord === 'Bucket', `expected floor 2 (no manual override) to still read from the list, got ${JSON.stringify(f[2])}`);
+    ok('elevator: a manual per-floor override still wins over the assigned list');
+  } catch(e){ bad('elevator: manual override wins over list', e); }
+
+  // 303. Reassigning the bucket to a DIFFERENT list clears floor 1's stale
+  //       manual override -- the exact reported bug: hand-assigned floor
+  //       objects from before had no way to be bulk-cleared, so a freshly
+  //       (re)assigned list's items all showed unused.
+  try {
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'floor_list_2'), carKey);
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ2.page.waitForTimeout(150);
+    const f = await byOrdinal();
+    assert(f[1].objWord === 'Zebra' && !f[1].objAssetId,
+      `expected reassigning the list to clear floor 1's stale manual override (toaster) and read "Zebra" from the new list instead, got ${JSON.stringify(f[1])}`);
+    assert(f[3].objAssetId === 'toaster', `expected floor 3 = "Xray" -> toaster (the new list's own asset item), got ${JSON.stringify(f[3])}`);
+    ok('elevator: reassigning the bucket\'s list clears stale per-floor manual overrides');
+  } catch(e){ bad('elevator: reassigning the list clears stale floor overrides', e); }
+
+  // 304. The Room Geometry editor's per-floor "Object:" button no longer
+  //       says a flat "none" for a list-driven floor with no manual
+  //       override -- it names the list item, tagged "(from list)" so it
+  //       reads differently from a real manual override.
+  try {
+    await appBQ2.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appBQ2.page.waitForTimeout(60);
+    await appBQ2.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
+    await appBQ2.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
+    const label = await appBQ2.page.evaluate((t) =>
+      document.querySelector(`#roomGeomOverlay [data-elev-obj-for="${t}"]`)?.textContent, floor1Target);
+    assert(label && label.includes('Zebra') && label.includes('from list'),
+      `expected the floor's object button to name the list item, got ${JSON.stringify(label)}`);
+    ok('elevator editor: a list-driven floor\'s object button names the list item instead of "none"');
+  } catch(e){ bad('elevator editor: object button label reflects the list', e); }
+} finally {
+  await appBQ2.close();
+}
+
+} catch(e){ bad('Phase BQ2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase BR: an entrance door's skin also becomes its destination room's
 //     own exit/back door skin (setDoorOverride), so walking out looks like
 //     walking back through the same door you came in. A transposition (two

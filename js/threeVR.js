@@ -3343,6 +3343,16 @@ function wallListId(roomKey, bucket){
 // (and here, list-drivable) in-room, same exception computeFullyDecorated
 // and buildSlots' render-skip already carve out for it.
 function bucketSlotCount(roomKey, bucket){
+  // an elevator car's own move-object slots are just its center anchor (it's
+  // reached by one move, same as any room) -- its FLOORS are a separate
+  // concept entirely (each one is a forward exit into a DIFFERENT room, not
+  // a slot of this one), so they need their own count here rather than
+  // falling through to the moveObjectSlots-based count below, which would
+  // report 0 and make a list assigned here look entirely unused (see
+  // elevatorFloorListItem/wallListPreviewHtml).
+  if(isElevatorCar(roomKey)){
+    return bucket === 'all' ? elevatorCarLayout(mergedRoom(roomKey)).floors.length : 0;
+  }
   const room = mergedRoom(roomKey);
   const centerCounts = !!(room && room.entryNoStreet);
   const slots = moveObjectSlots(roomKey);
@@ -3391,6 +3401,26 @@ function moveObjectListResolved(roomKey, slot){
   const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
   return { word: item.name, asset };
 }
+// resolves floor index `i` (0-based, in the car's own exit order -- the SAME
+// order elevatorCarLayout/buildElevatorPanels already walk) of an elevator
+// car's single 'all' bucket to its list-driven content -- an elevator's
+// floor-drivable equivalent of moveObjectListResolved. A floor's TARGET room
+// center slot is never itself list-drivable (slotListContext excludes every
+// center slot outside room.entryNoStreet, same as any ordinary door's
+// target), so without this an elevator car's own assigned list had no route
+// to actually reach the panel at all -- see doorPairContent's listFallback,
+// the same mechanism an ordinary door's source lane already gets via
+// continuationListItem.
+function elevatorFloorListItem(carRoomKey, i){
+  const id = wallListId(carRoomKey, 'all');
+  if(!id) return null;
+  const list = OBJECT_LISTS[id];
+  if(!list || !Array.isArray(list.items) || i >= list.items.length) return null;
+  const item = list.items[i];
+  if(!item) return null;
+  const asset = item.assetId ? (ASSET_BY_ID[item.assetId] || null) : null;
+  return { word: item.name, asset };
+}
 // clears every per-slot manual override (asset, word, nudge/scale) on a
 // bucket's own move-object slots -- called whenever that bucket's wall list is
 // freshly assigned or swapped, so the pick actually takes effect immediately
@@ -3407,6 +3437,25 @@ function clearBucketSlotOverrides(roomKey, bucket){
     delete r.slots[slot.id];
     delete r.slotWords[slot.id];
     delete r.slotXform[slot.id];
+  }
+  // an elevator car's own move-object slots (just its center anchor) never
+  // include its FLOORS -- each floor's head object lives on that floor's own
+  // TARGET room instead (see elevatorFloorListItem/doorPairContent's
+  // listFallback), a room this loop above can't reach at all. A freshly
+  // (re)assigned list needs this separate sweep of every floor target to
+  // actually take effect, for the exact same "don't stay silently blocked by
+  // a stale per-slot override" reason as the loop above -- reported live:
+  // manually-assigned floor objects from before a list existed had no way to
+  // be bulk-cleared, so a newly assigned list's items all showed unused.
+  if(isElevatorCar(roomKey) && bucket === 'all'){
+    for(const fe of elevatorCarLayout(mergedRoom(roomKey)).floors){
+      const headSlot = moveObjectSlots(fe.target).find(s => s.side === 'center');
+      const slotId = headSlot ? headSlot.id : 'obj-C1';
+      const tr = ensureRoomLayout(fe.target);
+      delete tr.slots[slotId];
+      delete tr.slotWords[slotId];
+      delete tr.slotXform[slotId];
+    }
   }
 }
 
@@ -5723,8 +5772,12 @@ function buildRoom(roomKey){
             // normal door shows (doorPairContent): the destination room's name,
             // the move pair (opponent raised / response lowered), and that
             // room's signature head object -- so the panel reads like a
-            // directory of doors, not a bare move list.
-            const dc = doorPairContent(fe.target, fe.pair);
+            // directory of doors, not a bare move list. The head object's own
+            // listFallback is this car's own assigned list, indexed by floor
+            // position -- an ordinary door gets the SOURCE lane's own list
+            // this same way (continuationListItem); an elevator floor has no
+            // lane, so it's this car's list directly (elevatorFloorListItem).
+            const dc = doorPairContent(fe.target, fe.pair, elevatorFloorListItem(roomKey, i));
             return {
               ordinal: i + 1,
               label: fe.label || fe.target,
@@ -7964,7 +8017,17 @@ function renderRoomGeomDialog(ov, roomKey){
     const rawId = LAYOUT[target] && LAYOUT[target].slots && LAYOUT[target].slots[slotId];
     if(rawId) return rawId;
     const word = slotWordFor(target, slotId);
-    return word && word.trim() ? word.trim() : 'none';
+    if(word && word.trim()) return word.trim();
+    // no manual override -- this floor may still be showing something real,
+    // supplied by the car's own assigned list (elevatorFloorListItem). Say so
+    // rather than a flat "none", which previously read as "nothing is here"
+    // even while the panel was actually showing a list item.
+    if(carMode){
+      const i = elevatorCarLayout(room).floors.findIndex(fe => fe.target === target);
+      const r = i >= 0 ? elevatorFloorListItem(roomKey, i) : null;
+      if(r) return (r.asset ? r.asset.id : r.word) + ' (from list)';
+    }
+    return 'none';
   };
   const exitTypeRows = staticExits.map(ex => {
     if(carMode){
