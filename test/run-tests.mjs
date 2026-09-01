@@ -9907,6 +9907,41 @@ try {
     assert(f[3].objAssetId === 'toaster', `expected the bucket's own list assignment to be unaffected by clearing overrides, got ${JSON.stringify(f[3])}`);
     ok('wall-lists dialog: "Clear overrides" bulk-clears manual overrides without touching the assigned list');
   } catch(e){ bad('wall-lists dialog: Clear overrides button', e); }
+
+  // 307. The panel is uniformly 25% bigger (both width and height) than the
+  //      pre-bump 0.375 m/row baseline -- ELEV_ROW_M is the single knob that
+  //      scales the whole panel, images included, without touching any
+  //      pixel-layout proportions (see its own comment) -- requested live:
+  //      "the elevator images are still a little too small".
+  try {
+    const size = await appBQ2.page.evaluate(() => window.__threeTestEdit.elevatorPanelSize());
+    assert(size, 'expected to find a built elevator panel mesh');
+    const canvasW = 12 * 2 + 132 + 300 + 150 + 176;   // ELEV_PAD_PX*2 + ELEV_COL.{btn,name,pair,obj} -- unchanged pixel layout
+    const canvasH = 12 * 2 + 140 * 5;                 // ELEV_PAD_PX*2 + ELEV_ROW_PX * floors.length (5 floors here)
+    const expectedMpp = 0.46875 / 140;                // ELEV_ROW_M / ELEV_ROW_PX, post-bump (0.375 * 1.25)
+    const expectedW = canvasW * expectedMpp, expectedH = canvasH * expectedMpp;
+    assert(Math.abs(size.w - expectedW) < 0.01, `expected panel width ~${expectedW.toFixed(3)}m (25% bigger than the old 0.375 baseline), got ${size.w}`);
+    assert(Math.abs(size.h - expectedH) < 0.01, `expected panel height ~${expectedH.toFixed(3)}m, got ${size.h}`);
+    ok('elevator panel: ELEV_ROW_M scales the whole physical panel 25% bigger (both dimensions)');
+  } catch(e){ bad('elevator panel: 25% bigger size', e); }
+
+  // 308. Each floor row carries its own occurrence stat ("N (M%)": how often
+  //      this exact floor has actually been taken in the user's own games,
+  //      out of the car's own total recorded continuations) -- an elevator
+  //      floor never gets an ordinary door hint of its own (buildDoorHint),
+  //      so this is its only route to that stat at all -- requested live:
+  //      "I do miss the statistics, which do not appear anywhere in the
+  //      elevator setting".
+  try {
+    const info = await appBQ2.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
+    const floors = info.forward[0];
+    assert(floors.length === 5, `test setup issue: expected 5 floors, got ${floors.length}`);
+    // one game each (g1..g5) out of 5 games reaching the car -> 20% each.
+    for(const f of floors){
+      assert(f.occurrence === '1 (20%)', `expected each floor's occurrence to be "1 (20%)" (1 of 5 games reaching the car), got ${JSON.stringify(f)}`);
+    }
+    ok('elevator panel: each floor row carries its own occurrence stat');
+  } catch(e){ bad('elevator panel: floor occurrence stat', e); }
 } finally {
   await appBQ2.close();
 }

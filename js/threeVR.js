@@ -4297,7 +4297,7 @@ const ELEV_ROW_PX = 140, ELEV_PAD_PX = 12;
 // in-room pair billboard), which also makes the panel read like a normal room.
 const ELEV_COL = { btn: 132, name: 300, pair: 150, obj: 176 };   // per-column widths (px)
 const ELEV_CANVAS_W = ELEV_PAD_PX * 2 + ELEV_COL.btn + ELEV_COL.name + ELEV_COL.pair + ELEV_COL.obj;
-const ELEV_ROW_M = 0.375;
+const ELEV_ROW_M = 0.46875;   // 0.375 * 1.25 -- requested 25% bigger (both dimensions: this scales panelW/panelH together, see buildOneElevatorPanel)
 // past ELEV_PANEL_MAX_ROWS floors, a second panel mounts to the right of the
 // door carrying the rest (see buildElevatorPanels) -- real elevators don't
 // split buttons like this, but it's the simplest practical fix for the rare
@@ -4364,11 +4364,23 @@ function makeElevatorPanelTexture(floors, contents, selectedOrdinal){
     ctx.fillText(String(f.ordinal), btnCx, btnCy + 1);
     x += ELEV_COL.btn;
 
-    // room name (or a faint "(unnamed)" so the row still reads)
+    // room name (or a faint "(unnamed)" so the row still reads), followed by
+    // its occurrence stat -- "(M%)", how often this exact floor has actually
+    // been taken in the user's own games -- in a smaller, muted style right
+    // after the name, same info an ordinary door's own hint shows
+    // (buildDoorHint) but an elevator floor never otherwise gets.
     ctx.textAlign = 'left';
     ctx.font = 'bold 30px sans-serif';
     ctx.fillStyle = f.name ? '#fff' : '#888';
-    ctx.fillText(fitText(ctx, f.name || '(unnamed)', ELEV_COL.name - 12), x + 6, cy);
+    const nameText = fitText(ctx, f.name || '(unnamed)', ELEV_COL.name - 12);
+    ctx.fillText(nameText, x + 6, cy);
+    if(f.occurrence){
+      const nameW = ctx.measureText(nameText).width;
+      const pct = f.occurrence.slice(f.occurrence.indexOf('('));   // "N (M%)" -> "(M%)"
+      ctx.font = '20px sans-serif';
+      ctx.fillStyle = '#999';
+      ctx.fillText(pct, x + 6 + nameW + 8, cy);
+    }
     x += ELEV_COL.name;
 
     // move pair: opponent raised (upper-left), response lowered (lower-right),
@@ -5803,6 +5815,12 @@ function buildRoom(roomKey){
               pair: dc.pair,                        // { opponent, response } move descriptors, or null
               objAsset: dc.asset || null,           // the room's head-object asset (has .image), or null
               objWord: dc.word || null,             // its placeholder word, if no image
+              // "N (M%)" -- how often this exact floor has actually been taken
+              // in the user's own games, same stat an ordinary door's own hint
+              // shows (buildDoorHint) but an elevator floor never otherwise
+              // gets, since it has no door hint of its own (the panel replaces
+              // it). Only the "(M%)" tail is drawn (see makeElevatorPanelTexture).
+              occurrence: fe.occurrence || null,
               target: fe.target,
               spawn: computeSpawnForExit(roomKey, room, fe)
             };
@@ -8894,9 +8912,18 @@ export async function openThreeTest(containerEl, opts){
           hasPair: !!f.pair,
           objAssetId: f.objAsset ? f.objAsset.id : null,
           objWord: f.objWord || null,
+          occurrence: f.occurrence || null,
         }))),
         back: elevatorMeta.filter(m => m.kind === 'back').map(m => m.target),
       }),
+      // the built panel mesh's own real-world width/height (PlaneGeometry
+      // params) -- for testing that ELEV_ROW_M actually scales the physical
+      // panel (images included), not just the canvas pixel layout.
+      elevatorPanelSize: () => {
+        let found = null;
+        scene.traverse(o => { if(!found && o.userData && o.userData.kind === 'elevator-panel') found = o; });
+        return found ? { w: found.geometry.parameters.width, h: found.geometry.parameters.height } : null;
+      },
       // click-to-select-floor UX: the currently-selected floor's ordinal for
       // the CURRENT room's car (null if nothing picked, or the pick is stale
       // against its current floors) -- read back after clickElevatorFloor
