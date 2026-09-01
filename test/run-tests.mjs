@@ -17279,5 +17279,89 @@ try {
 } catch(e){ bad('Phase DG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DH: Phase 4 of the transposition fix -- pasted-variation import
+//     ("Import Variations") routes any NEW data that runs through an
+//     already-redirected room straight to the target castle, live, instead
+//     of writing it into the source's own frozen/suppressed subtree where
+//     it would otherwise be silently invisible (same problem Port, Phase 3,
+//     solves for data that predates the redirect -- this covers data that
+//     shows up AFTER). importEngineVariation shares the same underlying
+//     importParsedLine, so it's covered by the same code path. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDH = await launchApp();
+try {
+  // same transposing pair as Phase DE/DF/DG, redirect pre-set, target room
+  // starts with NO children of its own.
+  await seedBackup(appDH.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDH.page.click('.line-row');
+  await appDH.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 306. Pasting a variation that runs straight through the redirected room
+  //      and keeps going lands its new continuation under the TARGET castle,
+  //      not the source -- both the new opponent try (e6) and the response
+  //      to it (e3).
+  try {
+    await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 Nf6 3. Nf3 e6 4. e3');
+    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.waitForFunction(() => /routed to a redirected room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    assert(/2 routed/.test(await appDH.page.evaluate(() => document.getElementById('progress').textContent)),
+      `expected the log to report 2 entries routed, got "${await appDH.page.evaluate(() => document.getElementById('progress').textContent)}"`);
+
+    const [l1Prefs, l2Prefs] = await appDH.page.evaluate(() => Promise.all([
+      window.__redirectTestHooks.getAllPrefs('L1'), window.__redirectTestHooks.getAllPrefs('L2'),
+    ]));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3']?.manualReplies?.includes('e6'),
+      `expected the new opponent try (e6) routed onto the target room's own manualReplies, got ${JSON.stringify(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3'])}`);
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6']?.reply === 'e3',
+      `expected the new response (e6 -> e3) routed onto the target line, got ${JSON.stringify(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'])}`);
+    assert(!l1Prefs['L1|Nc3,d5,d4,Nf6,Nf3,e6'],
+      `expected nothing written into the SOURCE castle's own (suppressed) subtree, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4,Nf6,Nf3,e6'])}`);
+    ok('Import Variations: new data past a redirected room routes to the target castle, not the frozen source');
+  } catch(e){ bad('Import Variations: redirect-aware routing for genuinely new data', e); }
+
+  // 307. A sibling branch that does NOT pass through the redirected room
+  //      (a different opponent try at the room's own parent) still writes
+  //      normally to the source line -- redirect-awareness shouldn't
+  //      over-fire on unrelated data.
+  try {
+    await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 c5 3. e4');
+    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.waitForFunction(() => /imported 2 move/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    const progressText = await appDH.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(!/routed/i.test(progressText), `expected no "routed" mention for an unrelated sibling branch, got "${progressText}"`);
+
+    const l1Prefs = await appDH.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    assert(l1Prefs['L1|Nc3,d5,d4']?.manualReplies?.includes('c5'),
+      `expected the sibling opponent try (c5) written normally to the source, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4'])}`);
+    assert(l1Prefs['L1|Nc3,d5,d4,c5']?.reply === 'e4',
+      `expected the sibling's own response written normally to the source, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4,c5'])}`);
+    ok('Import Variations: a sibling branch that never reaches the redirected room writes normally to the source');
+  } catch(e){ bad('Import Variations: unrelated data is not redirected', e); }
+} finally {
+  await appDH.close();
+}
+} catch(e){ bad('Phase DH: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

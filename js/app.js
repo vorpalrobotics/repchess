@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-331';
+const BUILD_TAG = '-332';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5574,19 +5574,110 @@ function parseAlgebraicMoveList(text){
    against stale IndexedDB reads mid-transaction.
    Synchronous now (no IDB round-trips happen here at all); returns the
    number of "our" moves set. */
-function importParsedLine(moves, batch){
+/* ---------- redirect-aware writes for pasted/engine-imported variations ----------
+   A paste (or an engine PV) can run straight through an already-redirected
+   room and keep going -- without this, whatever it adds below that room
+   would be written into the SOURCE castle's own dead/suppressed subtree
+   (see refreshRowMenuLabels: "Add Opponent Move" is hidden there for exactly
+   this reason) and never reach the target at all, the same "silently
+   dropped" problem portRedirectedResponses (Phase 3) fixes for data that
+   predates the redirect. This routes each write live, as the variation is
+   walked, instead of needing a separate manual Port pass afterward. */
+
+/* every distinct redirectTargetLineId named in `prefs` (a PREFS-shaped map),
+   excluding `ownLineId` -- used to pre-fetch each target's own prefs ONCE,
+   up front, before a redirect-aware import walk (see findActiveRedirect)
+   needs them: the walk itself must stay synchronous (inline with chess.js
+   parsing, mid-variation), so it can't await a DB read the moment it
+   discovers a redirect. A same-line redirect (target === ownLineId) needs no
+   separate snapshot -- PREFS itself already IS that line's own live copy. */
+function redirectTargetLineIds(prefs, ownLineId){
+  const ids = new Set();
+  for(const key in prefs){
+    const p = prefs[key];
+    if(p?.redirectToCastle && p.reply && p.redirectTargetSeq && p.redirectTargetLineId && p.redirectTargetLineId !== ownLineId){
+      ids.add(p.redirectTargetLineId);
+    }
+  }
+  return [...ids];
+}
+async function fetchRedirectTargetSnapshots(prefs, ownLineId){
+  const ids = redirectTargetLineIds(prefs, ownLineId);
+  if(!ids.length) return new Map();
+  return new Map(await Promise.all(ids.map(async id => [id, await getAllPrefs(id)])));
+}
+/* commits every target line's own batch (built up during the walk) in one
+   setPrefsBatch call per line -- same "one commit, not one per move" reasoning
+   importLine/importEngineVariation already apply to their own single-line batch. */
+async function commitRedirectTargetBatches(targetBatches){
+  await Promise.all([...targetBatches].map(([lineId, tb]) => setPrefsBatch(lineId, [...tb.values()])));
+}
+
+/* the deepest already-redirected room `seq` (any seq -- our-move-ending or
+   opponent-ending, this is a pure prefix check) falls at or below, if any --
+   same "the redirected room's own full seq is the swap point" reasoning
+   portRedirectedResponses uses for the one-time Port action. `prefs` is
+   PREFS itself (always CURRENT_LINE's own, which is where a redirect flag
+   can only ever be read from -- the variation being walked is always
+   relative to the line currently open). */
+function findActiveRedirect(prefs, seq){
+  let best = null;
+  for(const key in prefs){
+    const p = prefs[key];
+    if(!p?.redirectToCastle || !p.reply || !p.redirectTargetSeq || !p.redirectTargetLineId) continue;
+    const roomFullSeq = [...p.seq, p.reply];
+    if(seqStartsWith(seq, roomFullSeq) && (!best || roomFullSeq.length > best.roomFullSeq.length)){
+      best = { roomFullSeq, targetLineId: p.redirectTargetLineId, targetSeq: p.redirectTargetSeq };
+    }
+  }
+  return best;
+}
+
+/* targetSnapshots: Map(lineId -> that line's own PREFS-shaped map), from
+   fetchRedirectTargetSnapshots -- required (pass an empty Map if the caller
+   knows there's nothing to redirect through) since the walk below can't
+   fetch one on demand. targetBatches: Map(lineId -> Map(key -> {seq,patch})),
+   mutated in place -- the caller commits it via commitRedirectTargetBatches
+   after the whole paste (every raw line) has been walked. */
+function importParsedLine(moves, batch, targetBatches, targetSnapshots){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
     throw new Error(`this variation is for 1. ${triggers.join(' / ')}, but the pasted variation starts with 1. ${moves[0]}`);
   }
 
-  const queue = (seq, field, value) => {
-    const key = prefKey(CURRENT_LINE.id, seq);
-    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = value;
-    const entry = batch.get(key) || { seq, patch: {} };
-    entry.patch[field] = value;
-    batch.set(key, entry);
+  // writes `field:value` at `rawSeq` -- to CURRENT_LINE's own PREFS/batch as
+  // normal, or, once the walk has passed through an already-redirected room,
+  // into the target castle's own batch instead, re-based onto its own move
+  // order (the redirected room's own full seq swapped for the target's,
+  // same tail of moves kept exactly as parsed). manualReplies are unioned
+  // against whatever's already recorded there (PREFS for the source/a
+  // same-line target, the pre-fetched snapshot for a cross-line target) so
+  // an existing, unrelated try isn't lost; reply is a plain overwrite either
+  // way, matching how a re-import already overwrites an existing reply at
+  // the source (see this function's own doc comment above).
+  const queue = (rawSeq, field, value) => {
+    const redirect = findActiveRedirect(PREFS, rawSeq);
+    const lineId = redirect ? redirect.targetLineId : CURRENT_LINE.id;
+    const seq = redirect ? [...redirect.targetSeq, ...rawSeq.slice(redirect.roomFullSeq.length)] : rawSeq;
+    const key = prefKey(lineId, seq);
+    const sameLine = lineId === CURRENT_LINE.id;
+    const existingPref = sameLine ? PREFS[key] : targetSnapshots.get(lineId)?.[key];
+    const finalValue = field === 'manualReplies'
+      ? [...new Set([...(existingPref?.manualReplies||[]), ...value])]
+      : value;
+
+    if(sameLine){
+      (PREFS[key] ??= {key,lineId,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = finalValue;
+      const entry = batch.get(key) || { seq, patch: {} };
+      entry.patch[field] = finalValue;
+      batch.set(key, entry);
+    } else {
+      let tb = targetBatches.get(lineId); if(!tb){ tb = new Map(); targetBatches.set(lineId, tb); }
+      const entry = tb.get(key) || { seq, patch: {} };
+      entry.patch[field] = finalValue;
+      tb.set(key, entry);
+    }
   };
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
@@ -5599,10 +5690,7 @@ function importParsedLine(moves, batch){
     const opp = moves[k];
     /* k===0 for a Black line is the line's own fixed trigger row, which isn't
        data-enumerated (no counts/manualReplies lookup happens there) */
-    if(!(color==='black' && k===0)){
-      const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
-      if(!existing.includes(opp)) queue(seq,'manualReplies',[...existing,opp]);
-    }
+    if(!(color==='black' && k===0)) queue(seq,'manualReplies',[opp]);
     if(k+1 < moves.length){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
@@ -5634,6 +5722,12 @@ async function importLine(text){
   const spinner = showSpinner('Importing…');
   await nextPaint();
   try {
+    // pre-fetch, once, every OTHER line a redirect already set in THIS line
+    // points at -- see importParsedLine's own doc comment for why this can't
+    // just happen on demand mid-walk.
+    const targetSnapshots = await fetchRedirectTargetSnapshots(PREFS, CURRENT_LINE.id);
+    const targetBatches = new Map();   // lineId -> Map(key -> {seq,patch})
+
     const errors = [];
     let totalCount = 0, importedLines = 0;
     const batch = new Map();   // pref key -> {seq,patch}, merged across every parsed variation, committed in ONE IndexedDB transaction below
@@ -5641,7 +5735,7 @@ async function importLine(text){
       try{
         const moves = parseAlgebraicMoveList(rawLines[i]);
         if(!moves.length) continue;
-        totalCount += importParsedLine(moves, batch);
+        totalCount += importParsedLine(moves, batch, targetBatches, targetSnapshots);
         importedLines++;
       }catch(err){
         errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
@@ -5650,9 +5744,12 @@ async function importLine(text){
 
     if(importedLines){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
+      await commitRedirectTargetBatches(targetBatches);
       invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
       $('importLineOverlay').style.display='none';
+      const routed = [...targetBatches.values()].reduce((sum,tb)=>sum+tb.size, 0);
       log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
+        + (routed ? ` (${routed} routed to a redirected room's own target castle)` : '')
         + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
       if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
       // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -10204,13 +10301,18 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   const spinner = showSpinner('Importing…');
   await nextPaint();
   try {
+    const targetSnapshots = await fetchRedirectTargetSnapshots(PREFS, CURRENT_LINE.id);
+    const targetBatches = new Map();
     const batch = new Map();
-    const count = importParsedLine([...startSeq, ...pv], batch);
+    const count = importParsedLine([...startSeq, ...pv], batch, targetBatches, targetSnapshots);
     if(batch.size){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
       invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     }
-    log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
+    await commitRedirectTargetBatches(targetBatches);
+    const routed = [...targetBatches.values()].reduce((sum,tb)=>sum+tb.size, 0);
+    log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`
+      + (routed ? ` (${routed} routed to a redirected room's own target castle)` : ''));
     // Targeted re-render (just startSeq's own subtree) instead of a full
     // renderTreeBody whenever possible -- see targetedRenderAfterImport's
     // own comment for why. Falling back to the full rebuild keeps this
