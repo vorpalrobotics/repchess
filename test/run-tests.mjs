@@ -9865,6 +9865,48 @@ try {
       `expected the floor's object button to name the list item, got ${JSON.stringify(label)}`);
     ok('elevator editor: a list-driven floor\'s object button names the list item instead of "none"');
   } catch(e){ bad('elevator editor: object button label reflects the list', e); }
+
+  // 305. The wall-lists dialog's own preview flags a slot whose manual
+  //      override is shadowing the assigned list, so it's visible AT A
+  //      GLANCE why that slot isn't showing its list item -- previously the
+  //      preview just silently listed the list's items with no hint that
+  //      one of them wasn't actually reaching the panel.
+  try {
+    await appBQ2.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    await appBQ2.page.evaluate((t) => window.__threeTestEdit.setSlotAsset(t, 'obj-C1', 'toaster'), floor1Target);
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ2.page.waitForTimeout(150);
+    await appBQ2.page.evaluate(() => document.querySelector('[title="Wall object lists"]').click());
+    await appBQ2.page.waitForSelector('#wallListsOverlay .wl-bucket', { timeout: 5000 });
+    const preview = await appBQ2.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-preview').textContent);
+    assert(/hidden by a manual object/i.test(preview), `expected the preview to flag the overridden slot, got ${JSON.stringify(preview)}`);
+    assert(/Zebra/.test(preview), `expected the shadowed list item's own name (Zebra) still shown (struck through), got ${JSON.stringify(preview)}`);
+    ok('wall-lists dialog: the preview flags a slot whose manual override is hiding the list item');
+  } catch(e){ bad('wall-lists dialog: preview flags an overridden slot', e); }
+
+  // 306. "Clear overrides" wipes the manual override WITHOUT touching which
+  //      list is assigned -- covers the case the automatic sweep (on
+  //      reassignment) can't: editing an existing list's own items in place
+  //      never changes the assigned id, so that sweep never runs, and this
+  //      button is the only way to bulk-clear the stale override left over
+  //      from before.
+  try {
+    await appBQ2.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-clearoverrides').click());
+    await appBQ2.page.waitForFunction(() =>
+      !/hidden by a manual object/i.test(document.querySelector('#wallListsOverlay .wl-preview').textContent), { timeout: 5000 });
+    const preview = await appBQ2.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-preview').textContent);
+    assert(!/hidden by a manual object/i.test(preview), `expected the "hidden" flag gone after clearing, got ${JSON.stringify(preview)}`);
+    await appBQ2.page.evaluate(() => document.getElementById('wlCloseBtn').click());
+    await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
+    await appBQ2.page.waitForTimeout(150);
+    const f = await byOrdinal();
+    assert(f[1].objWord === 'Zebra' && !f[1].objAssetId,
+      `expected "Clear overrides" to remove the manual override (toaster) and fall back to the list's own "Zebra", got ${JSON.stringify(f[1])}`);
+    // the assignment itself is untouched -- floor 3 (list-driven all along)
+    // still reads from the SAME list as before.
+    assert(f[3].objAssetId === 'toaster', `expected the bucket's own list assignment to be unaffected by clearing overrides, got ${JSON.stringify(f[3])}`);
+    ok('wall-lists dialog: "Clear overrides" bulk-clears manual overrides without touching the assigned list');
+  } catch(e){ bad('wall-lists dialog: Clear overrides button', e); }
 } finally {
   await appBQ2.close();
 }
