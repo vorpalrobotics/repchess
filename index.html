@@ -255,6 +255,11 @@
     padding:.35rem .5rem;border:1px solid #e0e0e0;border-radius:5px;font-size:.85rem;cursor:pointer;text-decoration:none;color:inherit}
   .games-row:hover{border-color:#1565c0;background:#f5f9ff}
   .games-row.no-link{cursor:default}
+  /* cross-castle transposition report */
+  .transp-group{border:1px solid #e0e0e0;border-radius:6px;padding:.4rem .6rem;margin-bottom:.5rem}
+  .transp-group h3{margin:.1rem 0 .4rem;font-size:.85rem;color:#555;font-weight:600}
+  .transp-entry{font-size:.85rem;padding:.3rem 0}
+  .transp-entry+.transp-entry{border-top:1px dashed #eee}
   .games-row.no-link:hover{border-color:#e0e0e0;background:none}
   .games-col-date{color:#666;font-size:.8rem}
   .games-col-src{text-align:center;color:#999}
@@ -743,6 +748,7 @@
       <hr class="row-menu-sep">
       <button id="menuSearchLine">Search for a Variation</button>
       <button id="menuBrowseGames">Browse Games</button>
+      <button id="menuFindTranspositions" title="Scan every built castle for positions reached by two or more different castles">Find Transpositions</button>
       <hr class="row-menu-sep">
       <button id="menuHelp">Help</button>
       <button id="menuAbout">About</button>
@@ -1117,6 +1123,23 @@
     </div>
     <div id="gamesListSummary" class="games-list-summary"></div>
     <div id="gamesListBody" class="games-list-body"></div>
+  </div>
+</div>
+
+<!-- cross-castle transposition report -->
+<div id="transpOverlay" class="overlay">
+  <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div class="crop-header">
+      <h2>Transpositions Between Castles</h2>
+      <button id="transpCloseBtn">Close</button>
+    </div>
+    <p style="font-size:.85em;color:#555;margin-top:0">
+      Positions reached by two or more different castles via different move orders —
+      each is currently a separate VR room even though the position is identical.
+      Read-only report; nothing here merges rooms automatically.
+    </p>
+    <div id="transpSummary" class="games-list-summary"></div>
+    <div id="transpBody" class="games-list-body"></div>
   </div>
 </div>
 
@@ -1603,6 +1626,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-327"></script>
+<script type="module" src="js/app.js?v=20260804-328"></script>
 </body>
 </html>
