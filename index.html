@@ -40,6 +40,7 @@
   .branchName{font-weight:600;font-style:italic;color:#444}
   .branchName-memorized{color:#2e7d32}
   .branchName-locked{color:#1565c0}
+  .branchName-redirect-icon{color:#8e24aa;margin-right:.3em}
   .branchStats{font-size:.85em;color:#888}
   .systemStats{font-size:.85em;color:#666;margin-left:.6em}
   /* background analysis queue marker: static while queued, pulses (fa-fade,
@@ -1169,6 +1170,11 @@
       <select id="attrCastleOwner"></select>
       <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only needed to resolve a transposition shared by two castles; otherwise leave on Auto.</div>
     </div>
+    <div class="field" id="attrRedirectField" style="display:none">
+      <label for="attrRedirectTo">Redirect to castle (transposition)</label>
+      <select id="attrRedirectTo"><option value="">(none)</option></select>
+      <div id="attrRedirectHint" style="font-size:.72rem;color:#888;margin-top:.2rem"></div>
+    </div>
     <div class="field attr-note-field">
       <label for="attrNote">Notes</label>
       <textarea id="attrNote" rows="3" placeholder="Any notes about this move or position"></textarea>
@@ -1626,6 +1632,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-328"></script>
+<script type="module" src="js/app.js?v=20260804-329"></script>
 </body>
 </html>

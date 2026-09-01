@@ -16942,5 +16942,119 @@ try {
 } catch(e){ bad('Phase DD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DE: manual room-to-room redirect (Attributes modal > "Redirect
+//     to castle") -- Phase 1 of the cross-castle transposition fix (Find
+//     Transpositions, Phase DD, is the detector; this is the first piece of
+//     the actual fix). Marking a room redirected suppresses its own further
+//     responses in the move table (a badge, "Add Opponent Move" hidden, its
+//     children no longer rendered) -- nothing else changes yet; VR staying
+//     out of the redirected room's way, and import/game-driven redirect
+//     routing, land in later phases. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDE = await launchApp();
+try {
+  // same transposing pair Phase DD's detector fixture uses (1.d4 d5 2.Nc3 vs
+  // 1.Nc3 d5 2.d4), plus one real child under the Chigorin root (backed by
+  // an actual game, same as every other opponent-reply-row fixture in this
+  // suite) so redirecting it has a visible subtree to suppress.
+  await seedBackup(appDE.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','d5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['d4','d5','Nc3','Nc6'], reply: 'Bf4' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 d5 Nc3 Nc6 Bf4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDE.page.click('.line-row');
+  await appDE.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 20000 });
+  // the child row this test will watch get suppressed/restored -- confirm it
+  // actually renders before touching redirect at all.
+  await appDE.page.waitForSelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]', { timeout: 20000 });
+
+  // 297. The redirect pulldown offers the transposing castle as its only
+  //      candidate, on the room that actually collides (Chigorin's root).
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    assert((await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display)) !== 'none',
+      'expected the redirect field to be visible for a real, castle-owned room');
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    const opts = await appDE.page.$$eval('#attrRedirectTo option', os => os.map(o => o.textContent));
+    assert(opts.length === 2 && opts[0] === '(none)' && opts[1].includes('Queens Pawn Palace') && opts[1].includes('Reversed Approach'),
+      `expected exactly a "(none)" option plus the one transposing castle, got ${JSON.stringify(opts)}`);
+    await appDE.page.click('#attributesCancelBtn');
+    ok('Attributes modal: "Redirect to castle" offers the transposing castle as its only candidate');
+  } catch(e){ bad('Attributes modal: redirect candidate list', e); }
+
+  // 298. Selecting it and saving badges the row, hides "Add Opponent Move" on
+  //      it, and suppresses its own children from the move table.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDE.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const info = await appDE.page.evaluate(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,d5"]');
+      const nameSpan = row.querySelector('.branchName');
+      return {
+        hasIcon: !!nameSpan.querySelector('.branchName-redirect-icon'),
+        title: nameSpan.title,
+        addMoveVisible: row.querySelector('[data-act="addMove"]').style.display !== 'none',
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]'),
+      };
+    });
+    assert(info.hasIcon, 'expected the redirect icon badge on the row name after saving a redirect');
+    assert(info.title.includes('Queens Pawn Palace'), `expected the title to name the target castle, got "${info.title}"`);
+    assert(!info.addMoveVisible, 'expected "Add Opponent Move" hidden on a redirected room');
+    assert(!info.childRowExists, 'expected the redirected room\'s own child row to no longer render');
+    ok('Attributes modal: saving a redirect badges the row, hides "Add Opponent Move", and suppresses its children');
+  } catch(e){ bad('Attributes modal: saving a redirect updates the move table', e); }
+
+  // 299. Reopening Attributes shows the saved redirect pre-selected (proving
+  //      it round-tripped through the pref, not just left over in the DOM),
+  //      and picking "(none)" clears it -- the badge disappears, "Add
+  //      Opponent Move" comes back, and the suppressed child re-renders.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    const preselected = await appDE.page.$eval('#attrRedirectTo', s => s.options[s.selectedIndex].textContent);
+    assert(preselected.includes('Queens Pawn Palace'), `expected the saved redirect target pre-selected on reopen, got "${preselected}"`);
+
+    await appDE.page.selectOption('#attrRedirectTo', { index: 0 });   // "(none)"
+    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const info = await appDE.page.evaluate(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,d5"]');
+      return {
+        hasIcon: !!row.querySelector('.branchName .branchName-redirect-icon'),
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]'),
+      };
+    });
+    assert(!info.hasIcon, 'expected the redirect badge gone after clearing the redirect');
+    assert(info.childRowExists, 'expected the previously-suppressed child row to reappear after clearing the redirect');
+    ok('Attributes modal: clearing a redirect restores the badge-free row and its suppressed children');
+  } catch(e){ bad('Attributes modal: clearing a redirect restores normal move-table state', e); }
+} finally {
+  await appDE.close();
+}
+} catch(e){ bad('Phase DE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

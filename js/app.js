@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-328';
+const BUILD_TAG = '-329';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3285,8 +3285,17 @@ $('fieldModalSaveBtn').onclick = () => {
    fields (name / isCastleRoot / castleName). */
 let attributesModalSave = null;
 let attrModalLineSeq = null;
-function openAttributesModal(saved, onSave, lineSeq){
+// the room's own CANONICAL seq (see canonicalRoomSeq) -- distinct from
+// attrModalLineSeq (used only for the "Belongs to castle" inherit label),
+// this is the seq the redirect fields themselves get read/written on, and
+// what the room's real board position (roomSeq + saved.reply) is computed
+// from for the "Redirect to castle" candidate lookup.
+let attrModalRoomSeq = null;
+let attrModalSaved = null;
+function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrModalLineSeq = lineSeq;
+  attrModalRoomSeq = roomSeq || lineSeq;
+  attrModalSaved = saved;
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
@@ -3296,6 +3305,7 @@ function openAttributesModal(saved, onSave, lineSeq){
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
+  refreshRedirectField(saved, attrModalRoomSeq);
   attributesModalSave = onSave;
   $('attributesOverlay').style.display='flex';
 }
@@ -3518,6 +3528,74 @@ function refreshCastleOwnerSelect(saved, lineSeq){
   sel.value = saved?.castleOwner || '';
   $('attrCastleOwnerField').style.display = (castles.length || saved?.castleOwner) ? '' : 'none';
 }
+/* every OTHER built castle (any line, own castle excluded) whose own room
+   graph reaches the exact same position as `roomSeq`'s own room -- these are
+   the candidates the "Redirect to castle" pulldown offers. Each entry's
+   targetSeq is the target castle's own seq reaching that position, captured
+   here so a chosen redirect can be re-based onto the target's own move order
+   later (the port-responses action, and redirect-aware import) without
+   re-deriving it from a stale/rebuilt graph. */
+async function redirectCandidatesForRoom(roomFen, ownInstanceId){
+  const posKey = positionKey(roomFen);
+  const lines = await getLines(LOCAL_USER);
+  const built = await gatherBuiltCastles(lines);
+  const out = [];
+  for(const c of built){
+    if(c.instanceId === ownInstanceId) continue;
+    const gr = c.genRooms.find(r => r.posKey === posKey);
+    if(!gr) continue;
+    const line = lines.find(l => l.id === c.lineId);
+    out.push({ lineId: c.lineId, lineName: line ? line.name : c.lineId, castleName: c.castleName, targetSeq: gr.seq });
+  }
+  return out;
+}
+// bumped on every openAttributesModal/refreshRedirectField call so a slow
+// gatherBuiltCastles resolving after the modal's moved on (closed, or
+// reopened on a different row) doesn't clobber a since-changed select.
+let attrRedirectGen = 0;
+let attrRedirectCandidates = [];
+async function refreshRedirectField(saved, roomSeq){
+  const field = $('attrRedirectField');
+  const sel = $('attrRedirectTo');
+  const hint = $('attrRedirectHint');
+  attrRedirectCandidates = [];
+  const myGen = ++attrRedirectGen;
+  // only a real, already-built room (an actual reply recorded) belonging to
+  // some castle can be redirected -- nothing to transpose otherwise.
+  const ownCastleName = inheritedCastle(roomSeq, CURRENT_LINE?.id);
+  if(!saved?.reply || !ownCastleName){
+    field.style.display = 'none';
+    return;
+  }
+  field.style.display = '';
+  sel.disabled = true;
+  sel.innerHTML = '<option value="">(none)</option>';
+  hint.textContent = 'Checking other castles for this exact position…';
+  const ownInstanceId = castleInstanceId(CURRENT_LINE.id, ownCastleName);
+  const roomFen = fenForSeq([...roomSeq, saved.reply]);
+  let candidates;
+  try { candidates = await redirectCandidatesForRoom(roomFen, ownInstanceId); }
+  catch(e){ console.warn('[redirect] failed to gather candidates', e); candidates = []; }
+  if(myGen !== attrRedirectGen) return;   // modal moved on while this was in flight
+  attrRedirectCandidates = candidates;
+  sel.disabled = false;
+  let matchedIdx = -1;
+  if(saved.redirectToCastle){
+    matchedIdx = candidates.findIndex(c => c.lineId === saved.redirectTargetLineId && c.castleName === saved.redirectToCastle);
+  }
+  sel.innerHTML = '<option value="">(none)</option>' +
+    candidates.map((c,i)=>`<option value="${i}">${escapeHtml(c.castleName)} (${escapeHtml(c.lineName)})</option>`).join('') +
+    // the previously-saved target no longer resolves to a real room (stale
+    // cache, or the position/target castle changed) -- offer it as a
+    // distinct, pre-selected option instead of silently reverting to "(none)"
+    // and risking an accidental clear on the next Save.
+    (saved.redirectToCastle && matchedIdx < 0
+      ? `<option value="__stale__" selected>${escapeHtml(saved.redirectToCastle)} (saved, but no longer matches this position)</option>` : '');
+  if(matchedIdx >= 0) sel.value = String(matchedIdx);
+  hint.textContent = candidates.length
+    ? 'Doors that would open into this room instead route to the target castle\'s own room there.'
+    : (saved.redirectToCastle ? '' : 'No other castle currently shares this exact position.');
+}
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
 $('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
 $('attributesCancelBtn').onclick = () => {
@@ -3545,13 +3623,26 @@ $('attributesSaveBtn').onclick = () => {
     }
     streetNumber = num;
   }
+  const redirVal = $('attrRedirectTo').value;
+  let redirectToCastle = '', redirectTargetLineId = '', redirectTargetSeq = null;
+  if(redirVal === '__stale__'){
+    // unchanged since the modal opened -- write back exactly what was
+    // already saved rather than risk clearing it on a candidate-lookup miss.
+    redirectToCastle = attrModalSaved?.redirectToCastle || '';
+    redirectTargetLineId = attrModalSaved?.redirectTargetLineId || '';
+    redirectTargetSeq = attrModalSaved?.redirectTargetSeq || null;
+  } else if(redirVal !== ''){
+    const c = attrRedirectCandidates[parseInt(redirVal, 10)];
+    if(c){ redirectToCastle = c.castleName; redirectTargetLineId = c.lineId; redirectTargetSeq = c.targetSeq; }
+  }
   const v = {
     roomName: $('attrRoomName').value.trim(),
     isCastleRoot: isRoot,
     castleName,
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
-    note: $('attrNote').value.trim()
+    note: $('attrNote').value.trim(),
+    redirectToCastle, redirectTargetLineId, redirectTargetSeq,
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -4472,10 +4563,18 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
         savePrefField(roomSeq, 'name', v.roomName);
         savePrefField(roomSeq, 'note', v.note);
+        savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
+        savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
+        savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
         refreshBranchName(nameSpan, roomSaved());
+        refreshRowMenuLabels(rowMenu, roomSaved());
+        // re-sync the visible children immediately on a redirect toggle --
+        // otherwise turning it on leaves stale children on screen (or off,
+        // leaves the toggle stuck empty) until the next full re-render.
+        if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
         refreshMeta();
         notifyDirty?.();   // note/castleName/isCastleRoot can change an ancestor compact-run's eligibility/shape
-      }, lineSeq);
+      }, lineSeq, roomSeq);
     }
 
     /* expand the branch table under the chosen standard response */
@@ -4483,11 +4582,19 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     function expandWith(reply, startExpanded=true){
       const old = metaTr.nextSibling;
       if(old?.querySelector?.('.branch')) old.remove();
+      childrenSeq = [...lineSeq,reply];
+      // a redirected room's own children are suppressed entirely -- leave the
+      // toggle in its default "nothing to expand" state (see makeToggle),
+      // same as a genuine leaf row with no reply at all.
+      if(currentSaved()?.redirectToCastle){
+        branchDiv = null;
+        updateCompleteBadge(completeSpan);
+        return;
+      }
 
       const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      childrenSeq = [...lineSeq,reply];
       branchDiv = div;
       // carry noCompactUntil/notifyDirty forward so a single-line expansion
       // keeps rendering the run's own forced moves in full (the prefix test
@@ -4892,20 +4999,36 @@ function renderBlackRoot(parent,games,trigger){
       savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
       savePrefField(roomSeq, 'name', v.roomName);
       savePrefField(roomSeq, 'note', v.note);
+      savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
+      savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
+      savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
       refreshBranchName(nameSpan, roomSaved());
+      refreshRowMenuLabels(rowMenu, roomSaved());
+      // re-sync the visible children immediately on a redirect toggle --
+      // otherwise turning it on leaves stale children on screen (or off,
+      // leaves the toggle stuck empty) until the next full re-render.
+      if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
       refreshMeta();
-    }, lineSeq);
+    }, lineSeq, roomSeq);
   }
 
   let childrenSeq = null, branchDiv = null;
   function expandWith(reply, startExpanded=true){
     const old = metaTr.nextSibling;
     if(old?.querySelector?.('.branch')) old.remove();
+    childrenSeq = [...lineSeq,reply];
+    // a redirected room's own children are suppressed entirely -- leave the
+    // toggle in its default "nothing to expand" state (see makeToggle), same
+    // as a genuine leaf row with no reply at all.
+    if(currentSaved()?.redirectToCastle){
+      branchDiv = null;
+      updateCompleteBadge(completeSpan);
+      return;
+    }
 
     const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
     const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
     const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-    childrenSeq = [...lineSeq,reply];
     branchDiv = div;
     const sub = renderBranch(div,games,childrenSeq,1,true);
     updateCompleteBadge(completeSpan, sub.completeToMove);
@@ -8705,8 +8828,14 @@ function refreshBranchName(nameSpan, saved){
   // a node that starts a new castle shows "CastleName: RoomName"
   const castle = saved?.isCastleRoot ? (saved.castleName || '').trim() : '';
   const text = castle ? (name ? `${castle}: ${name}` : castle) : name;
-  if(!text){ nameSpan.style.display='none'; return; }
-  nameSpan.textContent = text;
+  // a redirected room's badge must show even with no name/castle text of its
+  // own -- it's the only visible signal this row's own children are
+  // suppressed, so it can't be hidden away behind the "nothing to show" path
+  // an unnamed, non-redirected row otherwise takes.
+  const redirected = !!saved?.redirectToCastle;
+  if(!text && !redirected){ nameSpan.style.display='none'; return; }
+  const icon = redirected ? '<i class="fa-solid fa-right-left branchName-redirect-icon"></i>' : '';
+  nameSpan.innerHTML = icon + escapeHtml(text);
   nameSpan.style.display='';
   // locked takes priority over memorized: a room behind a locked door can
   // never actually be walked into, so any memorized flag on it is stale
@@ -8716,7 +8845,9 @@ function refreshBranchName(nameSpan, saved){
   const roomKey = roomKeyForSaved(saved);
   nameSpan.classList.toggle('branchName-locked', locked);
   nameSpan.classList.toggle('branchName-memorized', !locked && !!(roomKey && MEMORIZED_ROOMS[roomKey]));
-  nameSpan.title = locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '';
+  nameSpan.title = redirected
+    ? `Redirected to "${saved.redirectToCastle}" -- this room's own further responses are suppressed; doors here lead to the target castle's room instead`
+    : (locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '');
 }
 
 function refreshBranchStats(statsSpan, games, childrenSeq){
@@ -8730,6 +8861,10 @@ function refreshBranchStats(statsSpan, games, childrenSeq){
 function refreshRowMenuLabels(rowMenu, saved){
   const responseBtn = rowMenu.querySelector('[data-act="response"]');
   if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
+  // a redirected room's own further responses are suppressed -- adding a new
+  // opponent try here would just create invisible, orphaned data.
+  const addMoveBtn = rowMenu.querySelector('[data-act="addMove"]');
+  if(addMoveBtn) addMoveBtn.style.display = saved?.redirectToCastle ? 'none' : '';
 }
 
 /* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
