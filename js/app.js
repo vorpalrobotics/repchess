@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-327';
+const BUILD_TAG = '-328';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6626,6 +6626,79 @@ async function gatherBuiltCastles(lines){
   console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
   return out;
 }
+
+/* ---------- cross-castle transposition detector ----------
+   Two different castles (different line and/or castle name) can each reach
+   the exact same chess position via their own, independent move order --
+   buildCastleGraph's room-merge (getRoom, keyed by positionKey) only ever
+   runs within ONE castle's own walk, so a shared position is never detected
+   or merged across castles automatically (castleInstanceId's own doc comment,
+   above, confirms the per-castle namespacing is deliberate, not a bug).
+   This is a read-only report: group every generated room's own posKey across
+   every built castle and surface any position claimed by 2+ distinct castle
+   instances, so the user can gauge how common this is before any
+   merge/redirect feature gets designed. Scoped to room ANCHORS (gr.posKey)
+   -- a multi-move corridor's own interior positions aren't checked
+   separately, only the position each generated room is keyed/entered by. */
+async function findTransposedRooms(lines){
+  const built = await gatherBuiltCastles(lines);
+  const byPosKey = new Map();   // posKey -> [{ lineId, lineName, castleName, instanceId, room }]
+  for(const c of built){
+    const line = lines.find(l => l.id === c.lineId);
+    const lineName = line ? line.name : c.lineId;
+    for(const gr of c.genRooms){
+      if(!gr.posKey) continue;
+      const arr = byPosKey.get(gr.posKey) || [];
+      arr.push({ lineId: c.lineId, lineName, castleName: c.castleName, instanceId: c.instanceId, room: gr });
+      byPosKey.set(gr.posKey, arr);
+    }
+  }
+  const groups = [];
+  for(const entries of byPosKey.values()){
+    const distinct = new Set(entries.map(e => e.instanceId));
+    if(distinct.size < 2) continue;
+    groups.push(entries);
+  }
+  // biggest collisions first (most distinct castles sharing one position),
+  // then alphabetically by the first entry's castle name for a stable order.
+  groups.sort((a, b) => b.length - a.length || a[0].castleName.localeCompare(b[0].castleName));
+  return groups;
+}
+
+function renderTranspositionsReport(groups){
+  const summary = $('transpSummary');
+  const body = $('transpBody');
+  if(!groups.length){
+    summary.textContent = 'No cross-castle transpositions found.';
+    body.innerHTML = '';
+    return;
+  }
+  const roomTotal = groups.reduce((sum, g) => sum + g.length, 0);
+  summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
+  body.innerHTML = groups.map(entries => `
+    <div class="transp-group">
+      <h3>${entries.length} castles share this position</h3>
+      ${entries.map(e => `
+        <div class="transp-entry">
+          <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
+          — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
+          <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+$('menuFindTranspositions').onclick = async ()=>{
+  $('menuList').style.display='none';
+  $('transpOverlay').style.display='flex';
+  $('transpSummary').textContent = 'Scanning castles…';
+  $('transpBody').innerHTML = '';
+  const lines = await getLines(LOCAL_USER);
+  const groups = await findTransposedRooms(lines);
+  renderTranspositionsReport(groups);
+};
+$('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
 
 // Builds and opens the full main VR world (every built castle, one street per
 // opening system). Extracted from menuThreeTest's handler (mirrors this

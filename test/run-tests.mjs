@@ -16862,5 +16862,85 @@ try {
 } catch(e){ bad('Phase DC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DD: cross-castle transposition detector (hamburger menu > "Find
+//     Transpositions"). buildCastleGraph's own room-merge (getRoom, keyed by
+//     positionKey) only ever runs within ONE castle's own walk -- two
+//     DIFFERENT castles that independently reach the identical chess
+//     position via different move orders never get detected or merged (see
+//     castleInstanceId's doc comment: the per-castle namespacing is
+//     deliberate). This is a read-only report surfacing how often that
+//     happens, with no auto-merge/redirect. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appDD = await launchApp();
+try {
+  // 295. No lines at all yet -- the report opens straight to the empty state
+  //      rather than erroring or hanging on "Scanning...".
+  try {
+    await appDD.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDD.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDD.page.waitForFunction(
+      () => /no cross-castle transpositions/i.test(document.getElementById('transpSummary').textContent),
+      { timeout: 5000 },
+    );
+    const groupCount = await appDD.page.evaluate(() => document.querySelectorAll('#transpBody .transp-group').length);
+    assert(groupCount === 0, `expected no collision groups with no lines seeded, got ${groupCount}`);
+    ok('Find Transpositions: empty state with no lines/castles built yet');
+    await appDD.page.evaluate(() => document.getElementById('transpCloseBtn').click());
+  } catch(e){ bad('Find Transpositions: empty state', e); }
+
+  // 296. Two castles in two different lines reach the exact same position
+  //      via different move orders (White's own d4/Nc3 played in reverse
+  //      order around Black's one reply, mirroring the reported bug: a
+  //      Chigorin-Castle-style room transposing with a Queen's-Pawn-Palace-
+  //      style room) -- flagged as one collision group naming both castles.
+  //      A third, unrelated castle (its own distinct position) must NOT show
+  //      up in that group or spawn a group of its own.
+  try {
+    await seedBackup(appDD.page, {
+      version: 6, user: 'tester',
+      lines: [
+        { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'], prefs: [
+          { seq: ['d4','d5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        ]},
+        { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+          { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        ]},
+        { id: 'L3', name: 'Unrelated Approach', color: 'white', openingMoves: ['e4'], prefs: [
+          { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        ]},
+      ],
+    }, { defaultPlayerColor: 'white' });
+
+    await appDD.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDD.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDD.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length > 0,
+      { timeout: 5000 },
+    );
+    const info = await appDD.page.evaluate(() => ({
+      groupCount: document.querySelectorAll('#transpBody .transp-group').length,
+      entryCount: document.querySelectorAll('#transpBody .transp-entry').length,
+      body: document.getElementById('transpBody').textContent,
+      summary: document.getElementById('transpSummary').textContent,
+    }));
+    assert(info.groupCount === 1, `expected exactly 1 collision group (the third castle is unrelated), got ${info.groupCount}`);
+    assert(info.entryCount === 2, `expected exactly 2 entries in that group, got ${info.entryCount}`);
+    assert(/\b1\b/.test(info.summary), `expected the summary to report 1 position, got "${info.summary}"`);
+    assert(info.body.includes('Chigorin Castle') && info.body.includes('Queens Pawn Palace'),
+      `expected both colliding castles named in the report, got ${JSON.stringify(info.body)}`);
+    assert(info.body.includes('Chigorin Approach') && info.body.includes('Reversed Approach'),
+      `expected both colliding lines named in the report, got ${JSON.stringify(info.body)}`);
+    assert(!info.body.includes('Italian Castle'), `expected the unrelated third castle to NOT appear in the report, got ${JSON.stringify(info.body)}`);
+    assert(info.body.includes('1.d4') && info.body.includes('1.Nc3'),
+      `expected each colliding entry's own move order shown, got ${JSON.stringify(info.body)}`);
+    ok('Find Transpositions: two castles reaching the same position via different move orders are grouped together, unrelated castles excluded');
+  } catch(e){ bad('Find Transpositions: detects a genuine cross-castle collision and excludes unrelated castles', e); }
+} finally {
+  await appDD.close();
+}
+} catch(e){ bad('Phase DD: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
