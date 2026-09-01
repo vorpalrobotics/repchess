@@ -16954,39 +16954,77 @@ if(shouldRunPhase(['move-table','castle-generation'])){
 try {
 const appDE = await launchApp();
 try {
-  // same transposing pair Phase DD's detector fixture uses (1.d4 d5 2.Nc3 vs
-  // 1.Nc3 d5 2.d4), plus one real child under the Chigorin root (backed by
-  // an actual game, same as every other opponent-reply-row fixture in this
-  // suite) so redirecting it has a visible subtree to suppress.
+  // two INTERIOR (non-root) rooms transposing -- each castle's own root sits
+  // at a different position (Chigorin: Nc3 d5 d4; Queen's Pawn: d4 Nf6 Nc3),
+  // reached via a different move order than the OTHER castle's own interior
+  // room, but both interiors land on the identical final position since the
+  // 5 moves involved (White: Nc3/d4/Nf3, Black: d5/Nf6) never interact with
+  // each other on the board and so commute regardless of order (verified
+  // directly against chess.js, not just reasoned by hand -- an earlier draft
+  // of this fixture used c4 as White's 3rd move, which LOOKS equally
+  // "unrelated" but actually isn't: a 2-square pawn push needs its transit
+  // square empty too, and the knight that's already landed on c3 by then
+  // blocks c2-c4 outright) -- same shape as the real reported bug (a room
+  // INSIDE one castle transposing with a room inside a differently-shaped
+  // other castle), and exercises redirect's own castle-root exclusion (see
+  // refreshRedirectField) since neither redirected room here is a root. A
+  // real game backs the interior room's own child (the row this test
+  // watches get suppressed/restored).
   await seedBackup(appDE.page, {
     version: 6, user: 'tester',
     lines: [
-      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'], prefs: [
-        { seq: ['d4','d5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
-        { seq: ['d4','d5','Nc3','Nc6'], reply: 'Bf4' },
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
       ]},
-      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
-        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        // a second, unrelated branch off the root -- without it the root and
+        // its one linear child collapse into a single VR "corridor" room
+        // (analyzeCastleStructure), whose exposed posKey is the ROOT's own
+        // position, not the interior room's (buildGeneratedCastle's anchor
+        // is a corridor's FIRST member) -- the redirect candidate search
+        // reads genRooms[].posKey directly, so the interior room needs to be
+        // a real anchor of its own, not swallowed into the root's corridor.
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
       ]},
     ],
     games: [
-      { id: 'g1', moves: 'd4 d5 Nc3 Nc6 Bf4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
     ],
   }, { defaultPlayerColor: 'white' });
   await appDE.page.click('.line-row');
-  await appDE.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 20000 });
+  await appDE.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
   // the child row this test will watch get suppressed/restored -- confirm it
   // actually renders before touching redirect at all.
-  await appDE.page.waitForSelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]', { timeout: 20000 });
+  await appDE.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]', { timeout: 20000 });
 
-  // 297. The redirect pulldown offers the transposing castle as its only
-  //      candidate, on the room that actually collides (Chigorin's root).
+  // 297. A castle ROOT never offers a redirect field at all -- it's the entry
+  //      point of its own street building (buildCastleGraph enters it
+  //      directly, never via a door), so redirecting it wouldn't stop that
+  //      castle from being built.
   try {
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    const display = await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display);
+    assert(display === 'none', `expected no redirect field on a castle root, got display="${display}"`);
+    await appDE.page.click('#attributesCancelBtn');
+    ok('Attributes modal: a castle root never offers "Redirect to castle"');
+  } catch(e){ bad('Attributes modal: castle root excluded from redirect', e); }
+
+  // 298. The redirect pulldown offers the transposing castle as its only
+  //      candidate, on the interior room that actually collides.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
     await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     assert((await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display)) !== 'none',
-      'expected the redirect field to be visible for a real, castle-owned room');
+      'expected the redirect field to be visible for a real, castle-owned interior room');
     await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     const opts = await appDE.page.$$eval('#attrRedirectTo option', os => os.map(o => o.textContent));
     assert(opts.length === 2 && opts[0] === '(none)' && opts[1].includes('Queens Pawn Palace') && opts[1].includes('Reversed Approach'),
@@ -16995,11 +17033,11 @@ try {
     ok('Attributes modal: "Redirect to castle" offers the transposing castle as its only candidate');
   } catch(e){ bad('Attributes modal: redirect candidate list', e); }
 
-  // 298. Selecting it and saving badges the row, hides "Add Opponent Move" on
+  // 299. Selecting it and saving badges the row, hides "Add Opponent Move" on
   //      it, and suppresses its own children from the move table.
   try {
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
     await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     await appDE.page.selectOption('#attrRedirectTo', { index: 1 });
@@ -17007,13 +17045,13 @@ try {
     await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const info = await appDE.page.evaluate(() => {
-      const row = document.querySelector('tr.data-row[data-seq="d4,d5"]');
+      const row = document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]');
       const nameSpan = row.querySelector('.branchName');
       return {
         hasIcon: !!nameSpan.querySelector('.branchName-redirect-icon'),
         title: nameSpan.title,
         addMoveVisible: row.querySelector('[data-act="addMove"]').style.display !== 'none',
-        childRowExists: !!document.querySelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]'),
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]'),
       };
     });
     assert(info.hasIcon, 'expected the redirect icon badge on the row name after saving a redirect');
@@ -17023,13 +17061,13 @@ try {
     ok('Attributes modal: saving a redirect badges the row, hides "Add Opponent Move", and suppresses its children');
   } catch(e){ bad('Attributes modal: saving a redirect updates the move table', e); }
 
-  // 299. Reopening Attributes shows the saved redirect pre-selected (proving
+  // 300. Reopening Attributes shows the saved redirect pre-selected (proving
   //      it round-tripped through the pref, not just left over in the DOM),
   //      and picking "(none)" clears it -- the badge disappears, "Add
   //      Opponent Move" comes back, and the suppressed child re-renders.
   try {
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
-    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
     await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     const preselected = await appDE.page.$eval('#attrRedirectTo', s => s.options[s.selectedIndex].textContent);
@@ -17040,10 +17078,10 @@ try {
     await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const info = await appDE.page.evaluate(() => {
-      const row = document.querySelector('tr.data-row[data-seq="d4,d5"]');
+      const row = document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]');
       return {
         hasIcon: !!row.querySelector('.branchName .branchName-redirect-icon'),
-        childRowExists: !!document.querySelector('tr.data-row[data-seq="d4,d5,Nc3,Nc6"]'),
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]'),
       };
     });
     assert(!info.hasIcon, 'expected the redirect badge gone after clearing the redirect');
@@ -17054,6 +17092,97 @@ try {
   await appDE.close();
 }
 } catch(e){ bad('Phase DE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DF: Phase 2 of the transposition fix -- a redirected room isn't
+//     built locally in VR at all; the door leading into it routes straight
+//     to the target castle's own room key instead (same foreignKey/
+//     foreignCastle mechanism buildCastleGraph already uses for an automatic
+//     same-line castle-root collision, just driven by the manual redirect
+//     flag and able to target a DIFFERENT line, per processExit's own new
+//     check ahead of the existing foreign-root one). Also exercises that a
+//     redirect set via seedBackup (i.e. via Full Backup import) round-trips
+//     at all -- applyBackupData/buildBackupData needed extending to the 3
+//     new pref fields, since both used an explicit field whitelist. ---
+if(shouldRunPhase(['vr-castle','castle-generation'])){
+try {
+const appDF = await launchApp();
+try {
+  // same fixture shape as Phase DE (see its fixture comment for why Nf3, not
+  // c4, is White's 3rd developing move -- c4 gets physically blocked by the
+  // knight already on c3 in one of the two move orders).
+  const keys = await appDF.page.evaluate(() => {
+    const pk = (mv, inst) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return `cas:${inst}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      chigorinRoot: pk(['Nc3','d5','d4'], 'L1_Chigorin_Castle'),
+      target: pk(['d4','Nf6','Nc3','d5','Nf3'], 'L2_Queens_Pawn_Palace'),
+    };
+  });
+  await seedBackup(appDF.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','Bg4'], reply: 'e3' },
+        // a second, unrelated branch off the root -- see Phase DE's identical
+        // fixture comment: without it the root and its one linear child
+        // collapse into a single VR "corridor" room keyed by the ROOT's own
+        // position, so the redirect's foreignKey (built from the interior
+        // room's raw position) would point at a room key nothing actually
+        // registers under.
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3 Bg4 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appDF.page);
+
+  // 301. A redirect written via a plain backup import (not the Attributes
+  //      modal) still takes effect: the Chigorin root's own Nf6 door points
+  //      straight at the Queen's Pawn Palace's own room key, not a second,
+  //      locally-built copy of that room.
+  try {
+    await appDF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chigorinRoot);
+    const landed = await appDF.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.chigorinRoot, `expected to land in the Chigorin root itself (not redirected), got ${landed}`);
+    const exits = await appDF.page.evaluate(() => window.__threeTestEdit.exits());
+    // a castle root's own exits include its back-to-street pointer alongside
+    // any forward doors -- only the forward ones are "opponent replies out
+    // of this room", which is what's actually under test here.
+    const fwd = exits.filter(e => !e.back);
+    assert(fwd.length === 1, `expected exactly one forward door out of the Chigorin root (its only recorded opponent try, Nf6), got ${fwd.length} (all exits: ${JSON.stringify(exits)})`);
+    assert(fwd[0].target === keys.target,
+      `expected the Nf6 door to route straight to the Queen's Pawn Palace room, got target=${fwd[0].target} (expected ${keys.target})`);
+    ok('VR: a redirected room is never built locally -- its door routes straight to the target castle\'s own room');
+  } catch(e){ bad('VR: redirected room routes its door to the target castle', e); }
+
+  // 302. The target room itself is the REAL room from Queen's Pawn Palace's
+  //      own tree (walkable, with its own further door), not a broken stub --
+  //      proving the redirect points at a genuine, independently-built room.
+  try {
+    await appDF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.target);
+    const landed = await appDF.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.target, `expected to actually land in the target room, got ${landed}`);
+    const targetExits = await appDF.page.evaluate(() => window.__threeTestEdit.exits());
+    assert(targetExits.length === 1, `expected the target room's own single door (its Bg4 continuation), got ${targetExits.length}`);
+    ok('VR: the redirect target is a real, independently-built room with its own continuation');
+  } catch(e){ bad('VR: redirect target room is real and walkable', e); }
+} finally {
+  await appDF.close();
+}
+} catch(e){ bad('Phase DF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-329';
+const BUILD_TAG = '-330';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1504,6 +1504,19 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
       return;
     }
     const destSeq = [...exitSeq,reply];
+    // a room the user has manually flagged "redirect to castle X" (Attributes
+    // modal, see refreshRedirectField) is a DELIBERATE, user-declared
+    // transposition -- same treatment as the automatic foreign-root case just
+    // below (stop here, point at the target's own room instead of building a
+    // duplicate), except the target can live in any line, not just this one,
+    // so its instance id is built from the stored redirectTargetLineId rather
+    // than always this castle's own line.id.
+    if(exitPref.redirectToCastle){
+      const targetLineId = exitPref.redirectTargetLineId || line.id;
+      const foreignKey = castleRoomKey(castleInstanceId(targetLineId, exitPref.redirectToCastle), positionKey(fenForSeq(destSeq)));
+      addEdge(fromRoomId, null, exitSeq, destSeq, { foreignCastle: exitPref.redirectToCastle, foreignKey, count, tot });
+      return;
+    }
     // a reply that starts ANOTHER castle's own root shouldn't be walked
     // inline into THIS castle's tree (that would rebuild it a second time
     // under this castle's own instance namespace, orphaning any objects/
@@ -3561,9 +3574,13 @@ async function refreshRedirectField(saved, roomSeq){
   attrRedirectCandidates = [];
   const myGen = ++attrRedirectGen;
   // only a real, already-built room (an actual reply recorded) belonging to
-  // some castle can be redirected -- nothing to transpose otherwise.
+  // some castle can be redirected -- nothing to transpose otherwise. A
+  // castle ROOT is excluded too: it's the entry point of its own building on
+  // the street (buildCastleGraph enters it directly, never via processExit),
+  // so redirecting it wouldn't stop that castle from being built -- only an
+  // interior room's incoming door can meaningfully be rerouted.
   const ownCastleName = inheritedCastle(roomSeq, CURRENT_LINE?.id);
-  if(!saved?.reply || !ownCastleName){
+  if(!saved?.reply || !ownCastleName || saved?.isCastleRoot){
     field.style.display = 'none';
     return;
   }
@@ -5954,7 +5971,8 @@ async function buildBackupData(){
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
         collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
-        castleStreetNumber:p.castleStreetNumber
+        castleStreetNumber:p.castleStreetNumber,
+        redirectToCastle:p.redirectToCastle, redirectTargetLineId:p.redirectTargetLineId, redirectTargetSeq:p.redirectTargetSeq
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -6053,7 +6071,9 @@ async function applyBackupData(data, onMnemProgress){
         eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
         moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
-        castleStreetNumber:pref.castleStreetNumber??''
+        castleStreetNumber:pref.castleStreetNumber??'',
+        redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
+        redirectTargetSeq:pref.redirectTargetSeq||null
       });
     }
   }
@@ -8833,7 +8853,10 @@ function refreshBranchName(nameSpan, saved){
   // suppressed, so it can't be hidden away behind the "nothing to show" path
   // an unnamed, non-redirected row otherwise takes.
   const redirected = !!saved?.redirectToCastle;
-  if(!text && !redirected){ nameSpan.style.display='none'; return; }
+  // clear stale content along with hiding -- otherwise a previous render's
+  // name/icon lingers invisibly in the DOM (display:none, but still there
+  // for anything that queries it directly rather than checking visibility).
+  if(!text && !redirected){ nameSpan.style.display='none'; nameSpan.innerHTML=''; return; }
   const icon = redirected ? '<i class="fa-solid fa-right-left branchName-redirect-icon"></i>' : '';
   nameSpan.innerHTML = icon + escapeHtml(text);
   nameSpan.style.display='';
