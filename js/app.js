@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-333';
+const BUILD_TAG = '-334';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7063,7 +7063,15 @@ async function gatherBuiltCastles(lines){
    instances, so the user can gauge how common this is before any
    merge/redirect feature gets designed. Scoped to room ANCHORS (gr.posKey)
    -- a multi-move corridor's own interior positions aren't checked
-   separately, only the position each generated room is keyed/entered by. */
+   separately, only the position each generated room is keyed/entered by.
+   A pair the user HAS since redirected (Attributes > "Redirect to castle")
+   drops out of this report on its own, with no special-casing needed here:
+   buildCastleGraph's processExit stops at a redirected room before ever
+   building it locally (see the redirect check ahead of the automatic
+   foreign-root one), so that position simply never gets a genRoom entry on
+   the source side any more -- only the target's own entry is left, which
+   is exactly 1 distinct castle instance, below this function's own "2+"
+   threshold. So the count here naturally reflects what's still unhandled. */
 async function findTransposedRooms(lines){
   const built = await gatherBuiltCastles(lines);
   const byPosKey = new Map();   // posKey -> [{ lineId, lineName, castleName, instanceId, room }]

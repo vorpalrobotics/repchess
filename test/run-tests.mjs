@@ -17449,5 +17449,83 @@ try {
 } catch(e){ bad('Phase DI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DJ: Phase 6 of the transposition fix -- "Find Transpositions"
+//     naturally stops re-flagging a pair once it's been redirected, with no
+//     special-casing added to the detector itself: the redirected room never
+//     gets a genRoom entry on the source side any more (Phase 2), so that
+//     position only has ONE distinct castle instance left, below the
+//     detector's own "2+ castles" threshold. This phase is pure
+//     verification -- confirming that emergent behavior, and that an
+//     UNRELATED, still-unredirected collision stays fully visible
+//     alongside it, so the report doesn't go quiet altogether. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appDJ = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): redirected -- must NOT be reported.
+  // Queen's Pawn's own interior room is backed by its OWN native game (g3),
+  // independent of Phase 5's games-synthesis, so it genuinely exists as a
+  // real genRoom -- proving the pair drops out because the SOURCE side is
+  // gone, not because the target side happens to be unbuilt too.
+  // pair 2 (Italian/Reversed Italian): NOT redirected -- must still show up.
+  await seedBackup(appDJ.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'Nf3 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 310. The redirected pair is gone from the report; the unrelated,
+  //      still-unredirected pair is still fully reported.
+  try {
+    await appDJ.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDJ.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDJ.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length > 0,
+      { timeout: 5000 },
+    );
+    const info = await appDJ.page.evaluate(() => ({
+      groupCount: document.querySelectorAll('#transpBody .transp-group').length,
+      entryCount: document.querySelectorAll('#transpBody .transp-entry').length,
+      body: document.getElementById('transpBody').textContent,
+      summary: document.getElementById('transpSummary').textContent,
+    }));
+    assert(info.groupCount === 1, `expected exactly 1 collision group (the redirected pair should be gone), got ${info.groupCount}`);
+    assert(info.entryCount === 2, `expected exactly 2 entries in that group, got ${info.entryCount}`);
+    assert(/\b1\b/.test(info.summary), `expected the summary to report 1 position, got "${info.summary}"`);
+    assert(info.body.includes('Italian Castle') && info.body.includes('Reversed Italian'),
+      `expected the still-unredirected pair reported, got ${JSON.stringify(info.body)}`);
+    assert(!info.body.includes('Chigorin Castle') && !info.body.includes('Queens Pawn Palace'),
+      `expected the redirected pair completely absent from the report, got ${JSON.stringify(info.body)}`);
+    ok('Find Transpositions: a redirected pair drops out on its own; an unrelated unredirected pair stays fully visible');
+  } catch(e){ bad('Find Transpositions: redirected pairs stop being reported', e); }
+} finally {
+  await appDJ.close();
+}
+} catch(e){ bad('Phase DJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
