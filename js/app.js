@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-332';
+const BUILD_TAG = '-333';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6892,6 +6892,65 @@ function invalidateBuiltCastlesCache(){
   setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
 }
+/* ---------- redirect-aware castle building: transposed GAME continuations ----------
+   Phases 3/4 translate PREFS (a set standard response, a manually-recorded
+   opponent try) across a redirect -- but a real imported game never writes a
+   pref at all: replies()/buildCastleGraph's own "how often has each
+   opponent move actually been played" reads GAMES directly, via a literal
+   move-string trie (gamesTrieRoot) that has no idea two different move
+   orders can reach the same position. So a game that transposes into a
+   redirected room and keeps going stays correctly invisible on the SOURCE
+   side (processExit stops there, same as every other redirected room) but
+   was ALSO invisible at the TARGET, since the game's own recorded moves
+   follow the source castle's order, not the target's -- a literal prefix
+   search at the target's own position simply never finds it.
+   Fixed by synthesizing, purely in memory and only for the duration of one
+   gatherBuiltCastles build (never written to the real games store, never
+   surfaced in Browse/Compare Games, which read GAMES directly and are
+   untouched by this), a re-ordered copy of any such game: same tail of
+   moves, re-based onto the target's own move order exactly like Port/import
+   already do for prefs. Once spliced into the target castle's own games
+   array, replies()'s ordinary literal trie finds it (and counts it toward
+   occurrence stats) at the target's own position, same as any other game
+   that was actually played in that order. */
+
+/* every game in `sourceGames` whose own recorded move list literally passes
+   through `roomFullSeq` (a redirected room's exact position, in its own
+   castle's move order), re-based onto `targetSeq`. Case-insensitive move
+   comparison, matching buildGamesTrie's own lookup (real game data isn't
+   guaranteed consistent SAN casing). */
+function synthesizeRedirectedGames(sourceGames, roomFullSeq, targetSeq){
+  const roomFullSeqLower = roomFullSeq.map(m => m.toLowerCase());
+  const out = [];
+  for(const g of sourceGames){
+    const moves = (g.moves || '').split(' ').filter(Boolean);
+    if(moves.length <= roomFullSeq.length) continue;
+    if(!roomFullSeqLower.every((m,i) => moves[i]?.toLowerCase() === m)) continue;
+    out.push({ ...g, id: `${g.id||''}:redirect:${targetSeq.join(',')}`,
+               moves: [...targetSeq, ...moves.slice(roomFullSeq.length)].join(' ') });
+  }
+  return out;
+}
+
+/* every OTHER line's own redirect declarations that point INTO `lines`,
+   grouped by target line id -- a pure read (getAllPrefs per line), entirely
+   independent of the withLinePrefs swap gatherBuiltCastles's own per-line
+   build uses below, so it's safe to gather up front for every line at once. */
+async function gatherRedirectsIntoLines(lines){
+  const allPrefs = await Promise.all(lines.map(l => getAllPrefs(l.id)));
+  const redirectsIntoLine = new Map();   // targetLineId -> [{ sourceLine, roomFullSeq, targetSeq }]
+  lines.forEach((sourceLine, i) => {
+    for(const key in allPrefs[i]){
+      const p = allPrefs[i][key];
+      if(!p?.redirectToCastle || !p.reply || !p.redirectTargetSeq || !p.redirectTargetLineId) continue;
+      const arr = redirectsIntoLine.get(p.redirectTargetLineId) || [];
+      arr.push({ sourceLine, roomFullSeq: [...p.seq, p.reply], targetSeq: p.redirectTargetSeq });
+      redirectsIntoLine.set(p.redirectTargetLineId, arr);
+    }
+  });
+  return redirectsIntoLine;
+}
+
 async function gatherBuiltCastles(lines){
   if(_builtCastlesCache){
     console.log('[VR] gatherBuiltCastles: cache hit (memory), 0ms');
@@ -6930,6 +6989,10 @@ async function gatherBuiltCastles(lines){
   // hit above already returned without reaching here, so this only runs on an
   // actual rebuild, exactly when a fresh read matters.
   await loadMemorizedShapes();
+  // every line's own outgoing redirects, indexed by which OTHER line they
+  // target -- gathered once, up front (see its own doc comment for why this
+  // is safe to do before/alongside the prefs-swap pass just below).
+  const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
   // one prefs swap per line, done concurrently rather than one-line-at-a-time:
   // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
   // so the "swap in this line's PREFS, run fn, restore" sequence for each line
@@ -6937,7 +7000,18 @@ async function gatherBuiltCastles(lines){
   // line's continuation can interleave in between, so running every line's
   // getAllPrefs() IDB read in parallel instead of serially is safe.
   const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
-    const lineGames = gamesForLineColor(GAMES, line.color);
+    let lineGames = gamesForLineColor(GAMES, line.color);
+    // splice in a synthetic, re-ordered copy of any OTHER line's game that
+    // transposes into one of THIS line's own rooms via a redirect (see
+    // synthesizeRedirectedGames's own doc comment) -- so a transposed
+    // continuation recorded only under the other castle's move order still
+    // surfaces (and counts toward occurrence stats) here too.
+    const incoming = redirectsIntoLine.get(line.id);
+    if(incoming?.length){
+      const synthetic = incoming.flatMap(r =>
+        synthesizeRedirectedGames(gamesForLineColor(GAMES, r.sourceLine.color), r.roomFullSeq, r.targetSeq));
+      if(synthetic.length) lineGames = [...lineGames, ...synthetic];
+    }
     return definedCastles().map(name => {
       const rootSeq = castleRootRoomSeq(name);
       if(!rootSeq) return null;   // named but not built yet — skip
@@ -10787,6 +10861,15 @@ if(localStorage.getItem('threeTestDebug')){
 if(localStorage.getItem('threeTestDebug')){
   window.__redirectTestHooks = {
     getAllPrefs: (lineId) => getAllPrefs(lineId),
+    // forces a fresh (non-cached) gatherBuiltCastles build across every line,
+    // for asserting directly on genRooms/exits -- the layer
+    // synthesizeRedirectedGames/gatherRedirectsIntoLines feed into, without
+    // needing to navigate the full VR room-registration pipeline just to
+    // check an occurrence stat or an exit's presence.
+    gatherBuiltCastles: async () => {
+      invalidateBuiltCastlesCache();
+      return gatherBuiltCastles(await getLines(LOCAL_USER));
+    },
   };
 }
 

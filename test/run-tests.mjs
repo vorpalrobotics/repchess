@@ -17142,7 +17142,11 @@ try {
       ]},
     ],
     games: [
-      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      // g1 stops exactly at the redirected room (no tail past it) so this
+      // phase stays scoped to Phase 2's own concern (VR routing) -- a game
+      // continuing further would ALSO exercise Phase 5's games-augmentation
+      // (see Phase DI), adding an extra door here that isn't this phase's.
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3 Bg4 e3', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
     ],
@@ -17361,6 +17365,88 @@ try {
   await appDH.close();
 }
 } catch(e){ bad('Phase DH: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DI: Phase 5 of the transposition fix -- a real GAME (unlike a
+//     pasted variation, Phase 4) never writes a pref at all; replies()/
+//     buildCastleGraph read games live via a literal move-string trie, so a
+//     game transposing into a redirected room and continuing further stayed
+//     invisible at the TARGET too (its own recorded moves follow the SOURCE
+//     castle's move order, not the target's -- a literal prefix search at
+//     the target's own position never finds it). gatherBuiltCastles now
+//     splices in a synthetic, re-ordered copy of any such game (in memory,
+//     for that one build only -- never written to the real games store, so
+//     Browse/Compare Games are untouched) before building the target's own
+//     castle, so its own literal trie finds the transposed continuation and
+//     counts it toward occurrence stats, same as a game actually played in
+//     that order would. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appDI = await launchApp();
+try {
+  // same transposing pair as Phase DE/DF/DG/DH, redirect pre-set. The one
+  // game reaching the redirected room continues past it with 'e6' -- a
+  // brand new opponent try with NO pref anywhere (not even manualReplies),
+  // the case only a real, unwritten game can produce.
+  await seedBackup(appDI.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6', white: 'a', black: 'b', result: '*' },
+      // backs the second-branch pref above -- a pref alone (no game/manualReply)
+      // never shows as a visible opponent try (see buildCastleGraph's own
+      // walk(), which enumerates strictly from replies()/manualReplies), so
+      // without this the root+interior room would ALSO collapse into one
+      // corridor here, same mistake Phase DE's fixture made and fixed.
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 308. The target room's own genRoom gains an exit for the transposed
+  //      game's continuation, with an occurrence stat reflecting it.
+  try {
+    const built = await appDI.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const targetCastle = built.find(c => c.castleName === 'Queens Pawn Palace');
+    assert(targetCastle, `expected to find the Queens Pawn Palace castle, got ${JSON.stringify(built.map(c=>c.castleName))}`);
+    const targetSeq = ['d4','Nf6','Nc3','d5','Nf3'];
+    const targetRoom = targetCastle.genRooms.find(gr => gr.seq.join(',') === targetSeq.join(','));
+    assert(targetRoom, `expected to find the target room at ${targetSeq.join(',')}, got rooms ${JSON.stringify(targetCastle.genRooms.map(gr=>gr.seq))}`);
+    const e6Exit = targetRoom.exits.find(ex => ex.opp === 'e6');
+    assert(e6Exit, `expected an exit for the transposed game's own continuation (e6), got ${JSON.stringify(targetRoom.exits)}`);
+    assert(e6Exit.occurrence === '1 (100%)', `expected the synthetic game to count toward occurrence, got "${e6Exit.occurrence}"`);
+    ok('gatherBuiltCastles: a game transposing into a redirected room surfaces its continuation at the target castle');
+  } catch(e){ bad('gatherBuiltCastles: transposed game continuation reaches the target', e); }
+
+  // 309. The source castle's own build is unaffected -- the redirected room
+  //      still doesn't exist as a local room at all (Phase 2), and nothing
+  //      about the synthetic-games machinery leaks a spurious room/exit into
+  //      the source's own genRooms.
+  try {
+    const built = await appDI.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const sourceCastle = built.find(c => c.castleName === 'Chigorin Castle');
+    const redirectedPosKey = await appDI.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['Nc3','d5','d4','Nf6','Nf3']) c.move(m,{sloppy:true});
+      return window.__positionKey(c.fen());
+    });
+    const leaked = sourceCastle.genRooms.find(gr => gr.posKey === redirectedPosKey);
+    assert(!leaked, `expected no local room at the redirected position in the source castle, got ${JSON.stringify(leaked)}`);
+    ok('gatherBuiltCastles: the source castle is unaffected by the target-side games augmentation');
+  } catch(e){ bad('gatherBuiltCastles: source castle stays clean', e); }
+} finally {
+  await appDI.close();
+}
+} catch(e){ bad('Phase DI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
