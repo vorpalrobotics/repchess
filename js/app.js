@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-330';
+const BUILD_TAG = '-331';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3613,6 +3613,94 @@ async function refreshRedirectField(saved, roomSeq){
     ? 'Doors that would open into this room instead route to the target castle\'s own room there.'
     : (saved.redirectToCastle ? '' : 'No other castle currently shares this exact position.');
 }
+
+/* true if `seq` is `prefix` itself or a genuine continuation of it -- element-
+   wise, not a naive joined-string prefix (SAN moves never contain commas, but
+   this is the same safe comparison seqEq/noCompactUntil's own prefix check use
+   elsewhere in this file, rather than relying on that). */
+function seqStartsWith(seq, prefix){
+  return !!seq && seq.length >= prefix.length && prefix.every((m,i)=>seq[i]===m);
+}
+
+/* ---------- redirect: port responses to the target castle ----------
+   A redirected room's own subtree (in ITS OWN line) is frozen the moment
+   the redirect is set: buildCastleGraph's processExit routes VR doors past
+   it entirely (see the redirect check ahead of the automatic foreign-root
+   one), and "Add Opponent Move" is hidden on it (refreshRowMenuLabels) --
+   but whatever was ALREADY recorded there before the redirect (or added to
+   the source since, by an import that hasn't yet learned to redirect itself
+   -- later phases) doesn't automatically show up at the target. This walks
+   every pref below the redirected room, re-bases each one's seq onto the
+   target's own move order (swap the redirected room's own full seq for the
+   target's own, keep the tail of moves after it exactly as recorded -- the
+   underlying position plays out identically from there regardless of which
+   castle's address it's filed under), and writes it into the TARGET line.
+   A merge, not an overwrite: a translated position the target already has
+   its own reply for is left untouched, so this is safe to re-run (e.g.
+   after adding more manual tries to the source branch) -- only ever fills
+   in what's still missing. Returns how many prefs were newly written. */
+async function portRedirectedResponses(roomSeq, saved){
+  const reply = saved?.reply;
+  const targetRoomSeq = saved?.redirectTargetSeq;
+  const targetLineId = saved?.redirectTargetLineId;
+  if(!reply || !targetRoomSeq || !targetLineId) return 0;
+  const sourceRoomSeq = [...roomSeq, reply];   // the redirected room's own full seq (ends in OUR reply)
+
+  const [sourcePrefs, targetPrefs] = await Promise.all([
+    getAllPrefs(CURRENT_LINE.id), getAllPrefs(targetLineId),
+  ]);
+  const entries = [];   // {seq, patch}, fed straight to setPrefsBatch
+
+  const addPort = (translatedSeq, srcPref) => {
+    const existing = targetPrefs[prefKey(targetLineId, translatedSeq)];
+    if(existing?.reply) return;   // already answered at the target -- leave it alone
+    const existingManual = existing?.manualReplies || [];
+    const manualReplies = [...new Set([...existingManual, ...(srcPref.manualReplies||[])])];
+    // a manual-try-only entry (no reply of its own, see the room-level port
+    // just below) has nothing to gate a re-run on except its manualReplies
+    // set actually growing -- without this check, re-running Port would
+    // "port" the same already-merged set every time and never settle into a
+    // true no-op.
+    const gainsReply = !!srcPref.reply && !existing?.reply;
+    const gainsManual = manualReplies.length !== existingManual.length;
+    if(!gainsReply && !gainsManual) return;
+    entries.push({ seq: translatedSeq, patch: {
+      reply: srcPref.reply || existing?.reply || '', note: srcPref.note || existing?.note || '',
+      mnemonic: srcPref.mnemonic || existing?.mnemonic || '',
+      manualReplies, moveQuality: srcPref.moveQuality || existing?.moveQuality || '',
+      hidden: existing?.hidden ?? srcPref.hidden ?? false,
+    }});
+  };
+
+  // the room's own manually-recorded (not-yet-answered) opponent tries --
+  // ported onto the target room's own manualReplies so it at least knows
+  // they exist, even before anyone picks a response for them there.
+  const srcRoomPref = sourcePrefs[prefKey(CURRENT_LINE.id, sourceRoomSeq)];
+  if(srcRoomPref?.manualReplies?.length) addPort(targetRoomSeq, srcRoomPref);
+
+  // every descendant pref (a real response, strictly below the redirected
+  // room) the target doesn't already have its own answer for.
+  for(const key in sourcePrefs){
+    const p = sourcePrefs[key];
+    if(!p?.reply || !seqStartsWith(p.seq, sourceRoomSeq) || p.seq.length <= sourceRoomSeq.length) continue;
+    const translatedSeq = [...targetRoomSeq, ...p.seq.slice(sourceRoomSeq.length)];
+    addPort(translatedSeq, p);
+  }
+
+  if(entries.length){
+    await setPrefsBatch(targetLineId, entries);
+    invalidateBuiltCastlesCache();
+    // the target IS the currently-open line (a redirect within one line,
+    // just a different castle) -- the in-memory PREFS this whole screen
+    // reads from needs the same refresh a real reload would give it.
+    if(targetLineId === CURRENT_LINE.id){
+      PREFS = await getAllPrefs(CURRENT_LINE.id);
+      renderTreeBody(CURRENT_LINE);
+    }
+  }
+  return entries.length;
+}
+
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
 $('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
 $('attributesCancelBtn').onclick = () => {
@@ -4432,6 +4520,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+             <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
            </div>
          </div>
        </td>
@@ -4777,6 +4866,16 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       rowMenu.classList.remove('show');
       openRoomAttributes();
     };
+    rowMenu.querySelector('[data-act="portRedirect"]').onclick = async e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      const roomSeq = canonicalRoomSeq(lineSeq);
+      const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+      if(!saved?.redirectToCastle) return;
+      const n = await portRedirectedResponses(roomSeq, saved);
+      log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
+            : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
+    };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
       removeManualBtn.style.display='';
@@ -4885,6 +4984,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+           <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
          </div>
        </div>
      </td>
@@ -5168,6 +5268,16 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openRoomAttributes();
+  };
+  rowMenu.querySelector('[data-act="portRedirect"]').onclick = async e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    const roomSeq = canonicalRoomSeq(lineSeq);
+    const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+    if(!saved?.redirectToCastle) return;
+    const n = await portRedirectedResponses(roomSeq, saved);
+    log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
+          : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
   };
 
   btnEval.onclick = () => {
@@ -8888,6 +8998,9 @@ function refreshRowMenuLabels(rowMenu, saved){
   // opponent try here would just create invisible, orphaned data.
   const addMoveBtn = rowMenu.querySelector('[data-act="addMove"]');
   if(addMoveBtn) addMoveBtn.style.display = saved?.redirectToCastle ? 'none' : '';
+  // the reverse: porting only makes sense once there's somewhere to port TO.
+  const portBtn = rowMenu.querySelector('[data-act="portRedirect"]');
+  if(portBtn) portBtn.style.display = saved?.redirectToCastle ? '' : 'none';
 }
 
 /* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
@@ -10561,6 +10674,17 @@ if(localStorage.getItem('threeTestDebug')){
   window.__linesTestHooks = {
     updateLine: (id, patch) => updateLine(id, patch),
     getLines: () => getLines(LOCAL_USER),
+  };
+}
+
+// test-only hook for reading a SPECIFIC line's own persisted prefs directly --
+// the in-memory PREFS global only ever mirrors whichever one line is
+// currently open, so a redirect-porting test (which writes into the TARGET
+// line, not necessarily the one open in the UI) has no other way to verify
+// what actually landed in IndexedDB.
+if(localStorage.getItem('threeTestDebug')){
+  window.__redirectTestHooks = {
+    getAllPrefs: (lineId) => getAllPrefs(lineId),
   };
 }
 

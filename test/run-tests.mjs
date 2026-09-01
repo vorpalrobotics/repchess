@@ -17185,5 +17185,99 @@ try {
 } catch(e){ bad('Phase DF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DG: Phase 3 of the transposition fix -- "Port Responses to
+//     Target", the row-menu action that copies a redirected room's own
+//     (now-frozen) subtree into the target castle's own move order. A
+//     merge, not an overwrite: a translated position the target already has
+//     its own reply for is left untouched. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDG = await launchApp();
+try {
+  // same transposing shape as Phase DE/DF; the redirect is pre-set (via
+  // seedBackup, same as DF) with three things hanging off the redirected
+  // room that porting needs to handle differently:
+  //  - a manually-recorded, not-yet-answered opponent try (c6) -- ports
+  //    onto the target room's own manualReplies.
+  //  - a real answered descendant (g6 -> Bg2) the target has nothing for
+  //    yet -- ports as a brand new pref.
+  //  - a real answered descendant (e6 -> e3) the target ALREADY has its
+  //    own different answer for (e6 -> e4) -- must be skipped, not
+  //    overwritten.
+  await seedBackup(appDG.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3'], manualReplies: ['c6'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','g6'], reply: 'Bg2' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        // second branch off the root -- same corridor-merge-avoidance reason
+        // as Phase DE/DF's identical fixture (not load-bearing for porting
+        // itself, just needed so redirectTargetSeq points at a real anchor).
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','e6'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDG.page.click('.line-row');
+  await appDG.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 303. Porting copies the unanswered manual try and the new answered
+  //      descendant, but leaves the target's own conflicting answer alone.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    const portVisible = await appDG.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').style.display !== 'none');
+    assert(portVisible, 'expected "Port Responses to Target" visible on an already-redirected room');
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').click());
+    await appDG.page.waitForFunction(() => /ported 2 response/i.test(document.getElementById('progress').textContent), { timeout: 5000 });
+
+    const targetPrefs = await appDG.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const roomPref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3'];
+    const g6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,g6'];
+    const e6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(roomPref?.manualReplies?.includes('c6'), `expected the unanswered manual try (c6) ported onto the target room, got ${JSON.stringify(roomPref)}`);
+    assert(g6Pref?.reply === 'Bg2', `expected the new descendant (g6 -> Bg2) ported, got ${JSON.stringify(g6Pref)}`);
+    assert(e6Pref?.reply === 'e4', `expected the target's own pre-existing answer (e6 -> e4) left untouched, got ${JSON.stringify(e6Pref)}`);
+    ok('Port Responses to Target: copies missing manual tries and answers, leaves existing target answers untouched');
+  } catch(e){ bad('Port Responses to Target: merges the redirected subtree into the target castle', e); }
+
+  // 304. Re-running Port is a safe no-op once everything's already there --
+  //      no duplicate writes, no accidental overwrite on a second pass.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').click());
+    await appDG.page.waitForFunction(() => /nothing new to port/i.test(document.getElementById('progress').textContent), { timeout: 5000 });
+
+    const targetPrefs = await appDG.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const e6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(e6Pref?.reply === 'e4', `expected the target's own answer still untouched after a second port, got ${JSON.stringify(e6Pref)}`);
+    ok('Port Responses to Target: re-running once everything is already ported is a safe no-op');
+  } catch(e){ bad('Port Responses to Target: idempotent re-run', e); }
+
+  // 305. A room that's NOT redirected never shows the Port action at all.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] .rowMenuBtn').click());
+    const portVisible = await appDG.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5"] [data-act="portRedirect"]').style.display !== 'none');
+    assert(!portVisible, 'expected "Port Responses to Target" hidden on a non-redirected room (the castle root)');
+    ok('Port Responses to Target: hidden on a room that has no redirect set');
+  } catch(e){ bad('Port Responses to Target: hidden without a redirect', e); }
+} finally {
+  await appDG.close();
+}
+} catch(e){ bad('Phase DG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
