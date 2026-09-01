@@ -9925,6 +9925,17 @@ try {
     ok('elevator panel: ELEV_ROW_M scales the whole physical panel 25% bigger (both dimensions)');
   } catch(e){ bad('elevator panel: 25% bigger size', e); }
 
+  // 306b. The panel is mounted at y=1.75 (raised 0.25m from the original 1.5)
+  //      -- reported live: once the panel grew 25% taller, its bottom edge
+  //      started touching the floor at the old mount height.
+  try {
+    const size = await appBQ2.page.evaluate(() => window.__threeTestEdit.elevatorPanelSize());
+    assert(Math.abs(size.y - 1.75) < 0.001, `expected the panel mounted at y=1.75, got ${size.y}`);
+    const bottomEdge = size.y - size.h / 2;
+    assert(bottomEdge > 0, `expected the panel's bottom edge clear of the floor (y>0), got ${bottomEdge}`);
+    ok('elevator panel: mounted at y=1.75, clear of the floor');
+  } catch(e){ bad('elevator panel: mount height clears the floor', e); }
+
   // 308. Each floor row carries its own occurrence stat ("N (M%)": how often
   //      this exact floor has actually been taken in the user's own games,
   //      out of the car's own total recorded continuations) -- an elevator

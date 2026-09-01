@@ -4467,7 +4467,7 @@ function buildOneElevatorPanel(size, wall, doorOffset, floors, roomKey, side){
   mesh.userData = { kind: 'elevator-panel', roomKey, floors };
   const clearance = WALL_THICK/2 + 0.02;
   const along = doorOffset + side * (DOOR_W/2 + margin + panelW/2);
-  const y = 1.5;
+  const y = 1.75;   // raised 0.25m from the original 1.5 -- the panel grew 25% taller (ELEV_ROW_M) and its bottom edge started touching the floor
   if(wall === 'north'){ mesh.position.set(along, y, fixed + clearance); mesh.rotation.y = 0; }
   if(wall === 'south'){ mesh.position.set(along, y, fixed - clearance); mesh.rotation.y = Math.PI; }
   if(wall === 'west'){  mesh.position.set(fixed + clearance, y, along); mesh.rotation.y = Math.PI/2; }
@@ -8917,12 +8917,13 @@ export async function openThreeTest(containerEl, opts){
         back: elevatorMeta.filter(m => m.kind === 'back').map(m => m.target),
       }),
       // the built panel mesh's own real-world width/height (PlaneGeometry
-      // params) -- for testing that ELEV_ROW_M actually scales the physical
-      // panel (images included), not just the canvas pixel layout.
+      // params) and mount height -- for testing that ELEV_ROW_M actually
+      // scales the physical panel (images included), not just the canvas
+      // pixel layout, and that it's mounted clear of the floor.
       elevatorPanelSize: () => {
         let found = null;
         scene.traverse(o => { if(!found && o.userData && o.userData.kind === 'elevator-panel') found = o; });
-        return found ? { w: found.geometry.parameters.width, h: found.geometry.parameters.height } : null;
+        return found ? { w: found.geometry.parameters.width, h: found.geometry.parameters.height, y: found.position.y } : null;
       },
       // click-to-select-floor UX: the currently-selected floor's ordinal for
       // the CURRENT room's car (null if nothing picked, or the pick is stale
