@@ -17871,5 +17871,55 @@ try {
 } catch(e){ bad('Phase DM: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DN: "new transpositions appearing" -- Phase 1 of that plan, the
+//     toast widget itself (show/hide, Show button, dismiss icon). Nothing
+//     drives it automatically yet -- that's later phases (a debounced scan
+//     on invalidateBuiltCastlesCache, diffed against a "seen" signature set).
+//     Exercised directly via __redirectTestHooks since there's no detector
+//     wired in to trigger it through real edits at this point. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDN = await launchApp();
+try {
+  // 318. Showing the toast displays the right (pluralized) count, and Show
+  //      opens the real Find Transpositions report while dismissing itself.
+  try {
+    await appDN.page.evaluate(() => window.__redirectTestHooks.showNewTranspositionsToast(3));
+    const text = await appDN.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(text === '3 new transpositions found', `expected pluralized count text, got "${text}"`);
+    assert(await appDN.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible()),
+      'expected the toast visible after showNewTranspositionsToast');
+
+    await appDN.page.click('#newTranspToastShowBtn');
+    await appDN.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    assert(!(await appDN.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible())),
+      'expected Show to dismiss the toast, not just open the report');
+    ok('New-transpositions toast: shows a pluralized count, and Show opens the report and dismisses itself');
+  } catch(e){ bad('New-transpositions toast: Show button', e); }
+
+  // 319. The singular form reads "1 new transposition found" (not "1
+  //      transpositions"), and the circle-x dismiss icon hides the toast
+  //      WITHOUT opening the report.
+  try {
+    await appDN.page.click('#transpCloseBtn');
+    await appDN.page.evaluate(() => window.__redirectTestHooks.showNewTranspositionsToast(1));
+    const text = await appDN.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(text === '1 new transposition found', `expected singular count text, got "${text}"`);
+
+    await appDN.page.click('#newTranspToastDismissBtn');
+    const [toastVisible, reportVisible] = await appDN.page.evaluate(() => [
+      window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      document.getElementById('transpOverlay').style.display === 'flex',
+    ]);
+    assert(!toastVisible, 'expected the dismiss icon to hide the toast');
+    assert(!reportVisible, 'expected dismiss to NOT open the Find Transpositions report');
+    ok('New-transpositions toast: singular count text, and dismiss hides it without opening the report');
+  } catch(e){ bad('New-transpositions toast: dismiss icon', e); }
+} finally {
+  await appDN.close();
+}
+} catch(e){ bad('Phase DN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

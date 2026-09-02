@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-338';
+const BUILD_TAG = '-339';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7239,12 +7239,42 @@ async function refreshTranspositionsReport(){
   renderTranspositionsReport(groups);
 }
 
-$('menuFindTranspositions').onclick = async ()=>{
+// shared by the hamburger menu item and the new-transposition toast's own
+// "Show" button (Phase 1) so both open the exact same report the exact same
+// way.
+async function openTranspositionsReport(){
   $('menuList').style.display='none';
   $('transpOverlay').style.display='flex';
   await refreshTranspositionsReport();
-};
+}
+$('menuFindTranspositions').onclick = openTranspositionsReport;
 $('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
+
+/* ---------- new-transposition toast ----------
+   Phase 1 of "new transpositions appearing" (see the phasing plan): the
+   toast widget itself -- showing/hiding it and wiring Show/dismiss. Nothing
+   calls showNewTranspositionsToast yet; the detector hookup (a debounced
+   scan on invalidateBuiltCastlesCache, diffed against a "seen" signature
+   set so an already-known collision doesn't re-nag) is later phases.
+   Deliberately persistent, not an auto-dismissing snackbar -- a newly
+   created transposition doesn't go away on its own the way a one-off status
+   message does, so it stays up until the user acts on it or dismisses it.
+   Doesn't survive a reload (in-memory only), which is an accepted tradeoff
+   for now. */
+function showNewTranspositionsToast(count){
+  $('newTranspToastText').textContent = `${count} new transposition${count===1?'':'s'} found`;
+  $('newTranspToast').style.display = 'flex';
+}
+function hideNewTranspositionsToast(){
+  $('newTranspToast').style.display = 'none';
+}
+$('newTranspToastShowBtn').onclick = async () => {
+  // dismiss first -- Show is the "I'm dealing with it now" action, so the
+  // toast shouldn't still be sitting there once the report itself is open.
+  hideNewTranspositionsToast();
+  await openTranspositionsReport();
+};
+$('newTranspToastDismissBtn').onclick = hideNewTranspositionsToast;
 
 // Builds and opens the full main VR world (every built castle, one street per
 // opening system). Extracted from menuThreeTest's handler (mirrors this
@@ -10993,6 +11023,12 @@ if(localStorage.getItem('threeTestDebug')){
       invalidateBuiltCastlesCache();
       return gatherBuiltCastles(await getLines(LOCAL_USER));
     },
+    // new-transposition toast (Phase 1): exercised directly since nothing
+    // drives it automatically yet -- later phases wire real detection in.
+    showNewTranspositionsToast: (count) => showNewTranspositionsToast(count),
+    hideNewTranspositionsToast: () => hideNewTranspositionsToast(),
+    isNewTranspositionsToastVisible: () => $('newTranspToast').style.display !== 'none',
+    newTranspositionsToastText: () => $('newTranspToastText').textContent,
   };
 }
 
