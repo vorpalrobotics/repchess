@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-343';
+const BUILD_TAG = '-344';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6051,16 +6051,21 @@ migrateLegacyUserData(LOCAL_USER)
   .then(() => maybeRecoverFromInterruptedRestore())
   .then(() => {
     renderHome();
-    runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
-    // silently seed the new-transposition toast's "seen" set from whatever
-    // collisions already exist at boot -- pre-existing ones aren't "new",
-    // only ones that appear FROM HERE ON should ever raise the toast. See
-    // primeTranspositionBaseline's own doc comment. Skipped under the test
-    // harness, same reasoning as invalidateBuiltCastlesCache's own guard --
-    // an unprompted gatherBuiltCastles build at every boot would throw off
-    // the VR cache tests' "clean slate" build-count assertions; Phase DO's
-    // own tests prime explicitly via forceNewTranspositionsScan instead.
-    if(!localStorage.getItem('threeTestDebug')) primeTranspositionBaseline();
+    // The transposition reminder runs AFTER auto-import settles, not
+    // racing it (.finally, not a bare call) -- auto-import's own writes can
+    // themselves introduce a transposition (a freshly-imported game can
+    // transpose into an existing castle), and checking beforehand would
+    // miss that on the very session it happened. runAutoImportCheck never
+    // actually rejects (each source's own fetch is try/caught internally),
+    // but .finally guards the reminder from being silently skipped even if
+    // that ever changes. Skipped under the test harness -- an unprompted
+    // gatherBuiltCastles build at every boot would throw off the VR cache
+    // tests' "clean slate" build-count assertions; Phase DO/DP's own tests
+    // drive this explicitly instead (see checkTranspositionsAtBoot's own
+    // doc comment).
+    runAutoImportCheck().finally(() => {
+      if(!localStorage.getItem('threeTestDebug')) checkTranspositionsAtBoot();
+    });
   });
 
 // auto-start the background analysis queue: load whatever's left over from a
@@ -7281,10 +7286,16 @@ $('transpCloseBtn').onclick = ()=>{
    Deliberately persistent, not an auto-dismissing snackbar -- a newly
    created transposition doesn't go away on its own the way a one-off status
    message does, so it stays up until the user acts on it or dismisses it.
-   Doesn't survive a reload (in-memory only), which is an accepted tradeoff
-   for now. */
-function showNewTranspositionsToast(count){
-  $('newTranspToastText').textContent = `${count} new transposition${count===1?'':'s'} found`;
+   Doesn't survive a reload (in-memory only) -- the boot-time reminder below
+   is what covers that gap instead of trying to persist the toast itself.
+   `label` distinguishes an edit-triggered scan ("N new transpositions
+   found") from the boot-time reminder ("N unresolved transpositions") --
+   same widget, different framing, since the boot check can't tell a
+   collision that's been sitting unresolved for weeks apart from one an
+   auto-import just created THIS load. */
+function showNewTranspositionsToast(count, label = 'found'){
+  const noun = `transposition${count===1?'':'s'}`;
+  $('newTranspToastText').textContent = label === 'unresolved' ? `${count} unresolved ${noun}` : `${count} new ${noun} found`;
   $('newTranspToast').style.display = 'flex';
 }
 function hideNewTranspositionsToast(){
@@ -7307,13 +7318,13 @@ function hideNewTranspositionsToast(){
    signature, but the exact same pair surviving an unrelated edit doesn't.
 
    transpSeenSignatures is EVERY signature already accounted for this
-   session, whether by the silent boot-time baseline (pre-existing
-   collisions aren't "new") or by a scan that already toasted it once --
-   this is what prevents an unresolved pair from re-nagging on every
-   subsequent edit. transpPendingSignatures is just the ones the toast is
-   CURRENTLY showing (reset on dismiss/Show, unlike transpSeenSignatures) --
-   this is what lets the visible count grow if more than one new collision
-   shows up before the user deals with the first one. */
+   session, whether by the boot-time reminder (see checkTranspositionsAtBoot)
+   or by a scan that already toasted it once -- this is what prevents an
+   unresolved pair from re-nagging on every subsequent edit. transpPendingSignatures
+   is just the ones the toast is CURRENTLY showing (reset on dismiss/Show,
+   unlike transpSeenSignatures) -- this is what lets the visible count grow
+   if more than one new collision shows up before the user deals with the
+   first one. */
 const transpSeenSignatures = new Set();
 const transpPendingSignatures = new Set();
 function transpGroupSignature(entries){
@@ -7321,21 +7332,36 @@ function transpGroupSignature(entries){
   const ids = [...new Set(entries.map(e => e.instanceId))].sort();
   return `${posKey}|${ids.join(',')}`;
 }
-// memoized so both the boot-time kickoff below AND a scan that happens to
-// race ahead of it (see scheduleTranspositionScan) always await the exact
-// same run, and it only ever executes once.
-let transpBaselinePromise = null;
-function primeTranspositionBaseline(){
-  if(!transpBaselinePromise){
-    transpBaselinePromise = (async () => {
+/* runs ONCE per page load, chained after runAutoImportCheck settles (see the
+   boot call site) so it reflects any transposition that import itself just
+   introduced, not a pre-import snapshot. A fresh load has no session memory
+   of what was already dismissed, so this can't distinguish "just imported
+   this boot" from "been sitting unresolved for weeks" -- it doesn't try to;
+   it surfaces whatever's currently unresolved as a single reminder (worded
+   "unresolved", not "new", since it may well not be), then marks those
+   signatures seen the same way a normal scan does so they won't re-toast
+   again later this session on their own. Memoized so both the boot-time
+   kickoff below AND a scan that happens to race ahead of it (see
+   scheduleTranspositionScan) always await the exact same run, and it only
+   ever actually executes once. */
+let transpBootCheckPromise = null;
+function checkTranspositionsAtBoot(){
+  if(!transpBootCheckPromise){
+    transpBootCheckPromise = (async () => {
       try {
         const lines = await getLines(LOCAL_USER);
         const groups = await findTransposedRooms(lines);
-        for(const entries of groups) transpSeenSignatures.add(transpGroupSignature(entries));
-      } catch(e){ console.warn('[transp toast] baseline priming failed', e); }
+        for(const entries of groups){
+          const sig = transpGroupSignature(entries);
+          if(transpSeenSignatures.has(sig)) continue;
+          transpSeenSignatures.add(sig);
+          transpPendingSignatures.add(sig);
+        }
+        maybeShowNewTranspositionsToast('unresolved');
+      } catch(e){ console.warn('[transp toast] boot check failed', e); }
     })();
   }
-  return transpBaselinePromise;
+  return transpBootCheckPromise;
 }
 async function scanForNewTranspositions(){
   try {
@@ -7347,7 +7373,7 @@ async function scanForNewTranspositions(){
       transpSeenSignatures.add(sig);
       transpPendingSignatures.add(sig);
     }
-    maybeShowNewTranspositionsToast();
+    maybeShowNewTranspositionsToast('found');
   } catch(e){ console.warn('[transp toast] scan failed', e); }
 }
 // Phase 3: skip popping the toast while the user is already looking at the
@@ -7357,16 +7383,16 @@ async function scanForNewTranspositions(){
 // same check (re-run from transpCloseBtn) raises the toast the moment the
 // report closes, whether or not the report's own (possibly now-stale)
 // listing happened to include it.
-function maybeShowNewTranspositionsToast(){
+function maybeShowNewTranspositionsToast(label = 'found'){
   if($('transpOverlay').style.display === 'flex') return;
-  if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size);
+  if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size, label);
 }
 const TRANSP_SCAN_DEBOUNCE_MS = 1500;
 let transpScanDebounceHandle = null;
 function scheduleTranspositionScan(){
   clearTimeout(transpScanDebounceHandle);
   transpScanDebounceHandle = setTimeout(async () => {
-    await primeTranspositionBaseline();   // no-op once already primed
+    await checkTranspositionsAtBoot();   // no-op once already run
     await scanForNewTranspositions();
   }, TRANSP_SCAN_DEBOUNCE_MS);
 }
@@ -11142,18 +11168,19 @@ if(localStorage.getItem('threeTestDebug')){
     isNewTranspositionsToastVisible: () => getComputedStyle($('newTranspToast')).display !== 'none',
     newTranspositionsToastText: () => $('newTranspToastText').textContent,
     // Phase 2: bypasses scheduleTranspositionScan's own debounce timer so a
-    // test doesn't have to sit through the real 1.5s wait -- primes the
-    // baseline first (a no-op once already primed) so the scan always runs
+    // test doesn't have to sit through the real 1.5s wait -- runs the boot
+    // check first (a no-op once it's already run) so the scan always runs
     // against a fully-seeded "seen" set, same as real use.
-    forceNewTranspositionsScan: async () => { await primeTranspositionBaseline(); await scanForNewTranspositions(); },
-    // separated out from forceNewTranspositionsScan so a test can prime the
-    // baseline explicitly, BEFORE seeding any data -- boot's own automatic
-    // primeTranspositionBaseline() call is skipped under threeTestDebug (see
-    // its own doc comment), so without this a test's first
-    // forceNewTranspositionsScan call would prime against whatever the test
-    // had ALREADY seeded by that point, wrongly treating it as pre-existing
-    // baseline instead of "new".
-    primeNewTranspositionsBaseline: () => primeTranspositionBaseline(),
+    forceNewTranspositionsScan: async () => { await checkTranspositionsAtBoot(); await scanForNewTranspositions(); },
+    // separated out from forceNewTranspositionsScan so a test can run the
+    // boot check explicitly, BEFORE seeding any data -- boot's own
+    // automatic call (chained after runAutoImportCheck) is skipped under
+    // threeTestDebug (see checkTranspositionsAtBoot's own doc comment), so
+    // without this a test's first forceNewTranspositionsScan call would run
+    // the boot check against whatever the test had ALREADY seeded by that
+    // point, toasting it as "unresolved" instead of leaving it for a later
+    // scan to correctly report as "new".
+    checkTranspositionsAtBoot: () => checkTranspositionsAtBoot(),
     // Phase 3: the REAL debounced scheduler (setTimeout, TRANSP_SCAN_DEBOUNCE_MS),
     // not the forced-immediate scan above -- for testing that several rapid
     // calls (mirroring several invalidateBuiltCastlesCache calls during one

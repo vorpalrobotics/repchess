@@ -17927,25 +17927,25 @@ try {
 //     a genuinely NEW collision raises the toast, but the exact same
 //     unresolved collision surviving an unrelated edit does NOT re-raise it
 //     (transpSeenSignatures, once added, is never removed except by the
-//     process ending). The boot-time baseline (primeTranspositionBaseline,
-//     called once from the real startup chain) means a collision that
-//     already existed before this test's own edits -- there isn't one here,
-//     since these lines don't exist until seedBackup creates them, but the
-//     mechanism is the same one that keeps a real user's pre-existing
-//     collisions from flooding the toast on their next edit after a
-//     deploy. forceNewTranspositionsScan bypasses the real 1.5s debounce
+//     process ending). checkTranspositionsAtBoot (called once from the real
+//     startup chain, after auto-import settles) is what seeds that "seen"
+//     set at the START of a session -- see Phase DQ for its own ACTIVE
+//     "unresolved" reminder behavior; these tests here just need it run
+//     once against an empty state first so a collision seeded afterward
+//     correctly counts as "new" rather than pre-existing.
+//     forceNewTranspositionsScan bypasses the real 1.5s debounce
 //     timer so these tests don't have to sit through it. ---
 if(shouldRunPhase(['move-table','castle-generation'])){
 try {
 const appDO = await launchApp();
 try {
-  // prime the baseline against the empty pre-seed state FIRST, mirroring
-  // real boot order (primeTranspositionBaseline runs before any user
-  // action) -- boot's own automatic call is skipped under threeTestDebug,
-  // so without this the collision seeded just below would itself get
-  // silently absorbed into the "pre-existing" baseline instead of counting
-  // as new.
-  await appDO.page.evaluate(() => window.__redirectTestHooks.primeNewTranspositionsBaseline());
+  // run the boot check against the empty pre-seed state FIRST, mirroring
+  // real boot order (checkTranspositionsAtBoot runs after auto-import
+  // settles but before any user action) -- boot's own automatic call is
+  // skipped under threeTestDebug, so without this the collision seeded just
+  // below would itself get toasted as "unresolved" here instead of being
+  // available for a later scan to correctly report as "new".
+  await appDO.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
 
   // root-vs-root collision (same simple shape as Phase DD's own detector
   // test) -- no interior rooms/games needed, a castle root always registers
@@ -18055,7 +18055,7 @@ if(shouldRunPhase(['move-table','castle-generation'])){
 try {
 const appDP = await launchApp();
 try {
-  await appDP.page.evaluate(() => window.__redirectTestHooks.primeNewTranspositionsBaseline());
+  await appDP.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
   await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
     id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
     rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
@@ -18124,6 +18124,74 @@ try {
   await appDP.close();
 }
 } catch(e){ bad('Phase DP: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DQ: the boot-time "unresolved transpositions" reminder.
+//     checkTranspositionsAtBoot (renamed from the old, purely-silent
+//     primeTranspositionBaseline) now ACTIVELY toasts whatever's still
+//     unresolved when it runs -- worded "unresolved", not "new", since a
+//     fresh page load has no session memory to tell a collision that's been
+//     sitting there for weeks apart from one an auto-import just created
+//     this load. Real boot chains it with .finally() after
+//     runAutoImportCheck() settles (see that call site's own comment) so it
+//     reflects any transposition the import itself just introduced --
+//     verified by reading the source, not a dedicated test here, since
+//     exercising the REAL automatic boot-time auto-import trigger (as
+//     opposed to calling importGamesFromPlatform/the manual "Import Now"
+//     button directly, which is all the existing auto-import suite does)
+//     would need new pre-navigation harness plumbing this doesn't otherwise
+//     need. What IS tested here is the reminder's own behavior once run:
+//     unlike a mid-session scan, it fires on collisions that already
+//     existed BEFORE it ran (nothing gets silently absorbed into a "seen"
+//     baseline without ever being shown), worded as unresolved rather than
+//     new. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDQ = await launchApp();
+try {
+  // seed the collision BEFORE ever calling checkTranspositionsAtBoot --
+  // unlike Phase DO/DP (which prime against an empty state first, so a
+  // LATER scan can correctly call something "new"), this test wants the
+  // collision to already exist the first time the boot check itself runs,
+  // mirroring a real second session where it was never resolved.
+  await appDQ.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDQ.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 325. The boot check finds the already-existing collision and toasts it
+  //      as "unresolved", not "new" -- proving it doesn't just silently fold
+  //      pre-existing collisions into "seen" without ever surfacing them.
+  try {
+    await appDQ.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+    const info = await appDQ.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the boot check to toast an already-existing, unresolved collision');
+    assert(info.text === '1 unresolved transposition', `expected "unresolved" wording (not "new ... found"), got "${info.text}"`);
+    ok('New-transpositions boot reminder: an already-existing collision is toasted as "unresolved" when the boot check runs');
+  } catch(e){ bad('New-transpositions boot reminder: unresolved wording on a pre-existing collision', e); }
+
+  // 326. Once the boot check has run, the SAME collision surviving an
+  //      unrelated edit still doesn't re-nag -- same seen-set mechanism a
+  //      mid-session scan uses (Phase DO's test 321), just seeded by the
+  //      boot check instead of an earlier scan.
+  try {
+    await appDQ.page.click('#newTranspToastDismissBtn');
+    await appDQ.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDQ.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected the collision the boot check already surfaced to not re-trigger a later scan');
+    ok('New-transpositions boot reminder: a collision the boot check already surfaced is seen, not re-toasted by a later scan');
+  } catch(e){ bad('New-transpositions boot reminder: boot-surfaced collision counted as seen for later scans', e); }
+} finally {
+  await appDQ.close();
+}
+} catch(e){ bad('Phase DQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
