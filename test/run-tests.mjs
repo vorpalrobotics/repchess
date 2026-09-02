@@ -17638,16 +17638,14 @@ try {
 } catch(e){ bad('Phase DK: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
-// --- Phase DL: offering to port automatically right after setting a
-//     redirect, instead of requiring a separate manual "Port Responses to
-//     Target" click every time. The Attributes modal offers it inline
-//     (once, only when the redirect actually changed -- not on every
-//     unrelated save); "Keep this, redirect the rest" offers it once for
-//     the whole batch. Both reuse Phase 3's own portRedirectedResponses --
-//     this is purely about surfacing it proactively. The harness
-//     auto-accepts every confirm() dialog (see harness.mjs), so these tests
-//     exercise the real "yes, port it" path end to end, not just that the
-//     offer appears. ---
+// --- Phase DL: porting automatically right after setting a redirect,
+//     instead of requiring a separate manual "Port Responses to Target"
+//     click every time. The Attributes modal ports inline (once, only when
+//     the redirect actually changed -- not on every unrelated save);
+//     "Keep this, redirect the rest" ports once for the whole batch. Both
+//     reuse Phase 3's own portRedirectedResponses -- this is purely about
+//     doing it proactively, with no confirmation prompt (users found the
+//     prompt pointless -- there was never a reason to decline). ---
 if(shouldRunPhase(['move-table','castle-generation'])){
 try {
 const appDL = await launchApp();
@@ -17700,8 +17698,8 @@ try {
   await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
   await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]', { timeout: 20000 });
 
-  // 313. Setting a redirect via the Attributes modal offers to port right
-  //      away, and (the harness auto-accepts confirm()) actually does.
+  // 313. Setting a redirect via the Attributes modal ports right away,
+  //      automatically, no confirmation prompt.
   try {
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
@@ -17714,12 +17712,12 @@ try {
     const l2Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
     const ported = l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
     assert(ported?.reply === 'e3', `expected the existing child (e6 -> e3) auto-ported to the target, got ${JSON.stringify(ported)}`);
-    ok('Attributes modal: setting a redirect offers to port immediately, and porting actually happens');
-  } catch(e){ bad('Attributes modal: auto-offer to port after setting a redirect', e); }
+    ok('Attributes modal: setting a redirect ports it to the target immediately, automatically');
+  } catch(e){ bad('Attributes modal: auto-port after setting a redirect', e); }
 
   // 314. Editing something UNRELATED on the same, already-redirected room
-  //      (its note) does NOT re-trigger the port offer -- only an actual
-  //      redirect change should.
+  //      (its note) does NOT re-trigger a port -- only an actual redirect
+  //      change should.
   try {
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
@@ -17730,12 +17728,13 @@ try {
     await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
     const progressText = await appDL.page.evaluate(() => document.getElementById('progress').textContent);
     assert(progressText === '', `expected no port-related message from an unrelated save, got "${progressText}"`);
-    ok('Attributes modal: an unrelated save on an already-redirected room does not re-offer to port');
+    ok('Attributes modal: an unrelated save on an already-redirected room does not re-port');
   } catch(e){ bad('Attributes modal: no spurious re-port on an unrelated save', e); }
 
-  // 315. "Keep this, redirect the rest" (Find Transpositions) also offers to
-  //      port, once, for the whole batch -- by now the Chigorin/Queen's Pawn
-  //      pair is already resolved (Phase 6), so only the Italian pair shows.
+  // 315. "Keep this, redirect the rest" (Find Transpositions) also ports,
+  //      automatically, once for the whole batch -- by now the Chigorin/
+  //      Queen's Pawn pair is already resolved (Phase 6), so only the
+  //      Italian pair shows.
   try {
     await appDL.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
     await appDL.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
@@ -17755,8 +17754,8 @@ try {
     const l4Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L4'));
     const ported = l4Prefs['L4|Nf3,Nc6,d4,e5,e4,a6'];
     assert(ported?.reply === 'a3', `expected Italian Castle's existing child (a6 -> a3) auto-ported to Reversed Italian, got ${JSON.stringify(ported)}`);
-    ok('Find Transpositions: "Keep this, redirect the rest" also offers to port, for the whole batch, and it actually happens');
-  } catch(e){ bad('Find Transpositions: bulk redirect auto-offers to port', e); }
+    ok('Find Transpositions: "Keep this, redirect the rest" also auto-ports, for the whole batch');
+  } catch(e){ bad('Find Transpositions: bulk redirect auto-ports', e); }
 } finally {
   await appDL.close();
 }

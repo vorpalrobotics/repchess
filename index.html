@@ -1138,7 +1138,9 @@
     <p style="font-size:.85em;color:#555;margin-top:0">
       Positions reached by two or more different castles via different move orders —
       each is currently a separate VR room even though the position is identical.
-      Read-only report; nothing here merges rooms automatically.
+      Pick "Keep this, redirect the rest" on the room you want to keep building out;
+      the others are redirected to it (their door routes straight to its room in VR)
+      and any responses they already had are automatically ported over to it.
     </p>
     <div id="transpSummary" class="games-list-summary"></div>
     <div id="transpBody" class="games-list-body"></div>
@@ -1633,6 +1635,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-336"></script>
+<script type="module" src="js/app.js?v=20260804-337"></script>
 </body>
 </html>
