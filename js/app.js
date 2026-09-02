@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-339';
+const BUILD_TAG = '-342';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6052,6 +6052,15 @@ migrateLegacyUserData(LOCAL_USER)
   .then(() => {
     renderHome();
     runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
+    // silently seed the new-transposition toast's "seen" set from whatever
+    // collisions already exist at boot -- pre-existing ones aren't "new",
+    // only ones that appear FROM HERE ON should ever raise the toast. See
+    // primeTranspositionBaseline's own doc comment. Skipped under the test
+    // harness, same reasoning as invalidateBuiltCastlesCache's own guard --
+    // an unprompted gatherBuiltCastles build at every boot would throw off
+    // the VR cache tests' "clean slate" build-count assertions; Phase DO's
+    // own tests prime explicitly via forceNewTranspositionsScan instead.
+    if(!localStorage.getItem('threeTestDebug')) primeTranspositionBaseline();
   });
 
 // auto-start the background analysis queue: load whatever's left over from a
@@ -6929,6 +6938,17 @@ function invalidateBuiltCastlesCache(){
   _builtCastlesIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
+  // "new transpositions appearing" (Phase 2): every write path that could
+  // add/change a room already calls this function, so it's the one place to
+  // hook a debounced re-scan rather than threading a flag through every
+  // individual call site -- see scheduleTranspositionScan's own doc comment.
+  // Skipped under the test harness: this function is called constantly by
+  // ordinary test setup (every pref write), and an unrelated background
+  // gatherBuiltCastles build 1.5s later would corrupt the VR cache tests'
+  // own build-count/cache-hit assertions -- Phase DO's own tests drive
+  // detection directly via forceNewTranspositionsScan instead, same
+  // reasoning as maybeOfferDefaultContent's own threeTestDebug guard.
+  if(!localStorage.getItem('threeTestDebug')) scheduleTranspositionScan();
 }
 /* ---------- redirect-aware castle building: transposed GAME continuations ----------
    Phases 3/4 translate PREFS (a set standard response, a manually-recorded
@@ -7252,10 +7272,7 @@ $('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
 
 /* ---------- new-transposition toast ----------
    Phase 1 of "new transpositions appearing" (see the phasing plan): the
-   toast widget itself -- showing/hiding it and wiring Show/dismiss. Nothing
-   calls showNewTranspositionsToast yet; the detector hookup (a debounced
-   scan on invalidateBuiltCastlesCache, diffed against a "seen" signature
-   set so an already-known collision doesn't re-nag) is later phases.
+   toast widget itself -- showing/hiding it and wiring Show/dismiss.
    Deliberately persistent, not an auto-dismissing snackbar -- a newly
    created transposition doesn't go away on its own the way a one-off status
    message does, so it stays up until the user acts on it or dismisses it.
@@ -7268,13 +7285,87 @@ function showNewTranspositionsToast(count){
 function hideNewTranspositionsToast(){
   $('newTranspToast').style.display = 'none';
 }
+
+/* ---------- new-transposition detection (Phase 2) ----------
+   Hooked centrally into invalidateBuiltCastlesCache -- the one function
+   every write path that could add/change a room already calls -- rather
+   than threading a "this might create a new position" flag through the
+   30+ call sites that invalidate the cache (renames/notes/hidden-toggles
+   included). The cost is a handful of redundant scans after purely cosmetic
+   edits, which cost nothing visible since they never turn up a new
+   signature; the benefit is one hook instead of thirty.
+
+   A collision GROUP (findTransposedRooms's own per-posKey entries array) is
+   identified by its posKey plus the sorted set of distinct castle instance
+   ids sharing it -- so a group whose membership actually changes (a third
+   castle joins, or one member gets redirected away) counts as a different
+   signature, but the exact same pair surviving an unrelated edit doesn't.
+
+   transpSeenSignatures is EVERY signature already accounted for this
+   session, whether by the silent boot-time baseline (pre-existing
+   collisions aren't "new") or by a scan that already toasted it once --
+   this is what prevents an unresolved pair from re-nagging on every
+   subsequent edit. transpPendingSignatures is just the ones the toast is
+   CURRENTLY showing (reset on dismiss/Show, unlike transpSeenSignatures) --
+   this is what lets the visible count grow if more than one new collision
+   shows up before the user deals with the first one. */
+const transpSeenSignatures = new Set();
+const transpPendingSignatures = new Set();
+function transpGroupSignature(entries){
+  const posKey = entries[0]?.room?.posKey || '';
+  const ids = [...new Set(entries.map(e => e.instanceId))].sort();
+  return `${posKey}|${ids.join(',')}`;
+}
+// memoized so both the boot-time kickoff below AND a scan that happens to
+// race ahead of it (see scheduleTranspositionScan) always await the exact
+// same run, and it only ever executes once.
+let transpBaselinePromise = null;
+function primeTranspositionBaseline(){
+  if(!transpBaselinePromise){
+    transpBaselinePromise = (async () => {
+      try {
+        const lines = await getLines(LOCAL_USER);
+        const groups = await findTransposedRooms(lines);
+        for(const entries of groups) transpSeenSignatures.add(transpGroupSignature(entries));
+      } catch(e){ console.warn('[transp toast] baseline priming failed', e); }
+    })();
+  }
+  return transpBaselinePromise;
+}
+async function scanForNewTranspositions(){
+  try {
+    const lines = await getLines(LOCAL_USER);
+    const groups = await findTransposedRooms(lines);
+    for(const entries of groups){
+      const sig = transpGroupSignature(entries);
+      if(transpSeenSignatures.has(sig)) continue;
+      transpSeenSignatures.add(sig);
+      transpPendingSignatures.add(sig);
+    }
+    if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size);
+  } catch(e){ console.warn('[transp toast] scan failed', e); }
+}
+const TRANSP_SCAN_DEBOUNCE_MS = 1500;
+let transpScanDebounceHandle = null;
+function scheduleTranspositionScan(){
+  clearTimeout(transpScanDebounceHandle);
+  transpScanDebounceHandle = setTimeout(async () => {
+    await primeTranspositionBaseline();   // no-op once already primed
+    await scanForNewTranspositions();
+  }, TRANSP_SCAN_DEBOUNCE_MS);
+}
+
 $('newTranspToastShowBtn').onclick = async () => {
   // dismiss first -- Show is the "I'm dealing with it now" action, so the
   // toast shouldn't still be sitting there once the report itself is open.
+  transpPendingSignatures.clear();
   hideNewTranspositionsToast();
   await openTranspositionsReport();
 };
-$('newTranspToastDismissBtn').onclick = hideNewTranspositionsToast;
+$('newTranspToastDismissBtn').onclick = () => {
+  transpPendingSignatures.clear();
+  hideNewTranspositionsToast();
+};
 
 // Builds and opens the full main VR world (every built castle, one street per
 // opening system). Extracted from menuThreeTest's handler (mirrors this
@@ -11027,8 +11118,37 @@ if(localStorage.getItem('threeTestDebug')){
     // drives it automatically yet -- later phases wire real detection in.
     showNewTranspositionsToast: (count) => showNewTranspositionsToast(count),
     hideNewTranspositionsToast: () => hideNewTranspositionsToast(),
-    isNewTranspositionsToastVisible: () => $('newTranspToast').style.display !== 'none',
+    // computed, not inline, style: the element starts with an EMPTY inline
+    // style (hidden only via the stylesheet's own display:none default)
+    // until the first real show/hide call ever touches it, so checking
+    // .style.display alone would misreport "visible" on that untouched
+    // starting state.
+    isNewTranspositionsToastVisible: () => getComputedStyle($('newTranspToast')).display !== 'none',
     newTranspositionsToastText: () => $('newTranspToastText').textContent,
+    // Phase 2: bypasses scheduleTranspositionScan's own debounce timer so a
+    // test doesn't have to sit through the real 1.5s wait -- primes the
+    // baseline first (a no-op once already primed) so the scan always runs
+    // against a fully-seeded "seen" set, same as real use.
+    forceNewTranspositionsScan: async () => { await primeTranspositionBaseline(); await scanForNewTranspositions(); },
+    // separated out from forceNewTranspositionsScan so a test can prime the
+    // baseline explicitly, BEFORE seeding any data -- boot's own automatic
+    // primeTranspositionBaseline() call is skipped under threeTestDebug (see
+    // its own doc comment), so without this a test's first
+    // forceNewTranspositionsScan call would prime against whatever the test
+    // had ALREADY seeded by that point, wrongly treating it as pre-existing
+    // baseline instead of "new".
+    primeNewTranspositionsBaseline: () => primeTranspositionBaseline(),
+    // adds a second, independent castle-root line WITHOUT wiping whatever's
+    // already there -- unlike seedBackup (a full-backup restore, which
+    // clearAllData()s first), so a test can introduce a genuinely new
+    // collision partway through, on top of state earlier assertions in the
+    // same test already depend on.
+    createLineWithCastleRoot: async ({ id, name, color, openingMoves, rootSeq, reply, castleName }) => {
+      const line = await createLine(LOCAL_USER, { id, name, color, openingMoves });
+      await setPref(line.id, rootSeq, { reply, isCastleRoot: true, castleName, castleStreetNumber: 1 });
+      invalidateBuiltCastlesCache();
+      return line.id;
+    },
   };
 }
 

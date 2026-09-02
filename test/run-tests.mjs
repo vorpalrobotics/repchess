@@ -17921,5 +17921,125 @@ try {
 } catch(e){ bad('Phase DN: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DO: "new transpositions appearing" -- Phase 2, real detection.
+//     invalidateBuiltCastlesCache now schedules a debounced re-scan
+//     (findTransposedRooms again), diffed against a "seen" signature set --
+//     a genuinely NEW collision raises the toast, but the exact same
+//     unresolved collision surviving an unrelated edit does NOT re-raise it
+//     (transpSeenSignatures, once added, is never removed except by the
+//     process ending). The boot-time baseline (primeTranspositionBaseline,
+//     called once from the real startup chain) means a collision that
+//     already existed before this test's own edits -- there isn't one here,
+//     since these lines don't exist until seedBackup creates them, but the
+//     mechanism is the same one that keeps a real user's pre-existing
+//     collisions from flooding the toast on their next edit after a
+//     deploy. forceNewTranspositionsScan bypasses the real 1.5s debounce
+//     timer so these tests don't have to sit through it. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDO = await launchApp();
+try {
+  // prime the baseline against the empty pre-seed state FIRST, mirroring
+  // real boot order (primeTranspositionBaseline runs before any user
+  // action) -- boot's own automatic call is skipped under threeTestDebug,
+  // so without this the collision seeded just below would itself get
+  // silently absorbed into the "pre-existing" baseline instead of counting
+  // as new.
+  await appDO.page.evaluate(() => window.__redirectTestHooks.primeNewTranspositionsBaseline());
+
+  // root-vs-root collision (same simple shape as Phase DD's own detector
+  // test) -- no interior rooms/games needed, a castle root always registers
+  // as its own genRoom directly, so there's no corridor-merge fixture
+  // concern to work around here.
+  await seedBackup(appDO.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','d5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+      ]},
+    ],
+    // a real game backing each root's own reply -- without one, Black's d5
+    // never renders as a visible move-table row at all (visibleOppsAt reads
+    // from games, not prefs), and test 321 needs the d4,d5 row on screen to
+    // open Attributes on it.
+    games: [
+      { id: 'g1', moves: 'd4 d5 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'Nc3 d5 d4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDO.page.click('.line-row');
+  await appDO.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 20000 });
+
+  // 320. Seeding a genuine new collision, then forcing a scan, raises the
+  //      toast with count 1.
+  try {
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDO.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast to appear after a scan finds a genuinely new collision');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('New-transpositions detection: a genuine new collision raises the toast after a forced scan');
+  } catch(e){ bad('New-transpositions detection: initial collision detected', e); }
+
+  // 321. Dismiss the toast, then make an UNRELATED edit (a note, touching
+  //      neither castle's own reply graph) on the SAME still-unresolved
+  //      collision -- invalidateBuiltCastlesCache fires for real (every
+  //      Attributes save calls it unconditionally), but the re-scan must
+  //      NOT re-raise the toast: the collision's signature is already in
+  //      transpSeenSignatures from test 320, so it isn't "new" again just
+  //      because something else about that room changed.
+  try {
+    // the real dismiss button, not the raw hideNewTranspositionsToast hook --
+    // dismissing also clears transpPendingSignatures (see its own click
+    // handler), which the bare widget-hide function alone does not.
+    await appDO.page.click('#newTranspToastDismissBtn');
+    await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
+    await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDO.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDO.page.fill('#attrNote', 'an unrelated note, not a redirect or new reply');
+    await appDO.page.click('#attributesSaveBtn');
+    await appDO.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDO.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected an unrelated edit on an already-known collision to NOT re-raise the toast');
+    ok('New-transpositions detection: an already-seen collision does not re-nag after an unrelated edit');
+  } catch(e){ bad('New-transpositions detection: no re-nag on an unrelated edit', e); }
+
+  // 322. A DIFFERENT, genuinely new collision (a second, distinct pair)
+  //      DOES raise the toast again -- proves transpSeenSignatures gates by
+  //      signature, not "has the toast ever fired this session".
+  try {
+    // added directly through DB helpers (not another seedBackup -- a full
+    // backup restore wipes existing data first, which would destroy L1/L2's
+    // already-seen signature this test is specifically checking survives).
+    await appDO.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+      rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+    }));
+    await appDO.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'],
+      rootSeq: ['Nf3','e5'], reply: 'e4', castleName: 'Reversed Italian',
+    }));
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDO.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected a genuinely different new collision to raise the toast again');
+    assert(info.text === '1 new transposition found', `expected count 1 (just the new pair, not the earlier already-seen one too), got "${info.text}"`);
+    ok('New-transpositions detection: a different, later collision raises the toast again, still counting only what\'s actually new');
+  } catch(e){ bad('New-transpositions detection: a second distinct collision still gets detected', e); }
+} finally {
+  await appDO.close();
+}
+} catch(e){ bad('Phase DO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
