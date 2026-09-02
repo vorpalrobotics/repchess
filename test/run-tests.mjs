@@ -18455,5 +18455,104 @@ try {
 } catch(e){ bad('Phase DT: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DU: bug fix -- a background transposition scan must never run
+//     WHILE a Full Backup restore is in flight. Reported by the user: after
+//     some redirect/hide activity (which leaves a scan armed ~1.5s out),
+//     restoring a backup file wiped and rewrote every line/pref while that
+//     stale scan's own gatherBuiltCastles call landed mid-operation,
+//     caching a wrong (empty/half-restored) snapshot that then silently
+//     persisted -- "Find Transpositions" kept reporting nothing even
+//     against a fresh restore that genuinely had unresolved collisions,
+//     until some unrelated later edit happened to invalidate the cache
+//     again. suspendTranspositionScan/resumeTranspositionScan (called
+//     around applyBackupData's own wipe+rewrite) fix it: the first two
+//     tests prove the guard mechanism itself works (a real armed timer
+//     genuinely cancelled, not just suppressed going forward; scheduling
+//     resumes correctly afterward) without depending on racing a real
+//     restore's own variable duration against the 1.5s window; the third
+//     is an integration sanity check that the real seedBackup path leaves
+//     scanning un-suspended and still able to detect correctly. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDU = await launchApp();
+try {
+  await appDU.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+  await appDU.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDU.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 333. Arming a scan and immediately suspending it cancels that timer
+  //      outright -- waiting past its own debounce window raises no toast,
+  //      proving suspend doesn't just block FUTURE scheduling but reaches
+  //      back and kills what was already armed (the exact scenario an
+  //      earlier interaction leaves behind before a restore begins).
+  try {
+    await appDU.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDU.page.evaluate(() => window.__redirectTestHooks.suspendNewTranspositionsScan());
+    await appDU.page.waitForTimeout(1900);   // past TRANSP_SCAN_DEBOUNCE_MS (1500ms) with margin
+    const visible = await appDU.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected the already-armed timer to be genuinely cancelled by suspend, not just suppressed going forward');
+    ok('Bug fix: suspending the transposition scan cancels an already-armed timer, not just future ones');
+  } catch(e){ bad('Bug fix: suspend cancels an already-armed scan', e); }
+
+  // 334. Resuming from that suspended state re-arms a normal scan -- the
+  //      real collision (never actually detected yet, since test 333's
+  //      timer got cancelled before it could fire) is found once scanning
+  //      is allowed to run again.
+  try {
+    await appDU.page.evaluate(() => window.__redirectTestHooks.resumeNewTranspositionsScan());
+    await appDU.page.waitForTimeout(1900);
+    const info = await appDU.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected scanning to resume normally and find the real collision');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('Bug fix: resuming re-arms scanning normally, finding what was missed while suspended');
+  } catch(e){ bad('Bug fix: resume re-arms scanning', e); }
+
+  // 335. Integration sanity: a real Full Backup restore (seedBackup, the
+  //      exact path applyBackupData/importBackup serve) leaves scanning
+  //      un-suspended afterward, AND correctly detects the newly-restored
+  //      data's own real collision -- proving suspend/resume actually
+  //      brackets the real restore call, not just the direct-hook
+  //      simulation above.
+  try {
+    await appDU.page.click('#newTranspToastDismissBtn');
+    await seedBackup(appDU.page, {
+      version: 6, user: 'tester',
+      lines: [
+        { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+          { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        ]},
+        { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+          { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        ]},
+      ],
+    }, { defaultPlayerColor: 'white' });
+
+    const suspended = await appDU.page.evaluate(() => window.__redirectTestHooks.isTranspositionScanSuspended());
+    assert(!suspended, 'expected scanning left un-suspended once the restore actually finished');
+
+    await appDU.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDU.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the freshly-restored backup\'s own real collision to be detected, not a stale cached "nothing here"');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('Bug fix: a real Full Backup restore leaves scanning un-suspended and still able to detect correctly');
+  } catch(e){ bad('Bug fix: real restore integration sanity', e); }
+} finally {
+  await appDU.close();
+}
+} catch(e){ bad('Phase DU: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

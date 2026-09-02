@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-347';
+const BUILD_TAG = '-348';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6303,83 +6303,95 @@ if(localStorage.getItem('threeTestDebug')){
 // spinner wants to update its label, same as buildMnemonicsExportData's own
 // onProgress on the export side.
 async function applyBackupData(data, onMnemProgress){
-  await clearAllData();
-  // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
-  // mirror so a lingering background loop can't keep processing/saving
-  // against lineIds this restore just replaced.
-  ANALYSIS_QUEUE = [];
-  // a restore replaces the whole repertoire without a page reload -- drop the
-  // cached VR world-build result so the next "Run VR" rebuilds against the
-  // restored data instead of showing whatever was cached from before the
-  // restore.
-  invalidateBuiltCastlesCache();
-  invalidatePositionIndexCache();
+  // must span the WHOLE wipe+rewrite, not just the invalidateBuiltCastlesCache
+  // call below -- see suspendTranspositionScan's own doc comment for the
+  // real bug this fixes (a background scan landing mid-restore, caching a
+  // wrong snapshot nothing later re-invalidates).
+  suspendTranspositionScan();
+  try {
+    await clearAllData();
+    // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
+    // mirror so a lingering background loop can't keep processing/saving
+    // against lineIds this restore just replaced.
+    ANALYSIS_QUEUE = [];
+    // a restore replaces the whole repertoire without a page reload -- drop the
+    // cached VR world-build result so the next "Run VR" rebuilds against the
+    // restored data instead of showing whatever was cached from before the
+    // restore.
+    invalidateBuiltCastlesCache();
+    invalidatePositionIndexCache();
 
-  // restore each platform's own remembered handle independently (see
-  // userColorInGame) -- back-compat: a backup from before per-platform
-  // handles were tracked separately only ever carried one ambiguous `user`
-  // field (whichever platform happened to be imported first), so fall back
-  // to treating that as the Lichess handle, matching this app's old behavior.
-  const lichessUser = data.lichessUser ?? data.user ?? '';
-  const chesscomUser = data.chesscomUser ?? '';
-  localStorage.setItem(LS_ID, lichessUser);
-  localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
-  $('userIdLichess').value = lichessUser;
-  $('userIdChesscom').value = chesscomUser;
+    // restore each platform's own remembered handle independently (see
+    // userColorInGame) -- back-compat: a backup from before per-platform
+    // handles were tracked separately only ever carried one ambiguous `user`
+    // field (whichever platform happened to be imported first), so fall back
+    // to treating that as the Lichess handle, matching this app's old behavior.
+    const lichessUser = data.lichessUser ?? data.user ?? '';
+    const chesscomUser = data.chesscomUser ?? '';
+    localStorage.setItem(LS_ID, lichessUser);
+    localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
+    $('userIdLichess').value = lichessUser;
+    $('userIdChesscom').value = chesscomUser;
 
-  if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
-  GAMES = data.games || [];
+    if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
+    GAMES = data.games || [];
 
-  for(const lineData of (data.lines||[])){
-    // reuse the original line id when present (older backups omit it) so VR
-    // decoration keys that embed it — castle rooms, building facades/signs —
-    // still resolve against the restored threeLayout.
-    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
-    if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
-    for(const pref of (lineData.prefs||[])){
-      await setPref(line.id, pref.seq, {
-        reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
-        hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
-        eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
-        moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
-        isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
-        castleStreetNumber:pref.castleStreetNumber??'',
-        redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
-        redirectTargetSeq:pref.redirectTargetSeq||null, redirectTargetRoomName:pref.redirectTargetRoomName||''
-      });
+    for(const lineData of (data.lines||[])){
+      // reuse the original line id when present (older backups omit it) so VR
+      // decoration keys that embed it — castle rooms, building facades/signs —
+      // still resolve against the restored threeLayout.
+      const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
+      if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
+      for(const pref of (lineData.prefs||[])){
+        await setPref(line.id, pref.seq, {
+          reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
+          hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
+          eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
+          moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
+          isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
+          castleStreetNumber:pref.castleStreetNumber??'',
+          redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
+          redirectTargetSeq:pref.redirectTargetSeq||null, redirectTargetRoomName:pref.redirectTargetRoomName||''
+        });
+      }
     }
-  }
-  let mnemCount = 0;
-  for(const entry of (data.mnemonics||[])){
-    const patch = {};
-    for(const p of MNEM_PIECES){
-      patch[p] = entry[p] || '';
-      patch[p+'Desc'] = entry[p+'Desc'] || '';
-      patch[p+'Img'] = entry[p+'Img'] || '';
+    let mnemCount = 0;
+    for(const entry of (data.mnemonics||[])){
+      const patch = {};
+      for(const p of MNEM_PIECES){
+        patch[p] = entry[p] || '';
+        patch[p+'Desc'] = entry[p+'Desc'] || '';
+        patch[p+'Img'] = entry[p+'Img'] || '';
+      }
+      await setMnemonicSquare(entry.square, patch);
+      onMnemProgress?.(++mnemCount);
     }
-    await setMnemonicSquare(entry.square, patch);
-    onMnemProgress?.(++mnemCount);
+    // keep the in-memory mirror in sync with what was just written -- mirrors
+    // importMnemonicsBundle/compressAllImages's own refresh, and matters here
+    // too since openMnemonicsEditor reads MNEMONICS directly rather than
+    // re-fetching (renderMnemonicsGrid always re-fetches on its own, so this
+    // is belt-and-suspenders rather than the actual fix for the reported bug
+    // -- see the spinner added around this call, which is what actually
+    // prevents the menu from being reachable mid-restore).
+    MNEMONICS = await getAllMnemonics();
+    if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+    if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
+    if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
+    if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
+    if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+    if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
+    if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
+    for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
+    for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
+    log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
+    await renderHome();
+    _importBackupGen++;
+  } finally {
+    // re-arm normally against the now-settled, real post-restore data --
+    // even on a thrown error, so a failed restore can't leave scanning
+    // permanently suspended for the rest of the session.
+    resumeTranspositionScan();
   }
-  // keep the in-memory mirror in sync with what was just written -- mirrors
-  // importMnemonicsBundle/compressAllImages's own refresh, and matters here
-  // too since openMnemonicsEditor reads MNEMONICS directly rather than
-  // re-fetching (renderMnemonicsGrid always re-fetches on its own, so this
-  // is belt-and-suspenders rather than the actual fix for the reported bug
-  // -- see the spinner added around this call, which is what actually
-  // prevents the menu from being reachable mid-restore).
-  MNEMONICS = await getAllMnemonics();
-  if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
-  if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
-  if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
-  if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
-  if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
-  if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
-  if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
-  for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
-  for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
-  log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
-  await renderHome();
-  _importBackupGen++;
 }
 
 /* ---------- safety backup (crash-surviving pre-restore snapshot) ----------
@@ -7501,9 +7513,35 @@ function maybeShowNewTranspositionsToast(collisionLabel = 'found'){
   $('newTranspToastText').textContent = parts.join('; ');
   $('newTranspToast').style.display = 'flex';
 }
+/* the background scan must never run WHILE a bulk data-replacing operation
+   (a Full Backup restore, or the crash-recovery replay that reuses the
+   exact same applyBackupData) is in flight. Found from a real bug report:
+   an earlier interaction leaves a scan armed 1.5s out; a restore that
+   starts within that window wipes and rewrites every line/pref while that
+   scan's own gatherBuiltCastles call lands mid-operation -- against a
+   freshly-wiped-empty or half-rewritten state -- and CACHES that wrong
+   snapshot (_builtCastlesCache, also persisted to IDB). Nothing else ever
+   re-invalidates it once the restore actually finishes, so "Find
+   Transpositions" silently keeps reporting nothing -- even against a fresh
+   restore that genuinely has unresolved collisions -- until some unrelated
+   LATER edit happens to invalidate the cache again. suspendTranspositionScan
+   cancels any timer already armed from BEFORE it's called (the case above)
+   and blocks scheduling new ones for as long as it's in effect;
+   resumeTranspositionScan re-arms one normally, against the now-settled
+   real data. */
+let transpScanSuspended = false;
+function suspendTranspositionScan(){
+  transpScanSuspended = true;
+  clearTimeout(transpScanDebounceHandle);
+}
+function resumeTranspositionScan(){
+  transpScanSuspended = false;
+  scheduleTranspositionScan();
+}
 const TRANSP_SCAN_DEBOUNCE_MS = 1500;
 let transpScanDebounceHandle = null;
 function scheduleTranspositionScan(){
+  if(transpScanSuspended) return;
   clearTimeout(transpScanDebounceHandle);
   transpScanDebounceHandle = setTimeout(async () => {
     await checkTranspositionsAtBoot();   // no-op once already run
@@ -11305,6 +11343,16 @@ if(localStorage.getItem('threeTestDebug')){
     // invalidateBuiltCastlesCache's own threeTestDebug gate on it (see that
     // gate's doc comment for why the gate exists).
     scheduleNewTranspositionsScan: () => scheduleTranspositionScan(),
+    // bug-fix regression coverage: a background scan must never fire WHILE a
+    // bulk data-replace (Full Backup restore) is in flight -- see
+    // suspendTranspositionScan's own doc comment. These call the real guard
+    // functions directly so a test can prove BOTH that an already-armed
+    // timer gets genuinely cancelled (not just suppressed going forward)
+    // and that scheduling resumes normally afterward, without needing to
+    // race a real restore's own variable duration against the 1.5s window.
+    suspendNewTranspositionsScan: () => suspendTranspositionScan(),
+    resumeNewTranspositionsScan: () => resumeTranspositionScan(),
+    isTranspositionScanSuspended: () => transpScanSuspended,
     // adds a second, independent castle-root line WITHOUT wiping whatever's
     // already there -- unlike seedBackup (a full-backup restore, which
     // clearAllData()s first), so a test can introduce a genuinely new
