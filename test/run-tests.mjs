@@ -18041,5 +18041,90 @@ try {
 } catch(e){ bad('Phase DO: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DP: "new transpositions appearing" -- Phase 3, the real debounce
+//     timer and modal-suppression polish. Phase DO already proved the
+//     detection LOGIC (signatures, seen-set, forced scans); this phase
+//     proves the two remaining pieces that only show up with real timing:
+//     (1) several rapid invalidateBuiltCastlesCache-style calls collapse
+//     into ONE scan 1.5s after the LAST one, not one scan per call (so an
+//     import's many writes don't spam the toast update repeatedly), and
+//     (2) a collision found while the Find Transpositions report is already
+//     open doesn't pop a redundant toast over it -- it surfaces the moment
+//     the report closes instead. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDP = await launchApp();
+try {
+  await appDP.page.evaluate(() => window.__redirectTestHooks.primeNewTranspositionsBaseline());
+  await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 323. Three rapid calls to the real debounced scheduler (mirroring
+  //      several invalidateBuiltCastlesCache calls during one import)
+  //      collapse into a single scan that fires 1.5s after the LAST call,
+  //      not the first -- checked at a point past the FIRST call's own
+  //      1.5s deadline but before the (reset) real one, then past it.
+  try {
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDP.page.waitForTimeout(600);
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDP.page.waitForTimeout(600);
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());   // now at ~1200ms since the first call
+
+    await appDP.page.waitForTimeout(900);   // ~2100ms since the first call, past its own un-reset 1500ms deadline
+    const early = await appDP.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!early, 'expected the first call\'s own 1.5s deadline to have been cancelled by the later calls, not fired on schedule');
+
+    await appDP.page.waitForTimeout(900);   // ~3000ms since the first call, past the third call's own (real) 1500ms deadline
+    const info = await appDP.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast up once the LAST call\'s own debounce window finally elapsed');
+    assert(info.text === '1 new transposition found', `expected exactly 1 (one collision, however many scans ran), got "${info.text}"`);
+    ok('New-transpositions detection: rapid scheduling calls collapse into one debounced scan, timed off the last call');
+  } catch(e){ bad('New-transpositions detection: debounce collapses rapid scheduling calls', e); }
+
+  // 324. A collision that appears while the Find Transpositions report is
+  //      already open doesn't pop a redundant toast over it -- it's held
+  //      back and surfaces the moment the report closes instead.
+  try {
+    await appDP.page.click('#newTranspToastDismissBtn');   // clear test 323's own toast first
+    await appDP.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDP.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+
+    await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+      rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+    }));
+    await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'],
+      rootSeq: ['Nf3','e5'], reply: 'e4', castleName: 'Reversed Italian',
+    }));
+    await appDP.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const whileOpen = await appDP.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!whileOpen, 'expected no toast while the Find Transpositions report is already open');
+
+    await appDP.page.click('#transpCloseBtn');
+    const info = await appDP.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the held-back toast to appear the moment the report closes');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('New-transpositions detection: a collision found while the report is open is held back, then surfaces on close');
+  } catch(e){ bad('New-transpositions detection: suppressed while the report modal is open', e); }
+} finally {
+  await appDP.close();
+}
+} catch(e){ bad('Phase DP: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

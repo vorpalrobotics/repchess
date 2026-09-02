@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-342';
+const BUILD_TAG = '-343';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7268,7 +7268,12 @@ async function openTranspositionsReport(){
   await refreshTranspositionsReport();
 }
 $('menuFindTranspositions').onclick = openTranspositionsReport;
-$('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
+$('transpCloseBtn').onclick = ()=>{
+  $('transpOverlay').style.display='none';
+  // surface anything a background scan found (and suppressed) while the
+  // report was open -- see maybeShowNewTranspositionsToast's own comment.
+  maybeShowNewTranspositionsToast();
+};
 
 /* ---------- new-transposition toast ----------
    Phase 1 of "new transpositions appearing" (see the phasing plan): the
@@ -7342,8 +7347,19 @@ async function scanForNewTranspositions(){
       transpSeenSignatures.add(sig);
       transpPendingSignatures.add(sig);
     }
-    if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size);
+    maybeShowNewTranspositionsToast();
   } catch(e){ console.warn('[transp toast] scan failed', e); }
+}
+// Phase 3: skip popping the toast while the user is already looking at the
+// Find Transpositions report -- a second, redundant "N new transpositions
+// found" over the report itself is just noise, not new information. Nothing
+// found this scan is lost: transpPendingSignatures still holds it, so this
+// same check (re-run from transpCloseBtn) raises the toast the moment the
+// report closes, whether or not the report's own (possibly now-stale)
+// listing happened to include it.
+function maybeShowNewTranspositionsToast(){
+  if($('transpOverlay').style.display === 'flex') return;
+  if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size);
 }
 const TRANSP_SCAN_DEBOUNCE_MS = 1500;
 let transpScanDebounceHandle = null;
@@ -11138,6 +11154,14 @@ if(localStorage.getItem('threeTestDebug')){
     // had ALREADY seeded by that point, wrongly treating it as pre-existing
     // baseline instead of "new".
     primeNewTranspositionsBaseline: () => primeTranspositionBaseline(),
+    // Phase 3: the REAL debounced scheduler (setTimeout, TRANSP_SCAN_DEBOUNCE_MS),
+    // not the forced-immediate scan above -- for testing that several rapid
+    // calls (mirroring several invalidateBuiltCastlesCache calls during one
+    // import) collapse into exactly one scan/toast update rather than one
+    // per call. Calls the function directly, bypassing
+    // invalidateBuiltCastlesCache's own threeTestDebug gate on it (see that
+    // gate's doc comment for why the gate exists).
+    scheduleNewTranspositionsScan: () => scheduleTranspositionScan(),
     // adds a second, independent castle-root line WITHOUT wiping whatever's
     // already there -- unlike seedBackup (a full-backup restore, which
     // clearAllData()s first), so a test can introduce a genuinely new
