@@ -18292,5 +18292,91 @@ try {
 } catch(e){ bad('Phase DR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DS: "disappearing transpositions" -- Phase 2, warning BEFORE
+//     hiding a variation that's currently a redirect's own target.  Unlike
+//     Phase 1's broken-redirect repair (which fixes things up after the
+//     fact for edits with no single moment to warn at), hiding is a
+//     deliberate, reversible action with a real moment to warn: declining
+//     leaves everything exactly as it was, since nothing has been hidden
+//     yet. Accepting proceeds to hide, which (same as any other edit that
+//     removes the target) leaves Phase 1's own repair to clean up on the
+//     next scan -- this phase only adds the warning, not a second repair
+//     path. redirectsIntoSubtree (the reverse lookup, reusing Phase 5's own
+//     gatherRedirectsIntoLines) checks whether ANY redirect's target falls
+//     at or below the row being hidden, since hiding cuts the whole subtree
+//     from there down, not just that one row. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDS = await launchApp();
+try {
+  // same fixture as Phase DR: L1's interior room already redirected to
+  // L2's -- this time hiding the TARGET side (L2's own d4,Nf6,Nc3,d5 row)
+  // instead of breaking it programmatically.
+  await seedBackup(appDS.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  await appDS.page.evaluate((name) => {
+    const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+    if(row) row.click();
+  }, 'Reversed Approach');
+  await appDS.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,Nc3,d5"]', { timeout: 20000 });
+
+  // 330. Hiding an UNRELATED row (no redirect targets it) proceeds straight
+  //      through, no confirm() at all.
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDS.page.on('dialog', onDialog);
+    await appDS.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,Nc3,e6"] [data-act="hide"]').click());
+    await appDS.page.waitForTimeout(500);
+    appDS.page.off('dialog', onDialog);
+    assert(dialogs.length === 0, `expected no confirm() dialog hiding a row with no incoming redirects, got ${JSON.stringify(dialogs)}`);
+    const l2Prefs = await appDS.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,e6']?.hidden === true, 'expected the row to actually be hidden');
+    ok('Disappearing transpositions: hiding a row with no incoming redirects raises no warning');
+  } catch(e){ bad('Disappearing transpositions: no warning on an unrelated hide', e); }
+
+  // 331. Hiding the row that's the redirect's own TARGET warns first (the
+  //      harness auto-accepts every confirm(), so this also proves hiding
+  //      still goes through once accepted -- same as declining would leave
+  //      it exactly as it was, this test only exercises the accept path).
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDS.page.on('dialog', onDialog);
+    await appDS.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,Nc3,d5"] [data-act="hide"]').click());
+    await appDS.page.waitForTimeout(500);
+    appDS.page.off('dialog', onDialog);
+    assert(dialogs.length === 1, `expected exactly one confirm() warning, got ${JSON.stringify(dialogs)}`);
+    assert(/1 redirect/.test(dialogs[0]), `expected the warning to name the redirect count, got "${dialogs[0]}"`);
+    const l2Prefs = await appDS.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5']?.hidden === true, 'expected hiding to actually proceed once the (auto-accepted) warning is confirmed');
+    ok('Disappearing transpositions: hiding a redirect\'s own target warns before proceeding');
+  } catch(e){ bad('Disappearing transpositions: warning on hiding a redirect target', e); }
+} finally {
+  await appDS.close();
+}
+} catch(e){ bad('Phase DS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

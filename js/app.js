@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-345';
+const BUILD_TAG = '-346';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4797,11 +4797,19 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       rowMenu.classList.remove('show');
       focusOnLine(tr, childrenSeq);
     };
-    hideBtn.onclick = e => {
+    hideBtn.onclick = async e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
+      const hidingNow = !currentSaved()?.hidden;
+      // only hiding (not unhiding, which only ever restores visibility) can
+      // sever a redirect's target out from under it -- see
+      // redirectsIntoSubtree's own doc comment.
+      if(hidingNow){
+        const incoming = await redirectsIntoSubtree(CURRENT_LINE.id, lineSeq);
+        if(incoming.length && !confirmHideBreaksRedirects(incoming.length)) return;
+      }
       invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
-      saveField('hidden', !currentSaved()?.hidden);
+      saveField('hidden', hidingNow);
       refreshSystemStats();
     };
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
@@ -5230,11 +5238,16 @@ function renderBlackRoot(parent,games,trigger){
     rowMenu.classList.remove('show');
     focusOnLine(tr);
   };
-  hideBtn.onclick = e => {
+  hideBtn.onclick = async e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
+    const hidingNow = !currentSaved()?.hidden;
+    if(hidingNow){
+      const incoming = await redirectsIntoSubtree(CURRENT_LINE.id, lineSeq);
+      if(incoming.length && !confirmHideBreaksRedirects(incoming.length)) return;
+    }
     invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
-    saveField('hidden', !currentSaved()?.hidden);
+    saveField('hidden', hidingNow);
     refreshSystemStats();
   };
   rowMenu.querySelector('[data-act="response"]').onclick = e => {
@@ -7012,6 +7025,29 @@ async function gatherRedirectsIntoLines(lines){
     }
   });
   return redirectsIntoLine;
+}
+
+/* "disappearing transpositions" Phase 2: every currently-active redirect
+   (any line) whose own target falls AT or BELOW `roomSeq` within `lineId`
+   -- i.e. would be broken by hiding `roomSeq` (hiding cuts the graph walk
+   there, taking the whole subtree with it, not just that one node). Reuses
+   gatherRedirectsIntoLines (Phase 5's own reverse lookup) rather than a
+   second db.js/PREFS scan -- same reasoning as Phase 1's on-demand
+   findBrokenRedirects: the forward pointer on the SOURCE room is the only
+   real source of truth, so there's nothing to precompute or keep in sync. */
+async function redirectsIntoSubtree(lineId, roomSeq){
+  const lines = await getLines(LOCAL_USER);
+  const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
+  const incoming = redirectsIntoLine.get(lineId) || [];
+  return incoming.filter(r => seqStartsWith(r.targetSeq, roomSeq));
+}
+// shared by both hideBtn handlers below (renderBranch's own row and the
+// root-row renderer's) -- declining leaves the room, and every redirect
+// pointing at it, exactly as they were; nothing is repaired proactively,
+// only warned about, since the room might still get unhidden instead.
+function confirmHideBreaksRedirects(count){
+  return confirm(`Hiding this will break ${count} redirect${count===1?'':'s'} that currently point${count===1?'s':''} here as ${count===1?'its':'their'} transpose target -- `
+    + `${count===1?'it will':'they will'} be automatically restored to a normal room afterward. Hide anyway?`);
 }
 
 async function gatherBuiltCastles(lines){
