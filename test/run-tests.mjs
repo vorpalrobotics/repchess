@@ -18614,5 +18614,81 @@ try {
 } catch(e){ bad('Phase DV: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DW: bug fix -- findBrokenRedirects was matching by exact
+//     redirectTargetSeq (the target room's anchor.seq, frozen at the moment
+//     the redirect was set) instead of by POSITION (posKey). A room's own
+//     anchor.seq is not a stable identity across rebuilds -- analyzeCastleStructure
+//     can re-anchor a corridor/two-track group differently whenever ANYTHING
+//     in that castle's structure changes, even something unrelated to the
+//     redirected room itself, while the actual position never moves. That
+//     made the exact-seq check see a perfectly valid, still-resolving
+//     redirect as "broken" and auto-clear it. Reported by the user (still
+//     reproducing in -349, after the earlier concurrent-gatherBuiltCastles
+//     fix, proving that fix alone wasn't the real cause of this symptom): a
+//     hide/unhide cycle left several false-positive "unresolved
+//     transposition" groups in the report, which all vanished once a
+//     manual re-redirect settled the structure back down. Fixed by matching
+//     on posKey within the target instance instead -- mirroring
+//     buildCastleGraph's own processExit, which already computes VR's
+//     foreignKey from positionKey(fenForSeq(destSeq)), never from a stored
+//     anchor.seq, for exactly this reason. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDW = await launchApp();
+try {
+  // L1's redirect stores a DIFFERENT (but position-equivalent) move order
+  // than L2's own real, built anchor for the same position -- simulating
+  // exactly what an anchor shift from an unrelated structural change would
+  // leave behind: a stale seq that no longer matches the CURRENT anchor,
+  // even though the position itself is completely intact. White's d4/Nc3/
+  // Nf3 and Black's d5/Nf6 never interact on the board (same commuting-move
+  // pair used throughout this suite), so both orders reach the identical
+  // final FEN regardless of interleaving.
+  await seedBackup(appDW.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2',
+          // deliberately NOT L2's real anchor (['d4','Nf6','Nc3','d5','Nf3'])
+          // -- a different, same-position order, standing in for "the anchor
+          // shifted since this redirect was set".
+          redirectTargetSeq: ['d4','d5','Nc3','Nf6','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 337. A scan finds nothing broken -- the stale-but-same-position
+  //      redirectTargetSeq still resolves via posKey, so it must NOT be
+  //      auto-cleared as a false positive.
+  try {
+    await appDW.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDW.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no "broken redirect" toast for a redirect whose target position still genuinely resolves');
+
+    const l1Prefs = await appDW.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const room = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(room?.redirectToCastle === 'Queens Pawn Palace',
+      `expected the redirect left untouched (matched by position, not exact stale seq), got ${JSON.stringify(room)}`);
+    ok('Bug fix: a redirect whose stored anchor.seq is stale (but whose position still resolves) is not a false-positive break');
+  } catch(e){ bad('Bug fix: findBrokenRedirects matches by posKey, not exact anchor.seq', e); }
+} finally {
+  await appDW.close();
+}
+} catch(e){ bad('Phase DW: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

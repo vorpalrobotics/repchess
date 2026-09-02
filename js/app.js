@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-349';
+const BUILD_TAG = '-350';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7421,18 +7421,41 @@ function transpGroupSignature(entries){
    renamed out from under the stored redirectToCastle snapshot. `built` is
    gatherBuiltCastles's own already-built result the caller already has from
    findTransposedRooms's own scan -- gatherBuiltCastles's memory cache makes
-   asking for it again here free, this just avoids re-deriving `lines`. */
+   asking for it again here free, this just avoids re-deriving `lines`.
+
+   Matched by POSITION (posKey) within the target instance, NOT by an exact
+   redirectTargetSeq/anchor.seq match -- a room's own anchor.seq is NOT a
+   stable identity across rebuilds: analyzeCastleStructure can re-anchor a
+   corridor/two-track group differently whenever ANYTHING in that castle's
+   own structure changes (hiding/unhiding a completely unrelated node,
+   adding a branch, etc.), even though the actual POSITION never moved.
+   redirectTargetSeq is a one-time snapshot taken when the redirect was set,
+   so an anchor shift alone would make an exact-seq check see a perfectly
+   valid redirect as "broken" and clear it -- a real, reproduced bug (a
+   hide/unhide cycle producing several false-positive "unresolved
+   transposition" groups that a manual re-redirect made vanish, since that
+   settled the structure back down). buildCastleGraph's own processExit
+   already establishes the right notion of "still resolves" for exactly
+   this purpose -- it computes VR's foreignKey from positionKey(fenForSeq(
+   destSeq)), never from a stored anchor.seq -- so this mirrors that same
+   check instead of inventing a different, stricter one. */
 async function findBrokenRedirects(lines, built){
-  const resolvable = new Set();
-  for(const c of built) for(const gr of c.genRooms) resolvable.add(`${c.instanceId}|${gr.seq.join(',')}`);
+  const posKeysByInstance = new Map();   // instanceId -> Set(posKey)
+  for(const c of built){
+    const set = posKeysByInstance.get(c.instanceId) || new Set();
+    for(const gr of c.genRooms) if(gr.posKey) set.add(gr.posKey);
+    posKeysByInstance.set(c.instanceId, set);
+  }
   const broken = [];   // { lineId, roomSeq }
   for(const line of lines){
     const prefs = await getAllPrefs(line.id);
     for(const key in prefs){
       const p = prefs[key];
       if(!p?.redirectToCastle || !p.redirectTargetLineId || !p.redirectTargetSeq) continue;
-      const targetKey = `${castleInstanceId(p.redirectTargetLineId, p.redirectToCastle)}|${p.redirectTargetSeq.join(',')}`;
-      if(!resolvable.has(targetKey)) broken.push({ lineId: line.id, roomSeq: p.seq });
+      const targetInstanceId = castleInstanceId(p.redirectTargetLineId, p.redirectToCastle);
+      const targetPosKey = positionKey(fenForSeq(p.redirectTargetSeq));
+      const posKeys = posKeysByInstance.get(targetInstanceId);
+      if(!posKeys || !posKeys.has(targetPosKey)) broken.push({ lineId: line.id, roomSeq: p.seq });
     }
   }
   return broken;
