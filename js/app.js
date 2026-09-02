@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-348';
+const BUILD_TAG = '-349';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7062,104 +7062,131 @@ function confirmHideBreaksRedirects(count){
     + `${count===1?'it will':'they will'} be automatically restored to a normal room afterward. Hide anyway?`);
 }
 
+// in-flight dedup: withLinePrefs's own doc comment is explicit --
+// "Sequential use only -- concurrent calls would race on PREFS" -- since it
+// swaps the shared, module-level PREFS global for the duration of each
+// line's build. Before the new-transpositions background scanner, nothing
+// ever called gatherBuiltCastles a second time while a first call was still
+// resolving, so that race was reachable only in theory. The scanner made it
+// real: a background rebuild landing while the user's OWN "Find
+// Transpositions" click (or another background rebuild) is also mid-flight
+// races on PREFS and can silently attach one line's room names/attributes
+// to another line's rooms. Found from a real bug report -- a rapid hide /
+// check / unhide / check sequence produced several phantom duplicate
+// transposition groups with mixed-up room names, which cleared up once the
+// user manually redirected the real room (forcing a settled rebuild).
+// Fixed by having every caller share the SAME in-flight build instead of
+// starting a second, independent, racing one.
+let _builtCastlesBuildPromise = null;
 async function gatherBuiltCastles(lines){
   if(_builtCastlesCache){
     console.log('[VR] gatherBuiltCastles: cache hit (memory), 0ms');
     return _builtCastlesCache;
   }
-  // the persisted copy is checked at most once per page load -- once we know
-  // one way or the other, _builtCastlesCache itself (null or populated) is
-  // authoritative and this branch is skipped from then on.
-  if(!_builtCastlesIdbChecked){
-    _builtCastlesIdbChecked = true;
+  if(_builtCastlesBuildPromise) return _builtCastlesBuildPromise;
+  _builtCastlesBuildPromise = (async () => {
     try {
-      const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
-      if(raw){
-        const parsed = JSON.parse(raw);
-        // Version-stamped: only reuse a persisted copy built by THIS exact
-        // build (BUILD_TAG). A code change to castle/room generation -- e.g.
-        // the positionKey position-identity rule, or the room-size floor --
-        // doesn't trip this cache's own data-write invalidation triggers, so
-        // without the stamp a reload after a deploy keeps serving a castle
-        // built under the OLD logic until a manual force-rebuild. A stamp
-        // mismatch (or an old, unstamped array) falls through to a fresh
-        // rebuild below, which re-persists under the current stamp.
-        if(parsed && parsed.version === BUILD_TAG && Array.isArray(parsed.data)){
-          _builtCastlesCache = parsed.data;
-          console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
-          return _builtCastlesCache;
-        }
-        console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
+      // the persisted copy is checked at most once per page load -- once we know
+      // one way or the other, _builtCastlesCache itself (null or populated) is
+      // authoritative and this branch is skipped from then on.
+      if(!_builtCastlesIdbChecked){
+        _builtCastlesIdbChecked = true;
+        try {
+          const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
+          if(raw){
+            const parsed = JSON.parse(raw);
+            // Version-stamped: only reuse a persisted copy built by THIS exact
+            // build (BUILD_TAG). A code change to castle/room generation -- e.g.
+            // the positionKey position-identity rule, or the room-size floor --
+            // doesn't trip this cache's own data-write invalidation triggers, so
+            // without the stamp a reload after a deploy keeps serving a castle
+            // built under the OLD logic until a manual force-rebuild. A stamp
+            // mismatch (or an old, unstamped array) falls through to a fresh
+            // rebuild below, which re-persists under the current stamp.
+            if(parsed && parsed.version === BUILD_TAG && Array.isArray(parsed.data)){
+              _builtCastlesCache = parsed.data;
+              console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
+              return _builtCastlesCache;
+            }
+            console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
+          }
+        } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
       }
-    } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
-  }
-  const t0 = performance.now();
-  if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
-  // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
-  // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
-  // hit above already returned without reaching here, so this only runs on an
-  // actual rebuild, exactly when a fresh read matters.
-  await loadMemorizedShapes();
-  // every line's own outgoing redirects, indexed by which OTHER line they
-  // target -- gathered once, up front (see its own doc comment for why this
-  // is safe to do before/alongside the prefs-swap pass just below).
-  const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
-  // one prefs swap per line, done concurrently rather than one-line-at-a-time:
-  // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
-  // so the "swap in this line's PREFS, run fn, restore" sequence for each line
-  // always completes atomically once its getAllPrefs() resolves — no other
-  // line's continuation can interleave in between, so running every line's
-  // getAllPrefs() IDB read in parallel instead of serially is safe.
-  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
-    let lineGames = gamesForLineColor(GAMES, line.color);
-    // splice in a synthetic, re-ordered copy of any OTHER line's game that
-    // transposes into one of THIS line's own rooms via a redirect (see
-    // synthesizeRedirectedGames's own doc comment) -- so a transposed
-    // continuation recorded only under the other castle's move order still
-    // surfaces (and counts toward occurrence stats) here too.
-    const incoming = redirectsIntoLine.get(line.id);
-    if(incoming?.length){
-      const synthetic = incoming.flatMap(r =>
-        synthesizeRedirectedGames(gamesForLineColor(GAMES, r.sourceLine.color), r.roomFullSeq, r.targetSeq));
-      if(synthetic.length) lineGames = [...lineGames, ...synthetic];
-    }
-    return definedCastles().map(name => {
-      const rootSeq = castleRootRoomSeq(name);
-      if(!rootSeq) return null;   // named but not built yet — skip
-      let streetNumber = null;
-      for(const key in PREFS){
-        const p = PREFS[key];
-        if(p?.isCastleRoot && p.castleName?.trim() === name){
-          const n = parseInt(p.castleStreetNumber, 10);
-          if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
+      const t0 = performance.now();
+      if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
+      // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
+      // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
+      // hit above already returned without reaching here, so this only runs on an
+      // actual rebuild, exactly when a fresh read matters.
+      await loadMemorizedShapes();
+      // every line's own outgoing redirects, indexed by which OTHER line they
+      // target -- gathered once, up front (see its own doc comment for why this
+      // is safe to do before/alongside the prefs-swap pass just below).
+      const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
+      // one prefs swap per line, done concurrently rather than one-line-at-a-time:
+      // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
+      // so the "swap in this line's PREFS, run fn, restore" sequence for each line
+      // always completes atomically once its getAllPrefs() resolves — no other
+      // line's continuation can interleave in between, so running every line's
+      // getAllPrefs() IDB read in parallel instead of serially is safe (this is
+      // still only true WITHIN this one build -- see the in-flight dedup above
+      // for why a SECOND, independent gatherBuiltCastles call is a different
+      // and real problem).
+      const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
+        let lineGames = gamesForLineColor(GAMES, line.color);
+        // splice in a synthetic, re-ordered copy of any OTHER line's game that
+        // transposes into one of THIS line's own rooms via a redirect (see
+        // synthesizeRedirectedGames's own doc comment) -- so a transposed
+        // continuation recorded only under the other castle's move order still
+        // surfaces (and counts toward occurrence stats) here too.
+        const incoming = redirectsIntoLine.get(line.id);
+        if(incoming?.length){
+          const synthetic = incoming.flatMap(r =>
+            synthesizeRedirectedGames(gamesForLineColor(GAMES, r.sourceLine.color), r.roomFullSeq, r.targetSeq));
+          if(synthetic.length) lineGames = [...lineGames, ...synthetic];
         }
-      }
-      // how often this castle's own entry has actually occurred in the
-      // user's games -- same "N (M%)" stat as a room's own doors, just
-      // computed for the move that leads INTO the castle's root itself
-      // (which buildGeneratedCastle's own genRooms never captures, since it
-      // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
-      // move (the room convention everywhere else); the position right
-      // before it is what a game "chose to enter this castle" out of.
-      const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
-      const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
-      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
-    }).filter(Boolean);
-  })));
-  const out = [];
-  lines.forEach((line, i) => {
-    for(const c of perLine[i]){
-      out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
-                 instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
+        return definedCastles().map(name => {
+          const rootSeq = castleRootRoomSeq(name);
+          if(!rootSeq) return null;   // named but not built yet — skip
+          let streetNumber = null;
+          for(const key in PREFS){
+            const p = PREFS[key];
+            if(p?.isCastleRoot && p.castleName?.trim() === name){
+              const n = parseInt(p.castleStreetNumber, 10);
+              if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
+            }
+          }
+          // how often this castle's own entry has actually occurred in the
+          // user's games -- same "N (M%)" stat as a room's own doors, just
+          // computed for the move that leads INTO the castle's root itself
+          // (which buildGeneratedCastle's own genRooms never captures, since it
+          // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
+          // move (the room convention everywhere else); the position right
+          // before it is what a game "chose to enter this castle" out of.
+          const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
+          const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
+          return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
+        }).filter(Boolean);
+      })));
+      const out = [];
+      lines.forEach((line, i) => {
+        for(const c of perLine[i]){
+          out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
+                     instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
+        }
+      });
+      _builtCastlesCache = out;
+      _builtCastlesBuildCount++;
+      // stamped with the current build so a later build detects the mismatch and
+      // rebuilds instead of serving this copy after castle-gen logic has changed.
+      setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
+      console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
+      return out;
+    } finally {
+      _builtCastlesBuildPromise = null;
     }
-  });
-  _builtCastlesCache = out;
-  _builtCastlesBuildCount++;
-  // stamped with the current build so a later build detects the mismatch and
-  // rebuilds instead of serving this copy after castle-gen logic has changed.
-  setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
-  console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
-  return out;
+  })();
+  return _builtCastlesBuildPromise;
 }
 
 /* ---------- cross-castle transposition detector ----------
@@ -11111,6 +11138,14 @@ if(localStorage.getItem('threeTestDebug')){
     // branch-expand UI.
     addManualReply: (seq, move) => addManualReply(seq, move),
     removeManualReply: (seq, move) => removeManualReply(seq, move),
+    // bug-fix regression coverage: calls gatherBuiltCastles directly, with
+    // NO invalidate first (unlike __redirectTestHooks.gatherBuiltCastles) --
+    // so a test can fire two of these concurrently (Promise.all) against an
+    // already-empty cache and confirm they share ONE in-flight build
+    // (buildCount stays 1) instead of racing two independent ones. See
+    // gatherBuiltCastles's own doc comment for the real bug this guards
+    // against (withLinePrefs's shared PREFS global).
+    gatherRaw: async () => gatherBuiltCastles(await getLines(LOCAL_USER)),
   };
 }
 

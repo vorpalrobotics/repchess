@@ -18554,5 +18554,65 @@ try {
 } catch(e){ bad('Phase DU: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DV: bug fix -- concurrent gatherBuiltCastles calls raced on the
+//     shared PREFS global (withLinePrefs's own doc comment: "Sequential use
+//     only -- concurrent calls would race on PREFS"). Before the
+//     new-transpositions background scanner, gatherBuiltCastles was only
+//     ever called from one direct, awaited user action at a time, so this
+//     was unreachable in practice. The scanner made it reachable: a
+//     background rebuild landing while the user's own "Find Transpositions"
+//     click (or another background rebuild) is also mid-flight can race.
+//     Reported by the user: a rapid hide / check / unhide / check sequence
+//     produced several phantom duplicate transposition groups with
+//     mixed-up room names, which cleared up once a manual redirect forced
+//     a single settled rebuild. Fixed with an in-flight dedup: every
+//     concurrent caller now shares the SAME build instead of racing
+//     independent ones. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDV = await launchApp();
+try {
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+    rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+  }));
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L3', name: 'Reti Approach', color: 'white', openingMoves: ['Nf3'],
+    rootSeq: ['Nf3','d5'], reply: 'g3', castleName: 'Reti Castle',
+  }));
+
+  // 336. Three genuinely concurrent gatherBuiltCastles calls (Promise.all,
+  //      no invalidate between them) against an empty cache share ONE
+  //      in-flight build -- buildCount rises by exactly 1, not 3 -- and
+  //      every caller gets back the same, correctly-attributed result (no
+  //      castle ends up with another line's name/rooms mixed in).
+  try {
+    const before = await appDV.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    const results = await appDV.page.evaluate(() => Promise.all([
+      window.__vrCacheTestHooks.gatherRaw(),
+      window.__vrCacheTestHooks.gatherRaw(),
+      window.__vrCacheTestHooks.gatherRaw(),
+    ]));
+    const after = await appDV.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    assert(after - before === 1, `expected exactly 1 real build for 3 concurrent callers, got ${after - before}`);
+
+    for(const built of results){
+      const byLine = Object.fromEntries(built.map(c => [c.lineId, c.castleName]));
+      assert(byLine.L1 === 'Chigorin Castle', `expected L1 -> Chigorin Castle, got ${JSON.stringify(byLine)}`);
+      assert(byLine.L2 === 'Italian Castle', `expected L2 -> Italian Castle, got ${JSON.stringify(byLine)}`);
+      assert(byLine.L3 === 'Reti Castle', `expected L3 -> Reti Castle, got ${JSON.stringify(byLine)}`);
+    }
+    ok('Bug fix: concurrent gatherBuiltCastles calls share one in-flight build, no cross-line name mixup');
+  } catch(e){ bad('Bug fix: gatherBuiltCastles in-flight dedup', e); }
+} finally {
+  await appDV.close();
+}
+} catch(e){ bad('Phase DV: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
