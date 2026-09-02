@@ -18194,5 +18194,103 @@ try {
 } catch(e){ bad('Phase DQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DR: "disappearing transpositions" -- Phase 1, detecting and
+//     auto-repairing a BROKEN redirect (its target room no longer exists),
+//     toasted the same way a new/unresolved collision is. A redirected room
+//     disappearing is fine on its own (Phase 6's own suppression just means
+//     it never registers a genRoom, so it silently drops out of any report
+//     -- nothing to fix). The problem is the other direction: the TARGET
+//     disappearing leaves every room that redirects to it pointing at
+//     nothing. findBrokenRedirects/repairBrokenRedirects clear that
+//     redirect's own fields, restoring the room to a normal one again --
+//     exactly "the variations that point there... have their redirect
+//     flags removed so that they once again become unresolved
+//     transpositions" -- and the SAME debounced scan that finds new
+//     collisions now also runs this check every time (reusing the
+//     just-built castle graph, not a separate pass). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDR = await launchApp();
+try {
+  // exact fixture shape as Phase DF's own "redirect via seedBackup"
+  // fixture (see its own comment for why Nf3, not c4, is White's 3rd
+  // developing move, and why L2's root needs a second branch to avoid
+  // corridor-merge) -- L1's interior room is already redirected to L2's,
+  // both sides real and consistent, before this test touches anything.
+  await seedBackup(appDR.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DF
+      ]},
+    ],
+    // real games backing each move, same as Phase DF's own identical
+    // fixture -- without them, castle generation's own visibility/frequency
+    // rules leave the graph too sparse for the interior rooms to register
+    // as their own genRoom entries at all (they silently fold into a
+    // different corridor grouping instead of the one this test expects).
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 327. Nothing broken yet -- a scan over a valid, consistent redirect
+  //      raises no toast at all (no false positives).
+  try {
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDR.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no toast while the redirect target is still real and consistent');
+    ok('Disappearing transpositions: a scan over a valid redirect finds nothing broken');
+  } catch(e){ bad('Disappearing transpositions: no false positive on a valid redirect', e); }
+
+  // 328. Break the target: change L2's own reply at the redirected-to room
+  //      so its old position (…,Nf3) no longer exists in L2's graph at all
+  //      -- simulating exactly the move-table edit the user described. A
+  //      forced scan detects it, clears L1's redirect fields (leaving its
+  //      OWN reply untouched), and toasts it.
+  try {
+    await appDR.page.evaluate(() => window.__redirectTestHooks.setPrefField('L2', ['d4','Nf6','Nc3','d5'], { reply: 'e4' }));
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDR.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast after the redirect target disappeared');
+    assert(info.text === '1 redirect restored -- target disappeared', `expected the repair-only wording (no collision found alongside it), got "${info.text}"`);
+
+    const l1Prefs = await appDR.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const room = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(!room?.redirectToCastle && !room?.redirectTargetLineId && !room?.redirectTargetSeq,
+      `expected every redirect field cleared, got ${JSON.stringify(room)}`);
+    assert(room?.reply === 'Nf3', `expected the room's OWN reply left untouched by the repair, got "${room?.reply}"`);
+    ok('Disappearing transpositions: a broken redirect is detected, repaired, and toasted');
+  } catch(e){ bad('Disappearing transpositions: detect + repair + toast on a broken redirect', e); }
+
+  // 329. Once repaired, it stays fixed -- a later scan finds nothing left
+  //      to repair (the redirect fields are already cleared) and raises no
+  //      further toast.
+  try {
+    await appDR.page.click('#newTranspToastDismissBtn');
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDR.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no further toast once the broken redirect is already repaired');
+    ok('Disappearing transpositions: a repaired redirect does not re-trigger on a later scan');
+  } catch(e){ bad('Disappearing transpositions: repair is stable across later scans', e); }
+} finally {
+  await appDR.close();
+}
+} catch(e){ bad('Phase DR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

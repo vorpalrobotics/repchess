@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-344';
+const BUILD_TAG = '-345';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7327,10 +7327,89 @@ function hideNewTranspositionsToast(){
    first one. */
 const transpSeenSignatures = new Set();
 const transpPendingSignatures = new Set();
+// "disappearing transpositions" Phase 1: broken redirects fixed by the most
+// recent scan(s), not yet shown -- reset on dismiss/Show same as
+// transpPendingSignatures, but unlike it there's no "seen" counterpart:
+// once a redirect's fields are cleared, it structurally can't be "broken"
+// again (a future redirect set on that room would be a brand new act, not
+// a re-detection of this one), so nothing needs deduping across scans.
+let transpPendingRepairCount = 0;
 function transpGroupSignature(entries){
   const posKey = entries[0]?.room?.posKey || '';
   const ids = [...new Set(entries.map(e => e.instanceId))].sort();
   return `${posKey}|${ids.join(',')}`;
+}
+/* every existing redirect (any pref with redirectToCastle set, across every
+   line) whose target no longer resolves to a real room in the just-built
+   castle set -- the target room's own reply got cleared/changed, the room
+   (or its whole line) got deleted, the room got hidden, or its castle got
+   renamed out from under the stored redirectToCastle snapshot. `built` is
+   gatherBuiltCastles's own already-built result the caller already has from
+   findTransposedRooms's own scan -- gatherBuiltCastles's memory cache makes
+   asking for it again here free, this just avoids re-deriving `lines`. */
+async function findBrokenRedirects(lines, built){
+  const resolvable = new Set();
+  for(const c of built) for(const gr of c.genRooms) resolvable.add(`${c.instanceId}|${gr.seq.join(',')}`);
+  const broken = [];   // { lineId, roomSeq }
+  for(const line of lines){
+    const prefs = await getAllPrefs(line.id);
+    for(const key in prefs){
+      const p = prefs[key];
+      if(!p?.redirectToCastle || !p.redirectTargetLineId || !p.redirectTargetSeq) continue;
+      const targetKey = `${castleInstanceId(p.redirectTargetLineId, p.redirectToCastle)}|${p.redirectTargetSeq.join(',')}`;
+      if(!resolvable.has(targetKey)) broken.push({ lineId: line.id, roomSeq: p.seq });
+    }
+  }
+  return broken;
+}
+/* the repair: clears a broken redirect's own fields, restoring the room to
+   a normal, independently-built one again -- exactly "the variations that
+   point there... have their redirect flags removed so that they once again
+   become unresolved transpositions". One setPrefsBatch call per source
+   line (a redirect from a different line than the one that just triggered
+   this scan is entirely possible). */
+async function repairBrokenRedirects(broken){
+  const byLine = new Map();
+  for(const b of broken){
+    const arr = byLine.get(b.lineId) || [];
+    arr.push(b);
+    byLine.set(b.lineId, arr);
+  }
+  for(const [lineId, items] of byLine){
+    const entries = items.map(b => ({ seq: b.roomSeq, patch: {
+      redirectToCastle: '', redirectTargetLineId: '', redirectTargetSeq: null, redirectTargetRoomName: '',
+    }}));
+    await setPrefsBatch(lineId, entries);
+  }
+  invalidateBuiltCastlesCache();   // the un-redirected room(s) need a real rebuild to show up again
+  if(CURRENT_LINE && byLine.has(CURRENT_LINE.id)){
+    PREFS = await getAllPrefs(CURRENT_LINE.id);
+    renderTreeBody(CURRENT_LINE);
+  }
+}
+/* shared by checkTranspositionsAtBoot and scanForNewTranspositions: finds
+   both newly-unaccounted-for collision groups AND broken redirects, repairs
+   the broken ones, and toasts whatever's newly pending. collisionLabel
+   distinguishes the boot reminder's "unresolved" wording from a live scan's
+   "new ... found" wording for the collision half; the repair half reads the
+   same either way, since "just got fixed this scan" is equally true for
+   both callers. */
+async function runTranspositionScan(collisionLabel){
+  const lines = await getLines(LOCAL_USER);
+  const groups = await findTransposedRooms(lines);
+  for(const entries of groups){
+    const sig = transpGroupSignature(entries);
+    if(transpSeenSignatures.has(sig)) continue;
+    transpSeenSignatures.add(sig);
+    transpPendingSignatures.add(sig);
+  }
+  const built = await gatherBuiltCastles(lines);
+  const broken = await findBrokenRedirects(lines, built);
+  if(broken.length){
+    await repairBrokenRedirects(broken);
+    transpPendingRepairCount += broken.length;
+  }
+  maybeShowNewTranspositionsToast(collisionLabel);
 }
 /* runs ONCE per page load, chained after runAutoImportCheck settles (see the
    boot call site) so it reflects any transposition that import itself just
@@ -7347,45 +7426,44 @@ function transpGroupSignature(entries){
 let transpBootCheckPromise = null;
 function checkTranspositionsAtBoot(){
   if(!transpBootCheckPromise){
-    transpBootCheckPromise = (async () => {
-      try {
-        const lines = await getLines(LOCAL_USER);
-        const groups = await findTransposedRooms(lines);
-        for(const entries of groups){
-          const sig = transpGroupSignature(entries);
-          if(transpSeenSignatures.has(sig)) continue;
-          transpSeenSignatures.add(sig);
-          transpPendingSignatures.add(sig);
-        }
-        maybeShowNewTranspositionsToast('unresolved');
-      } catch(e){ console.warn('[transp toast] boot check failed', e); }
-    })();
+    transpBootCheckPromise = runTranspositionScan('unresolved')
+      .catch(e => console.warn('[transp toast] boot check failed', e));
   }
   return transpBootCheckPromise;
 }
 async function scanForNewTranspositions(){
-  try {
-    const lines = await getLines(LOCAL_USER);
-    const groups = await findTransposedRooms(lines);
-    for(const entries of groups){
-      const sig = transpGroupSignature(entries);
-      if(transpSeenSignatures.has(sig)) continue;
-      transpSeenSignatures.add(sig);
-      transpPendingSignatures.add(sig);
-    }
-    maybeShowNewTranspositionsToast('found');
-  } catch(e){ console.warn('[transp toast] scan failed', e); }
+  try { await runTranspositionScan('found'); }
+  catch(e){ console.warn('[transp toast] scan failed', e); }
 }
 // Phase 3: skip popping the toast while the user is already looking at the
 // Find Transpositions report -- a second, redundant "N new transpositions
 // found" over the report itself is just noise, not new information. Nothing
-// found this scan is lost: transpPendingSignatures still holds it, so this
-// same check (re-run from transpCloseBtn) raises the toast the moment the
-// report closes, whether or not the report's own (possibly now-stale)
-// listing happened to include it.
-function maybeShowNewTranspositionsToast(label = 'found'){
+// found this scan is lost: transpPendingSignatures/transpPendingRepairCount
+// still hold it, so this same check (re-run from transpCloseBtn) raises the
+// toast the moment the report closes, whether or not the report's own
+// (possibly now-stale) listing happened to include it.
+function maybeShowNewTranspositionsToast(collisionLabel = 'found'){
   if($('transpOverlay').style.display === 'flex') return;
-  if(transpPendingSignatures.size) showNewTranspositionsToast(transpPendingSignatures.size, label);
+  const collisionCount = transpPendingSignatures.size;
+  if(!collisionCount && !transpPendingRepairCount) return;
+  // the common case (no repair pending) reuses showNewTranspositionsToast's
+  // own count+label wording unchanged; a pending repair doesn't fit that
+  // single count+label shape, so that combined case builds the text here
+  // instead, appending the repair note to whatever collision wording (if
+  // any) applies.
+  if(!transpPendingRepairCount){
+    showNewTranspositionsToast(collisionCount, collisionLabel);
+    return;
+  }
+  const parts = [];
+  if(collisionCount){
+    const noun = `transposition${collisionCount===1?'':'s'}`;
+    parts.push(collisionLabel === 'unresolved' ? `${collisionCount} unresolved ${noun}` : `${collisionCount} new ${noun} found`);
+  }
+  const repairNoun = `redirect${transpPendingRepairCount===1?'':'s'}`;
+  parts.push(`${transpPendingRepairCount} ${repairNoun} restored -- target disappeared`);
+  $('newTranspToastText').textContent = parts.join('; ');
+  $('newTranspToast').style.display = 'flex';
 }
 const TRANSP_SCAN_DEBOUNCE_MS = 1500;
 let transpScanDebounceHandle = null;
@@ -7401,11 +7479,13 @@ $('newTranspToastShowBtn').onclick = async () => {
   // dismiss first -- Show is the "I'm dealing with it now" action, so the
   // toast shouldn't still be sitting there once the report itself is open.
   transpPendingSignatures.clear();
+  transpPendingRepairCount = 0;
   hideNewTranspositionsToast();
   await openTranspositionsReport();
 };
 $('newTranspToastDismissBtn').onclick = () => {
   transpPendingSignatures.clear();
+  transpPendingRepairCount = 0;
   hideNewTranspositionsToast();
 };
 
@@ -11199,6 +11279,14 @@ if(localStorage.getItem('threeTestDebug')){
       await setPref(line.id, rootSeq, { reply, isCastleRoot: true, castleName, castleStreetNumber: 1 });
       invalidateBuiltCastlesCache();
       return line.id;
+    },
+    // "disappearing transpositions" Phase 1: a direct pref write + real
+    // cache invalidation, for simulating the edit that breaks a redirect's
+    // target -- e.g. changing the target room's own reply to a different
+    // move, so its old position no longer exists in that castle's graph.
+    setPrefField: async (lineId, seq, patch) => {
+      await setPref(lineId, seq, patch);
+      invalidateBuiltCastlesCache();
     },
   };
 }
