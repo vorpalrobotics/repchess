@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-335';
+const BUILD_TAG = '-336';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3638,8 +3638,12 @@ function seqStartsWith(seq, prefix){
    A merge, not an overwrite: a translated position the target already has
    its own reply for is left untouched, so this is safe to re-run (e.g.
    after adding more manual tries to the source branch) -- only ever fills
-   in what's still missing. Returns how many prefs were newly written. */
-async function portRedirectedResponses(roomSeq, saved){
+   in what's still missing. Returns how many prefs were newly written.
+   sourceLineId is explicit (not always CURRENT_LINE) because this is also
+   called from the Find Transpositions report, which can resolve a redirect
+   whose source line isn't the one currently open, or with no line open at
+   all. */
+async function portRedirectedResponses(sourceLineId, roomSeq, saved){
   const reply = saved?.reply;
   const targetRoomSeq = saved?.redirectTargetSeq;
   const targetLineId = saved?.redirectTargetLineId;
@@ -3647,7 +3651,7 @@ async function portRedirectedResponses(roomSeq, saved){
   const sourceRoomSeq = [...roomSeq, reply];   // the redirected room's own full seq (ends in OUR reply)
 
   const [sourcePrefs, targetPrefs] = await Promise.all([
-    getAllPrefs(CURRENT_LINE.id), getAllPrefs(targetLineId),
+    getAllPrefs(sourceLineId), getAllPrefs(targetLineId),
   ]);
   const entries = [];   // {seq, patch}, fed straight to setPrefsBatch
 
@@ -3675,7 +3679,7 @@ async function portRedirectedResponses(roomSeq, saved){
   // the room's own manually-recorded (not-yet-answered) opponent tries --
   // ported onto the target room's own manualReplies so it at least knows
   // they exist, even before anyone picks a response for them there.
-  const srcRoomPref = sourcePrefs[prefKey(CURRENT_LINE.id, sourceRoomSeq)];
+  const srcRoomPref = sourcePrefs[prefKey(sourceLineId, sourceRoomSeq)];
   if(srcRoomPref?.manualReplies?.length) addPort(targetRoomSeq, srcRoomPref);
 
   // every descendant pref (a real response, strictly below the redirected
@@ -3692,13 +3696,46 @@ async function portRedirectedResponses(roomSeq, saved){
     invalidateBuiltCastlesCache();
     // the target IS the currently-open line (a redirect within one line,
     // just a different castle) -- the in-memory PREFS this whole screen
-    // reads from needs the same refresh a real reload would give it.
-    if(targetLineId === CURRENT_LINE.id){
+    // reads from needs the same refresh a real reload would give it. Guarded
+    // on CURRENT_LINE existing at all: this can run with no line open (the
+    // Find Transpositions report doesn't require one).
+    if(CURRENT_LINE && targetLineId === CURRENT_LINE.id){
       PREFS = await getAllPrefs(CURRENT_LINE.id);
       renderTreeBody(CURRENT_LINE);
     }
   }
   return entries.length;
+}
+
+/* shared by the row menu's own "Port Responses to Target" and the
+   Attributes modal's auto-offer right after setting a redirect -- ports one
+   room and reports the result the same way both places. */
+async function portAndReport(sourceLineId, roomSeq, saved){
+  const n = await portRedirectedResponses(sourceLineId, roomSeq, saved);
+  log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
+        : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
+  return n;
+}
+
+/* true when this Attributes save just turned a redirect ON, or repointed an
+   already-redirected room at a DIFFERENT target -- the moment to offer
+   porting, not on every unrelated save (a note/name edit) that happens to
+   leave an existing redirect untouched. */
+function redirectChanged(before, after){
+  if(!after?.redirectToCastle) return false;
+  return before?.redirectToCastle !== after.redirectToCastle
+      || before?.redirectTargetLineId !== after.redirectTargetLineId;
+}
+/* offered right after Attributes sets/repoints a redirect -- same action as
+   the row menu's own "Port Responses to Target", just proactively suggested
+   instead of requiring the user to remember it's there. Declining is a
+   complete no-op: the room stays redirected either way, and Port is still
+   available on that row's own menu whenever they want it. */
+async function maybeOfferPortAfterRedirect(sourceLineId, roomSeq, saved){
+  if(!confirm(`Also port this room's existing responses to "${saved.redirectToCastle}" now?\n\n`
+    + `Any position the target doesn't already have its own answer for will be copied over. `
+    + `You can always do this later from this room's own "Port Responses to Target" menu item instead.`)) return;
+  await portAndReport(sourceLineId, roomSeq, saved);
 }
 
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
@@ -4661,7 +4698,12 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     function openRoomAttributes(){
       const roomSeq = canonicalRoomSeq(lineSeq);
       const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-      openAttributesModal(roomSaved(), v=>{
+      const before = roomSaved();
+      // a plain snapshot, NOT a reference to `before` -- savePrefField
+      // mutates that same PREFS object in place below, so comparing against
+      // `before` directly would always see it already-updated too.
+      const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
+      openAttributesModal(before, v=>{
         invalidateBuiltCastlesCache();
         savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
         savePrefField(roomSeq, 'castleName', v.castleName);
@@ -4680,6 +4722,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
         refreshMeta();
         notifyDirty?.();   // note/castleName/isCastleRoot can change an ancestor compact-run's eligibility/shape
+        if(redirectChanged(beforeRedirect, roomSaved())) maybeOfferPortAfterRedirect(CURRENT_LINE.id, roomSeq, roomSaved());
       }, lineSeq, roomSeq);
     }
 
@@ -4872,9 +4915,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       const roomSeq = canonicalRoomSeq(lineSeq);
       const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
       if(!saved?.redirectToCastle) return;
-      const n = await portRedirectedResponses(roomSeq, saved);
-      log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
-            : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
+      await portAndReport(CURRENT_LINE.id, roomSeq, saved);
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
@@ -5108,7 +5149,12 @@ function renderBlackRoot(parent,games,trigger){
   function openRoomAttributes(){
     const roomSeq = canonicalRoomSeq(lineSeq);
     const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-    openAttributesModal(roomSaved(), v=>{
+    const before = roomSaved();
+    // a plain snapshot, NOT a reference to `before` -- savePrefField mutates
+    // that same PREFS object in place below, so comparing against `before`
+    // directly would always see it already-updated too.
+    const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
+    openAttributesModal(before, v=>{
       invalidateBuiltCastlesCache();
       savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
       savePrefField(roomSeq, 'castleName', v.castleName);
@@ -5126,6 +5172,7 @@ function renderBlackRoot(parent,games,trigger){
       // leaves the toggle stuck empty) until the next full re-render.
       if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
       refreshMeta();
+      if(redirectChanged(beforeRedirect, roomSaved())) maybeOfferPortAfterRedirect(CURRENT_LINE.id, roomSeq, roomSaved());
     }, lineSeq, roomSeq);
   }
 
@@ -5275,9 +5322,7 @@ function renderBlackRoot(parent,games,trigger){
     const roomSeq = canonicalRoomSeq(lineSeq);
     const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
     if(!saved?.redirectToCastle) return;
-    const n = await portRedirectedResponses(roomSeq, saved);
-    log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
-          : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
+    await portAndReport(CURRENT_LINE.id, roomSeq, saved);
   };
 
   btnEval.onclick = () => {
@@ -7151,19 +7196,23 @@ async function resolveTranspositionGroup(entries, winnerIdx){
 
   const spinner = showSpinner('Redirecting…');
   await nextPaint();
-  let redirected = 0, skippedRoots = 0, touchedCurrentLine = false;
+  let skippedRoots = 0, touchedCurrentLine = false;
+  // { lineId, roomSeq, saved } per room actually redirected -- reused below
+  // to offer porting each one's existing responses, without re-fetching.
+  const redirectedLosers = [];
   try {
     for(const loser of others){
       const roomSeq = loser.room.seq.slice(0, -1);
       const pref = await getPref(loser.lineId, roomSeq);
       if(pref?.isCastleRoot){ skippedRoots++; continue; }
-      await setPref(loser.lineId, roomSeq, {
+      const redirectFields = {
         redirectToCastle: winner.castleName,
         redirectTargetLineId: winner.lineId,
         redirectTargetSeq: winner.room.seq,
-      });
+      };
+      await setPref(loser.lineId, roomSeq, redirectFields);
       if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
-      redirected++;
+      redirectedLosers.push({ lineId: loser.lineId, roomSeq, saved: { ...pref, ...redirectFields } });
     }
     invalidateBuiltCastlesCache();
     if(touchedCurrentLine){
@@ -7173,9 +7222,20 @@ async function resolveTranspositionGroup(entries, winnerIdx){
   } finally {
     hideSpinner(spinner);
   }
+  const redirected = redirectedLosers.length;
   log(`Redirected ${redirected} room(s) to ${label}`
     + (skippedRoots ? ` (${skippedRoots} skipped -- a castle root can't be redirected)` : ''));
   await refreshTranspositionsReport();
+
+  // offered once, for the whole batch, right after -- same idea as
+  // maybeOfferPortAfterRedirect (Attributes modal), just aggregated since
+  // this action can redirect more than one room in a single click.
+  if(redirected && confirm(`Also port ${redirected === 1 ? "that room's" : "those rooms'"} existing responses to ${label} now?\n\n`
+    + `Any position the target doesn't already have its own answer for will be copied over.`)){
+    let totalPorted = 0;
+    for(const { lineId, roomSeq, saved } of redirectedLosers) totalPorted += await portRedirectedResponses(lineId, roomSeq, saved);
+    log(totalPorted ? `Ported ${totalPorted} response${totalPorted===1?'':'s'} to ${label}` : `Nothing new to port to ${label}`);
+  }
 }
 
 async function refreshTranspositionsReport(){

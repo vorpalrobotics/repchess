@@ -17638,5 +17638,130 @@ try {
 } catch(e){ bad('Phase DK: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DL: offering to port automatically right after setting a
+//     redirect, instead of requiring a separate manual "Port Responses to
+//     Target" click every time. The Attributes modal offers it inline
+//     (once, only when the redirect actually changed -- not on every
+//     unrelated save); "Keep this, redirect the rest" offers it once for
+//     the whole batch. Both reuse Phase 3's own portRedirectedResponses --
+//     this is purely about surfacing it proactively. The harness
+//     auto-accepts every confirm() dialog (see harness.mjs), so these tests
+//     exercise the real "yes, port it" path end to end, not just that the
+//     offer appears. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDL = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): same shape as Phase DE, redirect set via
+  // the Attributes modal in the tests below (not pre-seeded) -- an existing
+  // child (e6 -> e3) under the room being redirected is what proves the
+  // auto-offered port actually ran.
+  // pair 2 (Italian/Reversed Italian): a SEPARATE, unrelated interior-room
+  // collision for the "Keep this, redirect the rest" bulk port-offer below,
+  // with its own existing child under the LOSING side only.
+  await seedBackup(appDL.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','c6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        { seq: ['e4','e5','Nf3','Bc5'], reply: 'c3' },   // second branch off root -- avoids corridor-merge
+        { seq: ['e4','e5','Nf3','Nc6'], reply: 'd4' },
+        { seq: ['e4','e5','Nf3','Nc6','d4','a6'], reply: 'a3' },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','Nc6'], reply: 'd4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        { seq: ['Nf3','Nc6','d4','d6'], reply: 'c4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['Nf3','Nc6','d4','e5'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g0', moves: 'Nc3 d5 d4 c6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3 Nc6 d4 a6 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'e4 e5 Nf3 Bc5 c3', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'Nf3 Nc6 d4 e5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g7', moves: 'Nf3 Nc6 d4 d6 c4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDL.page.click('.line-row');
+  await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+  await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]', { timeout: 20000 });
+
+  // 313. Setting a redirect via the Attributes modal offers to port right
+  //      away, and (the harness auto-accepts confirm()) actually does.
+  try {
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDL.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l2Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const ported = l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(ported?.reply === 'e3', `expected the existing child (e6 -> e3) auto-ported to the target, got ${JSON.stringify(ported)}`);
+    ok('Attributes modal: setting a redirect offers to port immediately, and porting actually happens');
+  } catch(e){ bad('Attributes modal: auto-offer to port after setting a redirect', e); }
+
+  // 314. Editing something UNRELATED on the same, already-redirected room
+  //      (its note) does NOT re-trigger the port offer -- only an actual
+  //      redirect change should.
+  try {
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.fill('#attrNote', 'just a note, not a redirect change');
+    await appDL.page.evaluate(() => { document.getElementById('progress').textContent = ''; });   // clear -- a stray re-port would show up here
+    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
+    const progressText = await appDL.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === '', `expected no port-related message from an unrelated save, got "${progressText}"`);
+    ok('Attributes modal: an unrelated save on an already-redirected room does not re-offer to port');
+  } catch(e){ bad('Attributes modal: no spurious re-port on an unrelated save', e); }
+
+  // 315. "Keep this, redirect the rest" (Find Transpositions) also offers to
+  //      port, once, for the whole batch -- by now the Chigorin/Queen's Pawn
+  //      pair is already resolved (Phase 6), so only the Italian pair shows.
+  try {
+    await appDL.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDL.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    // keep Reversed Italian (L4) -- so Italian Castle (L3), which has the
+    // existing child (a6 -> a3), is the one being redirected/ported FROM.
+    await appDL.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Reversed Italian'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l4Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L4'));
+    const ported = l4Prefs['L4|Nf3,Nc6,d4,e5,e4,a6'];
+    assert(ported?.reply === 'a3', `expected Italian Castle's existing child (a6 -> a3) auto-ported to Reversed Italian, got ${JSON.stringify(ported)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" also offers to port, for the whole batch, and it actually happens');
+  } catch(e){ bad('Find Transpositions: bulk redirect auto-offers to port', e); }
+} finally {
+  await appDL.close();
+}
+} catch(e){ bad('Phase DL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
