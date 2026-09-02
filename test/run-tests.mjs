@@ -17527,5 +17527,116 @@ try {
 } catch(e){ bad('Phase DJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DK: "Keep this, redirect the rest" -- resolving a collision
+//     directly from the Find Transpositions report, instead of hunting down
+//     the losing room's own row in the move table and setting the redirect
+//     there by hand. Writes the exact same 3 pref fields the Attributes
+//     modal's own field does; a castle root is skipped (can't be redirected,
+//     same rule refreshRedirectField enforces). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDK = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): an interior-room collision, resolvable.
+  // pair 2 (Alpha/Beta): a ROOT-vs-ROOT collision -- "Keep this" must skip
+  // it (a root can't be redirected) rather than silently doing nothing.
+  await seedBackup(appDK.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        // second branch off the root -- unlike every earlier phase's fixture,
+        // this one is NOT pre-redirected, so Chigorin's own interior room
+        // has to actually get BUILT (not skipped by processExit) for the
+        // detector to see it at all -- which means it needs the same
+        // corridor-merge-avoidance branch Phase DE's fixture comment
+        // explains, this time on the SOURCE side rather than the target's.
+        { seq: ['Nc3','d5','d4','c6'], reply: 'e4' },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Alpha Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Alpha Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L4', name: 'Beta Approach', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Beta Castle', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g0', moves: 'Nc3 d5 d4 c6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'Nf3 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 311. Clicking "Keep this, redirect the rest" on the Queen's Pawn Palace
+  //      entry redirects the Chigorin entry to it, and the whole group
+  //      disappears from the report afterward.
+  try {
+    await appDK.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDK.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDK.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 2,
+      { timeout: 5000 },
+    );
+    // find the Queen's Pawn Palace entry's own "Keep this" button, across
+    // either group (sort order isn't asserted on elsewhere in this suite).
+    await appDK.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Queens Pawn Palace'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDK.page.waitForFunction(() => /redirected 1 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l1Prefs = await appDK.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const chigorinInterior = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(chigorinInterior?.redirectToCastle === 'Queens Pawn Palace',
+      `expected the Chigorin entry redirected to Queens Pawn Palace, got ${JSON.stringify(chigorinInterior)}`);
+    assert(chigorinInterior?.redirectTargetLineId === 'L2', `expected the redirect target line to be L2, got ${JSON.stringify(chigorinInterior)}`);
+
+    // the report auto-refreshes after resolving -- that group is gone, only
+    // the still-unredirected Alpha/Beta pair is left.
+    await appDK.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    const bodyText = await appDK.page.evaluate(() => document.getElementById('transpBody').textContent);
+    assert(!bodyText.includes('Chigorin Castle') && !bodyText.includes('Queens Pawn Palace'),
+      `expected the resolved pair gone from the refreshed report, got ${JSON.stringify(bodyText)}`);
+    assert(bodyText.includes('Alpha Castle') && bodyText.includes('Beta Castle'),
+      `expected the still-unresolved pair still shown, got ${JSON.stringify(bodyText)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" resolves a group and it disappears on refresh');
+  } catch(e){ bad('Find Transpositions: resolving a collision from the report', e); }
+
+  // 312. A root-vs-root collision can't actually be redirected either way --
+  //      "Keep this" reports 0 redirected / 1 skipped, and neither root's
+  //      own pref gets touched.
+  try {
+    await appDK.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Alpha Castle'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDK.page.waitForFunction(() => /redirected 0 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    const progressText = await appDK.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(/skipped/i.test(progressText), `expected the skip explanation for a root-vs-root pair, got "${progressText}"`);
+
+    const l4Prefs = await appDK.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L4'));
+    assert(!l4Prefs['L4|Nf3,e5']?.redirectToCastle, `expected Beta's own root left untouched, got ${JSON.stringify(l4Prefs['L4|Nf3,e5'])}`);
+    ok('Find Transpositions: a root-vs-root collision is skipped, not silently redirected');
+  } catch(e){ bad('Find Transpositions: root-vs-root collision skip', e); }
+} finally {
+  await appDK.close();
+}
+} catch(e){ bad('Phase DK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

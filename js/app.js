@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-334';
+const BUILD_TAG = '-335';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7107,28 +7107,89 @@ function renderTranspositionsReport(groups){
   }
   const roomTotal = groups.reduce((sum, g) => sum + g.length, 0);
   summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
-  body.innerHTML = groups.map(entries => `
+  body.innerHTML = groups.map((entries, gi) => `
     <div class="transp-group">
       <h3>${entries.length} castles share this position</h3>
-      ${entries.map(e => `
+      ${entries.map((e, ei) => `
         <div class="transp-entry">
-          <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
-          — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
-          <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
+          <div>
+            <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
+            — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
+            <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
+          </div>
+          <button type="button" class="transp-keep-btn" data-group="${gi}" data-entry="${ei}"
+            title="Redirect every other room in this group to this one">Keep this, redirect the rest</button>
         </div>
       `).join('')}
     </div>
   `).join('');
+  // event delegation (not one listener per button) so a re-render never
+  // leaks stale handlers -- innerHTML above already discarded the old ones.
+  body.onclick = e => {
+    const btn = e.target.closest('.transp-keep-btn');
+    if(!btn) return;
+    resolveTranspositionGroup(groups[parseInt(btn.dataset.group, 10)], parseInt(btn.dataset.entry, 10));
+  };
 }
 
-$('menuFindTranspositions').onclick = async ()=>{
-  $('menuList').style.display='none';
-  $('transpOverlay').style.display='flex';
+/* Redirects every OTHER entry in this collision group to `entries[winnerIdx]`
+   -- the same 3 pref fields (redirectToCastle/redirectTargetLineId/
+   redirectTargetSeq) the Attributes modal's own "Redirect to castle" field
+   writes (see refreshRedirectField), just applied to every loser in the
+   group in one action instead of hunting down each row individually. A
+   castle ROOT can't be redirected (same rule refreshRedirectField enforces
+   by hiding its own field there) -- skipped here too, counted separately so
+   the confirmation message explains why fewer than expected got redirected. */
+async function resolveTranspositionGroup(entries, winnerIdx){
+  const winner = entries[winnerIdx];
+  const others = entries.filter((_, i) => i !== winnerIdx);
+  if(!others.length) return;
+  const label = `"${winner.castleName}" (${winner.lineName})`;
+  if(!confirm(`Redirect every other room in this group to ${label}?\n\n`
+    + `Each redirected room's own further responses are suppressed in favor of the target -- `
+    + `existing prep can still be brought over afterward with "Port Responses to Target" on that room.`)) return;
+
+  const spinner = showSpinner('Redirecting…');
+  await nextPaint();
+  let redirected = 0, skippedRoots = 0, touchedCurrentLine = false;
+  try {
+    for(const loser of others){
+      const roomSeq = loser.room.seq.slice(0, -1);
+      const pref = await getPref(loser.lineId, roomSeq);
+      if(pref?.isCastleRoot){ skippedRoots++; continue; }
+      await setPref(loser.lineId, roomSeq, {
+        redirectToCastle: winner.castleName,
+        redirectTargetLineId: winner.lineId,
+        redirectTargetSeq: winner.room.seq,
+      });
+      if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
+      redirected++;
+    }
+    invalidateBuiltCastlesCache();
+    if(touchedCurrentLine){
+      PREFS = await getAllPrefs(CURRENT_LINE.id);
+      renderTreeBody(CURRENT_LINE);
+    }
+  } finally {
+    hideSpinner(spinner);
+  }
+  log(`Redirected ${redirected} room(s) to ${label}`
+    + (skippedRoots ? ` (${skippedRoots} skipped -- a castle root can't be redirected)` : ''));
+  await refreshTranspositionsReport();
+}
+
+async function refreshTranspositionsReport(){
   $('transpSummary').textContent = 'Scanning castles…';
   $('transpBody').innerHTML = '';
   const lines = await getLines(LOCAL_USER);
   const groups = await findTransposedRooms(lines);
   renderTranspositionsReport(groups);
+}
+
+$('menuFindTranspositions').onclick = async ()=>{
+  $('menuList').style.display='none';
+  $('transpOverlay').style.display='flex';
+  await refreshTranspositionsReport();
 };
 $('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
 
