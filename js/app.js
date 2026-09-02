@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-337';
+const BUILD_TAG = '-338';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3558,7 +3558,7 @@ async function redirectCandidatesForRoom(roomFen, ownInstanceId){
     const gr = c.genRooms.find(r => r.posKey === posKey);
     if(!gr) continue;
     const line = lines.find(l => l.id === c.lineId);
-    out.push({ lineId: c.lineId, lineName: line ? line.name : c.lineId, castleName: c.castleName, targetSeq: gr.seq });
+    out.push({ lineId: c.lineId, lineName: line ? line.name : c.lineId, castleName: c.castleName, targetSeq: gr.seq, roomName: gr.name || '' });
   }
   return out;
 }
@@ -3755,16 +3755,17 @@ $('attributesSaveBtn').onclick = () => {
     streetNumber = num;
   }
   const redirVal = $('attrRedirectTo').value;
-  let redirectToCastle = '', redirectTargetLineId = '', redirectTargetSeq = null;
+  let redirectToCastle = '', redirectTargetLineId = '', redirectTargetSeq = null, redirectTargetRoomName = '';
   if(redirVal === '__stale__'){
     // unchanged since the modal opened -- write back exactly what was
     // already saved rather than risk clearing it on a candidate-lookup miss.
     redirectToCastle = attrModalSaved?.redirectToCastle || '';
     redirectTargetLineId = attrModalSaved?.redirectTargetLineId || '';
     redirectTargetSeq = attrModalSaved?.redirectTargetSeq || null;
+    redirectTargetRoomName = attrModalSaved?.redirectTargetRoomName || '';
   } else if(redirVal !== ''){
     const c = attrRedirectCandidates[parseInt(redirVal, 10)];
-    if(c){ redirectToCastle = c.castleName; redirectTargetLineId = c.lineId; redirectTargetSeq = c.targetSeq; }
+    if(c){ redirectToCastle = c.castleName; redirectTargetLineId = c.lineId; redirectTargetSeq = c.targetSeq; redirectTargetRoomName = c.roomName || ''; }
   }
   const v = {
     roomName: $('attrRoomName').value.trim(),
@@ -3773,7 +3774,7 @@ $('attributesSaveBtn').onclick = () => {
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
     note: $('attrNote').value.trim(),
-    redirectToCastle, redirectTargetLineId, redirectTargetSeq,
+    redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -4703,6 +4704,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
         savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
         savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
+        savePrefField(roomSeq, 'redirectTargetRoomName', v.redirectTargetRoomName);
         refreshBranchName(nameSpan, roomSaved());
         refreshRowMenuLabels(rowMenu, roomSaved());
         // re-sync the visible children immediately on a redirect toggle --
@@ -5154,6 +5156,7 @@ function renderBlackRoot(parent,games,trigger){
       savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
       savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
       savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
+      savePrefField(roomSeq, 'redirectTargetRoomName', v.redirectTargetRoomName);
       refreshBranchName(nameSpan, roomSaved());
       refreshRowMenuLabels(rowMenu, roomSaved());
       // re-sync the visible children immediately on a redirect toggle --
@@ -6213,7 +6216,8 @@ async function buildBackupData(){
         collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
         castleStreetNumber:p.castleStreetNumber,
-        redirectToCastle:p.redirectToCastle, redirectTargetLineId:p.redirectTargetLineId, redirectTargetSeq:p.redirectTargetSeq
+        redirectToCastle:p.redirectToCastle, redirectTargetLineId:p.redirectTargetLineId, redirectTargetSeq:p.redirectTargetSeq,
+        redirectTargetRoomName:p.redirectTargetRoomName
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -6314,7 +6318,7 @@ async function applyBackupData(data, onMnemProgress){
         isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
         castleStreetNumber:pref.castleStreetNumber??'',
         redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
-        redirectTargetSeq:pref.redirectTargetSeq||null
+        redirectTargetSeq:pref.redirectTargetSeq||null, redirectTargetRoomName:pref.redirectTargetRoomName||''
       });
     }
   }
@@ -7198,6 +7202,7 @@ async function resolveTranspositionGroup(entries, winnerIdx){
         redirectToCastle: winner.castleName,
         redirectTargetLineId: winner.lineId,
         redirectTargetSeq: winner.room.seq,
+        redirectTargetRoomName: winner.room.name || '',
       };
       await setPref(loser.lineId, roomSeq, redirectFields);
       if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
@@ -9266,8 +9271,9 @@ function refreshBranchName(nameSpan, saved){
   const roomKey = roomKeyForSaved(saved);
   nameSpan.classList.toggle('branchName-locked', locked);
   nameSpan.classList.toggle('branchName-memorized', !locked && !!(roomKey && MEMORIZED_ROOMS[roomKey]));
+  const targetRoomName = (saved?.redirectTargetRoomName || '').trim() || 'not yet named';
   nameSpan.title = redirected
-    ? `Redirected to "${saved.redirectToCastle}" -- this room's own further responses are suppressed; doors here lead to the target castle's room instead`
+    ? `Redirected to "${saved.redirectToCastle}" room "${targetRoomName}" -- this room's own further responses are suppressed; doors here lead to the target castle's room instead`
     : (locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '');
 }
 

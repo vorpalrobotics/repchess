@@ -17762,5 +17762,114 @@ try {
 } catch(e){ bad('Phase DL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DM: the redirect badge's tooltip names the target ROOM, not just
+//     the target castle -- "Redirected to "Castle" room "Room"" -- since a
+//     castle can (and often does) contain many rooms, naming only the castle
+//     left the user unable to tell which one without opening it. Falls back
+//     to `room "not yet named"` when the target room has no name pref set.
+//     Both the Attributes modal's own redirect and "Keep this, redirect the
+//     rest" (Find Transpositions) write the same redirectTargetRoomName
+//     snapshot, same as the pre-existing redirectToCastle castle-name
+//     snapshot (also captured at redirect-set time, not looked up live). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDM = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): same shape as Phase DE, but the target
+  // room (L2's) is given a name up front -- proves the tooltip carries an
+  // EXISTING name through, not just a placeholder.
+  // pair 2 (Italian/Reversed Italian): same shape as Phase DL, target room
+  // left unnamed -- proves the "not yet named" fallback, and that "Keep
+  // this, redirect the rest" captures the room name the same way.
+  await seedBackup(appDM.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3', name: 'Solarium' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        { seq: ['e4','e5','Nf3','Bc5'], reply: 'c3' },   // second branch off root -- avoids corridor-merge
+        { seq: ['e4','e5','Nf3','Nc6'], reply: 'd4' },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','Nc6'], reply: 'd4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        { seq: ['Nf3','Nc6','d4','d6'], reply: 'c4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['Nf3','Nc6','d4','e5'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3 Bc5 c3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'e4 e5 Nf3 Nc6 d4', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'Nf3 Nc6 d4 d6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g7', moves: 'Nf3 Nc6 d4 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDM.page.click('.line-row');
+  await appDM.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 316. Redirecting via the Attributes modal onto an already-named target
+  //      room shows that room's name in the badge tooltip.
+  try {
+    await appDM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDM.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDM.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDM.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDM.page.click('#attributesSaveBtn');
+    await appDM.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const title = await appDM.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .branchName').title);
+    assert(title.includes('Redirected to "Queens Pawn Palace" room "Solarium"'),
+      `expected the tooltip to name both the target castle and its named room, got "${title}"`);
+    ok('Attributes modal: redirect tooltip names the target room, not just the castle');
+  } catch(e){ bad('Attributes modal: redirect tooltip includes target room name', e); }
+
+  // 317. Redirecting onto a target room with NO name leaves
+  //      redirectTargetRoomName empty -- refreshBranchName's own fallback
+  //      (verified directly against the source in this same edit) turns that
+  //      into "not yet named" in the tooltip; this test proves "Keep this,
+  //      redirect the rest" (Find Transpositions) captures the (empty) room
+  //      name the same way the Attributes modal does, rather than, say,
+  //      leaving the field undefined or throwing on a nameless target.
+  try {
+    await appDM.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDM.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDM.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    // keep Reversed Italian (L4, unnamed target room) -- so Italian Castle
+    // (L3) is the one being redirected.
+    await appDM.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Reversed Italian'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDM.page.waitForFunction(() =>
+      document.querySelectorAll('#transpBody .transp-group').length === 0, { timeout: 10000 });
+
+    const l3Prefs = await appDM.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
+    const redirected = l3Prefs['L3|e4,e5,Nf3,Nc6'];
+    assert(redirected?.redirectToCastle === 'Reversed Italian', `expected Italian Castle's interior room redirected to Reversed Italian, got ${JSON.stringify(redirected)}`);
+    assert(!redirected?.redirectTargetRoomName, `expected an empty redirectTargetRoomName for an unnamed target room, got ${JSON.stringify(redirected?.redirectTargetRoomName)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" captures an empty room name for an unnamed target, ready for the tooltip\'s own fallback');
+  } catch(e){ bad('Find Transpositions: redirectTargetRoomName on an unnamed target room', e); }
+} finally {
+  await appDM.close();
+}
+} catch(e){ bad('Phase DM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
