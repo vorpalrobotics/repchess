@@ -5218,6 +5218,18 @@ function defaultEntrySpawn(room){
 
 function computeSpawnForExit(fromKey, room, ex){
   const targetRoom = mergedRoom(ex.target);
+  // a dangling target -- e.g. a cross-castle redirect whose target room
+  // disappeared out from under it (app.js's own repair/warning for this is
+  // best-effort, not airtight: there's a window before its debounced scan
+  // catches up) -- degrades to "stay put" instead of crashing here. This
+  // exit still gets a live trigger built around it (see the "locked" check
+  // this same doc comment is echoed at, in buildRoom's own wall/exit loop,
+  // which skips registering one in the first place whenever possible), so
+  // reaching this fallback at all should be rare.
+  if(!targetRoom){
+    console.warn(`[VR] computeSpawnForExit: target room "${ex.target}" doesn't exist -- degrading to a same-room spawn instead of crashing`);
+    return defaultEntrySpawn(room);
+  }
   if(targetRoom.outdoor){
     // walking out of a building's front door onto the street
     const building = targetRoom.buildings.find(b => b.target === fromKey);
@@ -5849,11 +5861,20 @@ function buildRoom(roomKey){
           const isStair = isStairType(ex.type);
           const dKey = doorKey(wall, ex.offset);
           // a locked door: a forward, ordinary (not stair/elevator) door whose
-          // target has nothing further built past it -- see isRoomEmpty. Room
-          // override wins, else the locked-door building default (never the
-          // ordinary-door default -- an unset locked default stays an open,
-          // unskinned gap rather than silently looking like a normal door).
-          const locked = !ex.back && !isStair && ex.type !== 'elevator' && isRoomEmpty(ex.target);
+          // target has nothing further built past it -- see isRoomEmpty --
+          // OR whose target doesn't exist AT ALL (!mergedRoom(ex.target)),
+          // e.g. a cross-castle redirect whose target disappeared out from
+          // under it (app.js's own repair for this is debounced, not
+          // instant -- see computeSpawnForExit's matching doc comment).
+          // isRoomEmpty itself deliberately does NOT treat a missing room
+          // this way (an unregistered single-castle-preview target is
+          // real, just not built THIS session) -- this is the other,
+          // genuinely-gone case, checked separately rather than folded into
+          // isRoomEmpty's own meaning. Room override wins, else the
+          // locked-door building default (never the ordinary-door default
+          // -- an unset locked default stays an open, unskinned gap rather
+          // than silently looking like a normal door).
+          const locked = !ex.back && !isStair && ex.type !== 'elevator' && (isRoomEmpty(ex.target) || !mergedRoom(ex.target));
           const doorAsset = doorAssetFor(roomKey, dKey)
             || (locked ? defaultLockedDoorAsset(roomKey) : defaultDoorAsset(roomKey, !!ex.back));
           // the back door's own physical slot (wall/offset/skin) is always
@@ -8764,6 +8785,16 @@ export async function openThreeTest(containerEl, opts){
       // the member-anchored side-door placement (memorized-room-stability).
       exits: (roomKeyArg) => (mergedRoom(roomKeyArg || currentRoomKey)?.exits || [])
         .map(e => ({ target: e.target, back: !!e.back, occurrence: e.occurrence || null, wall: e.wall, offset: e.offset })),
+      // "disappearing transpositions" Phase 3: whether the CURRENT room has
+      // an actual live, walkable trigger to `targetKey` -- exits() above
+      // reflects the static castle graph (still lists a locked/broken
+      // door's own edge), this reflects exitMeta/elevatorMeta, the RUNTIME
+      // list buildRoom actually wires up triggers from. A door whose target
+      // doesn't resolve to a real room gets excluded from this (see
+      // buildRoom's own "locked" check) even though exits() above still
+      // shows it.
+      hasLiveDoorTo: (targetKey) => exitMeta.some(m => m.target === targetKey)
+        || elevatorMeta.some(m => m.target === targetKey || (m.floors || []).some(f => f.target === targetKey)),
       // "memorized" toggle (Phase 1): drives the real toggleMemorized()/toolbar
       // state so a test doesn't need to click the actual button DOM element.
       memorized: () => MEMORIZED[currentRoomKey] || null,

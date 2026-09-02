@@ -18378,5 +18378,82 @@ try {
 } catch(e){ bad('Phase DS: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DT: "disappearing transpositions" -- Phase 3, the VR defensive
+//     fix. Phases 1/2 make a dangling redirect rare (auto-repaired within
+//     a debounce, warned about before a hide could cause one), but neither
+//     is airtight -- there's a real window (before the debounce fires)
+//     where VR could still be asked to build a door whose target doesn't
+//     exist. This test deliberately breaks a redirect's target WITHOUT
+//     ever running a scan (threeTestDebug already skips the automatic
+//     scheduler -- see invalidateBuiltCastlesCache's own guard), so the
+//     stale redirect is still sitting there when VR builds, exactly
+//     reproducing the crash this phase fixes: building the Chigorin root
+//     (its own forward door targets the now-gone Queen's Pawn Palace room)
+//     used to throw "Cannot read properties of undefined (reading
+//     'outdoor')" straight out of computeSpawnForExit. ---
+if(shouldRunPhase(['vr-castle','castle-generation'])){
+try {
+const appDT = await launchApp();
+try {
+  const keys = await appDT.page.evaluate(() => {
+    const pk = (mv, inst) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return `cas:${inst}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      chigorinRoot: pk(['Nc3','d5','d4'], 'L1_Chigorin_Castle'),
+      target: pk(['d4','Nf6','Nc3','d5','Nf3'], 'L2_Queens_Pawn_Palace'),
+    };
+  });
+  // same fixture shape as Phase DF/DR/DS -- L1's root door redirects to
+  // L2's interior room, both real and consistent at seed time.
+  await seedBackup(appDT.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // break the target -- and, unlike Phase DR/DS, deliberately never call
+  // forceNewTranspositionsScan, so L1's redirect fields are still stale
+  // (pointing at a position that no longer exists) by the time VR builds.
+  await appDT.page.evaluate(() => window.__redirectTestHooks.setPrefField('L2', ['d4','Nf6','Nc3','d5'], { reply: 'e4' }));
+
+  // 332. Entering the Chigorin root -- the room whose own forward door
+  //      targets the now-gone position -- builds cleanly (no page error/
+  //      crash), and that door is excluded from the live, walkable trigger
+  //      list even though the underlying castle-graph edge still lists it.
+  try {
+    await openVR(appDT.page);
+    await appDT.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chigorinRoot);
+    const landed = await appDT.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.chigorinRoot, `expected to actually land in the Chigorin root (a crash mid-build would leave this stale), got ${landed}`);
+
+    const errors = realErrors(appDT.consoleErrors);
+    assert(errors.length === 0, `expected no console/page errors building a room with a broken redirect door, got:\n${errors.join('\n')}`);
+
+    const hasLiveDoor = await appDT.page.evaluate((k) => window.__threeTestEdit.hasLiveDoorTo(k), keys.target);
+    assert(!hasLiveDoor, 'expected the broken door excluded from the live/walkable trigger list (locked), not silently offered as a normal door');
+    ok('Disappearing transpositions: VR builds a room with a dangling redirect door without crashing, and locks that door');
+  } catch(e){ bad('Disappearing transpositions: VR defensive fix on a dangling redirect', e); }
+} finally {
+  await appDT.close();
+}
+} catch(e){ bad('Phase DT: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
