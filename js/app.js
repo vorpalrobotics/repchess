@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-350';
+const BUILD_TAG = '-351';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6785,12 +6785,21 @@ $('backupImport').addEventListener('change', async e=>{
   e.target.value = '';
   if(!f) return;
 
+  // gunzip + JSON.parse of a large backup (base64 images push these into the
+  // tens of MB) can take several seconds with nothing else on screen to show
+  // for it -- a spinner here, not just around the restore itself further
+  // down, closes that silent gap between picking the file and any of the
+  // confirm() dialogs below actually appearing.
+  const readSpinner = showSpinner('Reading backup file…');
+  await nextPaint();
   let data;
   try{ data = JSON.parse(await readMaybeGzipped(f)); }
   catch(err){
     console.error('[import] parse failed',err);
     log('import failed: not a valid backup file',true);
     return;
+  } finally {
+    hideSpinner(readSpinner);
   }
 
   // An asset-only export gets a different, asset-scoped replace flow.

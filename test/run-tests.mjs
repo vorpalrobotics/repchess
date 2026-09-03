@@ -18690,5 +18690,87 @@ try {
 } catch(e){ bad('Phase DW: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DX: UX fix -- selecting a backup file to import used to sit with
+//     nothing on screen while it was read and gunzip/JSON.parse'd (a large
+//     production backup, heavy with base64 images, can take 10+ seconds)
+//     before any of the confirm() dialogs appeared. Reported by the user.
+//     Now a "Reading backup file…" spinner covers that gap, cleared in a
+//     finally so it can never leak past the read regardless of which
+//     confirm() branch (or a parse failure) follows. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDX = await launchApp();
+try {
+  // 338. The spinner appears (with the right label) while the file is
+  //      being read/parsed, and the restore confirm dialog still fires
+  //      normally afterward -- proving the spinner doesn't block or delay
+  //      the existing flow, just fills the previously-silent gap before it.
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDX.page.on('dialog', onDialog);
+    const setFiles = appDX.page.setInputFiles('#backupImport', {
+      name: 'backup.json', mimeType: 'application/json',
+      // padded with a bunch of inert lines so the read+parse isn't
+      // instantaneous -- gives the spinner a real (if brief) window to be
+      // observed in, rather than depending on sub-millisecond luck.
+      buffer: Buffer.from(JSON.stringify({
+        version: 6, user: 'tester', games: [],
+        lines: Array.from({ length: 500 }, (_, i) => ({
+          id: `pad${i}`, name: `Padding Line ${i}`, color: 'white', openingMoves: ['e4'], prefs: [],
+        })),
+      })),
+    });
+    // plain Node-side evaluate+wait polling, NOT page.waitForFunction --
+    // waitForFunction's own in-page polling was found (empirically, via a
+    // throwaway repro) to stall this harness's dialog delivery when a
+    // confirm() is about to fire while a waitForFunction poll is still
+    // in flight; a loop of separate evaluate() calls from the Node side
+    // doesn't have that problem.
+    let caughtSpinner = false;
+    for(let i = 0; i < 50 && !caughtSpinner; i++){
+      const info = await appDX.page.evaluate(() => ({
+        display: document.getElementById('spinnerOverlay').style.display,
+        label: document.getElementById('spinnerLabel').textContent,
+      }));
+      if(info.display === 'flex' && info.label.includes('Reading backup file')) caughtSpinner = true;
+      else await appDX.page.waitForTimeout(10);
+    }
+    for(let i = 0; i < 50 && dialogs.length === 0; i++) await appDX.page.waitForTimeout(50);
+    for(let i = 0; i < 100; i++){
+      const progressText = await appDX.page.evaluate(() => document.getElementById('progress').textContent);
+      if(/restored \d+ opening system/i.test(progressText)) break;
+      await appDX.page.waitForTimeout(50);
+    }
+    await setFiles;
+    appDX.page.off('dialog', onDialog);
+    assert(caughtSpinner, 'expected a "Reading backup file…" spinner while the file is being read/parsed');
+    assert(dialogs.some(m => m.includes('RESTORE FULL BACKUP')), `expected the restore confirm dialog to still appear afterward, got ${JSON.stringify(dialogs)}`);
+    const stuck = await appDX.page.evaluate(() => document.getElementById('spinnerOverlay').style.display);
+    assert(stuck === 'none', `expected no leftover spinner once the restore settled, got display="${stuck}"`);
+    ok('UX fix: a "Reading backup file…" spinner covers the read/parse gap before the restore confirm dialog');
+  } catch(e){ bad('UX fix: spinner while reading/parsing an imported backup file', e); }
+
+  // 339. A parse failure (not valid JSON) also clears the read spinner --
+  //      it doesn't leak just because the try block threw.
+  try {
+    await appDX.page.setInputFiles('#backupImport', {
+      name: 'garbage.json', mimeType: 'application/json',
+      buffer: Buffer.from('this is not valid json{{{'),
+    });
+    await appDX.page.waitForFunction(() =>
+      /import failed: not a valid backup file/i.test(document.getElementById('progress').textContent),
+      { timeout: 5000 },
+    );
+    const display = await appDX.page.evaluate(() => document.getElementById('spinnerOverlay').style.display);
+    assert(display === 'none', `expected the read spinner cleared after a parse failure, got display="${display}"`);
+    ok('UX fix: the read spinner is cleared (not leaked) when the selected file fails to parse');
+  } catch(e){ bad('UX fix: read spinner cleared on a parse failure', e); }
+} finally {
+  await appDX.close();
+}
+} catch(e){ bad('Phase DX: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
