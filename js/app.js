@@ -79,7 +79,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-351';
+const BUILD_TAG = '-352';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -559,6 +559,11 @@ function indexOneGame(add, game){
 // games…" message the caller already shows stays live/responsive throughout.
 const POSITION_INDEX_CHUNK = 100;
 async function buildPositionIndex(games, onProgress){
+  // TEMP diagnostic (2026-09): logs every call's stack + game count without
+  // pausing anything, to trace a reported repeated-rebuild performance bug
+  // (buildPositionIndex dominating the main thread during VR use on
+  // githack). Remove once root-caused.
+  console.trace(`[perf-debug] buildPositionIndex called, ${games?.length ?? 'n/a'} games`);
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
   for(let gi=0; gi<games.length; gi++){
