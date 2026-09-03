@@ -10,6 +10,31 @@ cytoscape.use(cytoscapeDagre);
 // boot watchdog in index.html so it doesn't show the "failed to load" message.
 window.__APP_BOOTED = true;
 
+// TEMP diagnostic (2026-09): app.js is a single ES module, imported exactly
+// once by exactly one <script type="module"> tag -- this top-level code
+// should therefore run exactly once per real page load, ever. window (not
+// a module-scoped variable) survives across a duplicate module evaluation
+// within the SAME document in a way nothing declared inside this file
+// would, so this is the one thing that can catch "the module itself got
+// re-run without a real navigation" as opposed to an actual page reload
+// (which index.html's own reload-loop detector, run before this script
+// even loads, covers separately). Tracing a reported bug where every
+// in-memory cache in this file (position index, built-castles) appears to
+// reset itself for no traceable reason, on one specific machine only.
+// Remove once root-caused.
+window.__repchessAppBootCount = (window.__repchessAppBootCount || 0) + 1;
+if(window.__repchessAppBootCount > 1){
+  console.error(`[perf-debug] app.js's top-level module code has run ${window.__repchessAppBootCount} times in this document without a real page reload -- this should be impossible for a single <script type="module"> tag.`);
+}
+// TEMP diagnostic (2026-09): a fire-and-forget IndexedDB write (setMeta,
+// used by both cache-persist paths) that silently rejects would otherwise
+// vanish as an unhandled rejection with no visible trace anywhere --
+// logging every one at least surfaces that something failed, even if this
+// alone can't say which call site.
+window.addEventListener('unhandledrejection', e => {
+  console.error('[perf-debug] unhandled promise rejection:', e.reason);
+});
+
 // gzip capability flag (native CompressionStream/DecompressionStream) -- read
 // by both the backup export/import gzip helpers below AND
 // maybeOfferDefaultMnemonics (which fetches a gzipped bundle), the latter
@@ -79,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-352';
+const BUILD_TAG = '-353';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -530,6 +555,15 @@ let _posIndex = { games: null, map: null };
 let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
 let _posIndexBuildCount = 0;       // real (non-cache-hit) FULL builds this page load -- test-only signal
 function invalidatePositionIndexCache(){
+  // TEMP diagnostic (2026-09): this is the ONLY place that resets
+  // _posIndex.map to null -- its one production caller is applyBackupData
+  // (a Full Backup restore), so if buildPositionIndex is firing repeatedly
+  // during ordinary use, this trace will show whether THIS is somehow
+  // being reached too, or whether _posIndex is getting reset some other
+  // way entirely (e.g. app.js's own module state getting torn down and
+  // re-initialized by a reload -- see index.html's own reload-loop
+  // detector). Remove once root-caused.
+  console.trace('[perf-debug] invalidatePositionIndexCache called');
   _posIndex = { games: null, map: null };
   _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache

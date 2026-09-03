@@ -12,6 +12,62 @@
      on browsers that don't support it the page just stays non-isolated and the
      engine falls back to the single-threaded build. -->
 <script>window.coi = { coepCredentialless: () => true };</script>
+<script>
+// TEMP diagnostic (2026-09): tracing a reported "everything in VR gets
+// slow" performance bug that's turned out to be machine-specific -- fine
+// in incognito, fine on other machines/browsers with the SAME data, still
+// slow on one particular profile even after a full data restore (which
+// rules out the app's own IndexedDB content as the cause). That points at
+// something browser/profile-level. The coi-serviceworker.min.js script
+// right below this one can trigger a FULL PAGE RELOAD entirely on its own
+// (its own updatefound handler calls doReload()) whenever it thinks its
+// own script bytes changed since the last registration -- if a
+// registration left over from earlier testing keeps disagreeing with
+// whatever a live-editing host like githack happens to serve on a given
+// request, that's a real way to end up in a reload loop, invisible if it's
+// fast enough not to look like a full navigation, but one that would wipe
+// every one of the app's in-memory caches as often as it fires -- exactly
+// matching a cache that "stops working" for no reason in the app's own
+// code. sessionStorage survives a same-tab reload (unlike anything
+// module-scoped in app.js), so it's the only thing that can actually catch
+// this from inside the page itself.
+(function(){
+  try {
+    const KEY = 'repchessLoadTimes';
+    const now = Date.now();
+    const prior = JSON.parse(sessionStorage.getItem(KEY) || '[]');
+    const recent = prior.filter(t => now - t < 20000).concat(now);
+    sessionStorage.setItem(KEY, JSON.stringify(recent.slice(-25)));
+    console.log(`[perf-debug] page load #${recent.length} in this tab within the last 20s`
+      + (navigator.serviceWorker && navigator.serviceWorker.controller ? ' -- a service worker IS controlling this page' : ' -- no service worker controlling this page yet'));
+    if(recent.length >= 4){
+      const msg = `repchess has (re)loaded ${recent.length} times in the last 20 seconds in this browser tab. `
+        + `This is almost certainly the actual cause of any "everything is slow" symptom -- every reload wipes every in-memory cache the app has, forcing a full rebuild each time. `
+        + `Check DevTools > Application > Service Workers for a registration stuck in an update loop, and consider unregistering it.`;
+      console.error('[perf-debug] ' + msg);
+      alert(msg);
+    }
+  } catch(e){ console.warn('[perf-debug] reload-loop detector failed', e); }
+  // full registration inventory -- scope/state/script URL for every service
+  // worker registered for this origin, not just whether one currently
+  // controls the page (a registration can be present/updating/waiting
+  // without controlling yet).
+  if(navigator.serviceWorker){
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      if(!regs.length){ console.log('[perf-debug] no service worker registrations for this origin'); return; }
+      for(const r of regs){
+        console.log('[perf-debug] service worker registration:', {
+          scope: r.scope,
+          installing: r.installing?.scriptURL || null,
+          waiting: r.waiting?.scriptURL || null,
+          active: r.active?.scriptURL || null,
+          activeState: r.active?.state || null,
+        });
+      }
+    }).catch(e => console.warn('[perf-debug] getRegistrations failed', e));
+  }
+})();
+</script>
 <script src="coi-serviceworker.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/cm-chessboard@8/assets/chessboard.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
@@ -1651,6 +1707,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-352"></script>
+<script type="module" src="js/app.js?v=20260804-353"></script>
 </body>
 </html>
