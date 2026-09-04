@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-8';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-272';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-273';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
@@ -9,6 +9,31 @@ cytoscape.use(cytoscapeDagre);
 // Reaching here means the module's static imports above all loaded; clears the
 // boot watchdog in index.html so it doesn't show the "failed to load" message.
 window.__APP_BOOTED = true;
+
+// TEMP diagnostic (2026-09): app.js is a single ES module, imported exactly
+// once by exactly one <script type="module"> tag -- this top-level code
+// should therefore run exactly once per real page load, ever. window (not
+// a module-scoped variable) survives across a duplicate module evaluation
+// within the SAME document in a way nothing declared inside this file
+// would, so this is the one thing that can catch "the module itself got
+// re-run without a real navigation" as opposed to an actual page reload
+// (which index.html's own reload-loop detector, run before this script
+// even loads, covers separately). Tracing a reported bug where every
+// in-memory cache in this file (position index, built-castles) appears to
+// reset itself for no traceable reason, on one specific machine only.
+// Remove once root-caused.
+window.__repchessAppBootCount = (window.__repchessAppBootCount || 0) + 1;
+if(window.__repchessAppBootCount > 1){
+  console.error(`[perf-debug] app.js's top-level module code has run ${window.__repchessAppBootCount} times in this document without a real page reload -- this should be impossible for a single <script type="module"> tag.`);
+}
+// TEMP diagnostic (2026-09): a fire-and-forget IndexedDB write (setMeta,
+// used by both cache-persist paths) that silently rejects would otherwise
+// vanish as an unhandled rejection with no visible trace anywhere --
+// logging every one at least surfaces that something failed, even if this
+// alone can't say which call site.
+window.addEventListener('unhandledrejection', e => {
+  console.error('[perf-debug] unhandled promise rejection:', e.reason);
+});
 
 // gzip capability flag (native CompressionStream/DecompressionStream) -- read
 // by both the backup export/import gzip helpers below AND
@@ -79,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-328';
+const BUILD_TAG = '-353';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -530,6 +555,15 @@ let _posIndex = { games: null, map: null };
 let _posIndexIdbChecked = false;   // have we tried loading the persisted copy yet this page load?
 let _posIndexBuildCount = 0;       // real (non-cache-hit) FULL builds this page load -- test-only signal
 function invalidatePositionIndexCache(){
+  // TEMP diagnostic (2026-09): this is the ONLY place that resets
+  // _posIndex.map to null -- its one production caller is applyBackupData
+  // (a Full Backup restore), so if buildPositionIndex is firing repeatedly
+  // during ordinary use, this trace will show whether THIS is somehow
+  // being reached too, or whether _posIndex is getting reset some other
+  // way entirely (e.g. app.js's own module state getting torn down and
+  // re-initialized by a reload -- see index.html's own reload-loop
+  // detector). Remove once root-caused.
+  console.trace('[perf-debug] invalidatePositionIndexCache called');
   _posIndex = { games: null, map: null };
   _posIndexIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(POSITION_INDEX_CACHE_KEY, '');   // fire-and-forget, same pattern as invalidateBuiltCastlesCache
@@ -559,6 +593,11 @@ function indexOneGame(add, game){
 // games…" message the caller already shows stays live/responsive throughout.
 const POSITION_INDEX_CHUNK = 100;
 async function buildPositionIndex(games, onProgress){
+  // TEMP diagnostic (2026-09): logs every call's stack + game count without
+  // pausing anything, to trace a reported repeated-rebuild performance bug
+  // (buildPositionIndex dominating the main thread during VR use on
+  // githack). Remove once root-caused.
+  console.trace(`[perf-debug] buildPositionIndex called, ${games?.length ?? 'n/a'} games`);
   const map = new Map();
   const add = (key, entry) => { let a = map.get(key); if(!a){ a=[]; map.set(key,a); } a.push(entry); };
   for(let gi=0; gi<games.length; gi++){
@@ -1504,6 +1543,19 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
       return;
     }
     const destSeq = [...exitSeq,reply];
+    // a room the user has manually flagged "redirect to castle X" (Attributes
+    // modal, see refreshRedirectField) is a DELIBERATE, user-declared
+    // transposition -- same treatment as the automatic foreign-root case just
+    // below (stop here, point at the target's own room instead of building a
+    // duplicate), except the target can live in any line, not just this one,
+    // so its instance id is built from the stored redirectTargetLineId rather
+    // than always this castle's own line.id.
+    if(exitPref.redirectToCastle){
+      const targetLineId = exitPref.redirectTargetLineId || line.id;
+      const foreignKey = castleRoomKey(castleInstanceId(targetLineId, exitPref.redirectToCastle), positionKey(fenForSeq(destSeq)));
+      addEdge(fromRoomId, null, exitSeq, destSeq, { foreignCastle: exitPref.redirectToCastle, foreignKey, count, tot });
+      return;
+    }
     // a reply that starts ANOTHER castle's own root shouldn't be walked
     // inline into THIS castle's tree (that would rebuild it a second time
     // under this castle's own instance namespace, orphaning any objects/
@@ -3285,8 +3337,17 @@ $('fieldModalSaveBtn').onclick = () => {
    fields (name / isCastleRoot / castleName). */
 let attributesModalSave = null;
 let attrModalLineSeq = null;
-function openAttributesModal(saved, onSave, lineSeq){
+// the room's own CANONICAL seq (see canonicalRoomSeq) -- distinct from
+// attrModalLineSeq (used only for the "Belongs to castle" inherit label),
+// this is the seq the redirect fields themselves get read/written on, and
+// what the room's real board position (roomSeq + saved.reply) is computed
+// from for the "Redirect to castle" candidate lookup.
+let attrModalRoomSeq = null;
+let attrModalSaved = null;
+function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrModalLineSeq = lineSeq;
+  attrModalRoomSeq = roomSeq || lineSeq;
+  attrModalSaved = saved;
   $('attrRoomName').value = saved?.name || '';
   $('attrIsCastleRoot').checked = !!saved?.isCastleRoot;
   $('attrCastleName').value = saved?.castleName || '';
@@ -3296,6 +3357,7 @@ function openAttributesModal(saved, onSave, lineSeq){
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
+  refreshRedirectField(saved, attrModalRoomSeq);
   attributesModalSave = onSave;
   $('attributesOverlay').style.display='flex';
 }
@@ -3518,6 +3580,192 @@ function refreshCastleOwnerSelect(saved, lineSeq){
   sel.value = saved?.castleOwner || '';
   $('attrCastleOwnerField').style.display = (castles.length || saved?.castleOwner) ? '' : 'none';
 }
+/* every OTHER built castle (any line, own castle excluded) whose own room
+   graph reaches the exact same position as `roomSeq`'s own room -- these are
+   the candidates the "Redirect to castle" pulldown offers. Each entry's
+   targetSeq is the target castle's own seq reaching that position, captured
+   here so a chosen redirect can be re-based onto the target's own move order
+   later (the port-responses action, and redirect-aware import) without
+   re-deriving it from a stale/rebuilt graph. */
+async function redirectCandidatesForRoom(roomFen, ownInstanceId){
+  const posKey = positionKey(roomFen);
+  const lines = await getLines(LOCAL_USER);
+  const built = await gatherBuiltCastles(lines);
+  const out = [];
+  for(const c of built){
+    if(c.instanceId === ownInstanceId) continue;
+    const gr = c.genRooms.find(r => r.posKey === posKey);
+    if(!gr) continue;
+    const line = lines.find(l => l.id === c.lineId);
+    out.push({ lineId: c.lineId, lineName: line ? line.name : c.lineId, castleName: c.castleName, targetSeq: gr.seq, roomName: gr.name || '' });
+  }
+  return out;
+}
+// bumped on every openAttributesModal/refreshRedirectField call so a slow
+// gatherBuiltCastles resolving after the modal's moved on (closed, or
+// reopened on a different row) doesn't clobber a since-changed select.
+let attrRedirectGen = 0;
+let attrRedirectCandidates = [];
+async function refreshRedirectField(saved, roomSeq){
+  const field = $('attrRedirectField');
+  const sel = $('attrRedirectTo');
+  const hint = $('attrRedirectHint');
+  attrRedirectCandidates = [];
+  const myGen = ++attrRedirectGen;
+  // only a real, already-built room (an actual reply recorded) belonging to
+  // some castle can be redirected -- nothing to transpose otherwise. A
+  // castle ROOT is excluded too: it's the entry point of its own building on
+  // the street (buildCastleGraph enters it directly, never via processExit),
+  // so redirecting it wouldn't stop that castle from being built -- only an
+  // interior room's incoming door can meaningfully be rerouted.
+  const ownCastleName = inheritedCastle(roomSeq, CURRENT_LINE?.id);
+  if(!saved?.reply || !ownCastleName || saved?.isCastleRoot){
+    field.style.display = 'none';
+    return;
+  }
+  field.style.display = '';
+  sel.disabled = true;
+  sel.innerHTML = '<option value="">(none)</option>';
+  hint.textContent = 'Checking other castles for this exact position…';
+  const ownInstanceId = castleInstanceId(CURRENT_LINE.id, ownCastleName);
+  const roomFen = fenForSeq([...roomSeq, saved.reply]);
+  let candidates;
+  try { candidates = await redirectCandidatesForRoom(roomFen, ownInstanceId); }
+  catch(e){ console.warn('[redirect] failed to gather candidates', e); candidates = []; }
+  if(myGen !== attrRedirectGen) return;   // modal moved on while this was in flight
+  attrRedirectCandidates = candidates;
+  sel.disabled = false;
+  let matchedIdx = -1;
+  if(saved.redirectToCastle){
+    matchedIdx = candidates.findIndex(c => c.lineId === saved.redirectTargetLineId && c.castleName === saved.redirectToCastle);
+  }
+  sel.innerHTML = '<option value="">(none)</option>' +
+    candidates.map((c,i)=>`<option value="${i}">${escapeHtml(c.castleName)} (${escapeHtml(c.lineName)})</option>`).join('') +
+    // the previously-saved target no longer resolves to a real room (stale
+    // cache, or the position/target castle changed) -- offer it as a
+    // distinct, pre-selected option instead of silently reverting to "(none)"
+    // and risking an accidental clear on the next Save.
+    (saved.redirectToCastle && matchedIdx < 0
+      ? `<option value="__stale__" selected>${escapeHtml(saved.redirectToCastle)} (saved, but no longer matches this position)</option>` : '');
+  if(matchedIdx >= 0) sel.value = String(matchedIdx);
+  hint.textContent = candidates.length
+    ? 'Doors that would open into this room instead route to the target castle\'s own room there.'
+    : (saved.redirectToCastle ? '' : 'No other castle currently shares this exact position.');
+}
+
+/* true if `seq` is `prefix` itself or a genuine continuation of it -- element-
+   wise, not a naive joined-string prefix (SAN moves never contain commas, but
+   this is the same safe comparison seqEq/noCompactUntil's own prefix check use
+   elsewhere in this file, rather than relying on that). */
+function seqStartsWith(seq, prefix){
+  return !!seq && seq.length >= prefix.length && prefix.every((m,i)=>seq[i]===m);
+}
+
+/* ---------- redirect: port responses to the target castle ----------
+   A redirected room's own subtree (in ITS OWN line) is frozen the moment
+   the redirect is set: buildCastleGraph's processExit routes VR doors past
+   it entirely (see the redirect check ahead of the automatic foreign-root
+   one), and "Add Opponent Move" is hidden on it (refreshRowMenuLabels) --
+   but whatever was ALREADY recorded there before the redirect (or added to
+   the source since, by an import that hasn't yet learned to redirect itself
+   -- later phases) doesn't automatically show up at the target. This walks
+   every pref below the redirected room, re-bases each one's seq onto the
+   target's own move order (swap the redirected room's own full seq for the
+   target's own, keep the tail of moves after it exactly as recorded -- the
+   underlying position plays out identically from there regardless of which
+   castle's address it's filed under), and writes it into the TARGET line.
+   A merge, not an overwrite: a translated position the target already has
+   its own reply for is left untouched, so this is safe to re-run (e.g.
+   after adding more manual tries to the source branch) -- only ever fills
+   in what's still missing. Returns how many prefs were newly written.
+   sourceLineId is explicit (not always CURRENT_LINE) because this is also
+   called from the Find Transpositions report, which can resolve a redirect
+   whose source line isn't the one currently open, or with no line open at
+   all. */
+async function portRedirectedResponses(sourceLineId, roomSeq, saved){
+  const reply = saved?.reply;
+  const targetRoomSeq = saved?.redirectTargetSeq;
+  const targetLineId = saved?.redirectTargetLineId;
+  if(!reply || !targetRoomSeq || !targetLineId) return 0;
+  const sourceRoomSeq = [...roomSeq, reply];   // the redirected room's own full seq (ends in OUR reply)
+
+  const [sourcePrefs, targetPrefs] = await Promise.all([
+    getAllPrefs(sourceLineId), getAllPrefs(targetLineId),
+  ]);
+  const entries = [];   // {seq, patch}, fed straight to setPrefsBatch
+
+  const addPort = (translatedSeq, srcPref) => {
+    const existing = targetPrefs[prefKey(targetLineId, translatedSeq)];
+    if(existing?.reply) return;   // already answered at the target -- leave it alone
+    const existingManual = existing?.manualReplies || [];
+    const manualReplies = [...new Set([...existingManual, ...(srcPref.manualReplies||[])])];
+    // a manual-try-only entry (no reply of its own, see the room-level port
+    // just below) has nothing to gate a re-run on except its manualReplies
+    // set actually growing -- without this check, re-running Port would
+    // "port" the same already-merged set every time and never settle into a
+    // true no-op.
+    const gainsReply = !!srcPref.reply && !existing?.reply;
+    const gainsManual = manualReplies.length !== existingManual.length;
+    if(!gainsReply && !gainsManual) return;
+    entries.push({ seq: translatedSeq, patch: {
+      reply: srcPref.reply || existing?.reply || '', note: srcPref.note || existing?.note || '',
+      mnemonic: srcPref.mnemonic || existing?.mnemonic || '',
+      manualReplies, moveQuality: srcPref.moveQuality || existing?.moveQuality || '',
+      hidden: existing?.hidden ?? srcPref.hidden ?? false,
+    }});
+  };
+
+  // the room's own manually-recorded (not-yet-answered) opponent tries --
+  // ported onto the target room's own manualReplies so it at least knows
+  // they exist, even before anyone picks a response for them there.
+  const srcRoomPref = sourcePrefs[prefKey(sourceLineId, sourceRoomSeq)];
+  if(srcRoomPref?.manualReplies?.length) addPort(targetRoomSeq, srcRoomPref);
+
+  // every descendant pref (a real response, strictly below the redirected
+  // room) the target doesn't already have its own answer for.
+  for(const key in sourcePrefs){
+    const p = sourcePrefs[key];
+    if(!p?.reply || !seqStartsWith(p.seq, sourceRoomSeq) || p.seq.length <= sourceRoomSeq.length) continue;
+    const translatedSeq = [...targetRoomSeq, ...p.seq.slice(sourceRoomSeq.length)];
+    addPort(translatedSeq, p);
+  }
+
+  if(entries.length){
+    await setPrefsBatch(targetLineId, entries);
+    invalidateBuiltCastlesCache();
+    // the target IS the currently-open line (a redirect within one line,
+    // just a different castle) -- the in-memory PREFS this whole screen
+    // reads from needs the same refresh a real reload would give it. Guarded
+    // on CURRENT_LINE existing at all: this can run with no line open (the
+    // Find Transpositions report doesn't require one).
+    if(CURRENT_LINE && targetLineId === CURRENT_LINE.id){
+      PREFS = await getAllPrefs(CURRENT_LINE.id);
+      renderTreeBody(CURRENT_LINE);
+    }
+  }
+  return entries.length;
+}
+
+/* shared by the row menu's own "Port Responses to Target" and the
+   Attributes modal's auto-offer right after setting a redirect -- ports one
+   room and reports the result the same way both places. */
+async function portAndReport(sourceLineId, roomSeq, saved){
+  const n = await portRedirectedResponses(sourceLineId, roomSeq, saved);
+  log(n ? `Ported ${n} response${n===1?'':'s'} to "${saved.redirectToCastle}"`
+        : `Nothing new to port -- "${saved.redirectToCastle}" already has everything`);
+  return n;
+}
+
+/* true when this Attributes save just turned a redirect ON, or repointed an
+   already-redirected room at a DIFFERENT target -- the moment to port,
+   not on every unrelated save (a note/name edit) that happens to leave an
+   already-redirected room untouched. */
+function redirectChanged(before, after){
+  if(!after?.redirectToCastle) return false;
+  return before?.redirectToCastle !== after.redirectToCastle
+      || before?.redirectTargetLineId !== after.redirectTargetLineId;
+}
+
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
 $('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
 $('attributesCancelBtn').onclick = () => {
@@ -3545,13 +3793,27 @@ $('attributesSaveBtn').onclick = () => {
     }
     streetNumber = num;
   }
+  const redirVal = $('attrRedirectTo').value;
+  let redirectToCastle = '', redirectTargetLineId = '', redirectTargetSeq = null, redirectTargetRoomName = '';
+  if(redirVal === '__stale__'){
+    // unchanged since the modal opened -- write back exactly what was
+    // already saved rather than risk clearing it on a candidate-lookup miss.
+    redirectToCastle = attrModalSaved?.redirectToCastle || '';
+    redirectTargetLineId = attrModalSaved?.redirectTargetLineId || '';
+    redirectTargetSeq = attrModalSaved?.redirectTargetSeq || null;
+    redirectTargetRoomName = attrModalSaved?.redirectTargetRoomName || '';
+  } else if(redirVal !== ''){
+    const c = attrRedirectCandidates[parseInt(redirVal, 10)];
+    if(c){ redirectToCastle = c.castleName; redirectTargetLineId = c.lineId; redirectTargetSeq = c.targetSeq; redirectTargetRoomName = c.roomName || ''; }
+  }
   const v = {
     roomName: $('attrRoomName').value.trim(),
     isCastleRoot: isRoot,
     castleName,
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
-    note: $('attrNote').value.trim()
+    note: $('attrNote').value.trim(),
+    redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
   $('attributesOverlay').style.display='none';
   if(attributesModalSave) attributesModalSave(v);
@@ -4324,6 +4586,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+             <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
            </div>
          </div>
        </td>
@@ -4464,7 +4727,12 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     function openRoomAttributes(){
       const roomSeq = canonicalRoomSeq(lineSeq);
       const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-      openAttributesModal(roomSaved(), v=>{
+      const before = roomSaved();
+      // a plain snapshot, NOT a reference to `before` -- savePrefField
+      // mutates that same PREFS object in place below, so comparing against
+      // `before` directly would always see it already-updated too.
+      const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
+      openAttributesModal(before, v=>{
         invalidateBuiltCastlesCache();
         savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
         savePrefField(roomSeq, 'castleName', v.castleName);
@@ -4472,10 +4740,20 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
         savePrefField(roomSeq, 'name', v.roomName);
         savePrefField(roomSeq, 'note', v.note);
+        savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
+        savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
+        savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
+        savePrefField(roomSeq, 'redirectTargetRoomName', v.redirectTargetRoomName);
         refreshBranchName(nameSpan, roomSaved());
+        refreshRowMenuLabels(rowMenu, roomSaved());
+        // re-sync the visible children immediately on a redirect toggle --
+        // otherwise turning it on leaves stale children on screen (or off,
+        // leaves the toggle stuck empty) until the next full re-render.
+        if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
         refreshMeta();
         notifyDirty?.();   // note/castleName/isCastleRoot can change an ancestor compact-run's eligibility/shape
-      }, lineSeq);
+        if(redirectChanged(beforeRedirect, roomSaved())) portAndReport(CURRENT_LINE.id, roomSeq, roomSaved());
+      }, lineSeq, roomSeq);
     }
 
     /* expand the branch table under the chosen standard response */
@@ -4483,11 +4761,19 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     function expandWith(reply, startExpanded=true){
       const old = metaTr.nextSibling;
       if(old?.querySelector?.('.branch')) old.remove();
+      childrenSeq = [...lineSeq,reply];
+      // a redirected room's own children are suppressed entirely -- leave the
+      // toggle in its default "nothing to expand" state (see makeToggle),
+      // same as a genuine leaf row with no reply at all.
+      if(currentSaved()?.redirectToCastle){
+        branchDiv = null;
+        updateCompleteBadge(completeSpan);
+        return;
+      }
 
       const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
       const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
       const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-      childrenSeq = [...lineSeq,reply];
       branchDiv = div;
       // carry noCompactUntil/notifyDirty forward so a single-line expansion
       // keeps rendering the run's own forced moves in full (the prefix test
@@ -4550,11 +4836,19 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       rowMenu.classList.remove('show');
       focusOnLine(tr, childrenSeq);
     };
-    hideBtn.onclick = e => {
+    hideBtn.onclick = async e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
+      const hidingNow = !currentSaved()?.hidden;
+      // only hiding (not unhiding, which only ever restores visibility) can
+      // sever a redirect's target out from under it -- see
+      // redirectsIntoSubtree's own doc comment.
+      if(hidingNow){
+        const incoming = await redirectsIntoSubtree(CURRENT_LINE.id, lineSeq);
+        if(incoming.length && !confirmHideBreaksRedirects(incoming.length)) return;
+      }
       invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
-      saveField('hidden', !currentSaved()?.hidden);
+      saveField('hidden', hidingNow);
       refreshSystemStats();
     };
     rowMenu.querySelector('[data-act="response"]').onclick = e => {
@@ -4652,6 +4946,14 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       rowMenu.classList.remove('show');
       openRoomAttributes();
+    };
+    rowMenu.querySelector('[data-act="portRedirect"]').onclick = async e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      const roomSeq = canonicalRoomSeq(lineSeq);
+      const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+      if(!saved?.redirectToCastle) return;
+      await portAndReport(CURRENT_LINE.id, roomSeq, saved);
     };
     const removeManualBtn = rowMenu.querySelector('[data-act="removeManual"]');
     if(isManual){
@@ -4761,6 +5063,7 @@ function renderBlackRoot(parent,games,trigger){
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
+           <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
          </div>
        </div>
      </td>
@@ -4884,7 +5187,12 @@ function renderBlackRoot(parent,games,trigger){
   function openRoomAttributes(){
     const roomSeq = canonicalRoomSeq(lineSeq);
     const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
-    openAttributesModal(roomSaved(), v=>{
+    const before = roomSaved();
+    // a plain snapshot, NOT a reference to `before` -- savePrefField mutates
+    // that same PREFS object in place below, so comparing against `before`
+    // directly would always see it already-updated too.
+    const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
+    openAttributesModal(before, v=>{
       invalidateBuiltCastlesCache();
       savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
       savePrefField(roomSeq, 'castleName', v.castleName);
@@ -4892,20 +5200,38 @@ function renderBlackRoot(parent,games,trigger){
       savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
       savePrefField(roomSeq, 'name', v.roomName);
       savePrefField(roomSeq, 'note', v.note);
+      savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
+      savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
+      savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
+      savePrefField(roomSeq, 'redirectTargetRoomName', v.redirectTargetRoomName);
       refreshBranchName(nameSpan, roomSaved());
+      refreshRowMenuLabels(rowMenu, roomSaved());
+      // re-sync the visible children immediately on a redirect toggle --
+      // otherwise turning it on leaves stale children on screen (or off,
+      // leaves the toggle stuck empty) until the next full re-render.
+      if(roomSaved().reply) expandWith(roomSaved().reply, !roomSaved()?.collapsed);
       refreshMeta();
-    }, lineSeq);
+      if(redirectChanged(beforeRedirect, roomSaved())) portAndReport(CURRENT_LINE.id, roomSeq, roomSaved());
+    }, lineSeq, roomSeq);
   }
 
   let childrenSeq = null, branchDiv = null;
   function expandWith(reply, startExpanded=true){
     const old = metaTr.nextSibling;
     if(old?.querySelector?.('.branch')) old.remove();
+    childrenSeq = [...lineSeq,reply];
+    // a redirected room's own children are suppressed entirely -- leave the
+    // toggle in its default "nothing to expand" state (see makeToggle), same
+    // as a genuine leaf row with no reply at all.
+    if(currentSaved()?.redirectToCastle){
+      branchDiv = null;
+      updateCompleteBadge(completeSpan);
+      return;
+    }
 
     const tr1=document.createElement('tr'); tr1.className='branch-row'; metaTr.after(tr1);
     const td1=document.createElement('td'); td1.colSpan=5; td1.style.padding='0'; tr1.appendChild(td1);
     const div=document.createElement('div'); div.className='branch'; td1.appendChild(div);
-    childrenSeq = [...lineSeq,reply];
     branchDiv = div;
     const sub = renderBranch(div,games,childrenSeq,1,true);
     updateCompleteBadge(completeSpan, sub.completeToMove);
@@ -4951,11 +5277,16 @@ function renderBlackRoot(parent,games,trigger){
     rowMenu.classList.remove('show');
     focusOnLine(tr);
   };
-  hideBtn.onclick = e => {
+  hideBtn.onclick = async e => {
     e.stopPropagation();
     rowMenu.classList.remove('show');
+    const hidingNow = !currentSaved()?.hidden;
+    if(hidingNow){
+      const incoming = await redirectsIntoSubtree(CURRENT_LINE.id, lineSeq);
+      if(incoming.length && !confirmHideBreaksRedirects(incoming.length)) return;
+    }
     invalidateBuiltCastlesCache();   // hiding/unhiding changes which opponent replies are visible, i.e. which exits/rooms exist
-    saveField('hidden', !currentSaved()?.hidden);
+    saveField('hidden', hidingNow);
     refreshSystemStats();
   };
   rowMenu.querySelector('[data-act="response"]').onclick = e => {
@@ -5028,6 +5359,14 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     openRoomAttributes();
+  };
+  rowMenu.querySelector('[data-act="portRedirect"]').onclick = async e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    const roomSeq = canonicalRoomSeq(lineSeq);
+    const saved = PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
+    if(!saved?.redirectToCastle) return;
+    await portAndReport(CURRENT_LINE.id, roomSeq, saved);
   };
 
   btnEval.onclick = () => {
@@ -5324,19 +5663,110 @@ function parseAlgebraicMoveList(text){
    against stale IndexedDB reads mid-transaction.
    Synchronous now (no IDB round-trips happen here at all); returns the
    number of "our" moves set. */
-function importParsedLine(moves, batch){
+/* ---------- redirect-aware writes for pasted/engine-imported variations ----------
+   A paste (or an engine PV) can run straight through an already-redirected
+   room and keep going -- without this, whatever it adds below that room
+   would be written into the SOURCE castle's own dead/suppressed subtree
+   (see refreshRowMenuLabels: "Add Opponent Move" is hidden there for exactly
+   this reason) and never reach the target at all, the same "silently
+   dropped" problem portRedirectedResponses (Phase 3) fixes for data that
+   predates the redirect. This routes each write live, as the variation is
+   walked, instead of needing a separate manual Port pass afterward. */
+
+/* every distinct redirectTargetLineId named in `prefs` (a PREFS-shaped map),
+   excluding `ownLineId` -- used to pre-fetch each target's own prefs ONCE,
+   up front, before a redirect-aware import walk (see findActiveRedirect)
+   needs them: the walk itself must stay synchronous (inline with chess.js
+   parsing, mid-variation), so it can't await a DB read the moment it
+   discovers a redirect. A same-line redirect (target === ownLineId) needs no
+   separate snapshot -- PREFS itself already IS that line's own live copy. */
+function redirectTargetLineIds(prefs, ownLineId){
+  const ids = new Set();
+  for(const key in prefs){
+    const p = prefs[key];
+    if(p?.redirectToCastle && p.reply && p.redirectTargetSeq && p.redirectTargetLineId && p.redirectTargetLineId !== ownLineId){
+      ids.add(p.redirectTargetLineId);
+    }
+  }
+  return [...ids];
+}
+async function fetchRedirectTargetSnapshots(prefs, ownLineId){
+  const ids = redirectTargetLineIds(prefs, ownLineId);
+  if(!ids.length) return new Map();
+  return new Map(await Promise.all(ids.map(async id => [id, await getAllPrefs(id)])));
+}
+/* commits every target line's own batch (built up during the walk) in one
+   setPrefsBatch call per line -- same "one commit, not one per move" reasoning
+   importLine/importEngineVariation already apply to their own single-line batch. */
+async function commitRedirectTargetBatches(targetBatches){
+  await Promise.all([...targetBatches].map(([lineId, tb]) => setPrefsBatch(lineId, [...tb.values()])));
+}
+
+/* the deepest already-redirected room `seq` (any seq -- our-move-ending or
+   opponent-ending, this is a pure prefix check) falls at or below, if any --
+   same "the redirected room's own full seq is the swap point" reasoning
+   portRedirectedResponses uses for the one-time Port action. `prefs` is
+   PREFS itself (always CURRENT_LINE's own, which is where a redirect flag
+   can only ever be read from -- the variation being walked is always
+   relative to the line currently open). */
+function findActiveRedirect(prefs, seq){
+  let best = null;
+  for(const key in prefs){
+    const p = prefs[key];
+    if(!p?.redirectToCastle || !p.reply || !p.redirectTargetSeq || !p.redirectTargetLineId) continue;
+    const roomFullSeq = [...p.seq, p.reply];
+    if(seqStartsWith(seq, roomFullSeq) && (!best || roomFullSeq.length > best.roomFullSeq.length)){
+      best = { roomFullSeq, targetLineId: p.redirectTargetLineId, targetSeq: p.redirectTargetSeq };
+    }
+  }
+  return best;
+}
+
+/* targetSnapshots: Map(lineId -> that line's own PREFS-shaped map), from
+   fetchRedirectTargetSnapshots -- required (pass an empty Map if the caller
+   knows there's nothing to redirect through) since the walk below can't
+   fetch one on demand. targetBatches: Map(lineId -> Map(key -> {seq,patch})),
+   mutated in place -- the caller commits it via commitRedirectTargetBatches
+   after the whole paste (every raw line) has been walked. */
+function importParsedLine(moves, batch, targetBatches, targetSnapshots){
   const color = CURRENT_LINE.color;
   const triggers = CURRENT_LINE.openingMoves || [];
   if(!triggers.includes(moves[0])){
     throw new Error(`this variation is for 1. ${triggers.join(' / ')}, but the pasted variation starts with 1. ${moves[0]}`);
   }
 
-  const queue = (seq, field, value) => {
-    const key = prefKey(CURRENT_LINE.id, seq);
-    (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = value;
-    const entry = batch.get(key) || { seq, patch: {} };
-    entry.patch[field] = value;
-    batch.set(key, entry);
+  // writes `field:value` at `rawSeq` -- to CURRENT_LINE's own PREFS/batch as
+  // normal, or, once the walk has passed through an already-redirected room,
+  // into the target castle's own batch instead, re-based onto its own move
+  // order (the redirected room's own full seq swapped for the target's,
+  // same tail of moves kept exactly as parsed). manualReplies are unioned
+  // against whatever's already recorded there (PREFS for the source/a
+  // same-line target, the pre-fetched snapshot for a cross-line target) so
+  // an existing, unrelated try isn't lost; reply is a plain overwrite either
+  // way, matching how a re-import already overwrites an existing reply at
+  // the source (see this function's own doc comment above).
+  const queue = (rawSeq, field, value) => {
+    const redirect = findActiveRedirect(PREFS, rawSeq);
+    const lineId = redirect ? redirect.targetLineId : CURRENT_LINE.id;
+    const seq = redirect ? [...redirect.targetSeq, ...rawSeq.slice(redirect.roomFullSeq.length)] : rawSeq;
+    const key = prefKey(lineId, seq);
+    const sameLine = lineId === CURRENT_LINE.id;
+    const existingPref = sameLine ? PREFS[key] : targetSnapshots.get(lineId)?.[key];
+    const finalValue = field === 'manualReplies'
+      ? [...new Set([...(existingPref?.manualReplies||[]), ...value])]
+      : value;
+
+    if(sameLine){
+      (PREFS[key] ??= {key,lineId,seq,reply:'',note:'',mnemonic:'',hidden:false})[field] = finalValue;
+      const entry = batch.get(key) || { seq, patch: {} };
+      entry.patch[field] = finalValue;
+      batch.set(key, entry);
+    } else {
+      let tb = targetBatches.get(lineId); if(!tb){ tb = new Map(); targetBatches.set(lineId, tb); }
+      const entry = tb.get(key) || { seq, patch: {} };
+      entry.patch[field] = finalValue;
+      tb.set(key, entry);
+    }
   };
 
   /* for a White line we enumerate the opponent's reply, so opponent moves sit
@@ -5349,10 +5779,7 @@ function importParsedLine(moves, batch){
     const opp = moves[k];
     /* k===0 for a Black line is the line's own fixed trigger row, which isn't
        data-enumerated (no counts/manualReplies lookup happens there) */
-    if(!(color==='black' && k===0)){
-      const existing = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
-      if(!existing.includes(opp)) queue(seq,'manualReplies',[...existing,opp]);
-    }
+    if(!(color==='black' && k===0)) queue(seq,'manualReplies',[opp]);
     if(k+1 < moves.length){
       const lineSeq = [...seq,opp];
       const reply = moves[k+1];
@@ -5384,6 +5811,12 @@ async function importLine(text){
   const spinner = showSpinner('Importing…');
   await nextPaint();
   try {
+    // pre-fetch, once, every OTHER line a redirect already set in THIS line
+    // points at -- see importParsedLine's own doc comment for why this can't
+    // just happen on demand mid-walk.
+    const targetSnapshots = await fetchRedirectTargetSnapshots(PREFS, CURRENT_LINE.id);
+    const targetBatches = new Map();   // lineId -> Map(key -> {seq,patch})
+
     const errors = [];
     let totalCount = 0, importedLines = 0;
     const batch = new Map();   // pref key -> {seq,patch}, merged across every parsed variation, committed in ONE IndexedDB transaction below
@@ -5391,7 +5824,7 @@ async function importLine(text){
       try{
         const moves = parseAlgebraicMoveList(rawLines[i]);
         if(!moves.length) continue;
-        totalCount += importParsedLine(moves, batch);
+        totalCount += importParsedLine(moves, batch, targetBatches, targetSnapshots);
         importedLines++;
       }catch(err){
         errors.push(rawLines.length>1 ? `variation ${i+1}: ${err.message}` : err.message);
@@ -5400,9 +5833,12 @@ async function importLine(text){
 
     if(importedLines){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole paste, not one per move
+      await commitRedirectTargetBatches(targetBatches);
       invalidateBuiltCastlesCache();   // an imported variation writes standard responses, same as setting one by hand
       $('importLineOverlay').style.display='none';
+      const routed = [...targetBatches.values()].reduce((sum,tb)=>sum+tb.size, 0);
       log(`imported ${totalCount} move(s) from ${importedLines} variation(s) into "${CURRENT_LINE.name}"`
+        + (routed ? ` (${routed} routed to a redirected room's own target castle)` : '')
         + (errors.length ? ` (${errors.length} variation(s) skipped, see console)` : ''));
       if(errors.length) console.warn('[importLine] skipped variations:\n' + errors.join('\n'));
       // renderTreeBody (not openLine) -- re-renders the ALREADY-open line from
@@ -5667,7 +6103,21 @@ migrateLegacyUserData(LOCAL_USER)
   .then(() => maybeRecoverFromInterruptedRestore())
   .then(() => {
     renderHome();
-    runAutoImportCheck();   // fire-and-forget, after the recovery check settles -- see its own doc comment for why this never blocks or disrupts the UI
+    // The transposition reminder runs AFTER auto-import settles, not
+    // racing it (.finally, not a bare call) -- auto-import's own writes can
+    // themselves introduce a transposition (a freshly-imported game can
+    // transpose into an existing castle), and checking beforehand would
+    // miss that on the very session it happened. runAutoImportCheck never
+    // actually rejects (each source's own fetch is try/caught internally),
+    // but .finally guards the reminder from being silently skipped even if
+    // that ever changes. Skipped under the test harness -- an unprompted
+    // gatherBuiltCastles build at every boot would throw off the VR cache
+    // tests' "clean slate" build-count assertions; Phase DO/DP's own tests
+    // drive this explicitly instead (see checkTranspositionsAtBoot's own
+    // doc comment).
+    runAutoImportCheck().finally(() => {
+      if(!localStorage.getItem('threeTestDebug')) checkTranspositionsAtBoot();
+    });
   });
 
 // auto-start the background analysis queue: load whatever's left over from a
@@ -5831,7 +6281,9 @@ async function buildBackupData(){
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
         collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
-        castleStreetNumber:p.castleStreetNumber
+        castleStreetNumber:p.castleStreetNumber,
+        redirectToCastle:p.redirectToCastle, redirectTargetLineId:p.redirectTargetLineId, redirectTargetSeq:p.redirectTargetSeq,
+        redirectTargetRoomName:p.redirectTargetRoomName
       }))
     }))),
     mnemonics: Object.values(mnemonicsBySquare).map(entry=>{
@@ -5890,81 +6342,95 @@ if(localStorage.getItem('threeTestDebug')){
 // spinner wants to update its label, same as buildMnemonicsExportData's own
 // onProgress on the export side.
 async function applyBackupData(data, onMnemProgress){
-  await clearAllData();
-  // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
-  // mirror so a lingering background loop can't keep processing/saving
-  // against lineIds this restore just replaced.
-  ANALYSIS_QUEUE = [];
-  // a restore replaces the whole repertoire without a page reload -- drop the
-  // cached VR world-build result so the next "Run VR" rebuilds against the
-  // restored data instead of showing whatever was cached from before the
-  // restore.
-  invalidateBuiltCastlesCache();
-  invalidatePositionIndexCache();
+  // must span the WHOLE wipe+rewrite, not just the invalidateBuiltCastlesCache
+  // call below -- see suspendTranspositionScan's own doc comment for the
+  // real bug this fixes (a background scan landing mid-restore, caching a
+  // wrong snapshot nothing later re-invalidates).
+  suspendTranspositionScan();
+  try {
+    await clearAllData();
+    // clearAllData wiped the analysisQueue store too -- drop the stale in-memory
+    // mirror so a lingering background loop can't keep processing/saving
+    // against lineIds this restore just replaced.
+    ANALYSIS_QUEUE = [];
+    // a restore replaces the whole repertoire without a page reload -- drop the
+    // cached VR world-build result so the next "Run VR" rebuilds against the
+    // restored data instead of showing whatever was cached from before the
+    // restore.
+    invalidateBuiltCastlesCache();
+    invalidatePositionIndexCache();
 
-  // restore each platform's own remembered handle independently (see
-  // userColorInGame) -- back-compat: a backup from before per-platform
-  // handles were tracked separately only ever carried one ambiguous `user`
-  // field (whichever platform happened to be imported first), so fall back
-  // to treating that as the Lichess handle, matching this app's old behavior.
-  const lichessUser = data.lichessUser ?? data.user ?? '';
-  const chesscomUser = data.chesscomUser ?? '';
-  localStorage.setItem(LS_ID, lichessUser);
-  localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
-  $('userIdLichess').value = lichessUser;
-  $('userIdChesscom').value = chesscomUser;
+    // restore each platform's own remembered handle independently (see
+    // userColorInGame) -- back-compat: a backup from before per-platform
+    // handles were tracked separately only ever carried one ambiguous `user`
+    // field (whichever platform happened to be imported first), so fall back
+    // to treating that as the Lichess handle, matching this app's old behavior.
+    const lichessUser = data.lichessUser ?? data.user ?? '';
+    const chesscomUser = data.chesscomUser ?? '';
+    localStorage.setItem(LS_ID, lichessUser);
+    localStorage.setItem(LS_ID_CHESSCOM, chesscomUser);
+    $('userIdLichess').value = lichessUser;
+    $('userIdChesscom').value = chesscomUser;
 
-  if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
-  GAMES = data.games || [];
+    if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
+    GAMES = data.games || [];
 
-  for(const lineData of (data.lines||[])){
-    // reuse the original line id when present (older backups omit it) so VR
-    // decoration keys that embed it — castle rooms, building facades/signs —
-    // still resolve against the restored threeLayout.
-    const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
-    if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
-    for(const pref of (lineData.prefs||[])){
-      await setPref(line.id, pref.seq, {
-        reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
-        hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
-        eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
-        moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
-        isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
-        castleStreetNumber:pref.castleStreetNumber??''
-      });
+    for(const lineData of (data.lines||[])){
+      // reuse the original line id when present (older backups omit it) so VR
+      // decoration keys that embed it — castle rooms, building facades/signs —
+      // still resolve against the restored threeLayout.
+      const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
+      if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
+      for(const pref of (lineData.prefs||[])){
+        await setPref(line.id, pref.seq, {
+          reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
+          hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
+          eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
+          moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
+          isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
+          castleStreetNumber:pref.castleStreetNumber??'',
+          redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
+          redirectTargetSeq:pref.redirectTargetSeq||null, redirectTargetRoomName:pref.redirectTargetRoomName||''
+        });
+      }
     }
-  }
-  let mnemCount = 0;
-  for(const entry of (data.mnemonics||[])){
-    const patch = {};
-    for(const p of MNEM_PIECES){
-      patch[p] = entry[p] || '';
-      patch[p+'Desc'] = entry[p+'Desc'] || '';
-      patch[p+'Img'] = entry[p+'Img'] || '';
+    let mnemCount = 0;
+    for(const entry of (data.mnemonics||[])){
+      const patch = {};
+      for(const p of MNEM_PIECES){
+        patch[p] = entry[p] || '';
+        patch[p+'Desc'] = entry[p+'Desc'] || '';
+        patch[p+'Img'] = entry[p+'Img'] || '';
+      }
+      await setMnemonicSquare(entry.square, patch);
+      onMnemProgress?.(++mnemCount);
     }
-    await setMnemonicSquare(entry.square, patch);
-    onMnemProgress?.(++mnemCount);
+    // keep the in-memory mirror in sync with what was just written -- mirrors
+    // importMnemonicsBundle/compressAllImages's own refresh, and matters here
+    // too since openMnemonicsEditor reads MNEMONICS directly rather than
+    // re-fetching (renderMnemonicsGrid always re-fetches on its own, so this
+    // is belt-and-suspenders rather than the actual fix for the reported bug
+    // -- see the spinner added around this call, which is what actually
+    // prevents the menu from being reachable mid-restore).
+    MNEMONICS = await getAllMnemonics();
+    if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
+    if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
+    if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
+    if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
+    if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+    if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
+    if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
+    for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
+    for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
+    log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
+    await renderHome();
+    _importBackupGen++;
+  } finally {
+    // re-arm normally against the now-settled, real post-restore data --
+    // even on a thrown error, so a failed restore can't leave scanning
+    // permanently suspended for the rest of the session.
+    resumeTranspositionScan();
   }
-  // keep the in-memory mirror in sync with what was just written -- mirrors
-  // importMnemonicsBundle/compressAllImages's own refresh, and matters here
-  // too since openMnemonicsEditor reads MNEMONICS directly rather than
-  // re-fetching (renderMnemonicsGrid always re-fetches on its own, so this
-  // is belt-and-suspenders rather than the actual fix for the reported bug
-  // -- see the spinner added around this call, which is what actually
-  // prevents the menu from being reachable mid-restore).
-  MNEMONICS = await getAllMnemonics();
-  if(typeof data.mnemonicsNotes === 'string') await setMeta(MNEM_NOTES_KEY, data.mnemonicsNotes);
-  if(typeof data.moveDisambiguator === 'string') await setMeta(MNEM_DISAMBIG_KEY, data.moveDisambiguator);
-  if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
-  if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
-  if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
-  if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
-  if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
-  for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
-  for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
-  log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
-  await renderHome();
-  _importBackupGen++;
 }
 
 /* ---------- safety backup (crash-surviving pre-restore snapshot) ----------
@@ -6358,12 +6824,21 @@ $('backupImport').addEventListener('change', async e=>{
   e.target.value = '';
   if(!f) return;
 
+  // gunzip + JSON.parse of a large backup (base64 images push these into the
+  // tens of MB) can take several seconds with nothing else on screen to show
+  // for it -- a spinner here, not just around the restore itself further
+  // down, closes that silent gap between picking the file and any of the
+  // confirm() dialogs below actually appearing.
+  const readSpinner = showSpinner('Reading backup file…');
+  await nextPaint();
   let data;
   try{ data = JSON.parse(await readMaybeGzipped(f)); }
   catch(err){
     console.error('[import] parse failed',err);
     log('import failed: not a valid backup file',true);
     return;
+  } finally {
+    hideSpinner(readSpinner);
   }
 
   // An asset-only export gets a different, asset-scoped replace flow.
@@ -6541,90 +7016,225 @@ function invalidateBuiltCastlesCache(){
   _builtCastlesIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
+  // "new transpositions appearing" (Phase 2): every write path that could
+  // add/change a room already calls this function, so it's the one place to
+  // hook a debounced re-scan rather than threading a flag through every
+  // individual call site -- see scheduleTranspositionScan's own doc comment.
+  // Skipped under the test harness: this function is called constantly by
+  // ordinary test setup (every pref write), and an unrelated background
+  // gatherBuiltCastles build 1.5s later would corrupt the VR cache tests'
+  // own build-count/cache-hit assertions -- Phase DO's own tests drive
+  // detection directly via forceNewTranspositionsScan instead, same
+  // reasoning as maybeOfferDefaultContent's own threeTestDebug guard.
+  if(!localStorage.getItem('threeTestDebug')) scheduleTranspositionScan();
 }
+/* ---------- redirect-aware castle building: transposed GAME continuations ----------
+   Phases 3/4 translate PREFS (a set standard response, a manually-recorded
+   opponent try) across a redirect -- but a real imported game never writes a
+   pref at all: replies()/buildCastleGraph's own "how often has each
+   opponent move actually been played" reads GAMES directly, via a literal
+   move-string trie (gamesTrieRoot) that has no idea two different move
+   orders can reach the same position. So a game that transposes into a
+   redirected room and keeps going stays correctly invisible on the SOURCE
+   side (processExit stops there, same as every other redirected room) but
+   was ALSO invisible at the TARGET, since the game's own recorded moves
+   follow the source castle's order, not the target's -- a literal prefix
+   search at the target's own position simply never finds it.
+   Fixed by synthesizing, purely in memory and only for the duration of one
+   gatherBuiltCastles build (never written to the real games store, never
+   surfaced in Browse/Compare Games, which read GAMES directly and are
+   untouched by this), a re-ordered copy of any such game: same tail of
+   moves, re-based onto the target's own move order exactly like Port/import
+   already do for prefs. Once spliced into the target castle's own games
+   array, replies()'s ordinary literal trie finds it (and counts it toward
+   occurrence stats) at the target's own position, same as any other game
+   that was actually played in that order. */
+
+/* every game in `sourceGames` whose own recorded move list literally passes
+   through `roomFullSeq` (a redirected room's exact position, in its own
+   castle's move order), re-based onto `targetSeq`. Case-insensitive move
+   comparison, matching buildGamesTrie's own lookup (real game data isn't
+   guaranteed consistent SAN casing). */
+function synthesizeRedirectedGames(sourceGames, roomFullSeq, targetSeq){
+  const roomFullSeqLower = roomFullSeq.map(m => m.toLowerCase());
+  const out = [];
+  for(const g of sourceGames){
+    const moves = (g.moves || '').split(' ').filter(Boolean);
+    if(moves.length <= roomFullSeq.length) continue;
+    if(!roomFullSeqLower.every((m,i) => moves[i]?.toLowerCase() === m)) continue;
+    out.push({ ...g, id: `${g.id||''}:redirect:${targetSeq.join(',')}`,
+               moves: [...targetSeq, ...moves.slice(roomFullSeq.length)].join(' ') });
+  }
+  return out;
+}
+
+/* every OTHER line's own redirect declarations that point INTO `lines`,
+   grouped by target line id -- a pure read (getAllPrefs per line), entirely
+   independent of the withLinePrefs swap gatherBuiltCastles's own per-line
+   build uses below, so it's safe to gather up front for every line at once. */
+async function gatherRedirectsIntoLines(lines){
+  const allPrefs = await Promise.all(lines.map(l => getAllPrefs(l.id)));
+  const redirectsIntoLine = new Map();   // targetLineId -> [{ sourceLine, roomFullSeq, targetSeq }]
+  lines.forEach((sourceLine, i) => {
+    for(const key in allPrefs[i]){
+      const p = allPrefs[i][key];
+      if(!p?.redirectToCastle || !p.reply || !p.redirectTargetSeq || !p.redirectTargetLineId) continue;
+      const arr = redirectsIntoLine.get(p.redirectTargetLineId) || [];
+      arr.push({ sourceLine, roomFullSeq: [...p.seq, p.reply], targetSeq: p.redirectTargetSeq });
+      redirectsIntoLine.set(p.redirectTargetLineId, arr);
+    }
+  });
+  return redirectsIntoLine;
+}
+
+/* "disappearing transpositions" Phase 2: every currently-active redirect
+   (any line) whose own target falls AT or BELOW `roomSeq` within `lineId`
+   -- i.e. would be broken by hiding `roomSeq` (hiding cuts the graph walk
+   there, taking the whole subtree with it, not just that one node). Reuses
+   gatherRedirectsIntoLines (Phase 5's own reverse lookup) rather than a
+   second db.js/PREFS scan -- same reasoning as Phase 1's on-demand
+   findBrokenRedirects: the forward pointer on the SOURCE room is the only
+   real source of truth, so there's nothing to precompute or keep in sync. */
+async function redirectsIntoSubtree(lineId, roomSeq){
+  const lines = await getLines(LOCAL_USER);
+  const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
+  const incoming = redirectsIntoLine.get(lineId) || [];
+  return incoming.filter(r => seqStartsWith(r.targetSeq, roomSeq));
+}
+// shared by both hideBtn handlers below (renderBranch's own row and the
+// root-row renderer's) -- declining leaves the room, and every redirect
+// pointing at it, exactly as they were; nothing is repaired proactively,
+// only warned about, since the room might still get unhidden instead.
+function confirmHideBreaksRedirects(count){
+  return confirm(`Hiding this will break ${count} redirect${count===1?'':'s'} that currently point${count===1?'s':''} here as ${count===1?'its':'their'} transpose target -- `
+    + `${count===1?'it will':'they will'} be automatically restored to a normal room afterward. Hide anyway?`);
+}
+
+// in-flight dedup: withLinePrefs's own doc comment is explicit --
+// "Sequential use only -- concurrent calls would race on PREFS" -- since it
+// swaps the shared, module-level PREFS global for the duration of each
+// line's build. Before the new-transpositions background scanner, nothing
+// ever called gatherBuiltCastles a second time while a first call was still
+// resolving, so that race was reachable only in theory. The scanner made it
+// real: a background rebuild landing while the user's OWN "Find
+// Transpositions" click (or another background rebuild) is also mid-flight
+// races on PREFS and can silently attach one line's room names/attributes
+// to another line's rooms. Found from a real bug report -- a rapid hide /
+// check / unhide / check sequence produced several phantom duplicate
+// transposition groups with mixed-up room names, which cleared up once the
+// user manually redirected the real room (forcing a settled rebuild).
+// Fixed by having every caller share the SAME in-flight build instead of
+// starting a second, independent, racing one.
+let _builtCastlesBuildPromise = null;
 async function gatherBuiltCastles(lines){
   if(_builtCastlesCache){
     console.log('[VR] gatherBuiltCastles: cache hit (memory), 0ms');
     return _builtCastlesCache;
   }
-  // the persisted copy is checked at most once per page load -- once we know
-  // one way or the other, _builtCastlesCache itself (null or populated) is
-  // authoritative and this branch is skipped from then on.
-  if(!_builtCastlesIdbChecked){
-    _builtCastlesIdbChecked = true;
+  if(_builtCastlesBuildPromise) return _builtCastlesBuildPromise;
+  _builtCastlesBuildPromise = (async () => {
     try {
-      const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
-      if(raw){
-        const parsed = JSON.parse(raw);
-        // Version-stamped: only reuse a persisted copy built by THIS exact
-        // build (BUILD_TAG). A code change to castle/room generation -- e.g.
-        // the positionKey position-identity rule, or the room-size floor --
-        // doesn't trip this cache's own data-write invalidation triggers, so
-        // without the stamp a reload after a deploy keeps serving a castle
-        // built under the OLD logic until a manual force-rebuild. A stamp
-        // mismatch (or an old, unstamped array) falls through to a fresh
-        // rebuild below, which re-persists under the current stamp.
-        if(parsed && parsed.version === BUILD_TAG && Array.isArray(parsed.data)){
-          _builtCastlesCache = parsed.data;
-          console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
-          return _builtCastlesCache;
-        }
-        console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
+      // the persisted copy is checked at most once per page load -- once we know
+      // one way or the other, _builtCastlesCache itself (null or populated) is
+      // authoritative and this branch is skipped from then on.
+      if(!_builtCastlesIdbChecked){
+        _builtCastlesIdbChecked = true;
+        try {
+          const raw = await getMeta(BUILT_CASTLES_CACHE_KEY);
+          if(raw){
+            const parsed = JSON.parse(raw);
+            // Version-stamped: only reuse a persisted copy built by THIS exact
+            // build (BUILD_TAG). A code change to castle/room generation -- e.g.
+            // the positionKey position-identity rule, or the room-size floor --
+            // doesn't trip this cache's own data-write invalidation triggers, so
+            // without the stamp a reload after a deploy keeps serving a castle
+            // built under the OLD logic until a manual force-rebuild. A stamp
+            // mismatch (or an old, unstamped array) falls through to a fresh
+            // rebuild below, which re-persists under the current stamp.
+            if(parsed && parsed.version === BUILD_TAG && Array.isArray(parsed.data)){
+              _builtCastlesCache = parsed.data;
+              console.log('[VR] gatherBuiltCastles: cache hit (persisted across reload), 0ms');
+              return _builtCastlesCache;
+            }
+            console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
+          }
+        } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
       }
-    } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
-  }
-  const t0 = performance.now();
-  if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
-  // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
-  // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
-  // hit above already returned without reaching here, so this only runs on an
-  // actual rebuild, exactly when a fresh read matters.
-  await loadMemorizedShapes();
-  // one prefs swap per line, done concurrently rather than one-line-at-a-time:
-  // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
-  // so the "swap in this line's PREFS, run fn, restore" sequence for each line
-  // always completes atomically once its getAllPrefs() resolves — no other
-  // line's continuation can interleave in between, so running every line's
-  // getAllPrefs() IDB read in parallel instead of serially is safe.
-  const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
-    const lineGames = gamesForLineColor(GAMES, line.color);
-    return definedCastles().map(name => {
-      const rootSeq = castleRootRoomSeq(name);
-      if(!rootSeq) return null;   // named but not built yet — skip
-      let streetNumber = null;
-      for(const key in PREFS){
-        const p = PREFS[key];
-        if(p?.isCastleRoot && p.castleName?.trim() === name){
-          const n = parseInt(p.castleStreetNumber, 10);
-          if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
+      const t0 = performance.now();
+      if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
+      // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
+      // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
+      // hit above already returned without reaching here, so this only runs on an
+      // actual rebuild, exactly when a fresh read matters.
+      await loadMemorizedShapes();
+      // every line's own outgoing redirects, indexed by which OTHER line they
+      // target -- gathered once, up front (see its own doc comment for why this
+      // is safe to do before/alongside the prefs-swap pass just below).
+      const redirectsIntoLine = await gatherRedirectsIntoLines(lines);
+      // one prefs swap per line, done concurrently rather than one-line-at-a-time:
+      // withLinePrefs's fn is fully synchronous (buildGeneratedCastle never awaits),
+      // so the "swap in this line's PREFS, run fn, restore" sequence for each line
+      // always completes atomically once its getAllPrefs() resolves — no other
+      // line's continuation can interleave in between, so running every line's
+      // getAllPrefs() IDB read in parallel instead of serially is safe (this is
+      // still only true WITHIN this one build -- see the in-flight dedup above
+      // for why a SECOND, independent gatherBuiltCastles call is a different
+      // and real problem).
+      const perLine = await Promise.all(lines.map(line => withLinePrefs(line, () => {
+        let lineGames = gamesForLineColor(GAMES, line.color);
+        // splice in a synthetic, re-ordered copy of any OTHER line's game that
+        // transposes into one of THIS line's own rooms via a redirect (see
+        // synthesizeRedirectedGames's own doc comment) -- so a transposed
+        // continuation recorded only under the other castle's move order still
+        // surfaces (and counts toward occurrence stats) here too.
+        const incoming = redirectsIntoLine.get(line.id);
+        if(incoming?.length){
+          const synthetic = incoming.flatMap(r =>
+            synthesizeRedirectedGames(gamesForLineColor(GAMES, r.sourceLine.color), r.roomFullSeq, r.targetSeq));
+          if(synthetic.length) lineGames = [...lineGames, ...synthetic];
         }
-      }
-      // how often this castle's own entry has actually occurred in the
-      // user's games -- same "N (M%)" stat as a room's own doors, just
-      // computed for the move that leads INTO the castle's root itself
-      // (which buildGeneratedCastle's own genRooms never captures, since it
-      // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
-      // move (the room convention everywhere else); the position right
-      // before it is what a game "chose to enter this castle" out of.
-      const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
-      const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
-      return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
-    }).filter(Boolean);
-  })));
-  const out = [];
-  lines.forEach((line, i) => {
-    for(const c of perLine[i]){
-      out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
-                 instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
+        return definedCastles().map(name => {
+          const rootSeq = castleRootRoomSeq(name);
+          if(!rootSeq) return null;   // named but not built yet — skip
+          let streetNumber = null;
+          for(const key in PREFS){
+            const p = PREFS[key];
+            if(p?.isCastleRoot && p.castleName?.trim() === name){
+              const n = parseInt(p.castleStreetNumber, 10);
+              if(Number.isFinite(n) && n >= 1){ streetNumber = n; break; }
+            }
+          }
+          // how often this castle's own entry has actually occurred in the
+          // user's games -- same "N (M%)" stat as a room's own doors, just
+          // computed for the move that leads INTO the castle's root itself
+          // (which buildGeneratedCastle's own genRooms never captures, since it
+          // starts fresh AT the root with no incoming edge). rootSeq ends in OUR
+          // move (the room convention everywhere else); the position right
+          // before it is what a game "chose to enter this castle" out of.
+          const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
+          const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
+          return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
+        }).filter(Boolean);
+      })));
+      const out = [];
+      lines.forEach((line, i) => {
+        for(const c of perLine[i]){
+          out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
+                     instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
+        }
+      });
+      _builtCastlesCache = out;
+      _builtCastlesBuildCount++;
+      // stamped with the current build so a later build detects the mismatch and
+      // rebuilds instead of serving this copy after castle-gen logic has changed.
+      setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
+      console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
+      return out;
+    } finally {
+      _builtCastlesBuildPromise = null;
     }
-  });
-  _builtCastlesCache = out;
-  _builtCastlesBuildCount++;
-  // stamped with the current build so a later build detects the mismatch and
-  // rebuilds instead of serving this copy after castle-gen logic has changed.
-  setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
-  console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
-  return out;
+  })();
+  return _builtCastlesBuildPromise;
 }
 
 /* ---------- cross-castle transposition detector ----------
@@ -6639,7 +7249,15 @@ async function gatherBuiltCastles(lines){
    instances, so the user can gauge how common this is before any
    merge/redirect feature gets designed. Scoped to room ANCHORS (gr.posKey)
    -- a multi-move corridor's own interior positions aren't checked
-   separately, only the position each generated room is keyed/entered by. */
+   separately, only the position each generated room is keyed/entered by.
+   A pair the user HAS since redirected (Attributes > "Redirect to castle")
+   drops out of this report on its own, with no special-casing needed here:
+   buildCastleGraph's processExit stops at a redirected room before ever
+   building it locally (see the redirect check ahead of the automatic
+   foreign-root one), so that position simply never gets a genRoom entry on
+   the source side any more -- only the target's own entry is left, which
+   is exactly 1 distinct castle instance, below this function's own "2+"
+   threshold. So the count here naturally reflects what's still unhandled. */
 async function findTransposedRooms(lines){
   const built = await gatherBuiltCastles(lines);
   const byPosKey = new Map();   // posKey -> [{ lineId, lineName, castleName, instanceId, room }]
@@ -6675,30 +7293,373 @@ function renderTranspositionsReport(groups){
   }
   const roomTotal = groups.reduce((sum, g) => sum + g.length, 0);
   summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
-  body.innerHTML = groups.map(entries => `
+  body.innerHTML = groups.map((entries, gi) => `
     <div class="transp-group">
       <h3>${entries.length} castles share this position</h3>
-      ${entries.map(e => `
+      ${entries.map((e, ei) => `
         <div class="transp-entry">
-          <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
-          — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
-          <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
+          <div>
+            <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
+            — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
+            <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
+          </div>
+          <button type="button" class="transp-keep-btn" data-group="${gi}" data-entry="${ei}"
+            title="Redirect every other room in this group to this one">Keep this, redirect the rest</button>
         </div>
       `).join('')}
     </div>
   `).join('');
+  // event delegation (not one listener per button) so a re-render never
+  // leaks stale handlers -- innerHTML above already discarded the old ones.
+  body.onclick = e => {
+    const btn = e.target.closest('.transp-keep-btn');
+    if(!btn) return;
+    resolveTranspositionGroup(groups[parseInt(btn.dataset.group, 10)], parseInt(btn.dataset.entry, 10));
+  };
 }
 
-$('menuFindTranspositions').onclick = async ()=>{
-  $('menuList').style.display='none';
-  $('transpOverlay').style.display='flex';
+/* Redirects every OTHER entry in this collision group to `entries[winnerIdx]`
+   -- the same 3 pref fields (redirectToCastle/redirectTargetLineId/
+   redirectTargetSeq) the Attributes modal's own "Redirect to castle" field
+   writes (see refreshRedirectField), just applied to every loser in the
+   group in one action instead of hunting down each row individually. A
+   castle ROOT can't be redirected (same rule refreshRedirectField enforces
+   by hiding its own field there) -- skipped here too, counted separately so
+   the confirmation message explains why fewer than expected got redirected. */
+async function resolveTranspositionGroup(entries, winnerIdx){
+  const winner = entries[winnerIdx];
+  const others = entries.filter((_, i) => i !== winnerIdx);
+  if(!others.length) return;
+  const label = `"${winner.castleName}" (${winner.lineName})`;
+  if(!confirm(`Redirect every other room in this group to ${label}?\n\n`
+    + `Each redirected room's own further responses are suppressed in favor of the target, `
+    + `and any existing prep is automatically ported over to it.`)) return;
+
+  const spinner = showSpinner('Redirecting…');
+  await nextPaint();
+  let skippedRoots = 0, touchedCurrentLine = false;
+  // { lineId, roomSeq, saved } per room actually redirected -- reused below
+  // to offer porting each one's existing responses, without re-fetching.
+  const redirectedLosers = [];
+  try {
+    for(const loser of others){
+      const roomSeq = loser.room.seq.slice(0, -1);
+      const pref = await getPref(loser.lineId, roomSeq);
+      if(pref?.isCastleRoot){ skippedRoots++; continue; }
+      const redirectFields = {
+        redirectToCastle: winner.castleName,
+        redirectTargetLineId: winner.lineId,
+        redirectTargetSeq: winner.room.seq,
+        redirectTargetRoomName: winner.room.name || '',
+      };
+      await setPref(loser.lineId, roomSeq, redirectFields);
+      if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
+      redirectedLosers.push({ lineId: loser.lineId, roomSeq, saved: { ...pref, ...redirectFields } });
+    }
+    invalidateBuiltCastlesCache();
+    if(touchedCurrentLine){
+      PREFS = await getAllPrefs(CURRENT_LINE.id);
+      renderTreeBody(CURRENT_LINE);
+    }
+  } finally {
+    hideSpinner(spinner);
+  }
+  const redirected = redirectedLosers.length;
+  log(`Redirected ${redirected} room(s) to ${label}`
+    + (skippedRoots ? ` (${skippedRoots} skipped -- a castle root can't be redirected)` : ''));
+  await refreshTranspositionsReport();
+
+  // ported automatically, for the whole batch, right after -- same idea as
+  // the Attributes modal's own redirectChanged/portAndReport pairing, just
+  // aggregated since this action can redirect more than one room at once.
+  if(redirected){
+    let totalPorted = 0;
+    for(const { lineId, roomSeq, saved } of redirectedLosers) totalPorted += await portRedirectedResponses(lineId, roomSeq, saved);
+    log(totalPorted ? `Ported ${totalPorted} response${totalPorted===1?'':'s'} to ${label}` : `Nothing new to port to ${label}`);
+  }
+}
+
+async function refreshTranspositionsReport(){
   $('transpSummary').textContent = 'Scanning castles…';
   $('transpBody').innerHTML = '';
   const lines = await getLines(LOCAL_USER);
   const groups = await findTransposedRooms(lines);
   renderTranspositionsReport(groups);
+}
+
+// shared by the hamburger menu item and the new-transposition toast's own
+// "Show" button (Phase 1) so both open the exact same report the exact same
+// way.
+async function openTranspositionsReport(){
+  $('menuList').style.display='none';
+  $('transpOverlay').style.display='flex';
+  await refreshTranspositionsReport();
+}
+$('menuFindTranspositions').onclick = openTranspositionsReport;
+$('transpCloseBtn').onclick = ()=>{
+  $('transpOverlay').style.display='none';
+  // surface anything a background scan found (and suppressed) while the
+  // report was open -- see maybeShowNewTranspositionsToast's own comment.
+  maybeShowNewTranspositionsToast();
 };
-$('transpCloseBtn').onclick = ()=>{ $('transpOverlay').style.display='none'; };
+
+/* ---------- new-transposition toast ----------
+   Phase 1 of "new transpositions appearing" (see the phasing plan): the
+   toast widget itself -- showing/hiding it and wiring Show/dismiss.
+   Deliberately persistent, not an auto-dismissing snackbar -- a newly
+   created transposition doesn't go away on its own the way a one-off status
+   message does, so it stays up until the user acts on it or dismisses it.
+   Doesn't survive a reload (in-memory only) -- the boot-time reminder below
+   is what covers that gap instead of trying to persist the toast itself.
+   `label` distinguishes an edit-triggered scan ("N new transpositions
+   found") from the boot-time reminder ("N unresolved transpositions") --
+   same widget, different framing, since the boot check can't tell a
+   collision that's been sitting unresolved for weeks apart from one an
+   auto-import just created THIS load. */
+function showNewTranspositionsToast(count, label = 'found'){
+  const noun = `transposition${count===1?'':'s'}`;
+  $('newTranspToastText').textContent = label === 'unresolved' ? `${count} unresolved ${noun}` : `${count} new ${noun} found`;
+  $('newTranspToast').style.display = 'flex';
+}
+function hideNewTranspositionsToast(){
+  $('newTranspToast').style.display = 'none';
+}
+
+/* ---------- new-transposition detection (Phase 2) ----------
+   Hooked centrally into invalidateBuiltCastlesCache -- the one function
+   every write path that could add/change a room already calls -- rather
+   than threading a "this might create a new position" flag through the
+   30+ call sites that invalidate the cache (renames/notes/hidden-toggles
+   included). The cost is a handful of redundant scans after purely cosmetic
+   edits, which cost nothing visible since they never turn up a new
+   signature; the benefit is one hook instead of thirty.
+
+   A collision GROUP (findTransposedRooms's own per-posKey entries array) is
+   identified by its posKey plus the sorted set of distinct castle instance
+   ids sharing it -- so a group whose membership actually changes (a third
+   castle joins, or one member gets redirected away) counts as a different
+   signature, but the exact same pair surviving an unrelated edit doesn't.
+
+   transpSeenSignatures is EVERY signature already accounted for this
+   session, whether by the boot-time reminder (see checkTranspositionsAtBoot)
+   or by a scan that already toasted it once -- this is what prevents an
+   unresolved pair from re-nagging on every subsequent edit. transpPendingSignatures
+   is just the ones the toast is CURRENTLY showing (reset on dismiss/Show,
+   unlike transpSeenSignatures) -- this is what lets the visible count grow
+   if more than one new collision shows up before the user deals with the
+   first one. */
+const transpSeenSignatures = new Set();
+const transpPendingSignatures = new Set();
+// "disappearing transpositions" Phase 1: broken redirects fixed by the most
+// recent scan(s), not yet shown -- reset on dismiss/Show same as
+// transpPendingSignatures, but unlike it there's no "seen" counterpart:
+// once a redirect's fields are cleared, it structurally can't be "broken"
+// again (a future redirect set on that room would be a brand new act, not
+// a re-detection of this one), so nothing needs deduping across scans.
+let transpPendingRepairCount = 0;
+function transpGroupSignature(entries){
+  const posKey = entries[0]?.room?.posKey || '';
+  const ids = [...new Set(entries.map(e => e.instanceId))].sort();
+  return `${posKey}|${ids.join(',')}`;
+}
+/* every existing redirect (any pref with redirectToCastle set, across every
+   line) whose target no longer resolves to a real room in the just-built
+   castle set -- the target room's own reply got cleared/changed, the room
+   (or its whole line) got deleted, the room got hidden, or its castle got
+   renamed out from under the stored redirectToCastle snapshot. `built` is
+   gatherBuiltCastles's own already-built result the caller already has from
+   findTransposedRooms's own scan -- gatherBuiltCastles's memory cache makes
+   asking for it again here free, this just avoids re-deriving `lines`.
+
+   Matched by POSITION (posKey) within the target instance, NOT by an exact
+   redirectTargetSeq/anchor.seq match -- a room's own anchor.seq is NOT a
+   stable identity across rebuilds: analyzeCastleStructure can re-anchor a
+   corridor/two-track group differently whenever ANYTHING in that castle's
+   own structure changes (hiding/unhiding a completely unrelated node,
+   adding a branch, etc.), even though the actual POSITION never moved.
+   redirectTargetSeq is a one-time snapshot taken when the redirect was set,
+   so an anchor shift alone would make an exact-seq check see a perfectly
+   valid redirect as "broken" and clear it -- a real, reproduced bug (a
+   hide/unhide cycle producing several false-positive "unresolved
+   transposition" groups that a manual re-redirect made vanish, since that
+   settled the structure back down). buildCastleGraph's own processExit
+   already establishes the right notion of "still resolves" for exactly
+   this purpose -- it computes VR's foreignKey from positionKey(fenForSeq(
+   destSeq)), never from a stored anchor.seq -- so this mirrors that same
+   check instead of inventing a different, stricter one. */
+async function findBrokenRedirects(lines, built){
+  const posKeysByInstance = new Map();   // instanceId -> Set(posKey)
+  for(const c of built){
+    const set = posKeysByInstance.get(c.instanceId) || new Set();
+    for(const gr of c.genRooms) if(gr.posKey) set.add(gr.posKey);
+    posKeysByInstance.set(c.instanceId, set);
+  }
+  const broken = [];   // { lineId, roomSeq }
+  for(const line of lines){
+    const prefs = await getAllPrefs(line.id);
+    for(const key in prefs){
+      const p = prefs[key];
+      if(!p?.redirectToCastle || !p.redirectTargetLineId || !p.redirectTargetSeq) continue;
+      const targetInstanceId = castleInstanceId(p.redirectTargetLineId, p.redirectToCastle);
+      const targetPosKey = positionKey(fenForSeq(p.redirectTargetSeq));
+      const posKeys = posKeysByInstance.get(targetInstanceId);
+      if(!posKeys || !posKeys.has(targetPosKey)) broken.push({ lineId: line.id, roomSeq: p.seq });
+    }
+  }
+  return broken;
+}
+/* the repair: clears a broken redirect's own fields, restoring the room to
+   a normal, independently-built one again -- exactly "the variations that
+   point there... have their redirect flags removed so that they once again
+   become unresolved transpositions". One setPrefsBatch call per source
+   line (a redirect from a different line than the one that just triggered
+   this scan is entirely possible). */
+async function repairBrokenRedirects(broken){
+  const byLine = new Map();
+  for(const b of broken){
+    const arr = byLine.get(b.lineId) || [];
+    arr.push(b);
+    byLine.set(b.lineId, arr);
+  }
+  for(const [lineId, items] of byLine){
+    const entries = items.map(b => ({ seq: b.roomSeq, patch: {
+      redirectToCastle: '', redirectTargetLineId: '', redirectTargetSeq: null, redirectTargetRoomName: '',
+    }}));
+    await setPrefsBatch(lineId, entries);
+  }
+  invalidateBuiltCastlesCache();   // the un-redirected room(s) need a real rebuild to show up again
+  if(CURRENT_LINE && byLine.has(CURRENT_LINE.id)){
+    PREFS = await getAllPrefs(CURRENT_LINE.id);
+    renderTreeBody(CURRENT_LINE);
+  }
+}
+/* shared by checkTranspositionsAtBoot and scanForNewTranspositions: finds
+   both newly-unaccounted-for collision groups AND broken redirects, repairs
+   the broken ones, and toasts whatever's newly pending. collisionLabel
+   distinguishes the boot reminder's "unresolved" wording from a live scan's
+   "new ... found" wording for the collision half; the repair half reads the
+   same either way, since "just got fixed this scan" is equally true for
+   both callers. */
+async function runTranspositionScan(collisionLabel){
+  const lines = await getLines(LOCAL_USER);
+  const groups = await findTransposedRooms(lines);
+  for(const entries of groups){
+    const sig = transpGroupSignature(entries);
+    if(transpSeenSignatures.has(sig)) continue;
+    transpSeenSignatures.add(sig);
+    transpPendingSignatures.add(sig);
+  }
+  const built = await gatherBuiltCastles(lines);
+  const broken = await findBrokenRedirects(lines, built);
+  if(broken.length){
+    await repairBrokenRedirects(broken);
+    transpPendingRepairCount += broken.length;
+  }
+  maybeShowNewTranspositionsToast(collisionLabel);
+}
+/* runs ONCE per page load, chained after runAutoImportCheck settles (see the
+   boot call site) so it reflects any transposition that import itself just
+   introduced, not a pre-import snapshot. A fresh load has no session memory
+   of what was already dismissed, so this can't distinguish "just imported
+   this boot" from "been sitting unresolved for weeks" -- it doesn't try to;
+   it surfaces whatever's currently unresolved as a single reminder (worded
+   "unresolved", not "new", since it may well not be), then marks those
+   signatures seen the same way a normal scan does so they won't re-toast
+   again later this session on their own. Memoized so both the boot-time
+   kickoff below AND a scan that happens to race ahead of it (see
+   scheduleTranspositionScan) always await the exact same run, and it only
+   ever actually executes once. */
+let transpBootCheckPromise = null;
+function checkTranspositionsAtBoot(){
+  if(!transpBootCheckPromise){
+    transpBootCheckPromise = runTranspositionScan('unresolved')
+      .catch(e => console.warn('[transp toast] boot check failed', e));
+  }
+  return transpBootCheckPromise;
+}
+async function scanForNewTranspositions(){
+  try { await runTranspositionScan('found'); }
+  catch(e){ console.warn('[transp toast] scan failed', e); }
+}
+// Phase 3: skip popping the toast while the user is already looking at the
+// Find Transpositions report -- a second, redundant "N new transpositions
+// found" over the report itself is just noise, not new information. Nothing
+// found this scan is lost: transpPendingSignatures/transpPendingRepairCount
+// still hold it, so this same check (re-run from transpCloseBtn) raises the
+// toast the moment the report closes, whether or not the report's own
+// (possibly now-stale) listing happened to include it.
+function maybeShowNewTranspositionsToast(collisionLabel = 'found'){
+  if($('transpOverlay').style.display === 'flex') return;
+  const collisionCount = transpPendingSignatures.size;
+  if(!collisionCount && !transpPendingRepairCount) return;
+  // the common case (no repair pending) reuses showNewTranspositionsToast's
+  // own count+label wording unchanged; a pending repair doesn't fit that
+  // single count+label shape, so that combined case builds the text here
+  // instead, appending the repair note to whatever collision wording (if
+  // any) applies.
+  if(!transpPendingRepairCount){
+    showNewTranspositionsToast(collisionCount, collisionLabel);
+    return;
+  }
+  const parts = [];
+  if(collisionCount){
+    const noun = `transposition${collisionCount===1?'':'s'}`;
+    parts.push(collisionLabel === 'unresolved' ? `${collisionCount} unresolved ${noun}` : `${collisionCount} new ${noun} found`);
+  }
+  const repairNoun = `redirect${transpPendingRepairCount===1?'':'s'}`;
+  parts.push(`${transpPendingRepairCount} ${repairNoun} restored -- target disappeared`);
+  $('newTranspToastText').textContent = parts.join('; ');
+  $('newTranspToast').style.display = 'flex';
+}
+/* the background scan must never run WHILE a bulk data-replacing operation
+   (a Full Backup restore, or the crash-recovery replay that reuses the
+   exact same applyBackupData) is in flight. Found from a real bug report:
+   an earlier interaction leaves a scan armed 1.5s out; a restore that
+   starts within that window wipes and rewrites every line/pref while that
+   scan's own gatherBuiltCastles call lands mid-operation -- against a
+   freshly-wiped-empty or half-rewritten state -- and CACHES that wrong
+   snapshot (_builtCastlesCache, also persisted to IDB). Nothing else ever
+   re-invalidates it once the restore actually finishes, so "Find
+   Transpositions" silently keeps reporting nothing -- even against a fresh
+   restore that genuinely has unresolved collisions -- until some unrelated
+   LATER edit happens to invalidate the cache again. suspendTranspositionScan
+   cancels any timer already armed from BEFORE it's called (the case above)
+   and blocks scheduling new ones for as long as it's in effect;
+   resumeTranspositionScan re-arms one normally, against the now-settled
+   real data. */
+let transpScanSuspended = false;
+function suspendTranspositionScan(){
+  transpScanSuspended = true;
+  clearTimeout(transpScanDebounceHandle);
+}
+function resumeTranspositionScan(){
+  transpScanSuspended = false;
+  scheduleTranspositionScan();
+}
+const TRANSP_SCAN_DEBOUNCE_MS = 1500;
+let transpScanDebounceHandle = null;
+function scheduleTranspositionScan(){
+  if(transpScanSuspended) return;
+  clearTimeout(transpScanDebounceHandle);
+  transpScanDebounceHandle = setTimeout(async () => {
+    await checkTranspositionsAtBoot();   // no-op once already run
+    await scanForNewTranspositions();
+  }, TRANSP_SCAN_DEBOUNCE_MS);
+}
+
+$('newTranspToastShowBtn').onclick = async () => {
+  // dismiss first -- Show is the "I'm dealing with it now" action, so the
+  // toast shouldn't still be sitting there once the report itself is open.
+  transpPendingSignatures.clear();
+  transpPendingRepairCount = 0;
+  hideNewTranspositionsToast();
+  await openTranspositionsReport();
+};
+$('newTranspToastDismissBtn').onclick = () => {
+  transpPendingSignatures.clear();
+  transpPendingRepairCount = 0;
+  hideNewTranspositionsToast();
+};
 
 // Builds and opens the full main VR world (every built castle, one street per
 // opening system). Extracted from menuThreeTest's handler (mirrors this
@@ -8705,8 +9666,17 @@ function refreshBranchName(nameSpan, saved){
   // a node that starts a new castle shows "CastleName: RoomName"
   const castle = saved?.isCastleRoot ? (saved.castleName || '').trim() : '';
   const text = castle ? (name ? `${castle}: ${name}` : castle) : name;
-  if(!text){ nameSpan.style.display='none'; return; }
-  nameSpan.textContent = text;
+  // a redirected room's badge must show even with no name/castle text of its
+  // own -- it's the only visible signal this row's own children are
+  // suppressed, so it can't be hidden away behind the "nothing to show" path
+  // an unnamed, non-redirected row otherwise takes.
+  const redirected = !!saved?.redirectToCastle;
+  // clear stale content along with hiding -- otherwise a previous render's
+  // name/icon lingers invisibly in the DOM (display:none, but still there
+  // for anything that queries it directly rather than checking visibility).
+  if(!text && !redirected){ nameSpan.style.display='none'; nameSpan.innerHTML=''; return; }
+  const icon = redirected ? '<i class="fa-solid fa-right-left branchName-redirect-icon"></i>' : '';
+  nameSpan.innerHTML = icon + escapeHtml(text);
   nameSpan.style.display='';
   // locked takes priority over memorized: a room behind a locked door can
   // never actually be walked into, so any memorized flag on it is stale
@@ -8716,7 +9686,10 @@ function refreshBranchName(nameSpan, saved){
   const roomKey = roomKeyForSaved(saved);
   nameSpan.classList.toggle('branchName-locked', locked);
   nameSpan.classList.toggle('branchName-memorized', !locked && !!(roomKey && MEMORIZED_ROOMS[roomKey]));
-  nameSpan.title = locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '';
+  const targetRoomName = (saved?.redirectTargetRoomName || '').trim() || 'not yet named';
+  nameSpan.title = redirected
+    ? `Redirected to "${saved.redirectToCastle}" room "${targetRoomName}" -- this room's own further responses are suppressed; doors here lead to the target castle's room instead`
+    : (locked ? 'Behind a locked door in VR (no further moves recorded here) -- can never be walked into or memorized' : '');
 }
 
 function refreshBranchStats(statsSpan, games, childrenSeq){
@@ -8730,6 +9703,13 @@ function refreshBranchStats(statsSpan, games, childrenSeq){
 function refreshRowMenuLabels(rowMenu, saved){
   const responseBtn = rowMenu.querySelector('[data-act="response"]');
   if(responseBtn) responseBtn.lastChild.textContent = saved?.reply ? 'Edit Standard Response' : 'Set Standard Response';
+  // a redirected room's own further responses are suppressed -- adding a new
+  // opponent try here would just create invisible, orphaned data.
+  const addMoveBtn = rowMenu.querySelector('[data-act="addMove"]');
+  if(addMoveBtn) addMoveBtn.style.display = saved?.redirectToCastle ? 'none' : '';
+  // the reverse: porting only makes sense once there's somewhere to port TO.
+  const portBtn = rowMenu.querySelector('[data-act="portRedirect"]');
+  if(portBtn) portBtn.style.display = saved?.redirectToCastle ? '' : 'none';
 }
 
 /* transforms one engine.analyze() rank (score/pv/depth, still turn-relative
@@ -9933,13 +10913,18 @@ async function importEngineVariation(startSeq, startFen, uciMoves, maxPlies){
   const spinner = showSpinner('Importing…');
   await nextPaint();
   try {
+    const targetSnapshots = await fetchRedirectTargetSnapshots(PREFS, CURRENT_LINE.id);
+    const targetBatches = new Map();
     const batch = new Map();
-    const count = importParsedLine([...startSeq, ...pv], batch);
+    const count = importParsedLine([...startSeq, ...pv], batch, targetBatches, targetSnapshots);
     if(batch.size){
       await setPrefsBatch(CURRENT_LINE.id, [...batch.values()]);   // one commit for the whole PV, same as importLine
       invalidateBuiltCastlesCache();   // writes standard responses the same way importLine does
     }
-    log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`);
+    await commitRedirectTargetBatches(targetBatches);
+    const routed = [...targetBatches.values()].reduce((sum,tb)=>sum+tb.size, 0);
+    log(`imported ${count} move(s) from the engine line into "${CURRENT_LINE.name}"`
+      + (routed ? ` (${routed} routed to a redirected room's own target castle)` : ''));
     // Targeted re-render (just startSeq's own subtree) instead of a full
     // renderTreeBody whenever possible -- see targetedRenderAfterImport's
     // own comment for why. Falling back to the full rebuild keeps this
@@ -10224,6 +11209,14 @@ if(localStorage.getItem('threeTestDebug')){
     // branch-expand UI.
     addManualReply: (seq, move) => addManualReply(seq, move),
     removeManualReply: (seq, move) => removeManualReply(seq, move),
+    // bug-fix regression coverage: calls gatherBuiltCastles directly, with
+    // NO invalidate first (unlike __redirectTestHooks.gatherBuiltCastles) --
+    // so a test can fire two of these concurrently (Promise.all) against an
+    // already-empty cache and confirm they share ONE in-flight build
+    // (buildCount stays 1) instead of racing two independent ones. See
+    // gatherBuiltCastles's own doc comment for the real bug this guards
+    // against (withLinePrefs's shared PREFS global).
+    gatherRaw: async () => gatherBuiltCastles(await getLines(LOCAL_USER)),
   };
 }
 
@@ -10403,6 +11396,88 @@ if(localStorage.getItem('threeTestDebug')){
   window.__linesTestHooks = {
     updateLine: (id, patch) => updateLine(id, patch),
     getLines: () => getLines(LOCAL_USER),
+  };
+}
+
+// test-only hook for reading a SPECIFIC line's own persisted prefs directly --
+// the in-memory PREFS global only ever mirrors whichever one line is
+// currently open, so a redirect-porting test (which writes into the TARGET
+// line, not necessarily the one open in the UI) has no other way to verify
+// what actually landed in IndexedDB.
+if(localStorage.getItem('threeTestDebug')){
+  window.__redirectTestHooks = {
+    getAllPrefs: (lineId) => getAllPrefs(lineId),
+    // forces a fresh (non-cached) gatherBuiltCastles build across every line,
+    // for asserting directly on genRooms/exits -- the layer
+    // synthesizeRedirectedGames/gatherRedirectsIntoLines feed into, without
+    // needing to navigate the full VR room-registration pipeline just to
+    // check an occurrence stat or an exit's presence.
+    gatherBuiltCastles: async () => {
+      invalidateBuiltCastlesCache();
+      return gatherBuiltCastles(await getLines(LOCAL_USER));
+    },
+    // new-transposition toast (Phase 1): exercised directly since nothing
+    // drives it automatically yet -- later phases wire real detection in.
+    showNewTranspositionsToast: (count) => showNewTranspositionsToast(count),
+    hideNewTranspositionsToast: () => hideNewTranspositionsToast(),
+    // computed, not inline, style: the element starts with an EMPTY inline
+    // style (hidden only via the stylesheet's own display:none default)
+    // until the first real show/hide call ever touches it, so checking
+    // .style.display alone would misreport "visible" on that untouched
+    // starting state.
+    isNewTranspositionsToastVisible: () => getComputedStyle($('newTranspToast')).display !== 'none',
+    newTranspositionsToastText: () => $('newTranspToastText').textContent,
+    // Phase 2: bypasses scheduleTranspositionScan's own debounce timer so a
+    // test doesn't have to sit through the real 1.5s wait -- runs the boot
+    // check first (a no-op once it's already run) so the scan always runs
+    // against a fully-seeded "seen" set, same as real use.
+    forceNewTranspositionsScan: async () => { await checkTranspositionsAtBoot(); await scanForNewTranspositions(); },
+    // separated out from forceNewTranspositionsScan so a test can run the
+    // boot check explicitly, BEFORE seeding any data -- boot's own
+    // automatic call (chained after runAutoImportCheck) is skipped under
+    // threeTestDebug (see checkTranspositionsAtBoot's own doc comment), so
+    // without this a test's first forceNewTranspositionsScan call would run
+    // the boot check against whatever the test had ALREADY seeded by that
+    // point, toasting it as "unresolved" instead of leaving it for a later
+    // scan to correctly report as "new".
+    checkTranspositionsAtBoot: () => checkTranspositionsAtBoot(),
+    // Phase 3: the REAL debounced scheduler (setTimeout, TRANSP_SCAN_DEBOUNCE_MS),
+    // not the forced-immediate scan above -- for testing that several rapid
+    // calls (mirroring several invalidateBuiltCastlesCache calls during one
+    // import) collapse into exactly one scan/toast update rather than one
+    // per call. Calls the function directly, bypassing
+    // invalidateBuiltCastlesCache's own threeTestDebug gate on it (see that
+    // gate's doc comment for why the gate exists).
+    scheduleNewTranspositionsScan: () => scheduleTranspositionScan(),
+    // bug-fix regression coverage: a background scan must never fire WHILE a
+    // bulk data-replace (Full Backup restore) is in flight -- see
+    // suspendTranspositionScan's own doc comment. These call the real guard
+    // functions directly so a test can prove BOTH that an already-armed
+    // timer gets genuinely cancelled (not just suppressed going forward)
+    // and that scheduling resumes normally afterward, without needing to
+    // race a real restore's own variable duration against the 1.5s window.
+    suspendNewTranspositionsScan: () => suspendTranspositionScan(),
+    resumeNewTranspositionsScan: () => resumeTranspositionScan(),
+    isTranspositionScanSuspended: () => transpScanSuspended,
+    // adds a second, independent castle-root line WITHOUT wiping whatever's
+    // already there -- unlike seedBackup (a full-backup restore, which
+    // clearAllData()s first), so a test can introduce a genuinely new
+    // collision partway through, on top of state earlier assertions in the
+    // same test already depend on.
+    createLineWithCastleRoot: async ({ id, name, color, openingMoves, rootSeq, reply, castleName }) => {
+      const line = await createLine(LOCAL_USER, { id, name, color, openingMoves });
+      await setPref(line.id, rootSeq, { reply, isCastleRoot: true, castleName, castleStreetNumber: 1 });
+      invalidateBuiltCastlesCache();
+      return line.id;
+    },
+    // "disappearing transpositions" Phase 1: a direct pref write + real
+    // cache invalidation, for simulating the edit that breaks a redirect's
+    // target -- e.g. changing the target room's own reply to a different
+    // move, so its old position no longer exists in that castle's graph.
+    setPrefField: async (lineId, seq, patch) => {
+      await setPref(lineId, seq, patch);
+      invalidateBuiltCastlesCache();
+    },
   };
 }
 

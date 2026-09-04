@@ -16942,5 +16942,1835 @@ try {
 } catch(e){ bad('Phase DD: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DE: manual room-to-room redirect (Attributes modal > "Redirect
+//     to castle") -- Phase 1 of the cross-castle transposition fix (Find
+//     Transpositions, Phase DD, is the detector; this is the first piece of
+//     the actual fix). Marking a room redirected suppresses its own further
+//     responses in the move table (a badge, "Add Opponent Move" hidden, its
+//     children no longer rendered) -- nothing else changes yet; VR staying
+//     out of the redirected room's way, and import/game-driven redirect
+//     routing, land in later phases. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDE = await launchApp();
+try {
+  // two INTERIOR (non-root) rooms transposing -- each castle's own root sits
+  // at a different position (Chigorin: Nc3 d5 d4; Queen's Pawn: d4 Nf6 Nc3),
+  // reached via a different move order than the OTHER castle's own interior
+  // room, but both interiors land on the identical final position since the
+  // 5 moves involved (White: Nc3/d4/Nf3, Black: d5/Nf6) never interact with
+  // each other on the board and so commute regardless of order (verified
+  // directly against chess.js, not just reasoned by hand -- an earlier draft
+  // of this fixture used c4 as White's 3rd move, which LOOKS equally
+  // "unrelated" but actually isn't: a 2-square pawn push needs its transit
+  // square empty too, and the knight that's already landed on c3 by then
+  // blocks c2-c4 outright) -- same shape as the real reported bug (a room
+  // INSIDE one castle transposing with a room inside a differently-shaped
+  // other castle), and exercises redirect's own castle-root exclusion (see
+  // refreshRedirectField) since neither redirected room here is a root. A
+  // real game backs the interior room's own child (the row this test
+  // watches get suppressed/restored).
+  await seedBackup(appDE.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        // a second, unrelated branch off the root -- without it the root and
+        // its one linear child collapse into a single VR "corridor" room
+        // (analyzeCastleStructure), whose exposed posKey is the ROOT's own
+        // position, not the interior room's (buildGeneratedCastle's anchor
+        // is a corridor's FIRST member) -- the redirect candidate search
+        // reads genRooms[].posKey directly, so the interior room needs to be
+        // a real anchor of its own, not swallowed into the root's corridor.
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDE.page.click('.line-row');
+  await appDE.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+  // the child row this test will watch get suppressed/restored -- confirm it
+  // actually renders before touching redirect at all.
+  await appDE.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]', { timeout: 20000 });
+
+  // 297. A castle ROOT never offers a redirect field at all -- it's the entry
+  //      point of its own street building (buildCastleGraph enters it
+  //      directly, never via a door), so redirecting it wouldn't stop that
+  //      castle from being built.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    const display = await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display);
+    assert(display === 'none', `expected no redirect field on a castle root, got display="${display}"`);
+    await appDE.page.click('#attributesCancelBtn');
+    ok('Attributes modal: a castle root never offers "Redirect to castle"');
+  } catch(e){ bad('Attributes modal: castle root excluded from redirect', e); }
+
+  // 298. The redirect pulldown offers the transposing castle as its only
+  //      candidate, on the interior room that actually collides.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    assert((await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display)) !== 'none',
+      'expected the redirect field to be visible for a real, castle-owned interior room');
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    const opts = await appDE.page.$$eval('#attrRedirectTo option', os => os.map(o => o.textContent));
+    assert(opts.length === 2 && opts[0] === '(none)' && opts[1].includes('Queens Pawn Palace') && opts[1].includes('Reversed Approach'),
+      `expected exactly a "(none)" option plus the one transposing castle, got ${JSON.stringify(opts)}`);
+    await appDE.page.click('#attributesCancelBtn');
+    ok('Attributes modal: "Redirect to castle" offers the transposing castle as its only candidate');
+  } catch(e){ bad('Attributes modal: redirect candidate list', e); }
+
+  // 299. Selecting it and saving badges the row, hides "Add Opponent Move" on
+  //      it, and suppresses its own children from the move table.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDE.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const info = await appDE.page.evaluate(() => {
+      const row = document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]');
+      const nameSpan = row.querySelector('.branchName');
+      return {
+        hasIcon: !!nameSpan.querySelector('.branchName-redirect-icon'),
+        title: nameSpan.title,
+        addMoveVisible: row.querySelector('[data-act="addMove"]').style.display !== 'none',
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]'),
+      };
+    });
+    assert(info.hasIcon, 'expected the redirect icon badge on the row name after saving a redirect');
+    assert(info.title.includes('Queens Pawn Palace'), `expected the title to name the target castle, got "${info.title}"`);
+    assert(!info.addMoveVisible, 'expected "Add Opponent Move" hidden on a redirected room');
+    assert(!info.childRowExists, 'expected the redirected room\'s own child row to no longer render');
+    ok('Attributes modal: saving a redirect badges the row, hides "Add Opponent Move", and suppresses its children');
+  } catch(e){ bad('Attributes modal: saving a redirect updates the move table', e); }
+
+  // 300. Reopening Attributes shows the saved redirect pre-selected (proving
+  //      it round-tripped through the pref, not just left over in the DOM),
+  //      and picking "(none)" clears it -- the badge disappears, "Add
+  //      Opponent Move" comes back, and the suppressed child re-renders.
+  try {
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDE.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    const preselected = await appDE.page.$eval('#attrRedirectTo', s => s.options[s.selectedIndex].textContent);
+    assert(preselected.includes('Queens Pawn Palace'), `expected the saved redirect target pre-selected on reopen, got "${preselected}"`);
+
+    await appDE.page.selectOption('#attrRedirectTo', { index: 0 });   // "(none)"
+    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const info = await appDE.page.evaluate(() => {
+      const row = document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]');
+      return {
+        hasIcon: !!row.querySelector('.branchName .branchName-redirect-icon'),
+        childRowExists: !!document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]'),
+      };
+    });
+    assert(!info.hasIcon, 'expected the redirect badge gone after clearing the redirect');
+    assert(info.childRowExists, 'expected the previously-suppressed child row to reappear after clearing the redirect');
+    ok('Attributes modal: clearing a redirect restores the badge-free row and its suppressed children');
+  } catch(e){ bad('Attributes modal: clearing a redirect restores normal move-table state', e); }
+} finally {
+  await appDE.close();
+}
+} catch(e){ bad('Phase DE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DF: Phase 2 of the transposition fix -- a redirected room isn't
+//     built locally in VR at all; the door leading into it routes straight
+//     to the target castle's own room key instead (same foreignKey/
+//     foreignCastle mechanism buildCastleGraph already uses for an automatic
+//     same-line castle-root collision, just driven by the manual redirect
+//     flag and able to target a DIFFERENT line, per processExit's own new
+//     check ahead of the existing foreign-root one). Also exercises that a
+//     redirect set via seedBackup (i.e. via Full Backup import) round-trips
+//     at all -- applyBackupData/buildBackupData needed extending to the 3
+//     new pref fields, since both used an explicit field whitelist. ---
+if(shouldRunPhase(['vr-castle','castle-generation'])){
+try {
+const appDF = await launchApp();
+try {
+  // same fixture shape as Phase DE (see its fixture comment for why Nf3, not
+  // c4, is White's 3rd developing move -- c4 gets physically blocked by the
+  // knight already on c3 in one of the two move orders).
+  const keys = await appDF.page.evaluate(() => {
+    const pk = (mv, inst) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return `cas:${inst}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      chigorinRoot: pk(['Nc3','d5','d4'], 'L1_Chigorin_Castle'),
+      target: pk(['d4','Nf6','Nc3','d5','Nf3'], 'L2_Queens_Pawn_Palace'),
+    };
+  });
+  await seedBackup(appDF.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','Bg4'], reply: 'e3' },
+        // a second, unrelated branch off the root -- see Phase DE's identical
+        // fixture comment: without it the root and its one linear child
+        // collapse into a single VR "corridor" room keyed by the ROOT's own
+        // position, so the redirect's foreignKey (built from the interior
+        // room's raw position) would point at a room key nothing actually
+        // registers under.
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      // g1 stops exactly at the redirected room (no tail past it) so this
+      // phase stays scoped to Phase 2's own concern (VR routing) -- a game
+      // continuing further would ALSO exercise Phase 5's games-augmentation
+      // (see Phase DI), adding an extra door here that isn't this phase's.
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3 Bg4 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appDF.page);
+
+  // 301. A redirect written via a plain backup import (not the Attributes
+  //      modal) still takes effect: the Chigorin root's own Nf6 door points
+  //      straight at the Queen's Pawn Palace's own room key, not a second,
+  //      locally-built copy of that room.
+  try {
+    await appDF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chigorinRoot);
+    const landed = await appDF.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.chigorinRoot, `expected to land in the Chigorin root itself (not redirected), got ${landed}`);
+    const exits = await appDF.page.evaluate(() => window.__threeTestEdit.exits());
+    // a castle root's own exits include its back-to-street pointer alongside
+    // any forward doors -- only the forward ones are "opponent replies out
+    // of this room", which is what's actually under test here.
+    const fwd = exits.filter(e => !e.back);
+    assert(fwd.length === 1, `expected exactly one forward door out of the Chigorin root (its only recorded opponent try, Nf6), got ${fwd.length} (all exits: ${JSON.stringify(exits)})`);
+    assert(fwd[0].target === keys.target,
+      `expected the Nf6 door to route straight to the Queen's Pawn Palace room, got target=${fwd[0].target} (expected ${keys.target})`);
+    ok('VR: a redirected room is never built locally -- its door routes straight to the target castle\'s own room');
+  } catch(e){ bad('VR: redirected room routes its door to the target castle', e); }
+
+  // 302. The target room itself is the REAL room from Queen's Pawn Palace's
+  //      own tree (walkable, with its own further door), not a broken stub --
+  //      proving the redirect points at a genuine, independently-built room.
+  try {
+    await appDF.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.target);
+    const landed = await appDF.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.target, `expected to actually land in the target room, got ${landed}`);
+    const targetExits = await appDF.page.evaluate(() => window.__threeTestEdit.exits());
+    assert(targetExits.length === 1, `expected the target room's own single door (its Bg4 continuation), got ${targetExits.length}`);
+    ok('VR: the redirect target is a real, independently-built room with its own continuation');
+  } catch(e){ bad('VR: redirect target room is real and walkable', e); }
+} finally {
+  await appDF.close();
+}
+} catch(e){ bad('Phase DF: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DG: Phase 3 of the transposition fix -- "Port Responses to
+//     Target", the row-menu action that copies a redirected room's own
+//     (now-frozen) subtree into the target castle's own move order. A
+//     merge, not an overwrite: a translated position the target already has
+//     its own reply for is left untouched. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDG = await launchApp();
+try {
+  // same transposing shape as Phase DE/DF; the redirect is pre-set (via
+  // seedBackup, same as DF) with three things hanging off the redirected
+  // room that porting needs to handle differently:
+  //  - a manually-recorded, not-yet-answered opponent try (c6) -- ports
+  //    onto the target room's own manualReplies.
+  //  - a real answered descendant (g6 -> Bg2) the target has nothing for
+  //    yet -- ports as a brand new pref.
+  //  - a real answered descendant (e6 -> e3) the target ALREADY has its
+  //    own different answer for (e6 -> e4) -- must be skipped, not
+  //    overwritten.
+  await seedBackup(appDG.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3'], manualReplies: ['c6'] },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','g6'], reply: 'Bg2' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        // second branch off the root -- same corridor-merge-avoidance reason
+        // as Phase DE/DF's identical fixture (not load-bearing for porting
+        // itself, just needed so redirectTargetSeq points at a real anchor).
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','e6'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDG.page.click('.line-row');
+  await appDG.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 303. Porting copies the unanswered manual try and the new answered
+  //      descendant, but leaves the target's own conflicting answer alone.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    const portVisible = await appDG.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').style.display !== 'none');
+    assert(portVisible, 'expected "Port Responses to Target" visible on an already-redirected room');
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').click());
+    await appDG.page.waitForFunction(() => /ported 2 response/i.test(document.getElementById('progress').textContent), { timeout: 5000 });
+
+    const targetPrefs = await appDG.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const roomPref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3'];
+    const g6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,g6'];
+    const e6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(roomPref?.manualReplies?.includes('c6'), `expected the unanswered manual try (c6) ported onto the target room, got ${JSON.stringify(roomPref)}`);
+    assert(g6Pref?.reply === 'Bg2', `expected the new descendant (g6 -> Bg2) ported, got ${JSON.stringify(g6Pref)}`);
+    assert(e6Pref?.reply === 'e4', `expected the target's own pre-existing answer (e6 -> e4) left untouched, got ${JSON.stringify(e6Pref)}`);
+    ok('Port Responses to Target: copies missing manual tries and answers, leaves existing target answers untouched');
+  } catch(e){ bad('Port Responses to Target: merges the redirected subtree into the target castle', e); }
+
+  // 304. Re-running Port is a safe no-op once everything's already there --
+  //      no duplicate writes, no accidental overwrite on a second pass.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="portRedirect"]').click());
+    await appDG.page.waitForFunction(() => /nothing new to port/i.test(document.getElementById('progress').textContent), { timeout: 5000 });
+
+    const targetPrefs = await appDG.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const e6Pref = targetPrefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(e6Pref?.reply === 'e4', `expected the target's own answer still untouched after a second port, got ${JSON.stringify(e6Pref)}`);
+    ok('Port Responses to Target: re-running once everything is already ported is a safe no-op');
+  } catch(e){ bad('Port Responses to Target: idempotent re-run', e); }
+
+  // 305. A room that's NOT redirected never shows the Port action at all.
+  try {
+    await appDG.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5"] .rowMenuBtn').click());
+    const portVisible = await appDG.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5"] [data-act="portRedirect"]').style.display !== 'none');
+    assert(!portVisible, 'expected "Port Responses to Target" hidden on a non-redirected room (the castle root)');
+    ok('Port Responses to Target: hidden on a room that has no redirect set');
+  } catch(e){ bad('Port Responses to Target: hidden without a redirect', e); }
+} finally {
+  await appDG.close();
+}
+} catch(e){ bad('Phase DG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DH: Phase 4 of the transposition fix -- pasted-variation import
+//     ("Import Variations") routes any NEW data that runs through an
+//     already-redirected room straight to the target castle, live, instead
+//     of writing it into the source's own frozen/suppressed subtree where
+//     it would otherwise be silently invisible (same problem Port, Phase 3,
+//     solves for data that predates the redirect -- this covers data that
+//     shows up AFTER). importEngineVariation shares the same underlying
+//     importParsedLine, so it's covered by the same code path. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDH = await launchApp();
+try {
+  // same transposing pair as Phase DE/DF/DG, redirect pre-set, target room
+  // starts with NO children of its own.
+  await seedBackup(appDH.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDH.page.click('.line-row');
+  await appDH.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 306. Pasting a variation that runs straight through the redirected room
+  //      and keeps going lands its new continuation under the TARGET castle,
+  //      not the source -- both the new opponent try (e6) and the response
+  //      to it (e3).
+  try {
+    await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 Nf6 3. Nf3 e6 4. e3');
+    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.waitForFunction(() => /routed to a redirected room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    assert(/2 routed/.test(await appDH.page.evaluate(() => document.getElementById('progress').textContent)),
+      `expected the log to report 2 entries routed, got "${await appDH.page.evaluate(() => document.getElementById('progress').textContent)}"`);
+
+    const [l1Prefs, l2Prefs] = await appDH.page.evaluate(() => Promise.all([
+      window.__redirectTestHooks.getAllPrefs('L1'), window.__redirectTestHooks.getAllPrefs('L2'),
+    ]));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3']?.manualReplies?.includes('e6'),
+      `expected the new opponent try (e6) routed onto the target room's own manualReplies, got ${JSON.stringify(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3'])}`);
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6']?.reply === 'e3',
+      `expected the new response (e6 -> e3) routed onto the target line, got ${JSON.stringify(l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'])}`);
+    assert(!l1Prefs['L1|Nc3,d5,d4,Nf6,Nf3,e6'],
+      `expected nothing written into the SOURCE castle's own (suppressed) subtree, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4,Nf6,Nf3,e6'])}`);
+    ok('Import Variations: new data past a redirected room routes to the target castle, not the frozen source');
+  } catch(e){ bad('Import Variations: redirect-aware routing for genuinely new data', e); }
+
+  // 307. A sibling branch that does NOT pass through the redirected room
+  //      (a different opponent try at the room's own parent) still writes
+  //      normally to the source line -- redirect-awareness shouldn't
+  //      over-fire on unrelated data.
+  try {
+    await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
+    await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 c5 3. e4');
+    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.waitForFunction(() => /imported 2 move/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    const progressText = await appDH.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(!/routed/i.test(progressText), `expected no "routed" mention for an unrelated sibling branch, got "${progressText}"`);
+
+    const l1Prefs = await appDH.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    assert(l1Prefs['L1|Nc3,d5,d4']?.manualReplies?.includes('c5'),
+      `expected the sibling opponent try (c5) written normally to the source, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4'])}`);
+    assert(l1Prefs['L1|Nc3,d5,d4,c5']?.reply === 'e4',
+      `expected the sibling's own response written normally to the source, got ${JSON.stringify(l1Prefs['L1|Nc3,d5,d4,c5'])}`);
+    ok('Import Variations: a sibling branch that never reaches the redirected room writes normally to the source');
+  } catch(e){ bad('Import Variations: unrelated data is not redirected', e); }
+} finally {
+  await appDH.close();
+}
+} catch(e){ bad('Phase DH: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DI: Phase 5 of the transposition fix -- a real GAME (unlike a
+//     pasted variation, Phase 4) never writes a pref at all; replies()/
+//     buildCastleGraph read games live via a literal move-string trie, so a
+//     game transposing into a redirected room and continuing further stayed
+//     invisible at the TARGET too (its own recorded moves follow the SOURCE
+//     castle's move order, not the target's -- a literal prefix search at
+//     the target's own position never finds it). gatherBuiltCastles now
+//     splices in a synthetic, re-ordered copy of any such game (in memory,
+//     for that one build only -- never written to the real games store, so
+//     Browse/Compare Games are untouched) before building the target's own
+//     castle, so its own literal trie finds the transposed continuation and
+//     counts it toward occurrence stats, same as a game actually played in
+//     that order would. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appDI = await launchApp();
+try {
+  // same transposing pair as Phase DE/DF/DG/DH, redirect pre-set. The one
+  // game reaching the redirected room continues past it with 'e6' -- a
+  // brand new opponent try with NO pref anywhere (not even manualReplies),
+  // the case only a real, unwritten game can produce.
+  await seedBackup(appDI.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6', white: 'a', black: 'b', result: '*' },
+      // backs the second-branch pref above -- a pref alone (no game/manualReply)
+      // never shows as a visible opponent try (see buildCastleGraph's own
+      // walk(), which enumerates strictly from replies()/manualReplies), so
+      // without this the root+interior room would ALSO collapse into one
+      // corridor here, same mistake Phase DE's fixture made and fixed.
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 308. The target room's own genRoom gains an exit for the transposed
+  //      game's continuation, with an occurrence stat reflecting it.
+  try {
+    const built = await appDI.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const targetCastle = built.find(c => c.castleName === 'Queens Pawn Palace');
+    assert(targetCastle, `expected to find the Queens Pawn Palace castle, got ${JSON.stringify(built.map(c=>c.castleName))}`);
+    const targetSeq = ['d4','Nf6','Nc3','d5','Nf3'];
+    const targetRoom = targetCastle.genRooms.find(gr => gr.seq.join(',') === targetSeq.join(','));
+    assert(targetRoom, `expected to find the target room at ${targetSeq.join(',')}, got rooms ${JSON.stringify(targetCastle.genRooms.map(gr=>gr.seq))}`);
+    const e6Exit = targetRoom.exits.find(ex => ex.opp === 'e6');
+    assert(e6Exit, `expected an exit for the transposed game's own continuation (e6), got ${JSON.stringify(targetRoom.exits)}`);
+    assert(e6Exit.occurrence === '1 (100%)', `expected the synthetic game to count toward occurrence, got "${e6Exit.occurrence}"`);
+    ok('gatherBuiltCastles: a game transposing into a redirected room surfaces its continuation at the target castle');
+  } catch(e){ bad('gatherBuiltCastles: transposed game continuation reaches the target', e); }
+
+  // 309. The source castle's own build is unaffected -- the redirected room
+  //      still doesn't exist as a local room at all (Phase 2), and nothing
+  //      about the synthetic-games machinery leaks a spurious room/exit into
+  //      the source's own genRooms.
+  try {
+    const built = await appDI.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const sourceCastle = built.find(c => c.castleName === 'Chigorin Castle');
+    const redirectedPosKey = await appDI.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['Nc3','d5','d4','Nf6','Nf3']) c.move(m,{sloppy:true});
+      return window.__positionKey(c.fen());
+    });
+    const leaked = sourceCastle.genRooms.find(gr => gr.posKey === redirectedPosKey);
+    assert(!leaked, `expected no local room at the redirected position in the source castle, got ${JSON.stringify(leaked)}`);
+    ok('gatherBuiltCastles: the source castle is unaffected by the target-side games augmentation');
+  } catch(e){ bad('gatherBuiltCastles: source castle stays clean', e); }
+} finally {
+  await appDI.close();
+}
+} catch(e){ bad('Phase DI: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DJ: Phase 6 of the transposition fix -- "Find Transpositions"
+//     naturally stops re-flagging a pair once it's been redirected, with no
+//     special-casing added to the detector itself: the redirected room never
+//     gets a genRoom entry on the source side any more (Phase 2), so that
+//     position only has ONE distinct castle instance left, below the
+//     detector's own "2+ castles" threshold. This phase is pure
+//     verification -- confirming that emergent behavior, and that an
+//     UNRELATED, still-unredirected collision stays fully visible
+//     alongside it, so the report doesn't go quiet altogether. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appDJ = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): redirected -- must NOT be reported.
+  // Queen's Pawn's own interior room is backed by its OWN native game (g3),
+  // independent of Phase 5's games-synthesis, so it genuinely exists as a
+  // real genRoom -- proving the pair drops out because the SOURCE side is
+  // gone, not because the target side happens to be unbuilt too.
+  // pair 2 (Italian/Reversed Italian): NOT redirected -- must still show up.
+  await seedBackup(appDJ.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'] },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'Nf3 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 310. The redirected pair is gone from the report; the unrelated,
+  //      still-unredirected pair is still fully reported.
+  try {
+    await appDJ.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDJ.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDJ.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length > 0,
+      { timeout: 5000 },
+    );
+    const info = await appDJ.page.evaluate(() => ({
+      groupCount: document.querySelectorAll('#transpBody .transp-group').length,
+      entryCount: document.querySelectorAll('#transpBody .transp-entry').length,
+      body: document.getElementById('transpBody').textContent,
+      summary: document.getElementById('transpSummary').textContent,
+    }));
+    assert(info.groupCount === 1, `expected exactly 1 collision group (the redirected pair should be gone), got ${info.groupCount}`);
+    assert(info.entryCount === 2, `expected exactly 2 entries in that group, got ${info.entryCount}`);
+    assert(/\b1\b/.test(info.summary), `expected the summary to report 1 position, got "${info.summary}"`);
+    assert(info.body.includes('Italian Castle') && info.body.includes('Reversed Italian'),
+      `expected the still-unredirected pair reported, got ${JSON.stringify(info.body)}`);
+    assert(!info.body.includes('Chigorin Castle') && !info.body.includes('Queens Pawn Palace'),
+      `expected the redirected pair completely absent from the report, got ${JSON.stringify(info.body)}`);
+    ok('Find Transpositions: a redirected pair drops out on its own; an unrelated unredirected pair stays fully visible');
+  } catch(e){ bad('Find Transpositions: redirected pairs stop being reported', e); }
+} finally {
+  await appDJ.close();
+}
+} catch(e){ bad('Phase DJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DK: "Keep this, redirect the rest" -- resolving a collision
+//     directly from the Find Transpositions report, instead of hunting down
+//     the losing room's own row in the move table and setting the redirect
+//     there by hand. Writes the exact same 3 pref fields the Attributes
+//     modal's own field does; a castle root is skipped (can't be redirected,
+//     same rule refreshRedirectField enforces). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDK = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): an interior-room collision, resolvable.
+  // pair 2 (Alpha/Beta): a ROOT-vs-ROOT collision -- "Keep this" must skip
+  // it (a root can't be redirected) rather than silently doing nothing.
+  await seedBackup(appDK.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        // second branch off the root -- unlike every earlier phase's fixture,
+        // this one is NOT pre-redirected, so Chigorin's own interior room
+        // has to actually get BUILT (not skipped by processExit) for the
+        // detector to see it at all -- which means it needs the same
+        // corridor-merge-avoidance branch Phase DE's fixture comment
+        // explains, this time on the SOURCE side rather than the target's.
+        { seq: ['Nc3','d5','d4','c6'], reply: 'e4' },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Alpha Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Alpha Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L4', name: 'Beta Approach', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Beta Castle', castleStreetNumber: 1 },
+      ]},
+    ],
+    games: [
+      { id: 'g0', moves: 'Nc3 d5 d4 c6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'Nf3 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 311. Clicking "Keep this, redirect the rest" on the Queen's Pawn Palace
+  //      entry redirects the Chigorin entry to it, and the whole group
+  //      disappears from the report afterward.
+  try {
+    await appDK.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDK.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDK.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 2,
+      { timeout: 5000 },
+    );
+    // find the Queen's Pawn Palace entry's own "Keep this" button, across
+    // either group (sort order isn't asserted on elsewhere in this suite).
+    await appDK.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Queens Pawn Palace'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDK.page.waitForFunction(() => /redirected 1 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l1Prefs = await appDK.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const chigorinInterior = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(chigorinInterior?.redirectToCastle === 'Queens Pawn Palace',
+      `expected the Chigorin entry redirected to Queens Pawn Palace, got ${JSON.stringify(chigorinInterior)}`);
+    assert(chigorinInterior?.redirectTargetLineId === 'L2', `expected the redirect target line to be L2, got ${JSON.stringify(chigorinInterior)}`);
+
+    // the report auto-refreshes after resolving -- that group is gone, only
+    // the still-unredirected Alpha/Beta pair is left.
+    await appDK.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    const bodyText = await appDK.page.evaluate(() => document.getElementById('transpBody').textContent);
+    assert(!bodyText.includes('Chigorin Castle') && !bodyText.includes('Queens Pawn Palace'),
+      `expected the resolved pair gone from the refreshed report, got ${JSON.stringify(bodyText)}`);
+    assert(bodyText.includes('Alpha Castle') && bodyText.includes('Beta Castle'),
+      `expected the still-unresolved pair still shown, got ${JSON.stringify(bodyText)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" resolves a group and it disappears on refresh');
+  } catch(e){ bad('Find Transpositions: resolving a collision from the report', e); }
+
+  // 312. A root-vs-root collision can't actually be redirected either way --
+  //      "Keep this" reports 0 redirected / 1 skipped, and neither root's
+  //      own pref gets touched.
+  try {
+    await appDK.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Alpha Castle'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDK.page.waitForFunction(() => /redirected 0 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+    const progressText = await appDK.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(/skipped/i.test(progressText), `expected the skip explanation for a root-vs-root pair, got "${progressText}"`);
+
+    const l4Prefs = await appDK.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L4'));
+    assert(!l4Prefs['L4|Nf3,e5']?.redirectToCastle, `expected Beta's own root left untouched, got ${JSON.stringify(l4Prefs['L4|Nf3,e5'])}`);
+    ok('Find Transpositions: a root-vs-root collision is skipped, not silently redirected');
+  } catch(e){ bad('Find Transpositions: root-vs-root collision skip', e); }
+} finally {
+  await appDK.close();
+}
+} catch(e){ bad('Phase DK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DL: porting automatically right after setting a redirect,
+//     instead of requiring a separate manual "Port Responses to Target"
+//     click every time. The Attributes modal ports inline (once, only when
+//     the redirect actually changed -- not on every unrelated save);
+//     "Keep this, redirect the rest" ports once for the whole batch. Both
+//     reuse Phase 3's own portRedirectedResponses -- this is purely about
+//     doing it proactively, with no confirmation prompt (users found the
+//     prompt pointless -- there was never a reason to decline). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDL = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): same shape as Phase DE, redirect set via
+  // the Attributes modal in the tests below (not pre-seeded) -- an existing
+  // child (e6 -> e3) under the room being redirected is what proves the
+  // auto-offered port actually ran.
+  // pair 2 (Italian/Reversed Italian): a SEPARATE, unrelated interior-room
+  // collision for the "Keep this, redirect the rest" bulk port-offer below,
+  // with its own existing child under the LOSING side only.
+  await seedBackup(appDL.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','c6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+        { seq: ['Nc3','d5','d4','Nf6','Nf3','e6'], reply: 'e3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','c5'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        { seq: ['e4','e5','Nf3','Bc5'], reply: 'c3' },   // second branch off root -- avoids corridor-merge
+        { seq: ['e4','e5','Nf3','Nc6'], reply: 'd4' },
+        { seq: ['e4','e5','Nf3','Nc6','d4','a6'], reply: 'a3' },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','Nc6'], reply: 'd4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        { seq: ['Nf3','Nc6','d4','d6'], reply: 'c4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['Nf3','Nc6','d4','e5'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g0', moves: 'Nc3 d5 d4 c6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 c5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3 Nc6 d4 a6 a3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'e4 e5 Nf3 Bc5 c3', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'Nf3 Nc6 d4 e5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g7', moves: 'Nf3 Nc6 d4 d6 c4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDL.page.click('.line-row');
+  await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+  await appDL.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6,Nf3,e6"]', { timeout: 20000 });
+
+  // 313. Setting a redirect via the Attributes modal ports right away,
+  //      automatically, no confirmation prompt.
+  try {
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDL.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l2Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const ported = l2Prefs['L2|d4,Nf6,Nc3,d5,Nf3,e6'];
+    assert(ported?.reply === 'e3', `expected the existing child (e6 -> e3) auto-ported to the target, got ${JSON.stringify(ported)}`);
+    ok('Attributes modal: setting a redirect ports it to the target immediately, automatically');
+  } catch(e){ bad('Attributes modal: auto-port after setting a redirect', e); }
+
+  // 314. Editing something UNRELATED on the same, already-redirected room
+  //      (its note) does NOT re-trigger a port -- only an actual redirect
+  //      change should.
+  try {
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.fill('#attrNote', 'just a note, not a redirect change');
+    await appDL.page.evaluate(() => { document.getElementById('progress').textContent = ''; });   // clear -- a stray re-port would show up here
+    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
+    const progressText = await appDL.page.evaluate(() => document.getElementById('progress').textContent);
+    assert(progressText === '', `expected no port-related message from an unrelated save, got "${progressText}"`);
+    ok('Attributes modal: an unrelated save on an already-redirected room does not re-port');
+  } catch(e){ bad('Attributes modal: no spurious re-port on an unrelated save', e); }
+
+  // 315. "Keep this, redirect the rest" (Find Transpositions) also ports,
+  //      automatically, once for the whole batch -- by now the Chigorin/
+  //      Queen's Pawn pair is already resolved (Phase 6), so only the
+  //      Italian pair shows.
+  try {
+    await appDL.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDL.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDL.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    // keep Reversed Italian (L4) -- so Italian Castle (L3), which has the
+    // existing child (a6 -> a3), is the one being redirected/ported FROM.
+    await appDL.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Reversed Italian'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
+
+    const l4Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L4'));
+    const ported = l4Prefs['L4|Nf3,Nc6,d4,e5,e4,a6'];
+    assert(ported?.reply === 'a3', `expected Italian Castle's existing child (a6 -> a3) auto-ported to Reversed Italian, got ${JSON.stringify(ported)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" also auto-ports, for the whole batch');
+  } catch(e){ bad('Find Transpositions: bulk redirect auto-ports', e); }
+} finally {
+  await appDL.close();
+}
+} catch(e){ bad('Phase DL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DM: the redirect badge's tooltip names the target ROOM, not just
+//     the target castle -- "Redirected to "Castle" room "Room"" -- since a
+//     castle can (and often does) contain many rooms, naming only the castle
+//     left the user unable to tell which one without opening it. Falls back
+//     to `room "not yet named"` when the target room has no name pref set.
+//     Both the Attributes modal's own redirect and "Keep this, redirect the
+//     rest" (Find Transpositions) write the same redirectTargetRoomName
+//     snapshot, same as the pre-existing redirectToCastle castle-name
+//     snapshot (also captured at redirect-set time, not looked up live). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDM = await launchApp();
+try {
+  // pair 1 (Chigorin/Queen's Pawn): same shape as Phase DE, but the target
+  // room (L2's) is given a name up front -- proves the tooltip carries an
+  // EXISTING name through, not just a placeholder.
+  // pair 2 (Italian/Reversed Italian): same shape as Phase DL, target room
+  // left unnamed -- proves the "not yet named" fallback, and that "Keep
+  // this, redirect the rest" captures the room name the same way.
+  await seedBackup(appDM.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3', name: 'Solarium' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DE
+      ]},
+      { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        { seq: ['e4','e5','Nf3','Bc5'], reply: 'c3' },   // second branch off root -- avoids corridor-merge
+        { seq: ['e4','e5','Nf3','Nc6'], reply: 'd4' },
+      ]},
+      { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+        { seq: ['Nf3','Nc6'], reply: 'd4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        { seq: ['Nf3','Nc6','d4','d6'], reply: 'c4' },   // second branch off root -- avoids corridor-merge
+        { seq: ['Nf3','Nc6','d4','e5'], reply: 'e4' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'e4 e5 Nf3 Bc5 c3', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'e4 e5 Nf3 Nc6 d4', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'Nf3 Nc6 d4 d6 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g7', moves: 'Nf3 Nc6 d4 e5 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDM.page.click('.line-row');
+  await appDM.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 316. Redirecting via the Attributes modal onto an already-named target
+  //      room shows that room's name in the badge tooltip.
+  try {
+    await appDM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
+    await appDM.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
+    await appDM.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDM.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
+    await appDM.page.selectOption('#attrRedirectTo', { index: 1 });
+    await appDM.page.click('#attributesSaveBtn');
+    await appDM.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    const title = await appDM.page.evaluate(() =>
+      document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .branchName').title);
+    assert(title.includes('Redirected to "Queens Pawn Palace" room "Solarium"'),
+      `expected the tooltip to name both the target castle and its named room, got "${title}"`);
+    ok('Attributes modal: redirect tooltip names the target room, not just the castle');
+  } catch(e){ bad('Attributes modal: redirect tooltip includes target room name', e); }
+
+  // 317. Redirecting onto a target room with NO name leaves
+  //      redirectTargetRoomName empty -- refreshBranchName's own fallback
+  //      (verified directly against the source in this same edit) turns that
+  //      into "not yet named" in the tooltip; this test proves "Keep this,
+  //      redirect the rest" (Find Transpositions) captures the (empty) room
+  //      name the same way the Attributes modal does, rather than, say,
+  //      leaving the field undefined or throwing on a nameless target.
+  try {
+    await appDM.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDM.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    await appDM.page.waitForFunction(
+      () => document.querySelectorAll('#transpBody .transp-group').length === 1,
+      { timeout: 5000 },
+    );
+    // keep Reversed Italian (L4, unnamed target room) -- so Italian Castle
+    // (L3) is the one being redirected.
+    await appDM.page.evaluate(() => {
+      const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
+      const target = entries.find(el => el.textContent.includes('Reversed Italian'));
+      target.querySelector('.transp-keep-btn').click();
+    });
+    await appDM.page.waitForFunction(() =>
+      document.querySelectorAll('#transpBody .transp-group').length === 0, { timeout: 10000 });
+
+    const l3Prefs = await appDM.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
+    const redirected = l3Prefs['L3|e4,e5,Nf3,Nc6'];
+    assert(redirected?.redirectToCastle === 'Reversed Italian', `expected Italian Castle's interior room redirected to Reversed Italian, got ${JSON.stringify(redirected)}`);
+    assert(!redirected?.redirectTargetRoomName, `expected an empty redirectTargetRoomName for an unnamed target room, got ${JSON.stringify(redirected?.redirectTargetRoomName)}`);
+    ok('Find Transpositions: "Keep this, redirect the rest" captures an empty room name for an unnamed target, ready for the tooltip\'s own fallback');
+  } catch(e){ bad('Find Transpositions: redirectTargetRoomName on an unnamed target room', e); }
+} finally {
+  await appDM.close();
+}
+} catch(e){ bad('Phase DM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DN: "new transpositions appearing" -- Phase 1 of that plan, the
+//     toast widget itself (show/hide, Show button, dismiss icon). Nothing
+//     drives it automatically yet -- that's later phases (a debounced scan
+//     on invalidateBuiltCastlesCache, diffed against a "seen" signature set).
+//     Exercised directly via __redirectTestHooks since there's no detector
+//     wired in to trigger it through real edits at this point. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDN = await launchApp();
+try {
+  // 318. Showing the toast displays the right (pluralized) count, and Show
+  //      opens the real Find Transpositions report while dismissing itself.
+  try {
+    await appDN.page.evaluate(() => window.__redirectTestHooks.showNewTranspositionsToast(3));
+    const text = await appDN.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(text === '3 new transpositions found', `expected pluralized count text, got "${text}"`);
+    assert(await appDN.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible()),
+      'expected the toast visible after showNewTranspositionsToast');
+
+    await appDN.page.click('#newTranspToastShowBtn');
+    await appDN.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+    assert(!(await appDN.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible())),
+      'expected Show to dismiss the toast, not just open the report');
+    ok('New-transpositions toast: shows a pluralized count, and Show opens the report and dismisses itself');
+  } catch(e){ bad('New-transpositions toast: Show button', e); }
+
+  // 319. The singular form reads "1 new transposition found" (not "1
+  //      transpositions"), and the circle-x dismiss icon hides the toast
+  //      WITHOUT opening the report.
+  try {
+    await appDN.page.click('#transpCloseBtn');
+    await appDN.page.evaluate(() => window.__redirectTestHooks.showNewTranspositionsToast(1));
+    const text = await appDN.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(text === '1 new transposition found', `expected singular count text, got "${text}"`);
+
+    await appDN.page.click('#newTranspToastDismissBtn');
+    const [toastVisible, reportVisible] = await appDN.page.evaluate(() => [
+      window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      document.getElementById('transpOverlay').style.display === 'flex',
+    ]);
+    assert(!toastVisible, 'expected the dismiss icon to hide the toast');
+    assert(!reportVisible, 'expected dismiss to NOT open the Find Transpositions report');
+    ok('New-transpositions toast: singular count text, and dismiss hides it without opening the report');
+  } catch(e){ bad('New-transpositions toast: dismiss icon', e); }
+} finally {
+  await appDN.close();
+}
+} catch(e){ bad('Phase DN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DO: "new transpositions appearing" -- Phase 2, real detection.
+//     invalidateBuiltCastlesCache now schedules a debounced re-scan
+//     (findTransposedRooms again), diffed against a "seen" signature set --
+//     a genuinely NEW collision raises the toast, but the exact same
+//     unresolved collision surviving an unrelated edit does NOT re-raise it
+//     (transpSeenSignatures, once added, is never removed except by the
+//     process ending). checkTranspositionsAtBoot (called once from the real
+//     startup chain, after auto-import settles) is what seeds that "seen"
+//     set at the START of a session -- see Phase DQ for its own ACTIVE
+//     "unresolved" reminder behavior; these tests here just need it run
+//     once against an empty state first so a collision seeded afterward
+//     correctly counts as "new" rather than pre-existing.
+//     forceNewTranspositionsScan bypasses the real 1.5s debounce
+//     timer so these tests don't have to sit through it. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDO = await launchApp();
+try {
+  // run the boot check against the empty pre-seed state FIRST, mirroring
+  // real boot order (checkTranspositionsAtBoot runs after auto-import
+  // settles but before any user action) -- boot's own automatic call is
+  // skipped under threeTestDebug, so without this the collision seeded just
+  // below would itself get toasted as "unresolved" here instead of being
+  // available for a later scan to correctly report as "new".
+  await appDO.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+
+  // root-vs-root collision (same simple shape as Phase DD's own detector
+  // test) -- no interior rooms/games needed, a castle root always registers
+  // as its own genRoom directly, so there's no corridor-merge fixture
+  // concern to work around here.
+  await seedBackup(appDO.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','d5'], reply: 'Nc3', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+      ]},
+    ],
+    // a real game backing each root's own reply -- without one, Black's d5
+    // never renders as a visible move-table row at all (visibleOppsAt reads
+    // from games, not prefs), and test 321 needs the d4,d5 row on screen to
+    // open Attributes on it.
+    games: [
+      { id: 'g1', moves: 'd4 d5 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'Nc3 d5 d4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appDO.page.click('.line-row');
+  await appDO.page.waitForSelector('tr.data-row[data-seq="d4,d5"]', { timeout: 20000 });
+
+  // 320. Seeding a genuine new collision, then forcing a scan, raises the
+  //      toast with count 1.
+  try {
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDO.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast to appear after a scan finds a genuinely new collision');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('New-transpositions detection: a genuine new collision raises the toast after a forced scan');
+  } catch(e){ bad('New-transpositions detection: initial collision detected', e); }
+
+  // 321. Dismiss the toast, then make an UNRELATED edit (a note, touching
+  //      neither castle's own reply graph) on the SAME still-unresolved
+  //      collision -- invalidateBuiltCastlesCache fires for real (every
+  //      Attributes save calls it unconditionally), but the re-scan must
+  //      NOT re-raise the toast: the collision's signature is already in
+  //      transpSeenSignatures from test 320, so it isn't "new" again just
+  //      because something else about that room changed.
+  try {
+    // the real dismiss button, not the raw hideNewTranspositionsToast hook --
+    // dismissing also clears transpPendingSignatures (see its own click
+    // handler), which the bare widget-hide function alone does not.
+    await appDO.page.click('#newTranspToastDismissBtn');
+    await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
+    await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
+    await appDO.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appDO.page.fill('#attrNote', 'an unrelated note, not a redirect or new reply');
+    await appDO.page.click('#attributesSaveBtn');
+    await appDO.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDO.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected an unrelated edit on an already-known collision to NOT re-raise the toast');
+    ok('New-transpositions detection: an already-seen collision does not re-nag after an unrelated edit');
+  } catch(e){ bad('New-transpositions detection: no re-nag on an unrelated edit', e); }
+
+  // 322. A DIFFERENT, genuinely new collision (a second, distinct pair)
+  //      DOES raise the toast again -- proves transpSeenSignatures gates by
+  //      signature, not "has the toast ever fired this session".
+  try {
+    // added directly through DB helpers (not another seedBackup -- a full
+    // backup restore wipes existing data first, which would destroy L1/L2's
+    // already-seen signature this test is specifically checking survives).
+    await appDO.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+      rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+    }));
+    await appDO.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'],
+      rootSeq: ['Nf3','e5'], reply: 'e4', castleName: 'Reversed Italian',
+    }));
+    await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDO.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected a genuinely different new collision to raise the toast again');
+    assert(info.text === '1 new transposition found', `expected count 1 (just the new pair, not the earlier already-seen one too), got "${info.text}"`);
+    ok('New-transpositions detection: a different, later collision raises the toast again, still counting only what\'s actually new');
+  } catch(e){ bad('New-transpositions detection: a second distinct collision still gets detected', e); }
+} finally {
+  await appDO.close();
+}
+} catch(e){ bad('Phase DO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DP: "new transpositions appearing" -- Phase 3, the real debounce
+//     timer and modal-suppression polish. Phase DO already proved the
+//     detection LOGIC (signatures, seen-set, forced scans); this phase
+//     proves the two remaining pieces that only show up with real timing:
+//     (1) several rapid invalidateBuiltCastlesCache-style calls collapse
+//     into ONE scan 1.5s after the LAST one, not one scan per call (so an
+//     import's many writes don't spam the toast update repeatedly), and
+//     (2) a collision found while the Find Transpositions report is already
+//     open doesn't pop a redundant toast over it -- it surfaces the moment
+//     the report closes instead. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDP = await launchApp();
+try {
+  await appDP.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+  await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 323. Three rapid calls to the real debounced scheduler (mirroring
+  //      several invalidateBuiltCastlesCache calls during one import)
+  //      collapse into a single scan that fires 1.5s after the LAST call,
+  //      not the first -- checked at a point past the FIRST call's own
+  //      1.5s deadline but before the (reset) real one, then past it.
+  try {
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDP.page.waitForTimeout(600);
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDP.page.waitForTimeout(600);
+    await appDP.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());   // now at ~1200ms since the first call
+
+    await appDP.page.waitForTimeout(900);   // ~2100ms since the first call, past its own un-reset 1500ms deadline
+    const early = await appDP.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!early, 'expected the first call\'s own 1.5s deadline to have been cancelled by the later calls, not fired on schedule');
+
+    await appDP.page.waitForTimeout(900);   // ~3000ms since the first call, past the third call's own (real) 1500ms deadline
+    const info = await appDP.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast up once the LAST call\'s own debounce window finally elapsed');
+    assert(info.text === '1 new transposition found', `expected exactly 1 (one collision, however many scans ran), got "${info.text}"`);
+    ok('New-transpositions detection: rapid scheduling calls collapse into one debounced scan, timed off the last call');
+  } catch(e){ bad('New-transpositions detection: debounce collapses rapid scheduling calls', e); }
+
+  // 324. A collision that appears while the Find Transpositions report is
+  //      already open doesn't pop a redundant toast over it -- it's held
+  //      back and surfaces the moment the report closes instead.
+  try {
+    await appDP.page.click('#newTranspToastDismissBtn');   // clear test 323's own toast first
+    await appDP.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDP.page.waitForSelector('#transpOverlay', { state: 'visible', timeout: 5000 });
+
+    await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+      rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+    }));
+    await appDP.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+      id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'],
+      rootSeq: ['Nf3','e5'], reply: 'e4', castleName: 'Reversed Italian',
+    }));
+    await appDP.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const whileOpen = await appDP.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!whileOpen, 'expected no toast while the Find Transpositions report is already open');
+
+    await appDP.page.click('#transpCloseBtn');
+    const info = await appDP.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the held-back toast to appear the moment the report closes');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('New-transpositions detection: a collision found while the report is open is held back, then surfaces on close');
+  } catch(e){ bad('New-transpositions detection: suppressed while the report modal is open', e); }
+} finally {
+  await appDP.close();
+}
+} catch(e){ bad('Phase DP: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DQ: the boot-time "unresolved transpositions" reminder.
+//     checkTranspositionsAtBoot (renamed from the old, purely-silent
+//     primeTranspositionBaseline) now ACTIVELY toasts whatever's still
+//     unresolved when it runs -- worded "unresolved", not "new", since a
+//     fresh page load has no session memory to tell a collision that's been
+//     sitting there for weeks apart from one an auto-import just created
+//     this load. Real boot chains it with .finally() after
+//     runAutoImportCheck() settles (see that call site's own comment) so it
+//     reflects any transposition the import itself just introduced --
+//     verified by reading the source, not a dedicated test here, since
+//     exercising the REAL automatic boot-time auto-import trigger (as
+//     opposed to calling importGamesFromPlatform/the manual "Import Now"
+//     button directly, which is all the existing auto-import suite does)
+//     would need new pre-navigation harness plumbing this doesn't otherwise
+//     need. What IS tested here is the reminder's own behavior once run:
+//     unlike a mid-session scan, it fires on collisions that already
+//     existed BEFORE it ran (nothing gets silently absorbed into a "seen"
+//     baseline without ever being shown), worded as unresolved rather than
+//     new. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDQ = await launchApp();
+try {
+  // seed the collision BEFORE ever calling checkTranspositionsAtBoot --
+  // unlike Phase DO/DP (which prime against an empty state first, so a
+  // LATER scan can correctly call something "new"), this test wants the
+  // collision to already exist the first time the boot check itself runs,
+  // mirroring a real second session where it was never resolved.
+  await appDQ.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDQ.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 325. The boot check finds the already-existing collision and toasts it
+  //      as "unresolved", not "new" -- proving it doesn't just silently fold
+  //      pre-existing collisions into "seen" without ever surfacing them.
+  try {
+    await appDQ.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+    const info = await appDQ.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the boot check to toast an already-existing, unresolved collision');
+    assert(info.text === '1 unresolved transposition', `expected "unresolved" wording (not "new ... found"), got "${info.text}"`);
+    ok('New-transpositions boot reminder: an already-existing collision is toasted as "unresolved" when the boot check runs');
+  } catch(e){ bad('New-transpositions boot reminder: unresolved wording on a pre-existing collision', e); }
+
+  // 326. Once the boot check has run, the SAME collision surviving an
+  //      unrelated edit still doesn't re-nag -- same seen-set mechanism a
+  //      mid-session scan uses (Phase DO's test 321), just seeded by the
+  //      boot check instead of an earlier scan.
+  try {
+    await appDQ.page.click('#newTranspToastDismissBtn');
+    await appDQ.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDQ.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected the collision the boot check already surfaced to not re-trigger a later scan');
+    ok('New-transpositions boot reminder: a collision the boot check already surfaced is seen, not re-toasted by a later scan');
+  } catch(e){ bad('New-transpositions boot reminder: boot-surfaced collision counted as seen for later scans', e); }
+} finally {
+  await appDQ.close();
+}
+} catch(e){ bad('Phase DQ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DR: "disappearing transpositions" -- Phase 1, detecting and
+//     auto-repairing a BROKEN redirect (its target room no longer exists),
+//     toasted the same way a new/unresolved collision is. A redirected room
+//     disappearing is fine on its own (Phase 6's own suppression just means
+//     it never registers a genRoom, so it silently drops out of any report
+//     -- nothing to fix). The problem is the other direction: the TARGET
+//     disappearing leaves every room that redirects to it pointing at
+//     nothing. findBrokenRedirects/repairBrokenRedirects clear that
+//     redirect's own fields, restoring the room to a normal one again --
+//     exactly "the variations that point there... have their redirect
+//     flags removed so that they once again become unresolved
+//     transpositions" -- and the SAME debounced scan that finds new
+//     collisions now also runs this check every time (reusing the
+//     just-built castle graph, not a separate pass). ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDR = await launchApp();
+try {
+  // exact fixture shape as Phase DF's own "redirect via seedBackup"
+  // fixture (see its own comment for why Nf3, not c4, is White's 3rd
+  // developing move, and why L2's root needs a second branch to avoid
+  // corridor-merge) -- L1's interior room is already redirected to L2's,
+  // both sides real and consistent, before this test touches anything.
+  await seedBackup(appDR.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge, see Phase DF
+      ]},
+    ],
+    // real games backing each move, same as Phase DF's own identical
+    // fixture -- without them, castle generation's own visibility/frequency
+    // rules leave the graph too sparse for the interior rooms to register
+    // as their own genRoom entries at all (they silently fold into a
+    // different corridor grouping instead of the one this test expects).
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 327. Nothing broken yet -- a scan over a valid, consistent redirect
+  //      raises no toast at all (no false positives).
+  try {
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDR.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no toast while the redirect target is still real and consistent');
+    ok('Disappearing transpositions: a scan over a valid redirect finds nothing broken');
+  } catch(e){ bad('Disappearing transpositions: no false positive on a valid redirect', e); }
+
+  // 328. Break the target: change L2's own reply at the redirected-to room
+  //      so its old position (…,Nf3) no longer exists in L2's graph at all
+  //      -- simulating exactly the move-table edit the user described. A
+  //      forced scan detects it, clears L1's redirect fields (leaving its
+  //      OWN reply untouched), and toasts it.
+  try {
+    await appDR.page.evaluate(() => window.__redirectTestHooks.setPrefField('L2', ['d4','Nf6','Nc3','d5'], { reply: 'e4' }));
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDR.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the toast after the redirect target disappeared');
+    assert(info.text === '1 redirect restored -- target disappeared', `expected the repair-only wording (no collision found alongside it), got "${info.text}"`);
+
+    const l1Prefs = await appDR.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const room = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(!room?.redirectToCastle && !room?.redirectTargetLineId && !room?.redirectTargetSeq,
+      `expected every redirect field cleared, got ${JSON.stringify(room)}`);
+    assert(room?.reply === 'Nf3', `expected the room's OWN reply left untouched by the repair, got "${room?.reply}"`);
+    ok('Disappearing transpositions: a broken redirect is detected, repaired, and toasted');
+  } catch(e){ bad('Disappearing transpositions: detect + repair + toast on a broken redirect', e); }
+
+  // 329. Once repaired, it stays fixed -- a later scan finds nothing left
+  //      to repair (the redirect fields are already cleared) and raises no
+  //      further toast.
+  try {
+    await appDR.page.click('#newTranspToastDismissBtn');
+    await appDR.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDR.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no further toast once the broken redirect is already repaired');
+    ok('Disappearing transpositions: a repaired redirect does not re-trigger on a later scan');
+  } catch(e){ bad('Disappearing transpositions: repair is stable across later scans', e); }
+} finally {
+  await appDR.close();
+}
+} catch(e){ bad('Phase DR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DS: "disappearing transpositions" -- Phase 2, warning BEFORE
+//     hiding a variation that's currently a redirect's own target.  Unlike
+//     Phase 1's broken-redirect repair (which fixes things up after the
+//     fact for edits with no single moment to warn at), hiding is a
+//     deliberate, reversible action with a real moment to warn: declining
+//     leaves everything exactly as it was, since nothing has been hidden
+//     yet. Accepting proceeds to hide, which (same as any other edit that
+//     removes the target) leaves Phase 1's own repair to clean up on the
+//     next scan -- this phase only adds the warning, not a second repair
+//     path. redirectsIntoSubtree (the reverse lookup, reusing Phase 5's own
+//     gatherRedirectsIntoLines) checks whether ANY redirect's target falls
+//     at or below the row being hidden, since hiding cuts the whole subtree
+//     from there down, not just that one row. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDS = await launchApp();
+try {
+  // same fixture as Phase DR: L1's interior room already redirected to
+  // L2's -- this time hiding the TARGET side (L2's own d4,Nf6,Nc3,d5 row)
+  // instead of breaking it programmatically.
+  await seedBackup(appDS.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  await appDS.page.evaluate((name) => {
+    const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+    if(row) row.click();
+  }, 'Reversed Approach');
+  await appDS.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,Nc3,d5"]', { timeout: 20000 });
+
+  // 330. Hiding an UNRELATED row (no redirect targets it) proceeds straight
+  //      through, no confirm() at all.
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDS.page.on('dialog', onDialog);
+    await appDS.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,Nc3,e6"] [data-act="hide"]').click());
+    await appDS.page.waitForTimeout(500);
+    appDS.page.off('dialog', onDialog);
+    assert(dialogs.length === 0, `expected no confirm() dialog hiding a row with no incoming redirects, got ${JSON.stringify(dialogs)}`);
+    const l2Prefs = await appDS.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,e6']?.hidden === true, 'expected the row to actually be hidden');
+    ok('Disappearing transpositions: hiding a row with no incoming redirects raises no warning');
+  } catch(e){ bad('Disappearing transpositions: no warning on an unrelated hide', e); }
+
+  // 331. Hiding the row that's the redirect's own TARGET warns first (the
+  //      harness auto-accepts every confirm(), so this also proves hiding
+  //      still goes through once accepted -- same as declining would leave
+  //      it exactly as it was, this test only exercises the accept path).
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDS.page.on('dialog', onDialog);
+    await appDS.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,Nc3,d5"] [data-act="hide"]').click());
+    await appDS.page.waitForTimeout(500);
+    appDS.page.off('dialog', onDialog);
+    assert(dialogs.length === 1, `expected exactly one confirm() warning, got ${JSON.stringify(dialogs)}`);
+    assert(/1 redirect/.test(dialogs[0]), `expected the warning to name the redirect count, got "${dialogs[0]}"`);
+    const l2Prefs = await appDS.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    assert(l2Prefs['L2|d4,Nf6,Nc3,d5']?.hidden === true, 'expected hiding to actually proceed once the (auto-accepted) warning is confirmed');
+    ok('Disappearing transpositions: hiding a redirect\'s own target warns before proceeding');
+  } catch(e){ bad('Disappearing transpositions: warning on hiding a redirect target', e); }
+} finally {
+  await appDS.close();
+}
+} catch(e){ bad('Phase DS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DT: "disappearing transpositions" -- Phase 3, the VR defensive
+//     fix. Phases 1/2 make a dangling redirect rare (auto-repaired within
+//     a debounce, warned about before a hide could cause one), but neither
+//     is airtight -- there's a real window (before the debounce fires)
+//     where VR could still be asked to build a door whose target doesn't
+//     exist. This test deliberately breaks a redirect's target WITHOUT
+//     ever running a scan (threeTestDebug already skips the automatic
+//     scheduler -- see invalidateBuiltCastlesCache's own guard), so the
+//     stale redirect is still sitting there when VR builds, exactly
+//     reproducing the crash this phase fixes: building the Chigorin root
+//     (its own forward door targets the now-gone Queen's Pawn Palace room)
+//     used to throw "Cannot read properties of undefined (reading
+//     'outdoor')" straight out of computeSpawnForExit. ---
+if(shouldRunPhase(['vr-castle','castle-generation'])){
+try {
+const appDT = await launchApp();
+try {
+  const keys = await appDT.page.evaluate(() => {
+    const pk = (mv, inst) => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return `cas:${inst}:` + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return {
+      chigorinRoot: pk(['Nc3','d5','d4'], 'L1_Chigorin_Castle'),
+      target: pk(['d4','Nf6','Nc3','d5','Nf3'], 'L2_Queens_Pawn_Palace'),
+    };
+  });
+  // same fixture shape as Phase DF/DR/DS -- L1's root door redirects to
+  // L2's interior room, both real and consistent at seed time.
+  await seedBackup(appDT.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2', redirectTargetSeq: ['d4','Nf6','Nc3','d5','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // break the target -- and, unlike Phase DR/DS, deliberately never call
+  // forceNewTranspositionsScan, so L1's redirect fields are still stale
+  // (pointing at a position that no longer exists) by the time VR builds.
+  await appDT.page.evaluate(() => window.__redirectTestHooks.setPrefField('L2', ['d4','Nf6','Nc3','d5'], { reply: 'e4' }));
+
+  // 332. Entering the Chigorin root -- the room whose own forward door
+  //      targets the now-gone position -- builds cleanly (no page error/
+  //      crash), and that door is excluded from the live, walkable trigger
+  //      list even though the underlying castle-graph edge still lists it.
+  try {
+    await openVR(appDT.page);
+    await appDT.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.chigorinRoot);
+    const landed = await appDT.page.evaluate(() => window.__threeTestEdit.room());
+    assert(landed === keys.chigorinRoot, `expected to actually land in the Chigorin root (a crash mid-build would leave this stale), got ${landed}`);
+
+    const errors = realErrors(appDT.consoleErrors);
+    assert(errors.length === 0, `expected no console/page errors building a room with a broken redirect door, got:\n${errors.join('\n')}`);
+
+    const hasLiveDoor = await appDT.page.evaluate((k) => window.__threeTestEdit.hasLiveDoorTo(k), keys.target);
+    assert(!hasLiveDoor, 'expected the broken door excluded from the live/walkable trigger list (locked), not silently offered as a normal door');
+    ok('Disappearing transpositions: VR builds a room with a dangling redirect door without crashing, and locks that door');
+  } catch(e){ bad('Disappearing transpositions: VR defensive fix on a dangling redirect', e); }
+} finally {
+  await appDT.close();
+}
+} catch(e){ bad('Phase DT: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DU: bug fix -- a background transposition scan must never run
+//     WHILE a Full Backup restore is in flight. Reported by the user: after
+//     some redirect/hide activity (which leaves a scan armed ~1.5s out),
+//     restoring a backup file wiped and rewrote every line/pref while that
+//     stale scan's own gatherBuiltCastles call landed mid-operation,
+//     caching a wrong (empty/half-restored) snapshot that then silently
+//     persisted -- "Find Transpositions" kept reporting nothing even
+//     against a fresh restore that genuinely had unresolved collisions,
+//     until some unrelated later edit happened to invalidate the cache
+//     again. suspendTranspositionScan/resumeTranspositionScan (called
+//     around applyBackupData's own wipe+rewrite) fix it: the first two
+//     tests prove the guard mechanism itself works (a real armed timer
+//     genuinely cancelled, not just suppressed going forward; scheduling
+//     resumes correctly afterward) without depending on racing a real
+//     restore's own variable duration against the 1.5s window; the third
+//     is an integration sanity check that the real seedBackup path leaves
+//     scanning un-suspended and still able to detect correctly. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDU = await launchApp();
+try {
+  await appDU.page.evaluate(() => window.__redirectTestHooks.checkTranspositionsAtBoot());
+  await appDU.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDU.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['Nc3'],
+    rootSeq: ['Nc3','d5'], reply: 'd4', castleName: 'Queens Pawn Palace',
+  }));
+
+  // 333. Arming a scan and immediately suspending it cancels that timer
+  //      outright -- waiting past its own debounce window raises no toast,
+  //      proving suspend doesn't just block FUTURE scheduling but reaches
+  //      back and kills what was already armed (the exact scenario an
+  //      earlier interaction leaves behind before a restore begins).
+  try {
+    await appDU.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appDU.page.evaluate(() => window.__redirectTestHooks.suspendNewTranspositionsScan());
+    await appDU.page.waitForTimeout(1900);   // past TRANSP_SCAN_DEBOUNCE_MS (1500ms) with margin
+    const visible = await appDU.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected the already-armed timer to be genuinely cancelled by suspend, not just suppressed going forward');
+    ok('Bug fix: suspending the transposition scan cancels an already-armed timer, not just future ones');
+  } catch(e){ bad('Bug fix: suspend cancels an already-armed scan', e); }
+
+  // 334. Resuming from that suspended state re-arms a normal scan -- the
+  //      real collision (never actually detected yet, since test 333's
+  //      timer got cancelled before it could fire) is found once scanning
+  //      is allowed to run again.
+  try {
+    await appDU.page.evaluate(() => window.__redirectTestHooks.resumeNewTranspositionsScan());
+    await appDU.page.waitForTimeout(1900);
+    const info = await appDU.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected scanning to resume normally and find the real collision');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('Bug fix: resuming re-arms scanning normally, finding what was missed while suspended');
+  } catch(e){ bad('Bug fix: resume re-arms scanning', e); }
+
+  // 335. Integration sanity: a real Full Backup restore (seedBackup, the
+  //      exact path applyBackupData/importBackup serve) leaves scanning
+  //      un-suspended afterward, AND correctly detects the newly-restored
+  //      data's own real collision -- proving suspend/resume actually
+  //      brackets the real restore call, not just the direct-hook
+  //      simulation above.
+  try {
+    await appDU.page.click('#newTranspToastDismissBtn');
+    await seedBackup(appDU.page, {
+      version: 6, user: 'tester',
+      lines: [
+        { id: 'L3', name: 'Italian Approach', color: 'white', openingMoves: ['e4'], prefs: [
+          { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Italian Castle', castleStreetNumber: 1 },
+        ]},
+        { id: 'L4', name: 'Italian Reversed', color: 'white', openingMoves: ['Nf3'], prefs: [
+          { seq: ['Nf3','e5'], reply: 'e4', isCastleRoot: true, castleName: 'Reversed Italian', castleStreetNumber: 1 },
+        ]},
+      ],
+    }, { defaultPlayerColor: 'white' });
+
+    const suspended = await appDU.page.evaluate(() => window.__redirectTestHooks.isTranspositionScanSuspended());
+    assert(!suspended, 'expected scanning left un-suspended once the restore actually finished');
+
+    await appDU.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const info = await appDU.page.evaluate(() => ({
+      visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
+      text: window.__redirectTestHooks.newTranspositionsToastText(),
+    }));
+    assert(info.visible, 'expected the freshly-restored backup\'s own real collision to be detected, not a stale cached "nothing here"');
+    assert(info.text === '1 new transposition found', `expected count 1, got "${info.text}"`);
+    ok('Bug fix: a real Full Backup restore leaves scanning un-suspended and still able to detect correctly');
+  } catch(e){ bad('Bug fix: real restore integration sanity', e); }
+} finally {
+  await appDU.close();
+}
+} catch(e){ bad('Phase DU: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DV: bug fix -- concurrent gatherBuiltCastles calls raced on the
+//     shared PREFS global (withLinePrefs's own doc comment: "Sequential use
+//     only -- concurrent calls would race on PREFS"). Before the
+//     new-transpositions background scanner, gatherBuiltCastles was only
+//     ever called from one direct, awaited user action at a time, so this
+//     was unreachable in practice. The scanner made it reachable: a
+//     background rebuild landing while the user's own "Find Transpositions"
+//     click (or another background rebuild) is also mid-flight can race.
+//     Reported by the user: a rapid hide / check / unhide / check sequence
+//     produced several phantom duplicate transposition groups with
+//     mixed-up room names, which cleared up once a manual redirect forced
+//     a single settled rebuild. Fixed with an in-flight dedup: every
+//     concurrent caller now shares the SAME build instead of racing
+//     independent ones. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDV = await launchApp();
+try {
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['d4'],
+    rootSeq: ['d4','d5'], reply: 'Nc3', castleName: 'Chigorin Castle',
+  }));
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L2', name: 'Italian Approach', color: 'white', openingMoves: ['e4'],
+    rootSeq: ['e4','e5'], reply: 'Nf3', castleName: 'Italian Castle',
+  }));
+  await appDV.page.evaluate(() => window.__redirectTestHooks.createLineWithCastleRoot({
+    id: 'L3', name: 'Reti Approach', color: 'white', openingMoves: ['Nf3'],
+    rootSeq: ['Nf3','d5'], reply: 'g3', castleName: 'Reti Castle',
+  }));
+
+  // 336. Three genuinely concurrent gatherBuiltCastles calls (Promise.all,
+  //      no invalidate between them) against an empty cache share ONE
+  //      in-flight build -- buildCount rises by exactly 1, not 3 -- and
+  //      every caller gets back the same, correctly-attributed result (no
+  //      castle ends up with another line's name/rooms mixed in).
+  try {
+    const before = await appDV.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    const results = await appDV.page.evaluate(() => Promise.all([
+      window.__vrCacheTestHooks.gatherRaw(),
+      window.__vrCacheTestHooks.gatherRaw(),
+      window.__vrCacheTestHooks.gatherRaw(),
+    ]));
+    const after = await appDV.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    assert(after - before === 1, `expected exactly 1 real build for 3 concurrent callers, got ${after - before}`);
+
+    for(const built of results){
+      const byLine = Object.fromEntries(built.map(c => [c.lineId, c.castleName]));
+      assert(byLine.L1 === 'Chigorin Castle', `expected L1 -> Chigorin Castle, got ${JSON.stringify(byLine)}`);
+      assert(byLine.L2 === 'Italian Castle', `expected L2 -> Italian Castle, got ${JSON.stringify(byLine)}`);
+      assert(byLine.L3 === 'Reti Castle', `expected L3 -> Reti Castle, got ${JSON.stringify(byLine)}`);
+    }
+    ok('Bug fix: concurrent gatherBuiltCastles calls share one in-flight build, no cross-line name mixup');
+  } catch(e){ bad('Bug fix: gatherBuiltCastles in-flight dedup', e); }
+} finally {
+  await appDV.close();
+}
+} catch(e){ bad('Phase DV: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DW: bug fix -- findBrokenRedirects was matching by exact
+//     redirectTargetSeq (the target room's anchor.seq, frozen at the moment
+//     the redirect was set) instead of by POSITION (posKey). A room's own
+//     anchor.seq is not a stable identity across rebuilds -- analyzeCastleStructure
+//     can re-anchor a corridor/two-track group differently whenever ANYTHING
+//     in that castle's structure changes, even something unrelated to the
+//     redirected room itself, while the actual position never moves. That
+//     made the exact-seq check see a perfectly valid, still-resolving
+//     redirect as "broken" and auto-clear it. Reported by the user (still
+//     reproducing in -349, after the earlier concurrent-gatherBuiltCastles
+//     fix, proving that fix alone wasn't the real cause of this symptom): a
+//     hide/unhide cycle left several false-positive "unresolved
+//     transposition" groups in the report, which all vanished once a
+//     manual re-redirect settled the structure back down. Fixed by matching
+//     on posKey within the target instance instead -- mirroring
+//     buildCastleGraph's own processExit, which already computes VR's
+//     foreignKey from positionKey(fenForSeq(destSeq)), never from a stored
+//     anchor.seq, for exactly this reason. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDW = await launchApp();
+try {
+  // L1's redirect stores a DIFFERENT (but position-equivalent) move order
+  // than L2's own real, built anchor for the same position -- simulating
+  // exactly what an anchor shift from an unrelated structural change would
+  // leave behind: a stale seq that no longer matches the CURRENT anchor,
+  // even though the position itself is completely intact. White's d4/Nc3/
+  // Nf3 and Black's d5/Nf6 never interact on the board (same commuting-move
+  // pair used throughout this suite), so both orders reach the identical
+  // final FEN regardless of interleaving.
+  await seedBackup(appDW.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Approach', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Castle', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3',
+          redirectToCastle: 'Queens Pawn Palace', redirectTargetLineId: 'L2',
+          // deliberately NOT L2's real anchor (['d4','Nf6','Nc3','d5','Nf3'])
+          // -- a different, same-position order, standing in for "the anchor
+          // shifted since this redirect was set".
+          redirectTargetSeq: ['d4','d5','Nc3','Nf6','Nf3'],
+          redirectTargetRoomName: '' },
+      ]},
+      { id: 'L2', name: 'Reversed Approach', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Queens Pawn Palace', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // second branch off root -- avoids corridor-merge
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // 337. A scan finds nothing broken -- the stale-but-same-position
+  //      redirectTargetSeq still resolves via posKey, so it must NOT be
+  //      auto-cleared as a false positive.
+  try {
+    await appDW.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const visible = await appDW.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
+    assert(!visible, 'expected no "broken redirect" toast for a redirect whose target position still genuinely resolves');
+
+    const l1Prefs = await appDW.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    const room = l1Prefs['L1|Nc3,d5,d4,Nf6'];
+    assert(room?.redirectToCastle === 'Queens Pawn Palace',
+      `expected the redirect left untouched (matched by position, not exact stale seq), got ${JSON.stringify(room)}`);
+    ok('Bug fix: a redirect whose stored anchor.seq is stale (but whose position still resolves) is not a false-positive break');
+  } catch(e){ bad('Bug fix: findBrokenRedirects matches by posKey, not exact anchor.seq', e); }
+} finally {
+  await appDW.close();
+}
+} catch(e){ bad('Phase DW: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase DX: UX fix -- selecting a backup file to import used to sit with
+//     nothing on screen while it was read and gunzip/JSON.parse'd (a large
+//     production backup, heavy with base64 images, can take 10+ seconds)
+//     before any of the confirm() dialogs appeared. Reported by the user.
+//     Now a "Reading backup file…" spinner covers that gap, cleared in a
+//     finally so it can never leak past the read regardless of which
+//     confirm() branch (or a parse failure) follows. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDX = await launchApp();
+try {
+  // 338. The spinner appears (with the right label) while the file is
+  //      being read/parsed, and the restore confirm dialog still fires
+  //      normally afterward -- proving the spinner doesn't block or delay
+  //      the existing flow, just fills the previously-silent gap before it.
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDX.page.on('dialog', onDialog);
+    const setFiles = appDX.page.setInputFiles('#backupImport', {
+      name: 'backup.json', mimeType: 'application/json',
+      // padded with a bunch of inert lines so the read+parse isn't
+      // instantaneous -- gives the spinner a real (if brief) window to be
+      // observed in, rather than depending on sub-millisecond luck.
+      buffer: Buffer.from(JSON.stringify({
+        version: 6, user: 'tester', games: [],
+        lines: Array.from({ length: 500 }, (_, i) => ({
+          id: `pad${i}`, name: `Padding Line ${i}`, color: 'white', openingMoves: ['e4'], prefs: [],
+        })),
+      })),
+    });
+    // plain Node-side evaluate+wait polling, NOT page.waitForFunction --
+    // waitForFunction's own in-page polling was found (empirically, via a
+    // throwaway repro) to stall this harness's dialog delivery when a
+    // confirm() is about to fire while a waitForFunction poll is still
+    // in flight; a loop of separate evaluate() calls from the Node side
+    // doesn't have that problem.
+    let caughtSpinner = false;
+    for(let i = 0; i < 50 && !caughtSpinner; i++){
+      const info = await appDX.page.evaluate(() => ({
+        display: document.getElementById('spinnerOverlay').style.display,
+        label: document.getElementById('spinnerLabel').textContent,
+      }));
+      if(info.display === 'flex' && info.label.includes('Reading backup file')) caughtSpinner = true;
+      else await appDX.page.waitForTimeout(10);
+    }
+    for(let i = 0; i < 50 && dialogs.length === 0; i++) await appDX.page.waitForTimeout(50);
+    for(let i = 0; i < 100; i++){
+      const progressText = await appDX.page.evaluate(() => document.getElementById('progress').textContent);
+      if(/restored \d+ opening system/i.test(progressText)) break;
+      await appDX.page.waitForTimeout(50);
+    }
+    await setFiles;
+    appDX.page.off('dialog', onDialog);
+    assert(caughtSpinner, 'expected a "Reading backup file…" spinner while the file is being read/parsed');
+    assert(dialogs.some(m => m.includes('RESTORE FULL BACKUP')), `expected the restore confirm dialog to still appear afterward, got ${JSON.stringify(dialogs)}`);
+    const stuck = await appDX.page.evaluate(() => document.getElementById('spinnerOverlay').style.display);
+    assert(stuck === 'none', `expected no leftover spinner once the restore settled, got display="${stuck}"`);
+    ok('UX fix: a "Reading backup file…" spinner covers the read/parse gap before the restore confirm dialog');
+  } catch(e){ bad('UX fix: spinner while reading/parsing an imported backup file', e); }
+
+  // 339. A parse failure (not valid JSON) also clears the read spinner --
+  //      it doesn't leak just because the try block threw.
+  try {
+    await appDX.page.setInputFiles('#backupImport', {
+      name: 'garbage.json', mimeType: 'application/json',
+      buffer: Buffer.from('this is not valid json{{{'),
+    });
+    await appDX.page.waitForFunction(() =>
+      /import failed: not a valid backup file/i.test(document.getElementById('progress').textContent),
+      { timeout: 5000 },
+    );
+    const display = await appDX.page.evaluate(() => document.getElementById('spinnerOverlay').style.display);
+    assert(display === 'none', `expected the read spinner cleared after a parse failure, got display="${display}"`);
+    ok('UX fix: the read spinner is cleared (not leaked) when the selected file fails to parse');
+  } catch(e){ bad('UX fix: read spinner cleared on a parse failure', e); }
+} finally {
+  await appDX.close();
+}
+} catch(e){ bad('Phase DX: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
