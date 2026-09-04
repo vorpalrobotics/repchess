@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260804-8';
+import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-273';
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-353';
+const BUILD_TAG = '-354';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3239,6 +3239,7 @@ $('castleWalkBtn').onclick = async () => {
     { lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms },
     ...linkedCastles.map(c => ({ lineId: CURRENT_LINE?.id, instanceId: c.instanceId, genRooms: c.genRooms }))
   ]);
+  enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
@@ -3246,7 +3247,7 @@ $('castleWalkBtn').onclick = async () => {
     linkedCastles,
     piecesFile: PIECES_FILE,
     onRoomRename: makeRoomRenamer(roomNameIndex),
-    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); refreshMemorizedRoomsAndTree(); },
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
   });
 };
@@ -7690,13 +7691,14 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     hideSpinner(spinner);
   }
   $('threeTestOverlay').style.display='flex';
+  enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castles,
     piecesFile: PIECES_FILE,
     startRoomKey,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
-    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); refreshMemorizedRoomsAndTree(); },
+    onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
   });
 }
@@ -10615,7 +10617,7 @@ async function maybeResumePerfectOpening(){
   poProcessing = true;
   try {
     while(true){
-      if(ANALYSIS_QUEUE.length || engineState === 'running' || !engine.ready) break;
+      if(ANALYSIS_QUEUE.length || engineState === 'running' || !engine.ready || vrActive) break;
       const config = await getPerfectOpeningConfig();
       if(!config.enabled) break;
       const queue = await getPerfectOpeningQueue();
@@ -10712,6 +10714,26 @@ async function saveAnalysisQueueResult(item, fen, result){
   }
 }
 
+// true while the VR/three.js walkthrough is open -- gates Perfect Opening's
+// and the manual analysis queue's own auto-resume (below) so a background
+// engine project can never compete with VR for CPU, and drives the engine's
+// own thread budget down/back up (see enterVrCpuGuard/exitVrCpuGuard,
+// wired into both openThreeTest call sites and their onClose callbacks).
+// Doesn't touch an ALREADY-dequeued item mid-search -- that search still
+// runs to completion, same as the existing engineState==='running' gate
+// below does for live analysis; this only stops a NEW item/job from
+// starting while VR is open.
+let vrActive = false;
+const VR_ENGINE_THREAD_CAP = 1;
+function enterVrCpuGuard(){
+  vrActive = true;
+  engine.setThreadBudget(VR_ENGINE_THREAD_CAP).catch(()=>{});
+}
+function exitVrCpuGuard(){
+  vrActive = false;
+  engine.setThreadBudget(engine.threads).catch(()=>{});
+}
+
 function maybeResumeAnalysisQueue(){
   if(aqProcessing) return;
   processAnalysisQueueLoop();
@@ -10727,7 +10749,7 @@ async function processAnalysisQueueLoop(){
       // an explicit user Stop, which hands the engine straight back to the
       // queue (resuming that live search later will transparently preempt
       // the queue again via analyze()'s own _stopCurrent()).
-      if(engineState === 'running' || !engine.ready) break;
+      if(engineState === 'running' || !engine.ready || vrActive) break;
       const item = ANALYSIS_QUEUE[0];
       aqCurrentItem = item;
       aqCurrentProgress = null;

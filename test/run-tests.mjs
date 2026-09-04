@@ -18772,5 +18772,107 @@ try {
 } catch(e){ bad('Phase DX: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DY: VR CPU guardrail -- opening VR must cap the engine's thread
+//     budget and stop Perfect Opening/the manual analysis queue from
+//     starting new background jobs, so a multi-threaded Stockfish search
+//     can't compete with VR for CPU. Reported by the user as "5 seconds per
+//     keypress" in VR, eventually traced (via a DevTools flame chart) to
+//     several fully-busy Stockfish worker threads running with zero
+//     coordination with VR at all -- entering VR never touched the engine.
+//     No live Stockfish is available in this harness, so engine._send/
+//     _listener are faked (same pattern as Phase V) to simulate the UCI
+//     Threads handshake and drive the real setThreadBudget()/analyze()
+//     logic against it. ---
+if(shouldRunPhase(['engine','vr-castle'])){
+try {
+const appDY = await launchApp();
+try {
+  await seedBackup(appDY.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [] }],
+    games: [],
+  });
+
+  const setupFakeEngine = () => {
+    const { engine } = window.__aqTestHooks;
+    engine.multithreaded = true;
+    engine.ready = true;
+    engine.threads = 8;
+    engine.maxThreads = 8;
+    engine._currentThreads = 8;
+    engine._currentHash = 512;
+    window.__engineFake = { sentCommands: [] };
+    engine._send = (cmd) => {
+      window.__engineFake.sentCommands.push(cmd);
+      if(cmd === 'isready') setTimeout(() => engine._listener?.('readyok'), 10);
+      else if(cmd === 'stop') setTimeout(() => engine._listener?.('bestmove e2e4'), 10);
+    };
+  };
+  await appDY.page.evaluate(setupFakeEngine);
+
+  // 340. Opening VR caps the engine down to a single thread.
+  try {
+    await openVR(appDY.page);
+    await appDY.page.waitForFunction(() => window.__aqTestHooks.engine._currentThreads === 1, { timeout: 5000 });
+    const f = await appDY.page.evaluate(() => window.__engineFake);
+    assert(f.sentCommands.includes('setoption name Threads value 1'),
+      `expected VR entry to cap Threads to 1, got: ${JSON.stringify(f.sentCommands)}`);
+    ok('VR CPU guardrail: opening VR caps the engine down to 1 thread');
+  } catch(e){ bad('VR CPU guardrail: opening VR caps engine threads', e); }
+
+  // 341. While VR is open, Perfect Opening's own scheduler must not start a
+  //      new job even when enabled with something queued.
+  try {
+    const config = await appDY.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
+    config.enabled = true;
+    config.lineId = 'L1';
+    await appDY.page.evaluate((c) => window.__perfectOpeningTestHooks.setConfig(c), config);
+    await appDY.page.evaluate(() => window.__perfectOpeningTestHooks.addQueueItems([
+      { id: 'poJob1', kind: 'white', seq: [], createdAt: Date.now() },
+    ]));
+    // fire-and-forget from the page side -- NOT awaited through evaluate()
+    // itself, so a broken guard (job actually starts) can't hang this test
+    // on a full engine search cycle the fake _send doesn't model.
+    await appDY.page.evaluate(() => { window.__perfectOpeningTestHooks.maybeResume(); });
+    await appDY.page.waitForTimeout(150);
+    const queueAfter = await appDY.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
+    const processing = await appDY.page.evaluate(() => window.__perfectOpeningTestHooks.isProcessing());
+    assert(queueAfter.length === 1, `expected the queued Perfect Opening job untouched while VR is open, got ${queueAfter.length} remaining`);
+    assert(processing === false, 'expected Perfect Opening not to start processing while VR is open');
+    ok('VR CPU guardrail: Perfect Opening does not start a new job while VR is open');
+  } catch(e){ bad('VR CPU guardrail: Perfect Opening gated while VR is open', e); }
+
+  // 342. While VR is open, the manual analysis queue must not start a new
+  //      item either.
+  try {
+    await appDY.page.evaluate(() => window.__aqTestHooks.addToAnalysisQueue('L1', ['d4'], 40, 4));
+    await appDY.page.evaluate(() => { window.__aqTestHooks.maybeResumeAnalysisQueue(); });
+    await appDY.page.waitForTimeout(150);
+    const q = await appDY.page.evaluate(() => window.__aqTestHooks.getQueue());
+    const current = q.find(it => it.lineId === 'L1' && it.seq.join(',') === 'd4');
+    assert(current?.status !== 'processing', `expected the queued analysis item untouched while VR is open, got status="${current?.status}"`);
+    ok('VR CPU guardrail: the manual analysis queue does not start a new item while VR is open');
+  } catch(e){ bad('VR CPU guardrail: manual analysis queue gated while VR is open', e); }
+
+  // 343. Closing VR restores the engine's normal thread budget (whatever
+  //      init() originally picked), not just leaving it capped forever.
+  try {
+    await appDY.page.evaluate(() => {
+      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
+      btn && btn.click();
+    });
+    await appDY.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+    await appDY.page.waitForFunction(() => window.__aqTestHooks.engine._currentThreads === 8, { timeout: 5000 });
+    const f = await appDY.page.evaluate(() => window.__engineFake);
+    assert(f.sentCommands.includes('setoption name Threads value 8'),
+      `expected VR close to restore Threads to 8, got: ${JSON.stringify(f.sentCommands)}`);
+    ok("VR CPU guardrail: closing VR restores the engine's normal thread budget");
+  } catch(e){ bad('VR CPU guardrail: closing VR restores engine threads', e); }
+} finally {
+  await appDY.close();
+}
+} catch(e){ bad('Phase DY: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

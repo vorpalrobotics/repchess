@@ -286,6 +286,53 @@ export class Engine {
   // caller relying on cross-search cache warmth (Perfect Opening, walking a
   // tree of related positions over a long unattended run) should treat this
   // as a "set once and leave it" value, not something to fluctuate per call.
+  // Sends `setoption name Threads value n` and waits (its own 4s timeout,
+  // separate from _commandWithTimeout since this path doesn't need a real
+  // `_worker` to listen for its 'error' event) for the readyok ack that
+  // confirms the WASM build's pthread pool has finished respawning. Shared
+  // by analyze() (a search-triggered Threads change) and setThreadBudget()
+  // (a standalone reconfigure, e.g. VR's CPU guardrail) -- see analyze()'s
+  // own comment below for why a missed ack can't just be ignored.
+  _trySetThreads(n) {
+    this._send(`setoption name Threads value ${n}`);
+    return new Promise(resolve => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this._listener = null;
+        resolve(false);
+      }, 4000);
+      this._listener = line => {
+        if (line !== 'readyok' || settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this._listener = null;
+        resolve(true);
+      };
+      this._send('isready');
+    });
+  }
+
+  // Reconfigures the live worker's Threads option with no search involved --
+  // used by VR's CPU guardrail (see app.js) to shrink the pthread pool while
+  // VR needs the CPU, then restore it on exit. Stops any in-progress search
+  // first (changing Threads mid-search risks wedging the worker, same as
+  // analyze()'s own Threads handling below). Best-effort: unlike analyze(),
+  // a failed ack just logs and leaves _currentThreads as whatever it was --
+  // there's no search here worth throwing over, and the next real analyze()
+  // call will retry/fall back through its own stricter handling anyway.
+  // No-op on the single-threaded fallback build or before init() completes.
+  async setThreadBudget(n) {
+    if (!this.multithreaded || !this.ready) return;
+    const clamped = Math.max(1, Math.min(n, this.maxThreads));
+    if (clamped === this._currentThreads) return;
+    await this._stopCurrent();
+    const ack = await this._trySetThreads(clamped);
+    if (ack) this._currentThreads = clamped;
+    else console.warn(`[engine] setThreadBudget(${n}) -- Threads change to ${clamped} didn't ack in time`);
+  }
+
   async analyze(fen, { multipv = 4, depth = Infinity, searchmoves, onInfo, threads = this.threads, hash = this._currentHash } = {}) {
     await this._stopCurrent();
     let threadsFallback = null;
@@ -301,31 +348,8 @@ export class Engine {
         // installed. The NEXT analyze() call's _stopCurrent() would then see
         // that stale listener, assume a real search was running, and burn
         // its own ~4s timeout waiting for a bestmove that was never coming --
-        // the exact "occasional 4s stall" this was reported as. (Deliberately
-        // not _commandWithTimeout here -- that also needs a real `_worker` to
-        // listen for its 'error' event, which this path doesn't otherwise
-        // depend on and which the engine.js tests don't fake.)
-        const trySetThreads = n => {
-          this._send(`setoption name Threads value ${n}`);
-          return new Promise(resolve => {
-            let settled = false;
-            const timer = setTimeout(() => {
-              if (settled) return;
-              settled = true;
-              this._listener = null;
-              resolve(false);
-            }, 4000);
-            this._listener = line => {
-              if (line !== 'readyok' || settled) return;
-              settled = true;
-              clearTimeout(timer);
-              this._listener = null;
-              resolve(true);
-            };
-            this._send('isready');
-          });
-        };
-        const ack = await trySetThreads(clampedThreads);
+        // the exact "occasional 4s stall" this was reported as.
+        const ack = await this._trySetThreads(clampedThreads);
         if (ack) {
           this._currentThreads = clampedThreads;
         } else {
@@ -341,7 +365,7 @@ export class Engine {
           // the worker itself is wedged, not just this particular thread
           // count, so give up loudly instead of hanging forever.
           console.warn(`[engine] Threads -> ${clampedThreads} didn't ack in time, falling back to ${this._currentThreads}`);
-          const fallbackAck = await trySetThreads(this._currentThreads);
+          const fallbackAck = await this._trySetThreads(this._currentThreads);
           if (!fallbackAck) {
             throw new Error(`engine unresponsive after a Threads change to ${clampedThreads} -- the worker may need a reload`);
           }
