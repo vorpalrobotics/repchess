@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-356';
+const BUILD_TAG = '-357';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7278,10 +7278,50 @@ async function findTransposedRooms(lines){
     if(distinct.size < 2) continue;
     groups.push(entries);
   }
+  // Fold descendant collisions into their ancestor. Two castles that
+  // transpose at position P and then continue with the same moves collide
+  // again at every shared position below P -- one group each -- but only
+  // the top-most one is actionable: a redirect there suppresses the whole
+  // subtree beneath it in the source. That's exactly the state a redirect +
+  // auto-port + later repair leaves behind (the port makes the target's
+  // subtree identical to the source's; the repair un-freezes the source's),
+  // and it reads as a pile of spurious duplicates rather than the single
+  // transposition it really is -- a real, reproduced report ("six pairs
+  // found" for one un-redirected room). A group is folded only when EVERY
+  // entry reaches its position by the same last move-pair from one shared
+  // parent position (a differing last pair means the parents differ, so
+  // it's an independent collision needing its own redirect) AND that parent
+  // is itself a LISTED group covering all of this group's castles -- listed,
+  // not merely present in each castle's graph, so whatever the report does
+  // show is always genuinely there to click. Folded groups aren't lost:
+  // each surviving ancestor carries how many it absorbed (belowCount), for
+  // the report to say so.
+  const groupByPosKey = new Map(groups.map(g => [g[0].room.posKey, g]));
+  const parentPosKeyOf = e => {
+    const s = e.room.seq;
+    return s && s.length >= 2 ? positionKey(fenForSeq(s.slice(0, -2))) : null;
+  };
+  const parentGroupOf = new Map();   // group -> the listed parent group it folds into
+  for(const g of groups){
+    const parents = new Set(g.map(parentPosKeyOf));
+    if(parents.size !== 1) continue;
+    const [pk] = parents;
+    const parent = pk ? groupByPosKey.get(pk) : null;
+    if(!parent || parent === g) continue;
+    const parentIds = new Set(parent.map(e => e.instanceId));
+    if(g.every(e => parentIds.has(e.instanceId))) parentGroupOf.set(g, parent);
+  }
+  for(const g of groups){
+    if(!parentGroupOf.has(g)) continue;
+    let top = g;
+    while(parentGroupOf.has(top)) top = parentGroupOf.get(top);
+    top.belowCount = (top.belowCount || 0) + 1;
+  }
+  const surviving = groups.filter(g => !parentGroupOf.has(g));
   // biggest collisions first (most distinct castles sharing one position),
   // then alphabetically by the first entry's castle name for a stable order.
-  groups.sort((a, b) => b.length - a.length || a[0].castleName.localeCompare(b[0].castleName));
-  return groups;
+  surviving.sort((a, b) => b.length - a.length || a[0].castleName.localeCompare(b[0].castleName));
+  return surviving;
 }
 
 function renderTranspositionsReport(groups){
@@ -7296,7 +7336,9 @@ function renderTranspositionsReport(groups){
   summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
   body.innerHTML = groups.map((entries, gi) => `
     <div class="transp-group">
-      <h3>${entries.length} castles share this position</h3>
+      <h3>${entries.length} castles share this position${entries.belowCount
+        ? ` <span style="font-weight:normal;color:#777">(+${entries.belowCount} position${entries.belowCount===1?'':'s'} below it share the same transposition -- one redirect here covers them all)</span>`
+        : ''}</h3>
       ${entries.map((e, ei) => `
         <div class="transp-entry">
           <div>

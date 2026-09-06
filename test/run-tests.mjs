@@ -18981,5 +18981,136 @@ try {
 } catch(e){ bad('Phase DZ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EA: Find Transpositions folds descendant collisions into their
+//     ancestor. Reported by the user ("six pairs found" after a hide/unhide
+//     cycle on ONE redirect target): redirecting via the report auto-ports
+//     the source room's subtree into the target, so once a later repair
+//     clears that redirect, both castles have identical subtrees and every
+//     shared position below the transposition point collides too -- one
+//     group each, all reading as duplicates of the one real transposition.
+//     Only the top-most one is actionable (a redirect there suppresses the
+//     whole subtree in the source), so findTransposedRooms now folds each
+//     descendant group into its listed ancestor and counts it there. Driven
+//     through the real report UI (not seeded pre-redirected) precisely so
+//     the auto-port that sets this up actually happens. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appEA = await launchApp();
+try {
+  await seedBackup(appEA.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Mansion', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Mansion', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },   // Target1 -- no subtree of its own yet
+        { seq: ['Nc3','d5','d4','e6'], reply: 'e4' },     // Target2
+      ]},
+      { id: 'L2', name: 'Alpha System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Alpha System', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },                         // duplicate1 (transposes to Target1)...
+        { seq: ['d4','Nf6','Nc3','d5','Nf3'], manualReplies: ['e6','c6'] },    // ...with a subtree the port will copy over
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','e6'], reply: 'Bf4' },
+        { seq: ['d4','Nf6','Nc3','d5','Nf3','c6'], reply: 'Bf4' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+      ]},
+      { id: 'L3', name: 'Beta System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta System', castleStreetNumber: 1 },
+        { seq: ['d4','e6','Nc3','d5'], reply: 'e4' },                           // duplicate2 (transposes to Target2)
+        { seq: ['d4','e6','Nc3','Nf6'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'Nc3 d5 d4 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 e6 Nc3 d5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'd4 e6 Nc3 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  const openReport = async () => {
+    await appEA.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appEA.page.waitForFunction(() => {
+      const t = document.getElementById('transpSummary').textContent.trim();
+      return t.length > 0 && !/^Scanning/.test(t);
+    }, { timeout: 20000 });
+    return appEA.page.evaluate(() => ({
+      groupCount: document.querySelectorAll('#transpBody .transp-group').length,
+      headers: [...document.querySelectorAll('#transpBody .transp-group h3')].map(h => h.textContent.replace(/\s+/g, ' ').trim()),
+    }));
+  };
+  const closeReport = () => appEA.page.evaluate(() => document.getElementById('transpCloseBtn').click());
+  // "Keep this, redirect the rest" on whichever group lists Chigorin, keeping
+  // Chigorin -- the real report action, which also auto-ports.
+  const keepChigorin = async () => {
+    await appEA.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appEA.page.waitForFunction(() => document.querySelectorAll('#transpBody .transp-group').length > 0, { timeout: 20000 });
+    await appEA.page.evaluate(() => {
+      const entry = [...document.querySelectorAll('.transp-entry')].find(e => e.textContent.includes('Chigorin Mansion'));
+      entry.querySelector('.transp-keep-btn').click();
+    });
+    await appEA.page.waitForTimeout(800);
+    await closeReport();
+  };
+
+  // 346. Baseline sanity: two independent transpositions, two groups -- the
+  //      source's own subtree below duplicate1 does NOT collide yet, since
+  //      Target1 has no subtree of its own until the port copies one over.
+  try {
+    const r = await openReport();
+    await closeReport();
+    assert(r.groupCount === 2, `expected exactly 2 groups before any redirect, got ${r.groupCount}`);
+    assert(r.headers.every(h => !/below it/.test(h)), `expected no folded descendants before any port, got ${JSON.stringify(r.headers)}`);
+    ok('Find Transpositions fold: two independent transpositions still show as two groups');
+  } catch(e){ bad('Find Transpositions fold: baseline two groups', e); }
+
+  // 347. Redirect both via the report (auto-porting duplicate1's subtree
+  //      into Target1), hide Target1, unhide it: the report shows ONE group
+  //      -- the transposition point -- annotated with the two ported
+  //      descendant positions it absorbed, not three separate groups; and
+  //      the toast counts it as one new transposition, not three.
+  try {
+    await keepChigorin();
+    await keepChigorin();
+    const l1 = await appEA.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
+    assert(l1['L1|Nc3,d5,d4,Nf6,Nf3,e6']?.reply === 'Bf4' && l1['L1|Nc3,d5,d4,Nf6,Nf3,c6']?.reply === 'Bf4',
+      'expected the report redirect to have auto-ported duplicate1\'s subtree into Chigorin');
+    await appEA.page.evaluate((name) => {
+      const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+      if(row) row.click();
+    }, 'Chigorin Mansion');
+    await appEA.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+    await appEA.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="hide"]').click());
+    await appEA.page.waitForTimeout(300);
+    await appEA.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    await appEA.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="hide"]').click());
+    await appEA.page.waitForTimeout(300);
+    await appEA.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const toastText = await appEA.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(/^1 new transposition found/.test(toastText), `expected the toast to count ONE new transposition (descendants folded), got "${toastText}"`);
+    const r = await openReport();
+    await closeReport();
+    assert(r.groupCount === 1, `expected exactly 1 group after the hide/unhide cycle (descendants folded in), got ${r.groupCount}: ${JSON.stringify(r.headers)}`);
+    assert(/\+2 positions below it/.test(r.headers[0]), `expected the surviving group to report the 2 folded descendants, got "${r.headers[0]}"`);
+    ok('Find Transpositions fold: a hide/unhide cycle surfaces one transposition with its ported descendants folded in, not one group per descendant');
+  } catch(e){ bad('Find Transpositions fold: descendants folded after a hide/unhide cycle', e); }
+
+  // 348. Resolving that one surviving group really does cover the folded
+  //      descendants: after "Keep this, redirect the rest" on it, the report
+  //      is empty again -- nothing left over below it.
+  try {
+    await keepChigorin();
+    const r = await openReport();
+    await closeReport();
+    assert(r.groupCount === 0, `expected no groups left after redirecting the top-most transposition, got ${r.groupCount}: ${JSON.stringify(r.headers)}`);
+    ok('Find Transpositions fold: one redirect at the top-most transposition resolves every folded descendant with it');
+  } catch(e){ bad('Find Transpositions fold: top redirect resolves the folded descendants', e); }
+} finally {
+  await appEA.close();
+}
+} catch(e){ bad('Phase EA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
