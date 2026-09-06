@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-354';
+const BUILD_TAG = '-355';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7487,12 +7487,33 @@ function transpGroupSignature(entries){
    already establishes the right notion of "still resolves" for exactly
    this purpose -- it computes VR's foreignKey from positionKey(fenForSeq(
    destSeq)), never from a stored anchor.seq -- so this mirrors that same
-   check instead of inventing a different, stricter one. */
+   check instead of inventing a different, stricter one.
+
+   A genRoom's OWN `.posKey` is only its anchor's position -- a corridor or
+   two-track room folds several real positions into one visual room (see
+   buildGeneratedCastle's own `shape`), and every non-anchor member's
+   position is otherwise invisible to a plain `.posKey` check. A real,
+   reproduced bug: hiding one sibling branch at a 2-way fork collapses the
+   fork's OTHER, untouched branch into a corridor with its parent -- that
+   branch's own redirect target didn't move or disappear, but its position
+   no longer matches any genRoom's top-level `.posKey`, so it got wrongly
+   swept up as "broken" and repaired right alongside the genuinely-broken
+   one. genRoomPosKeys below collects every position a genRoom actually
+   covers (its anchor plus every corridor/two-track member), so a redirect
+   into any of them is correctly recognized as still resolving. */
+function genRoomPosKeys(gr){
+  const keys = gr.posKey ? [gr.posKey] : [];
+  const shape = gr.shape;
+  if(shape?.members) keys.push(...shape.members);
+  if(shape?.left) keys.push(...shape.left);
+  if(shape?.right) keys.push(...shape.right);
+  return keys;
+}
 async function findBrokenRedirects(lines, built){
   const posKeysByInstance = new Map();   // instanceId -> Set(posKey)
   for(const c of built){
     const set = posKeysByInstance.get(c.instanceId) || new Set();
-    for(const gr of c.genRooms) if(gr.posKey) set.add(gr.posKey);
+    for(const gr of c.genRooms) for(const k of genRoomPosKeys(gr)) set.add(k);
     posKeysByInstance.set(c.instanceId, set);
   }
   const broken = [];   // { lineId, roomSeq }

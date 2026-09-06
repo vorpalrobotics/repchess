@@ -18874,5 +18874,112 @@ try {
 } catch(e){ bad('Phase DY: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase DZ: bug fix -- findBrokenRedirects only checked a genRoom's own
+//     (anchor) posKey, blind to any OTHER position folded into it by
+//     corridor/two-track merging. Reported by the user: redirecting two
+//     unrelated duplicate rooms into the same target castle, then hiding
+//     just ONE of the target castle's own branches, broke BOTH redirects --
+//     not just the one whose target was actually hidden. Root cause: hiding
+//     one branch at a 2-way fork leaves only one live child, so that child
+//     gets corridor-merged with its parent into a single visual room whose
+//     exposed `.posKey` is the PARENT's position -- the untouched sibling's
+//     own position becomes invisible to a plain `.posKey` scan, even though
+//     it's still very much part of the castle (just folded into a room
+//     whose `shape.members` now also lists it). findBrokenRedirects wrongly
+//     concluded the untouched sibling's redirect had lost its target too,
+//     and "repaired" (cleared) it right alongside the genuinely broken one
+//     -- which then reappeared as a spurious "new transposition" once the
+//     hidden branch was unhidden again, even though its own redirect had
+//     never actually broken. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appDZ = await launchApp();
+try {
+  // Chigorin Mansion (L1) is a 2-way fork right off its own root: Nf6 leads
+  // to Target1, e6 leads to Target2. Two OTHER, unrelated lines each
+  // transpose into one of those targets via a different move order, and are
+  // already redirected there -- mirroring the user's own real sequence
+  // (found 2 pre-existing transpositions, redirected both into the same
+  // target castle).
+  await seedBackup(appDZ.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Mansion', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Mansion', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },   // Target1 room = Nc3,d5,d4,Nf6,Nf3
+        { seq: ['Nc3','d5','d4','e6'], reply: 'e4' },     // Target2 room = Nc3,d5,d4,e6,e4 -- Target1's UNTOUCHED sibling
+      ]},
+      { id: 'L2', name: 'Alpha System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Alpha System', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3',
+          redirectToCastle: 'Chigorin Mansion', redirectTargetLineId: 'L1', redirectTargetSeq: ['Nc3','d5','d4','Nf6','Nf3'],
+          redirectTargetRoomName: '' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },   // sibling branch, avoids corridor-merge on L2's own side
+      ]},
+      { id: 'L3', name: 'Beta System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta System', castleStreetNumber: 1 },
+        { seq: ['d4','e6','Nc3','d5'], reply: 'e4',
+          redirectToCastle: 'Chigorin Mansion', redirectTargetLineId: 'L1', redirectTargetSeq: ['Nc3','d5','d4','e6','e4'],
+          redirectTargetRoomName: '' },
+        { seq: ['d4','e6','Nc3','Nf6'], reply: 'Nf3' },   // sibling branch, avoids corridor-merge on L3's own side
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'Nc3 d5 d4 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 e6 Nc3 d5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'd4 e6 Nc3 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  await appDZ.page.evaluate((name) => {
+    const row = [...document.querySelectorAll('.line-row')].find(r => r.querySelector('.line-name')?.textContent.trim() === name);
+    if(row) row.click();
+  }, 'Chigorin Mansion');
+  await appDZ.page.waitForSelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"]', { timeout: 20000 });
+
+  // 344. Hiding Target1's own row (a 2-way fork's branch) breaks only ITS
+  //      OWN redirect -- Target2's sibling redirect, whose target was never
+  //      touched, must survive untouched even though hiding Target1
+  //      corridor-merges Target2 into the same visual room as the root.
+  try {
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appDZ.page.on('dialog', onDialog);
+    await appDZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="hide"]').click());
+    await appDZ.page.waitForTimeout(300);
+    appDZ.page.off('dialog', onDialog);
+    assert(/1 redirect/.test(dialogs[0] || ''), `expected the hide warning to name exactly 1 incoming redirect, got ${JSON.stringify(dialogs)}`);
+    await appDZ.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    const toastText = await appDZ.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
+    assert(/^1 redirect restored/.test(toastText), `expected exactly 1 redirect restored (Target1's own), got "${toastText}"`);
+    const l2Prefs = await appDZ.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const l3Prefs = await appDZ.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
+    assert(!l2Prefs['L2|d4,Nf6,Nc3,d5']?.redirectToCastle, "expected L2's redirect (Target1's own) to be cleared by the repair");
+    assert(l3Prefs['L3|d4,e6,Nc3,d5']?.redirectToCastle === 'Chigorin Mansion',
+      "expected L3's redirect (Target2's, never hidden) to survive untouched");
+    ok('Bug fix: hiding one branch of a fork does not also break an untouched sibling redirect into the same castle');
+  } catch(e){ bad('Bug fix: sibling redirect survives hiding its untouched neighbor', e); }
+
+  // 345. Unhiding Target1 again surfaces at most the ONE genuine
+  //      transposition its own hide/repair cycle created -- not a phantom
+  //      group for Target2's sibling too.
+  try {
+    await appDZ.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="hide"]').click());
+    await appDZ.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
+    await appDZ.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appDZ.page.waitForFunction(() => document.getElementById('transpSummary').textContent.trim().length > 0, { timeout: 5000 });
+    const groupCount = await appDZ.page.evaluate(() => document.querySelectorAll('#transpBody .transp-group').length);
+    assert(groupCount === 1, `expected exactly 1 transposition group after unhiding (Target1's own), got ${groupCount}`);
+    ok('Bug fix: unhiding surfaces only the one genuine transposition, no phantom groups for the untouched sibling');
+  } catch(e){ bad('Bug fix: no phantom transposition groups after a hide/unhide cycle', e); }
+} finally {
+  await appDZ.close();
+}
+} catch(e){ bad('Phase DZ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
