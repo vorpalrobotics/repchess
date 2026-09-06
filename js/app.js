@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-355';
+const BUILD_TAG = '-356';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7628,8 +7628,16 @@ function maybeShowNewTranspositionsToast(collisionLabel = 'found'){
     const noun = `transposition${collisionCount===1?'':'s'}`;
     parts.push(collisionLabel === 'unresolved' ? `${collisionCount} unresolved ${noun}` : `${collisionCount} new ${noun} found`);
   }
-  const repairNoun = `redirect${transpPendingRepairCount===1?'':'s'}`;
-  parts.push(`${transpPendingRepairCount} ${repairNoun} restored -- target disappeared`);
+  // "restored" (not "redirect restored") -- the redirect itself was CLEARED,
+  // not fixed; what's restored is the room, back to a normal, independently-
+  // built one. And "a potential transposition", not "unresolved": if the
+  // target disappeared because it got hidden (the common case), there's
+  // nothing actually colliding right now -- Find Transpositions won't show
+  // anything until/unless the target comes back. Reported by the user as
+  // confusing: the wording implied something currently needs attention.
+  const repairNoun = `room${transpPendingRepairCount===1?'':'s'}`;
+  const potentialNoun = `potential transposition${transpPendingRepairCount===1?'':'s'}`;
+  parts.push(`${transpPendingRepairCount} ${repairNoun} restored to normal -- target disappeared (${potentialNoun})`);
   $('newTranspToastText').textContent = parts.join('; ');
   $('newTranspToast').style.display = 'flex';
 }

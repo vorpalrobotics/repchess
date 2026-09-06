@@ -18266,7 +18266,7 @@ try {
       text: window.__redirectTestHooks.newTranspositionsToastText(),
     }));
     assert(info.visible, 'expected the toast after the redirect target disappeared');
-    assert(info.text === '1 redirect restored -- target disappeared', `expected the repair-only wording (no collision found alongside it), got "${info.text}"`);
+    assert(info.text === '1 room restored to normal -- target disappeared (potential transposition)', `expected the repair-only wording (no collision found alongside it), got "${info.text}"`);
 
     const l1Prefs = await appDR.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L1'));
     const room = l1Prefs['L1|Nc3,d5,d4,Nf6'];
@@ -18954,7 +18954,7 @@ try {
     assert(/1 redirect/.test(dialogs[0] || ''), `expected the hide warning to name exactly 1 incoming redirect, got ${JSON.stringify(dialogs)}`);
     await appDZ.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());
     const toastText = await appDZ.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
-    assert(/^1 redirect restored/.test(toastText), `expected exactly 1 redirect restored (Target1's own), got "${toastText}"`);
+    assert(/^1 room restored to normal/.test(toastText), `expected exactly 1 room restored (Target1's own), got "${toastText}"`);
     const l2Prefs = await appDZ.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
     const l3Prefs = await appDZ.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
     assert(!l2Prefs['L2|d4,Nf6,Nc3,d5']?.redirectToCastle, "expected L2's redirect (Target1's own) to be cleared by the repair");
