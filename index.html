@@ -1201,12 +1201,18 @@
     <p style="font-size:.85em;color:#555;margin-top:0">
       Positions reached by two or more different castles via different move orders —
       each is currently a separate VR room even though the position is identical.
-      Pick "Keep this, redirect the rest" on the room you want to keep building out;
-      the others are redirected to it (their door routes straight to its room in VR)
-      and any responses they already had are automatically ported over to it.
+      In each group, select the room you want to keep building out, then press
+      "Redirect Selected". Every other room in that group is redirected to it (their
+      door routes straight to its room in VR) and any responses they already had are
+      automatically ported over. You can select in several groups and resolve them
+      all in one go; a group you leave unselected is left alone.
     </p>
     <div id="transpSummary" class="games-list-summary"></div>
     <div id="transpBody" class="games-list-body"></div>
+    <div id="transpFooter" style="display:none;gap:.7em;align-items:center;justify-content:flex-end;padding-top:.6em;margin-top:.4em;border-top:1px solid #ddd">
+      <span id="transpSelCount" style="font-size:.85em;color:#555"></span>
+      <button id="transpRedirectBtn" disabled>Redirect Selected</button>
+    </div>
   </div>
 </div>
 
@@ -1707,6 +1713,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-357"></script>
+<script type="module" src="js/app.js?v=20260804-358"></script>
 </body>
 </html>

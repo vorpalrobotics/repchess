@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-357';
+const BUILD_TAG = '-358';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7330,36 +7330,66 @@ function renderTranspositionsReport(groups){
   if(!groups.length){
     summary.textContent = 'No cross-castle transpositions found.';
     body.innerHTML = '';
+    _transpReportGroups = [];
+    $('transpFooter').style.display = 'none';
     return;
   }
   const roomTotal = groups.reduce((sum, g) => sum + g.length, 0);
   summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
+  // One radio group per collision group: picking a room means "keep this one,
+  // redirect the rest of ITS group to it". Nothing is preselected -- a group
+  // left untouched is simply skipped, so the button can never redirect
+  // something the user didn't actually choose. The whole selection is then
+  // applied by one Redirect Selected press (see resolveTranspositionSelections),
+  // which re-scans ONCE at the end rather than once per group -- the report
+  // used to re-scan after every single resolve, so clearing several groups
+  // meant sitting through a full castle rebuild between each one.
   body.innerHTML = groups.map((entries, gi) => `
     <div class="transp-group">
       <h3>${entries.length} castles share this position${entries.belowCount
         ? ` <span style="font-weight:normal;color:#777">(+${entries.belowCount} position${entries.belowCount===1?'':'s'} below it share the same transposition -- one redirect here covers them all)</span>`
         : ''}</h3>
       ${entries.map((e, ei) => `
-        <div class="transp-entry">
+        <label class="transp-entry" style="cursor:pointer">
           <div>
             <strong>${escapeHtml(e.castleName)}</strong> <span style="color:#777">(${escapeHtml(e.lineName)})</span>
             — room ${escapeHtml(e.room.id)}${e.room.name ? ' "' + escapeHtml(e.room.name) + '"' : ''}<br>
             <span style="color:#555">${escapeHtml(seqToNotation(e.room.seq))}</span>
           </div>
-          <button type="button" class="transp-keep-btn" data-group="${gi}" data-entry="${ei}"
-            title="Redirect every other room in this group to this one">Keep this, redirect the rest</button>
-        </div>
+          <span style="display:flex;align-items:center;gap:.4em;white-space:nowrap">
+            <input type="radio" class="transp-keep-radio" name="transpWinner${gi}"
+                   data-group="${gi}" data-entry="${ei}"
+                   title="Keep this room; redirect the rest of this group to it">
+            Keep this one
+          </span>
+        </label>
       `).join('')}
     </div>
   `).join('');
-  // event delegation (not one listener per button) so a re-render never
-  // leaks stale handlers -- innerHTML above already discarded the old ones.
-  body.onclick = e => {
-    const btn = e.target.closest('.transp-keep-btn');
-    if(!btn) return;
-    resolveTranspositionGroup(groups[parseInt(btn.dataset.group, 10)], parseInt(btn.dataset.entry, 10));
-  };
+  _transpReportGroups = groups;
+  $('transpFooter').style.display = 'flex';
+  refreshTranspRedirectBtn();
+  // event delegation (not one listener per radio) so a re-render never leaks
+  // stale handlers -- innerHTML above already discarded the old ones.
+  body.onchange = e => { if(e.target.closest('.transp-keep-radio')) refreshTranspRedirectBtn(); };
 }
+/* the groups the report is CURRENTLY showing, so Redirect Selected can map
+   the checked radios back to real entries. Set by every render; cleared when
+   the report finds nothing (nothing selectable to act on). */
+let _transpReportGroups = [];
+// each checked radio, as {gi, ei} -- the winner picked in that group
+function transpSelections(){
+  return [...document.querySelectorAll('#transpBody .transp-keep-radio:checked')]
+    .map(r => ({ gi: parseInt(r.dataset.group, 10), ei: parseInt(r.dataset.entry, 10) }));
+}
+function refreshTranspRedirectBtn(){
+  const n = transpSelections().length;
+  $('transpRedirectBtn').disabled = !n;
+  $('transpSelCount').textContent = n
+    ? `${n} group${n===1?'':'s'} selected`
+    : 'Select the room to keep in one or more groups';
+}
+$('transpRedirectBtn').onclick = () => resolveTranspositionSelections(transpSelections());
 
 /* Redirects every OTHER entry in this collision group to `entries[winnerIdx]`
    -- the same 3 pref fields (redirectToCastle/redirectTargetLineId/
@@ -7369,36 +7399,50 @@ function renderTranspositionsReport(groups){
    castle ROOT can't be redirected (same rule refreshRedirectField enforces
    by hiding its own field there) -- skipped here too, counted separately so
    the confirmation message explains why fewer than expected got redirected. */
-async function resolveTranspositionGroup(entries, winnerIdx){
-  const winner = entries[winnerIdx];
-  const others = entries.filter((_, i) => i !== winnerIdx);
-  if(!others.length) return;
-  const label = `"${winner.castleName}" (${winner.lineName})`;
-  if(!confirm(`Redirect every other room in this group to ${label}?\n\n`
+async function resolveTranspositionSelections(selections){
+  if(!selections.length) return;
+  const picks = selections
+    .map(({ gi, ei }) => {
+      const entries = _transpReportGroups[gi];
+      if(!entries) return null;
+      const winner = entries[ei];
+      const others = entries.filter((_, i) => i !== ei);
+      return winner && others.length ? { winner, others } : null;
+    })
+    .filter(Boolean);
+  if(!picks.length) return;
+
+  const labelOf = p => `"${p.winner.castleName}" (${p.winner.lineName})`;
+  const detail = picks.map(p => `  • keep ${labelOf(p)}, redirect ${p.others.length} other room${p.others.length===1?'':'s'} to it`).join('\n');
+  if(!confirm(`Redirect ${picks.length} group${picks.length===1?'':'s'}?\n\n${detail}\n\n`
     + `Each redirected room's own further responses are suppressed in favor of the target, `
     + `and any existing prep is automatically ported over to it.`)) return;
 
   const spinner = showSpinner('Redirecting…');
   await nextPaint();
   let skippedRoots = 0, touchedCurrentLine = false;
-  // { lineId, roomSeq, saved } per room actually redirected -- reused below
-  // to offer porting each one's existing responses, without re-fetching.
+  // { lineId, roomSeq, saved, label } per room actually redirected -- reused
+  // below to port each one's existing responses, without re-fetching.
   const redirectedLosers = [];
   try {
-    for(const loser of others){
-      const roomSeq = loser.room.seq.slice(0, -1);
-      const pref = await getPref(loser.lineId, roomSeq);
-      if(pref?.isCastleRoot){ skippedRoots++; continue; }
-      const redirectFields = {
-        redirectToCastle: winner.castleName,
-        redirectTargetLineId: winner.lineId,
-        redirectTargetSeq: winner.room.seq,
-        redirectTargetRoomName: winner.room.name || '',
-      };
-      await setPref(loser.lineId, roomSeq, redirectFields);
-      if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
-      redirectedLosers.push({ lineId: loser.lineId, roomSeq, saved: { ...pref, ...redirectFields } });
+    for(const { winner, others } of picks){
+      for(const loser of others){
+        const roomSeq = loser.room.seq.slice(0, -1);
+        const pref = await getPref(loser.lineId, roomSeq);
+        if(pref?.isCastleRoot){ skippedRoots++; continue; }
+        const redirectFields = {
+          redirectToCastle: winner.castleName,
+          redirectTargetLineId: winner.lineId,
+          redirectTargetSeq: winner.room.seq,
+          redirectTargetRoomName: winner.room.name || '',
+        };
+        await setPref(loser.lineId, roomSeq, redirectFields);
+        if(loser.lineId === CURRENT_LINE?.id) touchedCurrentLine = true;
+        redirectedLosers.push({ lineId: loser.lineId, roomSeq, saved: { ...pref, ...redirectFields } });
+      }
     }
+    // once for the whole batch, not once per group -- the castle rebuild this
+    // forces is the expensive part, and it's the same rebuild either way.
     invalidateBuiltCastlesCache();
     if(touchedCurrentLine){
       PREFS = await getAllPrefs(CURRENT_LINE.id);
@@ -7408,18 +7452,27 @@ async function resolveTranspositionGroup(entries, winnerIdx){
     hideSpinner(spinner);
   }
   const redirected = redirectedLosers.length;
-  log(`Redirected ${redirected} room(s) to ${label}`
-    + (skippedRoots ? ` (${skippedRoots} skipped -- a castle root can't be redirected)` : ''));
-  await refreshTranspositionsReport();
+  const target = picks.length === 1 ? ` to ${labelOf(picks[0])}` : ` across ${picks.length} groups`;
 
   // ported automatically, for the whole batch, right after -- same idea as
   // the Attributes modal's own redirectChanged/portAndReport pairing, just
   // aggregated since this action can redirect more than one room at once.
+  let ported = null;
   if(redirected){
     let totalPorted = 0;
     for(const { lineId, roomSeq, saved } of redirectedLosers) totalPorted += await portRedirectedResponses(lineId, roomSeq, saved);
-    log(totalPorted ? `Ported ${totalPorted} response${totalPorted===1?'':'s'} to ${label}` : `Nothing new to port to ${label}`);
+    ported = totalPorted ? `ported ${totalPorted} response${totalPorted===1?'':'s'}` : 'nothing new to port';
   }
+  // ONE combined message, not a "Redirected…" line immediately overwritten by
+  // a "Ported…" one -- #progress only ever shows the latest, so the redirect
+  // count was never actually readable.
+  log(`Redirected ${redirected} room${redirected===1?'':'s'}${target}`
+    + (skippedRoots ? ` (${skippedRoots} skipped -- a castle root can't be redirected)` : '')
+    + (ported ? ` — ${ported}` : ''));
+  // ONE re-scan, after everything above has landed (including the ports, which
+  // write prefs of their own) -- so the refreshed report reflects the whole
+  // batch's real end state rather than a mid-batch snapshot.
+  await refreshTranspositionsReport();
 }
 
 async function refreshTranspositionsReport(){
