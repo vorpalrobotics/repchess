@@ -17591,7 +17591,8 @@ try {
     await appDK.page.evaluate(() => {
       const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
       const target = entries.find(el => el.textContent.includes('Queens Pawn Palace'));
-      target.querySelector('.transp-keep-btn').click();
+      target.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
     });
     await appDK.page.waitForFunction(() => /redirected 1 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
 
@@ -17622,7 +17623,8 @@ try {
     await appDK.page.evaluate(() => {
       const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
       const target = entries.find(el => el.textContent.includes('Alpha Castle'));
-      target.querySelector('.transp-keep-btn').click();
+      target.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
     });
     await appDK.page.waitForFunction(() => /redirected 0 room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
     const progressText = await appDK.page.evaluate(() => document.getElementById('progress').textContent);
@@ -17747,7 +17749,8 @@ try {
     await appDL.page.evaluate(() => {
       const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
       const target = entries.find(el => el.textContent.includes('Reversed Italian'));
-      target.querySelector('.transp-keep-btn').click();
+      target.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
     });
     await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
 
@@ -17854,7 +17857,8 @@ try {
     await appDM.page.evaluate(() => {
       const entries = [...document.querySelectorAll('#transpBody .transp-entry')];
       const target = entries.find(el => el.textContent.includes('Reversed Italian'));
-      target.querySelector('.transp-keep-btn').click();
+      target.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
     });
     await appDM.page.waitForFunction(() =>
       document.querySelectorAll('#transpBody .transp-group').length === 0, { timeout: 10000 });
@@ -19041,14 +19045,15 @@ try {
     }));
   };
   const closeReport = () => appEA.page.evaluate(() => document.getElementById('transpCloseBtn').click());
-  // "Keep this, redirect the rest" on whichever group lists Chigorin, keeping
-  // Chigorin -- the real report action, which also auto-ports.
+  // select Chigorin as the keeper in whichever group lists it, then press
+  // Redirect Selected -- the real report action, which also auto-ports.
   const keepChigorin = async () => {
     await appEA.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
     await appEA.page.waitForFunction(() => document.querySelectorAll('#transpBody .transp-group').length > 0, { timeout: 20000 });
     await appEA.page.evaluate(() => {
       const entry = [...document.querySelectorAll('.transp-entry')].find(e => e.textContent.includes('Chigorin Mansion'));
-      entry.querySelector('.transp-keep-btn').click();
+      entry.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
     });
     await appEA.page.waitForTimeout(800);
     await closeReport();
@@ -19110,6 +19115,135 @@ try {
   await appEA.close();
 }
 } catch(e){ bad('Phase EA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EB: Find Transpositions resolves several groups in ONE press.
+//     Reported by the user: with two collision groups, resolving one made the
+//     report re-scan (a full castle rebuild) before the second could be
+//     touched, so clearing N groups meant sitting through N rebuilds. The
+//     report now offers a radio per room ("keep this one") and a single
+//     Redirect Selected button, applying every selected group in one batch
+//     with one invalidation and one re-scan at the end. A group left
+//     unselected must be left completely alone. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appEB = await launchApp();
+try {
+  // two independent transpositions, deliberately in different line pairs so
+  // resolving one can't affect the other's own detection.
+  await seedBackup(appEB.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Chigorin Mansion', color: 'white', openingMoves: ['Nc3'], prefs: [
+        { seq: ['Nc3','d5'], reply: 'd4', isCastleRoot: true, castleName: 'Chigorin Mansion', castleStreetNumber: 1 },
+        { seq: ['Nc3','d5','d4','Nf6'], reply: 'Nf3' },
+        { seq: ['Nc3','d5','d4','e6'], reply: 'e4' },
+      ]},
+      { id: 'L2', name: 'Alpha System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Alpha System', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','Nc3','d5'], reply: 'Nf3' },
+        { seq: ['d4','Nf6','Nc3','e6'], reply: 'e4' },
+      ]},
+      { id: 'L3', name: 'Beta System', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','e6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta System', castleStreetNumber: 1 },
+        { seq: ['d4','e6','Nc3','d5'], reply: 'e4' },
+        { seq: ['d4','e6','Nc3','Nf6'], reply: 'Nf3' },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'Nc3 d5 d4 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'Nc3 d5 d4 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 Nc3 d5 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 Nc3 e6 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g5', moves: 'd4 e6 Nc3 d5 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g6', moves: 'd4 e6 Nc3 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  const openReport = async () => {
+    await appEB.page.evaluate(() => document.getElementById('menuFindTranspositions').click());
+    await appEB.page.waitForFunction(() => {
+      const t = document.getElementById('transpSummary').textContent.trim();
+      return t.length > 0 && !/^Scanning/.test(t);
+    }, { timeout: 20000 });
+    return appEB.page.evaluate(() => document.querySelectorAll('#transpBody .transp-group').length);
+  };
+
+  // 349. Redirect Selected is disabled until something is picked, and picking
+  //      a room in one group enables it and reports the selection count.
+  try {
+    const groupCount = await openReport();
+    assert(groupCount === 2, `expected 2 collision groups to work with, got ${groupCount}`);
+    const before = await appEB.page.evaluate(() => ({
+      disabled: document.getElementById('transpRedirectBtn').disabled,
+      footer: getComputedStyle(document.getElementById('transpFooter')).display,
+    }));
+    assert(before.disabled === true, 'expected Redirect Selected to start disabled with nothing picked');
+    assert(before.footer !== 'none', 'expected the Redirect Selected footer to be visible when there are groups');
+    await appEB.page.evaluate(() => {
+      document.querySelector('#transpBody .transp-group .transp-keep-radio').click();
+    });
+    const after = await appEB.page.evaluate(() => ({
+      disabled: document.getElementById('transpRedirectBtn').disabled,
+      count: document.getElementById('transpSelCount').textContent,
+    }));
+    assert(after.disabled === false, 'expected Redirect Selected to enable once a room is picked');
+    assert(/1 group selected/.test(after.count), `expected the selection count to read 1 group, got "${after.count}"`);
+    ok('Find Transpositions: Redirect Selected stays disabled until a room is picked, then reports the count');
+  } catch(e){ bad('Find Transpositions: Redirect Selected enablement', e); }
+
+  // 350. Picking a winner in BOTH groups and pressing Redirect Selected once
+  //      resolves both -- the whole point of the change.
+  try {
+    await appEB.page.evaluate(() => {
+      for(const g of document.querySelectorAll('#transpBody .transp-group')){
+        const keep = [...g.querySelectorAll('.transp-entry')].find(e => e.textContent.includes('Chigorin Mansion'));
+        keep.querySelector('.transp-keep-radio').click();
+      }
+      document.getElementById('transpRedirectBtn').click();
+    });
+    await appEB.page.waitForFunction(() =>
+      document.querySelectorAll('#transpBody .transp-group').length === 0, { timeout: 20000 });
+    const l2 = await appEB.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const l3 = await appEB.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
+    assert(l2['L2|d4,Nf6,Nc3,d5']?.redirectToCastle === 'Chigorin Mansion',
+      `expected group 1's loser redirected to Chigorin, got ${JSON.stringify(l2['L2|d4,Nf6,Nc3,d5']?.redirectToCastle)}`);
+    assert(l3['L3|d4,e6,Nc3,d5']?.redirectToCastle === 'Chigorin Mansion',
+      `expected group 2's loser redirected to Chigorin in the SAME press, got ${JSON.stringify(l3['L3|d4,e6,Nc3,d5']?.redirectToCastle)}`);
+    ok('Find Transpositions: one Redirect Selected press resolves every selected group at once');
+  } catch(e){ bad('Find Transpositions: batch redirect across groups', e); }
+
+  // 351. A group left unselected is not touched: re-seed two groups, pick a
+  //      winner in only one, and confirm the other survives untouched.
+  try {
+    await appEB.page.evaluate(() => window.__redirectTestHooks.setPrefField('L2', ['d4','Nf6','Nc3','d5'], {
+      redirectToCastle: '', redirectTargetLineId: '', redirectTargetSeq: null, redirectTargetRoomName: '',
+    }));
+    await appEB.page.evaluate(() => window.__redirectTestHooks.setPrefField('L3', ['d4','e6','Nc3','d5'], {
+      redirectToCastle: '', redirectTargetLineId: '', redirectTargetSeq: null, redirectTargetRoomName: '',
+    }));
+    const groupCount = await openReport();
+    assert(groupCount === 2, `expected both collisions back after clearing the redirects, got ${groupCount}`);
+    // pick a winner ONLY in the group that contains Beta System
+    await appEB.page.evaluate(() => {
+      const g = [...document.querySelectorAll('#transpBody .transp-group')].find(x => x.textContent.includes('Beta System'));
+      const keep = [...g.querySelectorAll('.transp-entry')].find(e => e.textContent.includes('Chigorin Mansion'));
+      keep.querySelector('.transp-keep-radio').click();
+      document.getElementById('transpRedirectBtn').click();
+    });
+    await appEB.page.waitForFunction(() =>
+      document.querySelectorAll('#transpBody .transp-group').length === 1, { timeout: 20000 });
+    const l2 = await appEB.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
+    const l3 = await appEB.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L3'));
+    assert(l3['L3|d4,e6,Nc3,d5']?.redirectToCastle === 'Chigorin Mansion', 'expected the SELECTED group to be redirected');
+    assert(!l2['L2|d4,Nf6,Nc3,d5']?.redirectToCastle,
+      `expected the UNSELECTED group left completely alone, got ${JSON.stringify(l2['L2|d4,Nf6,Nc3,d5']?.redirectToCastle)}`);
+    ok('Find Transpositions: a group left unselected is not touched by Redirect Selected');
+  } catch(e){ bad('Find Transpositions: unselected groups untouched', e); }
+} finally {
+  await appEB.close();
+}
+} catch(e){ bad('Phase EB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
