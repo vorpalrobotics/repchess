@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-354';
+const BUILD_TAG = '-357';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7278,10 +7278,50 @@ async function findTransposedRooms(lines){
     if(distinct.size < 2) continue;
     groups.push(entries);
   }
+  // Fold descendant collisions into their ancestor. Two castles that
+  // transpose at position P and then continue with the same moves collide
+  // again at every shared position below P -- one group each -- but only
+  // the top-most one is actionable: a redirect there suppresses the whole
+  // subtree beneath it in the source. That's exactly the state a redirect +
+  // auto-port + later repair leaves behind (the port makes the target's
+  // subtree identical to the source's; the repair un-freezes the source's),
+  // and it reads as a pile of spurious duplicates rather than the single
+  // transposition it really is -- a real, reproduced report ("six pairs
+  // found" for one un-redirected room). A group is folded only when EVERY
+  // entry reaches its position by the same last move-pair from one shared
+  // parent position (a differing last pair means the parents differ, so
+  // it's an independent collision needing its own redirect) AND that parent
+  // is itself a LISTED group covering all of this group's castles -- listed,
+  // not merely present in each castle's graph, so whatever the report does
+  // show is always genuinely there to click. Folded groups aren't lost:
+  // each surviving ancestor carries how many it absorbed (belowCount), for
+  // the report to say so.
+  const groupByPosKey = new Map(groups.map(g => [g[0].room.posKey, g]));
+  const parentPosKeyOf = e => {
+    const s = e.room.seq;
+    return s && s.length >= 2 ? positionKey(fenForSeq(s.slice(0, -2))) : null;
+  };
+  const parentGroupOf = new Map();   // group -> the listed parent group it folds into
+  for(const g of groups){
+    const parents = new Set(g.map(parentPosKeyOf));
+    if(parents.size !== 1) continue;
+    const [pk] = parents;
+    const parent = pk ? groupByPosKey.get(pk) : null;
+    if(!parent || parent === g) continue;
+    const parentIds = new Set(parent.map(e => e.instanceId));
+    if(g.every(e => parentIds.has(e.instanceId))) parentGroupOf.set(g, parent);
+  }
+  for(const g of groups){
+    if(!parentGroupOf.has(g)) continue;
+    let top = g;
+    while(parentGroupOf.has(top)) top = parentGroupOf.get(top);
+    top.belowCount = (top.belowCount || 0) + 1;
+  }
+  const surviving = groups.filter(g => !parentGroupOf.has(g));
   // biggest collisions first (most distinct castles sharing one position),
   // then alphabetically by the first entry's castle name for a stable order.
-  groups.sort((a, b) => b.length - a.length || a[0].castleName.localeCompare(b[0].castleName));
-  return groups;
+  surviving.sort((a, b) => b.length - a.length || a[0].castleName.localeCompare(b[0].castleName));
+  return surviving;
 }
 
 function renderTranspositionsReport(groups){
@@ -7296,7 +7336,9 @@ function renderTranspositionsReport(groups){
   summary.textContent = `${groups.length} position${groups.length===1?'':'s'} reached by 2+ castles (${roomTotal} rooms total).`;
   body.innerHTML = groups.map((entries, gi) => `
     <div class="transp-group">
-      <h3>${entries.length} castles share this position</h3>
+      <h3>${entries.length} castles share this position${entries.belowCount
+        ? ` <span style="font-weight:normal;color:#777">(+${entries.belowCount} position${entries.belowCount===1?'':'s'} below it share the same transposition -- one redirect here covers them all)</span>`
+        : ''}</h3>
       ${entries.map((e, ei) => `
         <div class="transp-entry">
           <div>
@@ -7487,12 +7529,33 @@ function transpGroupSignature(entries){
    already establishes the right notion of "still resolves" for exactly
    this purpose -- it computes VR's foreignKey from positionKey(fenForSeq(
    destSeq)), never from a stored anchor.seq -- so this mirrors that same
-   check instead of inventing a different, stricter one. */
+   check instead of inventing a different, stricter one.
+
+   A genRoom's OWN `.posKey` is only its anchor's position -- a corridor or
+   two-track room folds several real positions into one visual room (see
+   buildGeneratedCastle's own `shape`), and every non-anchor member's
+   position is otherwise invisible to a plain `.posKey` check. A real,
+   reproduced bug: hiding one sibling branch at a 2-way fork collapses the
+   fork's OTHER, untouched branch into a corridor with its parent -- that
+   branch's own redirect target didn't move or disappear, but its position
+   no longer matches any genRoom's top-level `.posKey`, so it got wrongly
+   swept up as "broken" and repaired right alongside the genuinely-broken
+   one. genRoomPosKeys below collects every position a genRoom actually
+   covers (its anchor plus every corridor/two-track member), so a redirect
+   into any of them is correctly recognized as still resolving. */
+function genRoomPosKeys(gr){
+  const keys = gr.posKey ? [gr.posKey] : [];
+  const shape = gr.shape;
+  if(shape?.members) keys.push(...shape.members);
+  if(shape?.left) keys.push(...shape.left);
+  if(shape?.right) keys.push(...shape.right);
+  return keys;
+}
 async function findBrokenRedirects(lines, built){
   const posKeysByInstance = new Map();   // instanceId -> Set(posKey)
   for(const c of built){
     const set = posKeysByInstance.get(c.instanceId) || new Set();
-    for(const gr of c.genRooms) if(gr.posKey) set.add(gr.posKey);
+    for(const gr of c.genRooms) for(const k of genRoomPosKeys(gr)) set.add(k);
     posKeysByInstance.set(c.instanceId, set);
   }
   const broken = [];   // { lineId, roomSeq }
@@ -7607,8 +7670,16 @@ function maybeShowNewTranspositionsToast(collisionLabel = 'found'){
     const noun = `transposition${collisionCount===1?'':'s'}`;
     parts.push(collisionLabel === 'unresolved' ? `${collisionCount} unresolved ${noun}` : `${collisionCount} new ${noun} found`);
   }
-  const repairNoun = `redirect${transpPendingRepairCount===1?'':'s'}`;
-  parts.push(`${transpPendingRepairCount} ${repairNoun} restored -- target disappeared`);
+  // "restored" (not "redirect restored") -- the redirect itself was CLEARED,
+  // not fixed; what's restored is the room, back to a normal, independently-
+  // built one. And "a potential transposition", not "unresolved": if the
+  // target disappeared because it got hidden (the common case), there's
+  // nothing actually colliding right now -- Find Transpositions won't show
+  // anything until/unless the target comes back. Reported by the user as
+  // confusing: the wording implied something currently needs attention.
+  const repairNoun = `room${transpPendingRepairCount===1?'':'s'}`;
+  const potentialNoun = `potential transposition${transpPendingRepairCount===1?'':'s'}`;
+  parts.push(`${transpPendingRepairCount} ${repairNoun} restored to normal -- target disappeared (${potentialNoun})`);
   $('newTranspToastText').textContent = parts.join('; ');
   $('newTranspToast').style.display = 'flex';
 }
