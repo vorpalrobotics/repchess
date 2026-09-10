@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-360';
+const BUILD_TAG = '-361';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2398,10 +2398,18 @@ function isRoomDirty(roomKey, liveShape){
    and a missing WORD outranks a missing image (there's nothing to visualise
    at all yet, where a worded placeholder is already walkable).
 
-   Room-level completeness -- move-object slots still on placeholders -- is
-   deliberately NOT here yet: that data (LAYOUT / ASSET_MAP) lives inside
-   threeVR.js and isn't readable from here without bridging it out. The
-   existing 🎨 decorated glyph already covers it coarsely in the meantime. */
+   Atom completeness ALONE is not enough to make this view useful, which was
+   a real miss in the first cut. The square x piece vocabulary is GLOBAL --
+   384 entries shared by every castle, not per-castle work -- and the app
+   ships a complete default set (repchess-mnemonics-DEFAULT.json.gz, offered
+   on first run). With that accepted, every atom scores complete and every
+   castle paints identically green, including ones never touched. So room
+   decoration is folded in as a fourth state: it's the axis that actually
+   varies per castle. DECORATED_ROOMS is already loaded by the graph render,
+   so this needs no extra plumbing -- but it inherits that flag's limits:
+   it's binary (no "3 of 7 slots"), only recomputed when edit mode exits, and
+   conflates slot assets with door-target naming. Finer detail would mean
+   bridging LAYOUT/ASSET_MAP out of threeVR.js. */
 /* Above this many moves (edges) in the current scope, the graph refuses to
    draw and points at the ways to narrow it -- see the bail-out in
    showTranspositionGraph for why. Chosen from real use: a whole white
@@ -2719,7 +2727,13 @@ async function showTranspositionGraph(){
         // completeness class rides along on EVERY render (cheap, and it means
         // toggling the view mode never needs a re-render) but only paints
         // once 'cmode' joins it -- see updateGraphCompletenessVisibility.
-        const cmp = 'cmp-' + pairCompleteness(r.seq, mnemForGraph);
+        // atoms first (a room with no word yet can't be judged on decoration
+        // -- there's nothing to put on the wall). Only once its vocabulary is
+        // complete does "is this room actually built out" become the question.
+        // A node with no roomKey isn't a castle room at all, so there's no
+        // decoration state to judge and it stays at its atom score.
+        const atomState = pairCompleteness(r.seq, mnemForGraph);
+        const cmp = 'cmp-' + (atomState === 'ok' && roomKey && !decorated ? 'undecorated' : atomState);
         return {
           data,
           classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp,
@@ -2781,10 +2795,11 @@ async function showTranspositionGraph(){
         // GRAPH_COMPLETENESS_ON). Box parents never carry a cmp- class, so
         // run/two-track containers keep their own styling and the castle's
         // structure stays readable in this mode.
-        { selector:'node.cmode.cmp-ok',     style:{ 'background-color':'#2e7d32' } },
-        { selector:'node.cmode.cmp-noimg',  style:{ 'background-color':'#ef6c00' } },
-        { selector:'node.cmode.cmp-noword', style:{ 'background-color':'#c62828' } },
-        { selector:'node.cmode.cmp-none',   style:{ 'background-color':'#9e9e9e' } },
+        { selector:'node.cmode.cmp-ok',          style:{ 'background-color':'#2e7d32' } },
+        { selector:'node.cmode.cmp-undecorated', style:{ 'background-color':'#00838f' } },
+        { selector:'node.cmode.cmp-noimg',       style:{ 'background-color':'#ef6c00' } },
+        { selector:'node.cmode.cmp-noword',      style:{ 'background-color':'#c62828' } },
+        { selector:'node.cmode.cmp-none',        style:{ 'background-color':'#9e9e9e' } },
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
           'target-arrow-shape':'triangle', 'curve-style':'bezier',

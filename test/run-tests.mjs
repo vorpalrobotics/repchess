@@ -19258,27 +19258,35 @@ if(shouldRunPhase(['move-table','castle-generation'])){
 try {
 const appEC = await launchApp();
 try {
-  // 1.d4 Nf6 2.c4 e6 3.Nc3 -- the three rooms' own replies land on d4 (pawn),
-  // c4 (pawn) and c3 (knight), so seeding those three squares gives one room
-  // per completeness state. Nf6/e6 (the opponent moves in each pair) are
-  // seeded complete throughout, so each room's score is decided by its own
-  // reply and the test isn't asserting on an accident of the other atom.
+  // A castle rooted at 1.d4 Nf6 2.c4, with two branches under it, so rooms
+  // inside it get real VR roomKeys (decoration can only be judged on those).
+  // Each room's score is decided by its OWN reply -- every opponent-move atom
+  // (f6, e6, g6) is seeded complete so it never decides the outcome:
+  //   d4,Nf6,c4        c4 pawn  word+image  -> atoms ok (decoration decides)
+  //   …,c4,e6,Nc3      c3 knight word only  -> noimg
+  //   …,c4,g6,g3       g3 pawn   unseeded   -> noword
+  // The pre-castle d4 room has no roomKey at all, covering the "not a castle
+  // room, so stays at its atom score" path.
   await seedBackup(appEC.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
-      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
     ]}],
-    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
     mnemonics: [
-      // the opponent-move atoms, complete, so they never decide a score
+      // opponent-move atoms, complete throughout, so they never decide a score
       { square: 'f6', knight: 'knife', knightImg: 'data:image/png;base64,AAA' },
       { square: 'e6', pawn: 'egg', pawnImg: 'data:image/png;base64,AAA' },
-      // d4 pawn: word AND image -> that room scores ok
+      { square: 'g6', pawn: 'goose', pawnImg: 'data:image/png;base64,AAA' },
       { square: 'd4', pawn: 'door', pawnImg: 'data:image/png;base64,AAA' },
-      // c4 pawn: word, no image -> noimg
-      { square: 'c4', pawn: 'cart' },
-      // c3 knight: deliberately absent entirely -> noword
+      { square: 'c4', pawn: 'cart', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'c3', knight: 'cane' },   // word, no image
+      // g3 deliberately absent entirely -> noword
     ],
   }, { defaultPlayerColor: 'white' });
   await appEC.page.click('.line-row');
@@ -19296,11 +19304,40 @@ try {
   try {
     const nodes = await classesBySeq();
     const bySeq = Object.fromEntries(nodes.map(n => [n.seq, n.classes]));
-    assert(/\bcmp-ok\b/.test(bySeq['d4'] || ''), `expected d4 (word+image) to score ok, got "${bySeq['d4']}"`);
-    assert(/\bcmp-noimg\b/.test(bySeq['d4,Nf6,c4'] || ''), `expected c4 (word, no image) to score noimg, got "${bySeq['d4,Nf6,c4']}"`);
-    assert(/\bcmp-noword\b/.test(bySeq['d4,Nf6,c4,e6,Nc3'] || ''), `expected Nc3 (no mnemonic at all) to score noword, got "${bySeq['d4,Nf6,c4,e6,Nc3']}"`);
+    assert(/\bcmp-noimg\b/.test(bySeq['d4,Nf6,c4,e6,Nc3'] || ''), `expected Nc3 (word, no image) to score noimg, got "${bySeq['d4,Nf6,c4,e6,Nc3']}"`);
+    assert(/\bcmp-noword\b/.test(bySeq['d4,Nf6,c4,g6,g3'] || ''), `expected g3 (no mnemonic at all) to score noword, got "${bySeq['d4,Nf6,c4,g6,g3']}"`);
+    // outside any castle, so there's no decoration state to judge -- it stays
+    // on its atom score rather than being dragged down to "not decorated"
+    assert(/\bcmp-ok\b/.test(bySeq['d4'] || ''), `expected the pre-castle d4 room (word+image, no roomKey) to score ok, got "${bySeq['d4']}"`);
     ok('Graph completeness: each room is scored by its own move-pair (ok / needs image / needs word)');
   } catch(e){ bad('Graph completeness: per-room scoring', e); }
+
+  // 352b. A room whose atoms are all complete is still NOT done until it's
+  //       actually decorated -- the axis that varies per castle. Without
+  //       this, a complete (or default-bundle) mnemonic vocabulary paints
+  //       every castle green including ones never touched, which is what the
+  //       first cut of this view did.
+  try {
+    const roomKey = await appEC.page.evaluate(() => {
+      const n = window.__graphTestHooks.cy().nodes()
+        .filter(x => (x.data('seq') || []).join(',') === 'd4,Nf6,c4' && x.data('roomKey'));
+      return n.nonempty() ? n.data('roomKey') : null;
+    });
+    if(!roomKey) throw new Error('expected the castle root room to have a VR roomKey to judge decoration on');
+    // undecorated first: complete atoms, but the room isn't built out
+    const before = await appEC.page.evaluate((k) =>
+      window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k).classes().join(' '), roomKey);
+    assert(/\bcmp-undecorated\b/.test(before), `expected complete atoms + undecorated room to score undecorated, got "${before}"`);
+
+    await appEC.page.evaluate((k) => window.__graphTestHooks.setDecorated(k, true), roomKey);
+    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const after = await appEC.page.evaluate((k) =>
+      window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k).classes().join(' '), roomKey);
+    assert(/\bcmp-ok\b/.test(after), `expected a decorated room with complete atoms to score ok, got "${after}"`);
+    ok('Graph completeness: complete atoms still score "not decorated" until the room itself is built out');
+  } catch(e){ bad('Graph completeness: decoration folded into the score', e); }
 
   // 353. The mode itself: off by default, and toggling only adds/removes the
   //      'cmode' class -- no re-render, so node identity (and the user's
