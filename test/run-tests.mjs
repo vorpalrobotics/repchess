@@ -19246,5 +19246,104 @@ try {
 } catch(e){ bad('Phase EB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EC: the opening graph's Completeness view mode -- "unfinished
+//     business" (which move-pairs still need a mnemonic word, and which have
+//     a word but no image yet) surfaced as a VIEW MODE that swaps node fill
+//     over to completeness, rather than as another colour layered onto the
+//     normal view. Node fill already carries both identity (root /
+//     transposition / locked) and status (all-done), so a fifth meaning
+//     would collide. Scored per move-pair from the room's own seq, worst
+//     atom winning, missing word outranking missing image. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appEC = await launchApp();
+try {
+  // 1.d4 Nf6 2.c4 e6 3.Nc3 -- the three rooms' own replies land on d4 (pawn),
+  // c4 (pawn) and c3 (knight), so seeding those three squares gives one room
+  // per completeness state. Nf6/e6 (the opponent moves in each pair) are
+  // seeded complete throughout, so each room's score is decided by its own
+  // reply and the test isn't asserting on an accident of the other atom.
+  await seedBackup(appEC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    mnemonics: [
+      // the opponent-move atoms, complete, so they never decide a score
+      { square: 'f6', knight: 'knife', knightImg: 'data:image/png;base64,AAA' },
+      { square: 'e6', pawn: 'egg', pawnImg: 'data:image/png;base64,AAA' },
+      // d4 pawn: word AND image -> that room scores ok
+      { square: 'd4', pawn: 'door', pawnImg: 'data:image/png;base64,AAA' },
+      // c4 pawn: word, no image -> noimg
+      { square: 'c4', pawn: 'cart' },
+      // c3 knight: deliberately absent entirely -> noword
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEC.page.click('.line-row');
+  await appEC.page.waitForSelector('.data-row', { timeout: 40000 });
+  await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+
+  const classesBySeq = () => appEC.page.evaluate(() =>
+    window.__graphTestHooks.cy().nodes().filter(n => !!n.data('seq'))
+      .map(n => ({ seq: (n.data('seq') || []).join(','), classes: n.classes().join(' ') })));
+
+  // 352. Each room is scored by its own move-pair: complete, word-without-
+  //      image, and no-word-at-all each get their own class -- and the
+  //      classes ride along even before the mode is switched on.
+  try {
+    const nodes = await classesBySeq();
+    const bySeq = Object.fromEntries(nodes.map(n => [n.seq, n.classes]));
+    assert(/\bcmp-ok\b/.test(bySeq['d4'] || ''), `expected d4 (word+image) to score ok, got "${bySeq['d4']}"`);
+    assert(/\bcmp-noimg\b/.test(bySeq['d4,Nf6,c4'] || ''), `expected c4 (word, no image) to score noimg, got "${bySeq['d4,Nf6,c4']}"`);
+    assert(/\bcmp-noword\b/.test(bySeq['d4,Nf6,c4,e6,Nc3'] || ''), `expected Nc3 (no mnemonic at all) to score noword, got "${bySeq['d4,Nf6,c4,e6,Nc3']}"`);
+    ok('Graph completeness: each room is scored by its own move-pair (ok / needs image / needs word)');
+  } catch(e){ bad('Graph completeness: per-room scoring', e); }
+
+  // 353. The mode itself: off by default, and toggling only adds/removes the
+  //      'cmode' class -- no re-render, so node identity (and the user's
+  //      manual layout) survives switching back and forth.
+  try {
+    const offAtFirst = await appEC.page.evaluate(() =>
+      window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(offAtFirst === 0, `expected the completeness mode off on a fresh open, got ${offAtFirst} nodes in it`);
+    const legendHidden = await appEC.page.evaluate(() =>
+      getComputedStyle(document.getElementById('graphCompletenessLegend')).display);
+    assert(legendHidden === 'none', `expected the legend hidden while the mode is off, got "${legendHidden}"`);
+
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    const on = await appEC.page.evaluate(() => ({
+      inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      total: window.__graphTestHooks.cy().nodes().length,
+      legend: getComputedStyle(document.getElementById('graphCompletenessLegend')).display,
+    }));
+    assert(on.inMode === on.total && on.total > 0, `expected every node in the mode, got ${on.inMode} of ${on.total}`);
+    assert(on.legend !== 'none', 'expected the legend shown while the mode is on');
+
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    const backOff = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(backOff === 0, `expected toggling back off to leave no node in the mode, got ${backOff}`);
+    ok('Graph completeness: the view mode toggles on and off without re-rendering the graph');
+  } catch(e){ bad('Graph completeness: view-mode toggle', e); }
+
+  // 354. Closing the graph resets the mode, so a later open starts in the
+  //      normal role-coloured view rather than silently still recoloured.
+  try {
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const after = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(after === 0, `expected a fresh open to start out of the completeness mode, got ${after} nodes in it`);
+    ok('Graph completeness: closing the graph resets the mode for the next open');
+  } catch(e){ bad('Graph completeness: mode resets on close', e); }
+} finally {
+  await appEC.close();
+}
+} catch(e){ bad('Phase EC: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

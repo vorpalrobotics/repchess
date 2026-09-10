@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-358';
+const BUILD_TAG = '-359';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2382,6 +2382,59 @@ function isRoomDirty(roomKey, liveShape){
   const known = new Set(snap.exitPosKeys || []);
   return (liveShape.exitPosKeys || []).some(k => !known.has(k));
 }
+/* ---------- graph completeness view ----------
+   "Unfinished business" as a VIEW MODE over the opening graph, rather than
+   another colour layered onto the normal one: node fill already carries BOTH
+   identity (root / transposition / locked) and status (all-done), so a fifth
+   meaning would collide -- a root that still needs artwork can't be green for
+   both reasons. Toggling the mode swaps fill over to completeness entirely
+   and swaps it back, so nothing has to share.
+
+   Scored per NODE (a move-pair), not per room: the two atoms a room's
+   billboard shows are both derived from its own seq -- our reply is
+   lastMoveInfo(seq), the opponent move that led in is lastMoveInfo(seq minus
+   its last ply) -- exactly as buildGeneratedCastle's own pairFor computes
+   them. Worst atom wins, since a pair is only as usable as its weaker half,
+   and a missing WORD outranks a missing image (there's nothing to visualise
+   at all yet, where a worded placeholder is already walkable).
+
+   Room-level completeness -- move-object slots still on placeholders -- is
+   deliberately NOT here yet: that data (LAYOUT / ASSET_MAP) lives inside
+   threeVR.js and isn't readable from here without bridging it out. The
+   existing 🎨 decorated glyph already covers it coarsely in the meantime. */
+let GRAPH_COMPLETENESS_ON = false;
+// the live cytoscape instance, so the toggle can restyle in place. `cy` itself
+// is local to showTranspositionGraph (one per render); this just holds the
+// current one, and is cleared when the overlay closes.
+let GRAPH_CY = null;
+function pairCompleteness(seq, mnem){
+  const atoms = [lastMoveInfo(seq), lastMoveInfo((seq || []).slice(0, -1))].filter(Boolean);
+  if(!atoms.length) return 'none';
+  let missingImg = false;
+  for(const a of atoms){
+    const field = MNEM_WORD_FOR_PIECE[a.piece];
+    if(!field) continue;
+    const entry = mnem[a.to];
+    if(!entry || !entry[field]) return 'noword';
+    if(!entry[field + 'Img']) missingImg = true;
+  }
+  return missingImg ? 'noimg' : 'ok';
+}
+// reflects GRAPH_COMPLETENESS_ON onto the button, the legend, and the live
+// graph. Toggling only adds/removes one class across existing nodes -- no
+// re-render and no re-layout, so the view doesn't jump while you're working.
+function updateGraphCompletenessVisibility(){
+  const on = GRAPH_COMPLETENESS_ON;
+  $('graphCompletenessToggle').innerHTML =
+    `<i class="fa-${on ? 'solid fa-square-check' : 'regular fa-square'}"></i> Completeness`;
+  $('graphCompletenessLegend').style.display = on ? 'flex' : 'none';
+  if(GRAPH_CY) GRAPH_CY.nodes()[on ? 'addClass' : 'removeClass']('cmode');
+}
+$('graphCompletenessToggle').onclick = () => {
+  GRAPH_COMPLETENESS_ON = !GRAPH_COMPLETENESS_ON;
+  updateGraphCompletenessVisibility();
+};
+
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -2488,6 +2541,7 @@ async function showTranspositionGraph(){
       coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
     $('graphCoverageToggle').style.display = totalCastleRooms ? '' : 'none';
     updateGraphCoverageVisibility();
+    updateGraphCompletenessVisibility();   // keeps the button/legend in step with a mode left on across re-renders
 
     populateGraphCastleSelect();
 
@@ -2560,6 +2614,10 @@ async function showTranspositionGraph(){
       return { track: 'right', chainIdx: box.runs[1].indexOf(r.id) };
     };
 
+    // read fresh rather than trusting the MNEMONICS global: that's only
+    // populated by the flows that manage mnemonics (Manage Mnemonics, restore),
+    // so it can be empty here and would score every node as "needs a word".
+    const mnemForGraph = await getAllMnemonics();
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       // box compound parents are NEVER given to dagre (they crash it); they are
@@ -2600,9 +2658,14 @@ async function showTranspositionGraph(){
         // thick green border: reserved for "all done" (both memorized AND
         // decorated) so it reads at a glance even zoomed out too far to make
         // out the glyphs -- memorized/decorated alone show only their glyph.
+        // completeness class rides along on EVERY render (cheap, and it means
+        // toggling the view mode never needs a re-render) but only paints
+        // once 'cmode' joins it -- see updateGraphCompletenessVisibility.
+        const cmp = 'cmp-' + pairCompleteness(r.seq, mnemForGraph);
         return {
           data,
-          classes: [baseClass, (memorized && decorated) ? 'all-done' : ''].filter(Boolean).join(' ')
+          classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp,
+                    GRAPH_COMPLETENESS_ON ? 'cmode' : ''].filter(Boolean).join(' ')
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
@@ -2618,7 +2681,7 @@ async function showTranspositionGraph(){
       classes:'cycle-edge'
     }] : []);
 
-    const cy = cytoscape({
+    const cy = GRAPH_CY = cytoscape({
       container: $('graphContainer'),
       elements,
       style: [
@@ -2655,6 +2718,15 @@ async function showTranspositionGraph(){
         { selector:'node.locked', style:{
           'background-color':'#c62828', 'padding':'8px', 'font-size':11
         }},
+        // completeness view mode -- LAST among the node selectors so it wins
+        // over role/status fills while it's on (see the section comment on
+        // GRAPH_COMPLETENESS_ON). Box parents never carry a cmp- class, so
+        // run/two-track containers keep their own styling and the castle's
+        // structure stays readable in this mode.
+        { selector:'node.cmode.cmp-ok',     style:{ 'background-color':'#2e7d32' } },
+        { selector:'node.cmode.cmp-noimg',  style:{ 'background-color':'#ef6c00' } },
+        { selector:'node.cmode.cmp-noword', style:{ 'background-color':'#c62828' } },
+        { selector:'node.cmode.cmp-none',   style:{ 'background-color':'#9e9e9e' } },
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
           'target-arrow-shape':'triangle', 'curve-style':'bezier',
@@ -2812,6 +2884,9 @@ $('graphCloseBtn').onclick = () => {
   hideGraphCtxMenu();
   GRAPH_FOCUS_SEQ = null;      // each fresh open starts at the move-table scope
   GRAPH_COVERAGE_OPEN = false;   // ...and with the coverage panel collapsed
+  GRAPH_COMPLETENESS_ON = false; // ...and in the normal (role-coloured) view
+  GRAPH_CY = null;               // the instance dies with the overlay's container
+  updateGraphCompletenessVisibility();
 };
 
 // reflects GRAPH_COVERAGE_OPEN onto the toggle button's icon/title and the
