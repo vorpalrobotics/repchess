@@ -19345,5 +19345,86 @@ try {
 } catch(e){ bad('Phase EC: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase ED: the opening graph's size guard. A whole opening system can run
+//     to thousands of moves, where dagre takes a long time AND the result is
+//     unreadable -- too small to read, and zooming in loses the structure that
+//     was the reason to look. Past the limit the graph refuses to draw and
+//     points at the two ways to narrow the scope instead. The limit is
+//     lowered here rather than seeding 500+ moves to cross it. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appED = await launchApp();
+try {
+  await seedBackup(appED.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appED.page.click('.line-row');
+  await appED.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  const openGraph = () => appED.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  const containerText = () => appED.page.evaluate(() => document.getElementById('graphContainer').textContent);
+
+  // 355. Over the limit: nothing is drawn, the message explains why and how to
+  //      narrow, and the status line + Show Castle dropdown are still
+  //      populated so the fastest fix is right there rather than behind a
+  //      re-open.
+  try {
+    await appED.page.evaluate(() => window.__graphSizeTestHooks.setMaxMoves(1));
+    await openGraph();
+    await appED.page.waitForFunction(() =>
+      /too large to graph/i.test(document.getElementById('graphContainer').textContent), { timeout: 20000 });
+    const rendered = await appED.page.evaluate(() => !!window.__graphTestHooks);
+    assert(rendered === false, 'expected no cytoscape render at all when over the limit');
+    const status = await appED.page.evaluate(() => document.getElementById('graphStatus').textContent);
+    assert(/move\(s\)/.test(status), `expected the status line still populated so the size is visible, got "${status}"`);
+    const text = await containerText();
+    assert(/Show Castle/.test(text) && /Focus on this Variation/.test(text),
+      `expected the message to name both ways to narrow the scope, got "${text}"`);
+    ok('Graph size guard: past the limit nothing renders, and the message says how to narrow it');
+  } catch(e){ bad('Graph size guard: refuses to render over the limit', e); }
+
+  // 356. "Draw it anyway" overrides for that one render.
+  try {
+    await appED.page.evaluate(() => document.getElementById('graphRenderAnywayLink').click());
+    await appED.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appED.page.evaluate(() => window.__graphTestHooks.cy().nodes().length);
+    assert(nodes > 0, `expected the override to actually render the graph, got ${nodes} nodes`);
+    ok('Graph size guard: "Draw it anyway" overrides it for that render');
+  } catch(e){ bad('Graph size guard: render-anyway override', e); }
+
+  // 357. ...but only for that render -- closing restores the guard, so one
+  //      impatient click can't silently disable it for good.
+  try {
+    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+    await appED.page.waitForFunction(() =>
+      /too large to graph/i.test(document.getElementById('graphContainer').textContent), { timeout: 20000 });
+    ok('Graph size guard: the override is per-render, and closing restores the guard');
+  } catch(e){ bad('Graph size guard: override resets on close', e); }
+
+  // 358. Under the limit, the graph renders exactly as before -- the guard is
+  //      inert in the normal case.
+  try {
+    await appED.page.evaluate(() => window.__graphSizeTestHooks.setMaxMoves(500));
+    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+    await appED.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appED.page.evaluate(() => window.__graphTestHooks.cy().nodes().length);
+    assert(nodes > 0, `expected a normal render under the limit, got ${nodes} nodes`);
+    const text = await containerText();
+    assert(!/too large to graph/i.test(text), 'expected no size message under the limit');
+    ok('Graph size guard: under the limit the graph renders normally');
+  } catch(e){ bad('Graph size guard: normal render under the limit', e); }
+} finally {
+  await appED.close();
+}
+} catch(e){ bad('Phase ED: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

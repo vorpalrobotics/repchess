@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-359';
+const BUILD_TAG = '-360';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2402,6 +2402,24 @@ function isRoomDirty(roomKey, liveShape){
    deliberately NOT here yet: that data (LAYOUT / ASSET_MAP) lives inside
    threeVR.js and isn't readable from here without bridging it out. The
    existing 🎨 decorated glyph already covers it coarsely in the meantime. */
+/* Above this many moves (edges) in the current scope, the graph refuses to
+   draw and points at the ways to narrow it -- see the bail-out in
+   showTranspositionGraph for why. Chosen from real use: a whole white
+   repertoire runs past 2000 moves, which is both slow to lay out and far too
+   dense to read, while a single castle is comfortably under this. */
+let GRAPH_MAX_MOVES = 500;
+let GRAPH_RENDER_ANYWAY = false;   // per-open override, cleared on close
+// test-only: lets a test drive the size guard with a tiny fixture instead of
+// seeding 500+ moves just to cross the threshold. Registered out here, not
+// inside showTranspositionGraph like __graphTestHooks -- that one is only
+// assigned once a render actually completes, which is exactly what this
+// guard prevents.
+if(localStorage.getItem('threeTestDebug')){
+  window.__graphSizeTestHooks = {
+    setMaxMoves: (n) => { GRAPH_MAX_MOVES = n; },
+    maxMoves: () => GRAPH_MAX_MOVES,
+  };
+}
 let GRAPH_COMPLETENESS_ON = false;
 // the live cytoscape instance, so the toggle can restyle in place. `cy` itself
 // is local to showTranspositionGraph (one per render); this just holds the
@@ -2544,6 +2562,46 @@ async function showTranspositionGraph(){
     updateGraphCompletenessVisibility();   // keeps the button/legend in step with a mode left on across re-renders
 
     populateGraphCastleSelect();
+
+    /* Too big to be worth drawing. A whole opening system can run to thousands
+       of moves, where dagre takes a long time AND the result is unreadable --
+       nodes end up too small to read and zooming in doesn't help, since you
+       lose the structure that was the reason to look. So bail BEFORE building
+       elements (the expensive half: elements + cytoscape + dagre layout) and
+       say how to narrow it instead.
+       Counted in MOVES (edges) to match the vocabulary of the status line
+       just above, which is what the user reads the size off. The status line
+       and the Show Castle dropdown are both deliberately populated before
+       this point, so the numbers are visible and the fastest way to narrow
+       is one click away rather than behind a re-open.
+       renderAnyway is a per-call escape hatch, not a saved setting -- it
+       resets on the next open, so the guard can't be silently disabled
+       forever by one impatient click. */
+    if(edges.length > GRAPH_MAX_MOVES && !GRAPH_RENDER_ANYWAY){
+      $('graphContainer').innerHTML = `
+        <div style="padding:2rem;max-width:34em;margin:0 auto;color:#444;line-height:1.5">
+          <h3 style="margin-top:0">Too large to graph</h3>
+          <p>This scope has <strong>${edges.length} moves</strong>, past the ${GRAPH_MAX_MOVES}-move
+          limit for a readable diagram. Drawing it takes a while and comes out too small to
+          read, so it isn't drawn.</p>
+          <p>Narrow it down first:</p>
+          <ul>
+            <li>pick one castle from <strong>Show Castle</strong> above, or</li>
+            <li>close this and use <strong>Focus on this Variation</strong> from a row's menu in
+            the move table, then reopen the graph.</li>
+          </ul>
+          <p style="font-size:.85em;color:#777">
+            <a href="#" id="graphRenderAnywayLink">Draw it anyway</a> — expect it to be slow and hard to read.
+          </p>
+        </div>`;
+      $('graphRenderAnywayLink').onclick = (e) => {
+        e.preventDefault();
+        GRAPH_RENDER_ANYWAY = true;
+        showTranspositionGraph();
+      };
+      GRAPH_CY = null;   // nothing rendered, so the completeness toggle has nothing to restyle
+      return;
+    }
 
     // a room's user-assigned name lives on the opponent-move row that leads into
     // it (room.seq ends in OUR reply, so the name is keyed one ply back);
@@ -2885,6 +2943,7 @@ $('graphCloseBtn').onclick = () => {
   GRAPH_FOCUS_SEQ = null;      // each fresh open starts at the move-table scope
   GRAPH_COVERAGE_OPEN = false;   // ...and with the coverage panel collapsed
   GRAPH_COMPLETENESS_ON = false; // ...and in the normal (role-coloured) view
+  GRAPH_RENDER_ANYWAY = false;   // ...and with the size guard back in force
   GRAPH_CY = null;               // the instance dies with the overlay's container
   updateGraphCompletenessVisibility();
 };
