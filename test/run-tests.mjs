@@ -19463,5 +19463,75 @@ try {
 } catch(e){ bad('Phase ED: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EE: click feedback. Buttons whose action doesn't show a result
+//     immediately (Build Graph on a big system, Generate Castle) gave no sign
+//     the press had landed at all. One delegated pointerdown listener flashes
+//     any button opted in with .btn-flash -- delegated because the move table
+//     rebuilds wholesale on most edits, and on pointerdown rather than click
+//     so the flash starts before the button's own (possibly blocking)
+//     handler runs. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEE = await launchApp();
+try {
+  await seedBackup(appEE.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEE.page.click('.line-row');
+  await appEE.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  const flashing = (sel) => appEE.page.evaluate((s) =>
+    document.querySelector(s).classList.contains('flashing'), sel);
+
+  // 359. Pressing an opted-in button flashes it; the flash is driven by
+  //      pointerdown, so it's already on before any click handler runs.
+  try {
+    const before = await flashing('#buildGraphBtn');
+    assert(before === false, 'expected no flash before the press');
+    await appEE.page.dispatchEvent('#buildGraphBtn', 'pointerdown');
+    assert(await flashing('#buildGraphBtn') === true, 'expected the button to flash on pointerdown');
+    ok('Click feedback: an opted-in button flashes on press');
+  } catch(e){ bad('Click feedback: flash on press', e); }
+
+  // 360. The whole icon row is opted in -- the row this started with, so a
+  //      later markup edit can't silently drop one of them.
+  try {
+    const optedIn = await appEE.page.evaluate(() =>
+      ['unfocusBtn','visibilityToggleBtn','compactModeBtn','buildGraphBtn','collapseAllBtn','expandAllBtn']
+        .filter(id => document.getElementById(id)?.classList.contains('btn-flash')));
+    assert(optedIn.length === 6, `expected all 6 icon-row buttons opted in, got ${JSON.stringify(optedIn)}`);
+    ok('Click feedback: every button in the opening-system icon row is opted in');
+  } catch(e){ bad('Click feedback: icon row opted in', e); }
+
+  // 361. The animation is cleaned up when it ends, so a repeat press can
+  //      restart it rather than finding the class already set and doing
+  //      nothing visible.
+  try {
+    await appEE.page.waitForFunction(() =>
+      !document.getElementById('buildGraphBtn').classList.contains('flashing'), { timeout: 5000 });
+    await appEE.page.dispatchEvent('#buildGraphBtn', 'pointerdown');
+    assert(await flashing('#buildGraphBtn') === true, 'expected a second press to flash again');
+    ok('Click feedback: the flash clears when it ends, so a repeat press flashes again');
+  } catch(e){ bad('Click feedback: repeat press re-flashes', e); }
+
+  // 362. A button NOT opted in stays untouched -- this is deliberately
+  //      opt-in for now, not applied to every button in the app.
+  try {
+    await appEE.page.dispatchEvent('#backBtn', 'pointerdown');
+    const flashed = await appEE.page.evaluate(() =>
+      document.getElementById('backBtn').classList.contains('flashing'));
+    assert(flashed === false, 'expected a button without .btn-flash to be left alone');
+    ok('Click feedback: buttons that have not opted in are left alone');
+  } catch(e){ bad('Click feedback: opt-in only', e); }
+} finally {
+  await appEE.close();
+}
+} catch(e){ bad('Phase EE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

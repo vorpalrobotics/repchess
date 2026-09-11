@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-361';
+const BUILD_TAG = '-362';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6309,6 +6309,36 @@ document.addEventListener('visibilitychange', () => {
 // fetch+decompress+import of the (large) bundles. The dedicated tests for
 // this feature drive it explicitly via __defaultContentTestHooks instead.
 if(!localStorage.getItem('threeTestDebug')) maybeOfferDefaultContent();
+
+/* ---------- click feedback ----------
+   Acknowledges a press on any button opted in with .btn-flash (see the
+   btnFlash keyframes in index.html for the visual and why it animates
+   box-shadow rather than background).
+
+   ONE delegated listener rather than a listener per button: buttons come and
+   go constantly here (the move table rebuilds wholesale on most edits), so
+   per-button wiring would need re-attaching on every render and would leak
+   the ones it missed.
+
+   pointerdown, not click: the flash then starts BEFORE the button's own
+   handler runs, so the browser can paint it even when that handler goes on
+   to block -- which is exactly the case this is for (Build Graph on a large
+   system, Generate Castle). Captured, since several handlers here
+   stopPropagation() on their way out.
+
+   Restarting the animation on a rapid second press needs the class removed
+   and a reflow forced before re-adding it -- without that the browser sees
+   no change and the second press produces no visible flash at all. */
+document.addEventListener('pointerdown', e => {
+  const btn = e.target.closest?.('button.btn-flash');
+  if(!btn || btn.disabled) return;
+  btn.classList.remove('flashing');
+  void btn.offsetWidth;            // forced reflow -- see above
+  btn.classList.add('flashing');
+}, true);
+document.addEventListener('animationend', e => {
+  if(e.animationName === 'btnFlash') e.target.classList.remove('flashing');
+});
 
 /* ---------- hamburger menu ---------- */
 function collapseMenuSubs(){
