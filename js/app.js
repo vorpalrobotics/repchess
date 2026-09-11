@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-362';
+const BUILD_TAG = '-363';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6480,6 +6480,7 @@ async function buildBackupData(){
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
     decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
+    roomReviews: await getMeta(ROOM_REVIEWS_KEY),           // VR room progress: spaced-repetition review history
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     assets: await getAllAssets(),
@@ -6598,6 +6599,13 @@ async function applyBackupData(data, onMnemProgress){
     if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
     if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
     if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+    // absent in any backup taken before review scheduling existed. Restoring
+    // one of those leaves no review history -- clearAllData() has already
+    // emptied the meta store by this point -- which is the same thing that
+    // happens to memorized/decorated flags, and is what a full restore means.
+    // Every memorized room then re-bootstraps a schedule from its own
+    // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
+    if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
@@ -11494,6 +11502,31 @@ if(localStorage.getItem('threeTestDebug')){
       try { return aqProgressHtml(item); }
       finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
     },
+  };
+}
+
+// test-only hook for room review scheduling (R1: the data model and the
+// ladder, ahead of any UI). The scheduling functions live in db.js as plain
+// globals so both modules can reach them -- exposed here because app.js is
+// where the harness drives things from. `now`/`rand` are passed straight
+// through so a test can be deterministic about both the clock and the fuzz.
+if(localStorage.getItem('threeTestDebug')){
+  window.__reviewTestHooks = {
+    ladder: () => ROOM_REVIEW_LADDER.slice(),
+    fuzz: () => ROOM_REVIEW_FUZZ,
+    nextStep: (step, grade, lastGrade) => nextReviewStep(step, grade, lastGrade),
+    // `rand == null`, not a falsy check: rand 0 is a legitimate value (the
+    // bottom of the fuzz band) and would otherwise be passed straight through
+    // as a non-function.
+    applyGrade: (record, grade, now, rand) =>
+      applyRoomReviewGrade(record, grade, now, rand == null ? undefined : () => rand),
+    bootstrap: (memorizedAt) => bootstrapRoomReview(memorizedAt),
+    state: (record, now) => roomReviewState(record, now),
+    getReviews: () => getRoomReviews(),
+    setReviews: (map) => setRoomReviews(map),
+    // the raw meta value, for asserting what a backup actually round-tripped
+    rawMeta: () => getMeta(ROOM_REVIEWS_KEY),
+    dayMs: () => DAY_MS,
   };
 }
 

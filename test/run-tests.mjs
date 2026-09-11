@@ -19533,5 +19533,154 @@ try {
 } catch(e){ bad('Phase EE: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EF: room review scheduling, R1 -- the data model and the ladder,
+//     deliberately ahead of any UI. A fixed ladder rather than SM-2's ease
+//     factor: with a few hundred rooms reviewed by one person a per-item ease
+//     never converges, and "step 4 of 6" is inspectable where an ease of 2.36
+//     is not. The rule worth testing hardest is B: it HOLDS, but a second
+//     consecutive B demotes -- one miss in a room of several move-pairs is
+//     the ordinary outcome, so demoting on every B would pin everything at
+//     short intervals, while holding forever lets a never-quite-mastered room
+//     drift out to 180 days. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEF = await launchApp();
+try {
+  const H = (fn, ...args) => appEF.page.evaluate(
+    ({ f, a }) => window.__reviewTestHooks[f](...a), { f: fn, a: args });
+  const DAY = await H('dayMs');
+  const LADDER = await H('ladder');
+  const T0 = Date.UTC(2026, 0, 15, 12, 0, 0);   // midday, so local-midnight snapping is unambiguous
+
+  // 363. The ladder walks forward on A, resets to the bottom on C.
+  try {
+    assert(await H('nextStep', 0, 'A', null) === 1, 'expected A to advance a step');
+    assert(await H('nextStep', 3, 'A', null) === 4, 'expected A to advance from mid-ladder');
+    assert(await H('nextStep', LADDER.length - 1, 'A', null) === LADDER.length - 1,
+      'expected A at the top of the ladder to stay there, not run off the end');
+    assert(await H('nextStep', 4, 'C', null) === 0, 'expected C to reset to the bottom');
+    assert(await H('nextStep', 0, 'C', null) === 0, 'expected C at the bottom to stay there');
+    ok('Review scheduling: A advances and clamps at the top, C resets to the bottom');
+  } catch(e){ bad('Review scheduling: A and C step rules', e); }
+
+  // 364. B holds on its own, and only demotes when it follows another B --
+  //      the rule this whole design turns on.
+  try {
+    assert(await H('nextStep', 3, 'B', 'A') === 3, 'expected a single B (after an A) to hold');
+    assert(await H('nextStep', 3, 'B', null) === 3, 'expected a first-ever B to hold');
+    assert(await H('nextStep', 3, 'B', 'C') === 3, 'expected B after a C to hold, not demote');
+    assert(await H('nextStep', 3, 'B', 'B') === 2, 'expected a SECOND consecutive B to demote one step');
+    assert(await H('nextStep', 0, 'B', 'B') === 0, 'expected consecutive B at the bottom to stay there');
+    ok('Review scheduling: B holds, but a second consecutive B demotes one step');
+  } catch(e){ bad('Review scheduling: the B rule', e); }
+
+  // 365. Applying a grade produces a whole record: the due date lands the
+  //      ladder's interval out, lapses count only failures, and the grade is
+  //      remembered so the next B knows whether it's the second one.
+  try {
+    const first = await H('applyGrade', null, 'A', T0, 0.5);   // rand 0.5 -> no fuzz offset
+    assert(first.step === 1, `expected a first A to reach step 1, got ${first.step}`);
+    assert(first.lapses === 0, `expected no lapses after an A, got ${first.lapses}`);
+    assert(first.lastGrade === 'A', `expected the grade recorded, got ${first.lastGrade}`);
+    assert(first.last === T0, 'expected the review time recorded');
+    const failed = await H('applyGrade', first, 'C', T0, 0.5);
+    assert(failed.step === 0, `expected C to drop to step 0, got ${failed.step}`);
+    assert(failed.lapses === 1, `expected a C to count a lapse, got ${failed.lapses}`);
+    const secondFail = await H('applyGrade', failed, 'C', T0, 0.5);
+    assert(secondFail.lapses === 2, `expected lapses to accumulate, got ${secondFail.lapses}`);
+    ok('Review scheduling: a grade produces a full record (step, due, lapses, last grade)');
+  } catch(e){ bad('Review scheduling: applying a grade', e); }
+
+  // 366. Fuzz keeps due dates inside ±15% of the nominal interval, so a wing
+  //      memorized in one sitting stops coming due all on the same day -- but
+  //      never wanders outside the band.
+  try {
+    const nominal = LADDER[1];   // step 1 after a first A
+    const spread = await H('fuzz');
+    for(const rand of [0, 0.25, 0.5, 0.75, 1]){
+      const rec = await H('applyGrade', null, 'A', T0, rand);
+      const days = (rec.due - T0) / DAY;
+      // due is snapped to local midnight, so allow a day of slack either way
+      // on top of the fuzz band itself
+      assert(days >= nominal * (1 - spread) - 1 && days <= nominal * (1 + spread) + 1,
+        `expected a due date within ±${spread * 100}% of ${nominal}d (rand=${rand}), got ${days.toFixed(2)}d`);
+    }
+    // Variation only shows once 15% of the interval clears a whole day --
+    // below that, midnight-snapping absorbs it (deliberately: pile-ups hurt
+    // at long intervals, not when you're reviewing every few days anyway).
+    // So assert the spread where it actually matters, at a long step.
+    const atStep3 = { step: 3, lapses: 0, lastGrade: 'A' };   // A from here -> step 4, 60 days
+    const lo = await H('applyGrade', atStep3, 'A', T0, 0);
+    const hi = await H('applyGrade', atStep3, 'A', T0, 1);
+    assert(lo.step === 4 && hi.step === 4, 'expected both to land on the same ladder step');
+    assert(hi.due > lo.due,
+      `expected fuzz to spread due dates at a long interval, got ${(hi.due - lo.due) / DAY}d apart`);
+    const spreadDays = (hi.due - lo.due) / DAY;
+    assert(spreadDays <= LADDER[4] * spread * 2 + 2,
+      `expected the spread to stay inside the fuzz band, got ${spreadDays}d`);
+    ok('Review scheduling: fuzz varies due dates within ±15%, never outside it');
+  } catch(e){ bad('Review scheduling: interval fuzz', e); }
+
+  // 367. A memorized-but-never-reviewed room bootstraps from its memorized
+  //      timestamp, so an existing repertoire joins the schedule with no
+  //      migration and nothing is stranded.
+  try {
+    const rec = await H('bootstrap', T0);
+    assert(rec && rec.step === 0, 'expected a bootstrapped record at the bottom of the ladder');
+    assert(rec.last === null, 'expected no review time yet -- it has never been reviewed');
+    const days = (rec.due - T0) / DAY;
+    assert(days >= 0.4 && days <= 1.6, `expected the first review due about a day after memorizing, got ${days.toFixed(2)}d`);
+    assert(await H('bootstrap', null) === null, 'expected a room that was never memorized to get no schedule');
+    ok('Review scheduling: a memorized room bootstraps its first review from the memorized timestamp');
+  } catch(e){ bad('Review scheduling: bootstrap from memorized', e); }
+
+  // 368. Four due states, with soon/overdue windows proportional to the
+  //      interval -- a 1-day item goes overdue almost at once where a
+  //      180-day one gets weeks of slack.
+  try {
+    assert(await H('state', null, T0) === 'none', 'expected no record to read as "none"');
+    const rec = { due: T0, step: 3, lapses: 0, lastGrade: 'A' };   // 21-day interval
+    assert(await H('state', rec, T0 - 10 * DAY) === 'notdue', 'expected well before the due date to read not-due');
+    assert(await H('state', rec, T0 - 2 * DAY) === 'soon', 'expected just before the due date to read due-soon');
+    assert(await H('state', rec, T0) === 'due', 'expected the due date itself to read due');
+    assert(await H('state', rec, T0 + 20 * DAY) === 'overdue', 'expected well past the due date to read overdue');
+    // proportional: the same lateness that is merely "due" on a long
+    // interval is already "overdue" on a short one
+    const shortRec = { due: T0, step: 0, lapses: 0, lastGrade: 'A' };   // 1-day interval
+    assert(await H('state', shortRec, T0 + 2 * DAY) === 'overdue', 'expected a short-interval room to go overdue quickly');
+    assert(await H('state', rec, T0 + 2 * DAY) === 'due', 'expected a long-interval room to still be merely due at the same lateness');
+    ok('Review scheduling: four due states, with windows proportional to the interval');
+  } catch(e){ bad('Review scheduling: due states', e); }
+
+  // 369. Records persist, and survive a real Full Backup round-trip -- the
+  //      part that would quietly lose review history if the new key were
+  //      missed in the backup format.
+  try {
+    const seeded = { 'cas:L1_X:abc': { last: T0, due: T0 + 21 * DAY, step: 3, lapses: 1, lastGrade: 'A' } };
+    await appEF.page.evaluate((m) => window.__reviewTestHooks.setReviews(m), seeded);
+    const readBack = await H('getReviews');
+    assert(readBack['cas:L1_X:abc']?.step === 3, `expected the record to persist, got ${JSON.stringify(readBack)}`);
+
+    const exported = await appEF.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    assert(typeof exported.roomReviews === 'string' && /cas:L1_X:abc/.test(exported.roomReviews),
+      `expected review records carried in the backup, got ${JSON.stringify(exported.roomReviews)}`);
+
+    // and back in through a REAL restore, which clears the meta store first --
+    // so this proves the round trip, not just that the field is written
+    await seedBackup(appEF.page, {
+      version: 6, user: 'tester', lines: [], games: [],
+      roomReviews: exported.roomReviews,
+    });
+    const restored = await H('getReviews');
+    assert(restored['cas:L1_X:abc']?.step === 3,
+      `expected review history to survive a full restore, got ${JSON.stringify(restored)}`);
+    ok('Review scheduling: records persist and survive a Full Backup round trip');
+  } catch(e){ bad('Review scheduling: persistence and backup', e); }
+} finally {
+  await appEF.close();
+}
+} catch(e){ bad('Phase EF: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

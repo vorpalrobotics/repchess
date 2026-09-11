@@ -829,3 +829,122 @@ async function clearSafetyBackup(){
     txn.onerror    = () => reject(txn.error);
   });
 }
+
+/* ---------- room review scheduling (spaced repetition) ----------
+   Per-room review history, so a memorized room can be resurfaced on a
+   widening schedule instead of relying on noticing it's gone stale. Lives in
+   the meta store as one JSON blob keyed by roomKey (small, rewritten
+   wholesale), the same shape and persistence pattern as threeMemorizedRooms
+   / threeDecoratedRooms -- and keyed the same way, so a record survives
+   castle regeneration exactly as decorations do.
+
+   These functions live in db.js rather than either module because BOTH need
+   them: grading happens in the VR walk (threeVR.js) and the due-state
+   colouring in the opening graph (app.js), and neither module imports the
+   other. db.js is a classic <script>, so its functions are plain globals
+   both can call.
+
+   A fixed LADDER rather than SM-2's ease factor. SM-2 tunes a per-item ease
+   from many repetitions; with a few hundred rooms reviewed by one person it
+   would never converge, and "step 4 of 6, next in 21 days" is inspectable in
+   a way an opaque ease of 2.36 is not. The stored shape leaves room to add
+   an ease later without discarding history.
+*/
+const ROOM_REVIEWS_KEY = 'threeRoomReviews';
+const ROOM_REVIEW_LADDER = [1, 3, 7, 21, 60, 180];   // days until the next review, by step
+// ±15%, so a wing memorized in one sitting doesn't come due all on the same
+// day for the rest of time -- the pile-up every spaced-repetition tool ends
+// up having to defuse.
+//
+// Note this has NO effect below roughly a week: 15% of 3 days is ±11 hours,
+// and due dates snap to local midnight (see startOfLocalDay), so short
+// intervals absorb their own fuzz and stay clumped. That's deliberate --
+// a pile-up only really hurts at long intervals, where a whole wing coming
+// due on one distant day is a genuine wall; at 1-3 days you're reviewing
+// more or less continuously anyway.
+const ROOM_REVIEW_FUZZ = 0.15;
+const DAY_MS = 86400000;
+
+// Due dates are snapped to local midnight so "due today" means the whole day
+// regardless of what time the last review happened -- without this, grading
+// at 9pm makes the next one silently not-due until 9pm.
+function startOfLocalDay(ms){
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+function fuzzedDays(days, rand = Math.random){
+  const spread = days * ROOM_REVIEW_FUZZ;
+  return days + (rand() * 2 - 1) * spread;
+}
+
+/* The grade -> step rule. 'A' perfect, 'B' mostly right, 'C' failed.
+
+   B HOLDS rather than demoting, but a SECOND consecutive B demotes. For a
+   room holding several move-pairs, one miss is likely the ordinary outcome
+   rather than the exception -- demoting on every B would make the ladder
+   unclimbable and pin everything at short intervals. Holding forever is
+   wrong too, though: a room never quite mastered shouldn't keep drifting out
+   to 180 days. Two B's in a row is the signal that the interval itself is
+   too long, where one is just noise. (This is SM-2's ease factor in spirit
+   -- intervals growing more slowly when you're shaky -- expressed so it can
+   be read off rather than inferred.) */
+function nextReviewStep(step, grade, lastGrade){
+  if(grade === 'C') return 0;
+  if(grade === 'B') return (lastGrade === 'B') ? Math.max(0, step - 1) : step;
+  return Math.min(ROOM_REVIEW_LADDER.length - 1, step + 1);   // 'A'
+}
+
+/* Applies one grade to a room's record, returning the NEW record (never
+   mutates the old one). `now` and `rand` are injectable so tests can be
+   deterministic about both the clock and the fuzz. A room with no record yet
+   starts at step 0 -- see bootstrapRoomReview for where that first record
+   comes from. */
+function applyRoomReviewGrade(record, grade, now = Date.now(), rand = Math.random){
+  const prev = record || { step: 0, lapses: 0, lastGrade: null };
+  const step = nextReviewStep(prev.step || 0, grade, prev.lastGrade);
+  const days = fuzzedDays(ROOM_REVIEW_LADDER[step], rand);
+  return {
+    last: now,
+    due: startOfLocalDay(now + days * DAY_MS),
+    step,
+    lapses: (prev.lapses || 0) + (grade === 'C' ? 1 : 0),
+    lastGrade: grade,
+  };
+}
+
+/* A room marked memorized but never reviewed still needs a due date, and the
+   memorized flag already stores WHEN (threeVR.js writes Date.now()), so the
+   first review falls due a day after it was memorized. This means an existing
+   repertoire joins the schedule with no migration step and no backfill. */
+function bootstrapRoomReview(memorizedAt){
+  if(!memorizedAt) return null;
+  return { last: null, due: startOfLocalDay(memorizedAt + DAY_MS), step: 0, lapses: 0, lastGrade: null };
+}
+
+/* Four states, not three: "not memorized at all" has to read differently
+   from "memorized and not due yet", or an untouched castle and a
+   fully-reviewed one look identical.
+
+   The soon/overdue windows are PROPORTIONAL to the interval rather than
+   fixed: a 2-day item should read overdue almost immediately, where a
+   180-day one deserves weeks of slack. "due soon" exists because reaching a
+   room costs a walk -- unlike a flashcard, where there's no reason to
+   review early since coming back is free. */
+function roomReviewState(record, now = Date.now()){
+  if(!record || !record.due) return 'none';
+  const interval = ROOM_REVIEW_LADDER[record.step || 0] * DAY_MS;
+  if(now >= record.due + Math.max(DAY_MS, interval * 0.5)) return 'overdue';
+  if(now >= record.due) return 'due';
+  if(now >= record.due - interval * 0.2) return 'soon';
+  return 'notdue';
+}
+
+async function getRoomReviews(){
+  const raw = await getMeta(ROOM_REVIEWS_KEY);
+  try { return raw ? JSON.parse(raw) : {}; }
+  catch { return {}; }
+}
+async function setRoomReviews(map){
+  return setMeta(ROOM_REVIEWS_KEY, JSON.stringify(map || {}));
+}
