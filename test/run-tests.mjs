@@ -19246,5 +19246,222 @@ try {
 } catch(e){ bad('Phase EB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EC: the opening graph's Completeness view mode -- "unfinished
+//     business" (which move-pairs still need a mnemonic word, and which have
+//     a word but no image yet) surfaced as a VIEW MODE that swaps node fill
+//     over to completeness, rather than as another colour layered onto the
+//     normal view. Node fill already carries both identity (root /
+//     transposition / locked) and status (all-done), so a fifth meaning
+//     would collide. Scored per move-pair from the room's own seq, worst
+//     atom winning, missing word outranking missing image. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appEC = await launchApp();
+try {
+  // A castle rooted at 1.d4 Nf6 2.c4, with two branches under it, so rooms
+  // inside it get real VR roomKeys (decoration can only be judged on those).
+  // Each room's score is decided by its OWN reply -- every opponent-move atom
+  // (f6, e6, g6) is seeded complete so it never decides the outcome:
+  //   d4,Nf6,c4        c4 pawn  word+image  -> atoms ok (decoration decides)
+  //   …,c4,e6,Nc3      c3 knight word only  -> noimg
+  //   …,c4,g6,g3       g3 pawn   unseeded   -> noword
+  // The pre-castle d4 room has no roomKey at all, covering the "not a castle
+  // room, so stays at its atom score" path.
+  await seedBackup(appEC.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+    mnemonics: [
+      // opponent-move atoms, complete throughout, so they never decide a score
+      { square: 'f6', knight: 'knife', knightImg: 'data:image/png;base64,AAA' },
+      { square: 'e6', pawn: 'egg', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'g6', pawn: 'goose', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'd4', pawn: 'door', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'c4', pawn: 'cart', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'c3', knight: 'cane' },   // word, no image
+      // g3 deliberately absent entirely -> noword
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEC.page.click('.line-row');
+  await appEC.page.waitForSelector('.data-row', { timeout: 40000 });
+  await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+
+  const classesBySeq = () => appEC.page.evaluate(() =>
+    window.__graphTestHooks.cy().nodes().filter(n => !!n.data('seq'))
+      .map(n => ({ seq: (n.data('seq') || []).join(','), classes: n.classes().join(' ') })));
+
+  // 352. Each room is scored by its own move-pair: complete, word-without-
+  //      image, and no-word-at-all each get their own class -- and the
+  //      classes ride along even before the mode is switched on.
+  try {
+    const nodes = await classesBySeq();
+    const bySeq = Object.fromEntries(nodes.map(n => [n.seq, n.classes]));
+    assert(/\bcmp-noimg\b/.test(bySeq['d4,Nf6,c4,e6,Nc3'] || ''), `expected Nc3 (word, no image) to score noimg, got "${bySeq['d4,Nf6,c4,e6,Nc3']}"`);
+    assert(/\bcmp-noword\b/.test(bySeq['d4,Nf6,c4,g6,g3'] || ''), `expected g3 (no mnemonic at all) to score noword, got "${bySeq['d4,Nf6,c4,g6,g3']}"`);
+    // outside any castle, so there's no decoration state to judge -- it stays
+    // on its atom score rather than being dragged down to "not decorated"
+    assert(/\bcmp-ok\b/.test(bySeq['d4'] || ''), `expected the pre-castle d4 room (word+image, no roomKey) to score ok, got "${bySeq['d4']}"`);
+    ok('Graph completeness: each room is scored by its own move-pair (ok / needs image / needs word)');
+  } catch(e){ bad('Graph completeness: per-room scoring', e); }
+
+  // 352b. A room whose atoms are all complete is still NOT done until it's
+  //       actually decorated -- the axis that varies per castle. Without
+  //       this, a complete (or default-bundle) mnemonic vocabulary paints
+  //       every castle green including ones never touched, which is what the
+  //       first cut of this view did.
+  try {
+    const roomKey = await appEC.page.evaluate(() => {
+      const n = window.__graphTestHooks.cy().nodes()
+        .filter(x => (x.data('seq') || []).join(',') === 'd4,Nf6,c4' && x.data('roomKey'));
+      return n.nonempty() ? n.data('roomKey') : null;
+    });
+    if(!roomKey) throw new Error('expected the castle root room to have a VR roomKey to judge decoration on');
+    // undecorated first: complete atoms, but the room isn't built out
+    const before = await appEC.page.evaluate((k) =>
+      window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k).classes().join(' '), roomKey);
+    assert(/\bcmp-undecorated\b/.test(before), `expected complete atoms + undecorated room to score undecorated, got "${before}"`);
+
+    await appEC.page.evaluate((k) => window.__graphTestHooks.setDecorated(k, true), roomKey);
+    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const after = await appEC.page.evaluate((k) =>
+      window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k).classes().join(' '), roomKey);
+    assert(/\bcmp-ok\b/.test(after), `expected a decorated room with complete atoms to score ok, got "${after}"`);
+    ok('Graph completeness: complete atoms still score "not decorated" until the room itself is built out');
+  } catch(e){ bad('Graph completeness: decoration folded into the score', e); }
+
+  // 353. The mode itself: off by default, and toggling only adds/removes the
+  //      'cmode' class -- no re-render, so node identity (and the user's
+  //      manual layout) survives switching back and forth.
+  try {
+    const offAtFirst = await appEC.page.evaluate(() =>
+      window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(offAtFirst === 0, `expected the completeness mode off on a fresh open, got ${offAtFirst} nodes in it`);
+    const legendHidden = await appEC.page.evaluate(() =>
+      getComputedStyle(document.getElementById('graphCompletenessLegend')).display);
+    assert(legendHidden === 'none', `expected the legend hidden while the mode is off, got "${legendHidden}"`);
+
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    const on = await appEC.page.evaluate(() => ({
+      inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      total: window.__graphTestHooks.cy().nodes().length,
+      legend: getComputedStyle(document.getElementById('graphCompletenessLegend')).display,
+    }));
+    assert(on.inMode === on.total && on.total > 0, `expected every node in the mode, got ${on.inMode} of ${on.total}`);
+    assert(on.legend !== 'none', 'expected the legend shown while the mode is on');
+
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    const backOff = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(backOff === 0, `expected toggling back off to leave no node in the mode, got ${backOff}`);
+    ok('Graph completeness: the view mode toggles on and off without re-rendering the graph');
+  } catch(e){ bad('Graph completeness: view-mode toggle', e); }
+
+  // 354. Closing the graph resets the mode, so a later open starts in the
+  //      normal role-coloured view rather than silently still recoloured.
+  try {
+    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const after = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
+    assert(after === 0, `expected a fresh open to start out of the completeness mode, got ${after} nodes in it`);
+    ok('Graph completeness: closing the graph resets the mode for the next open');
+  } catch(e){ bad('Graph completeness: mode resets on close', e); }
+} finally {
+  await appEC.close();
+}
+} catch(e){ bad('Phase EC: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase ED: the opening graph's size guard. A whole opening system can run
+//     to thousands of moves, where dagre takes a long time AND the result is
+//     unreadable -- too small to read, and zooming in loses the structure that
+//     was the reason to look. Past the limit the graph refuses to draw and
+//     points at the two ways to narrow the scope instead. The limit is
+//     lowered here rather than seeding 500+ moves to cross it. ---
+if(shouldRunPhase(['move-table','castle-generation'])){
+try {
+const appED = await launchApp();
+try {
+  await seedBackup(appED.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appED.page.click('.line-row');
+  await appED.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  const openGraph = () => appED.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+  const containerText = () => appED.page.evaluate(() => document.getElementById('graphContainer').textContent);
+
+  // 355. Over the limit: nothing is drawn, the message explains why and how to
+  //      narrow, and the status line + Show Castle dropdown are still
+  //      populated so the fastest fix is right there rather than behind a
+  //      re-open.
+  try {
+    await appED.page.evaluate(() => window.__graphSizeTestHooks.setMaxMoves(1));
+    await openGraph();
+    await appED.page.waitForFunction(() =>
+      /too large to graph/i.test(document.getElementById('graphContainer').textContent), { timeout: 20000 });
+    const rendered = await appED.page.evaluate(() => !!window.__graphTestHooks);
+    assert(rendered === false, 'expected no cytoscape render at all when over the limit');
+    const status = await appED.page.evaluate(() => document.getElementById('graphStatus').textContent);
+    assert(/move\(s\)/.test(status), `expected the status line still populated so the size is visible, got "${status}"`);
+    const text = await containerText();
+    assert(/Show Castle/.test(text) && /Focus on this Variation/.test(text),
+      `expected the message to name both ways to narrow the scope, got "${text}"`);
+    ok('Graph size guard: past the limit nothing renders, and the message says how to narrow it');
+  } catch(e){ bad('Graph size guard: refuses to render over the limit', e); }
+
+  // 356. "Draw it anyway" overrides for that one render.
+  try {
+    await appED.page.evaluate(() => document.getElementById('graphRenderAnywayLink').click());
+    await appED.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appED.page.evaluate(() => window.__graphTestHooks.cy().nodes().length);
+    assert(nodes > 0, `expected the override to actually render the graph, got ${nodes} nodes`);
+    ok('Graph size guard: "Draw it anyway" overrides it for that render');
+  } catch(e){ bad('Graph size guard: render-anyway override', e); }
+
+  // 357. ...but only for that render -- closing restores the guard, so one
+  //      impatient click can't silently disable it for good.
+  try {
+    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+    await appED.page.waitForFunction(() =>
+      /too large to graph/i.test(document.getElementById('graphContainer').textContent), { timeout: 20000 });
+    ok('Graph size guard: the override is per-render, and closing restores the guard');
+  } catch(e){ bad('Graph size guard: override resets on close', e); }
+
+  // 358. Under the limit, the graph renders exactly as before -- the guard is
+  //      inert in the normal case.
+  try {
+    await appED.page.evaluate(() => window.__graphSizeTestHooks.setMaxMoves(500));
+    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+    await appED.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appED.page.evaluate(() => window.__graphTestHooks.cy().nodes().length);
+    assert(nodes > 0, `expected a normal render under the limit, got ${nodes} nodes`);
+    const text = await containerText();
+    assert(!/too large to graph/i.test(text), 'expected no size message under the limit');
+    ok('Graph size guard: under the limit the graph renders normally');
+  } catch(e){ bad('Graph size guard: normal render under the limit', e); }
+} finally {
+  await appED.close();
+}
+} catch(e){ bad('Phase ED: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

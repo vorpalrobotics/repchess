@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-358';
+const BUILD_TAG = '-361';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2382,6 +2382,85 @@ function isRoomDirty(roomKey, liveShape){
   const known = new Set(snap.exitPosKeys || []);
   return (liveShape.exitPosKeys || []).some(k => !known.has(k));
 }
+/* ---------- graph completeness view ----------
+   "Unfinished business" as a VIEW MODE over the opening graph, rather than
+   another colour layered onto the normal one: node fill already carries BOTH
+   identity (root / transposition / locked) and status (all-done), so a fifth
+   meaning would collide -- a root that still needs artwork can't be green for
+   both reasons. Toggling the mode swaps fill over to completeness entirely
+   and swaps it back, so nothing has to share.
+
+   Scored per NODE (a move-pair), not per room: the two atoms a room's
+   billboard shows are both derived from its own seq -- our reply is
+   lastMoveInfo(seq), the opponent move that led in is lastMoveInfo(seq minus
+   its last ply) -- exactly as buildGeneratedCastle's own pairFor computes
+   them. Worst atom wins, since a pair is only as usable as its weaker half,
+   and a missing WORD outranks a missing image (there's nothing to visualise
+   at all yet, where a worded placeholder is already walkable).
+
+   Atom completeness ALONE is not enough to make this view useful, which was
+   a real miss in the first cut. The square x piece vocabulary is GLOBAL --
+   384 entries shared by every castle, not per-castle work -- and the app
+   ships a complete default set (repchess-mnemonics-DEFAULT.json.gz, offered
+   on first run). With that accepted, every atom scores complete and every
+   castle paints identically green, including ones never touched. So room
+   decoration is folded in as a fourth state: it's the axis that actually
+   varies per castle. DECORATED_ROOMS is already loaded by the graph render,
+   so this needs no extra plumbing -- but it inherits that flag's limits:
+   it's binary (no "3 of 7 slots"), only recomputed when edit mode exits, and
+   conflates slot assets with door-target naming. Finer detail would mean
+   bridging LAYOUT/ASSET_MAP out of threeVR.js. */
+/* Above this many moves (edges) in the current scope, the graph refuses to
+   draw and points at the ways to narrow it -- see the bail-out in
+   showTranspositionGraph for why. Chosen from real use: a whole white
+   repertoire runs past 2000 moves, which is both slow to lay out and far too
+   dense to read, while a single castle is comfortably under this. */
+let GRAPH_MAX_MOVES = 500;
+let GRAPH_RENDER_ANYWAY = false;   // per-open override, cleared on close
+// test-only: lets a test drive the size guard with a tiny fixture instead of
+// seeding 500+ moves just to cross the threshold. Registered out here, not
+// inside showTranspositionGraph like __graphTestHooks -- that one is only
+// assigned once a render actually completes, which is exactly what this
+// guard prevents.
+if(localStorage.getItem('threeTestDebug')){
+  window.__graphSizeTestHooks = {
+    setMaxMoves: (n) => { GRAPH_MAX_MOVES = n; },
+    maxMoves: () => GRAPH_MAX_MOVES,
+  };
+}
+let GRAPH_COMPLETENESS_ON = false;
+// the live cytoscape instance, so the toggle can restyle in place. `cy` itself
+// is local to showTranspositionGraph (one per render); this just holds the
+// current one, and is cleared when the overlay closes.
+let GRAPH_CY = null;
+function pairCompleteness(seq, mnem){
+  const atoms = [lastMoveInfo(seq), lastMoveInfo((seq || []).slice(0, -1))].filter(Boolean);
+  if(!atoms.length) return 'none';
+  let missingImg = false;
+  for(const a of atoms){
+    const field = MNEM_WORD_FOR_PIECE[a.piece];
+    if(!field) continue;
+    const entry = mnem[a.to];
+    if(!entry || !entry[field]) return 'noword';
+    if(!entry[field + 'Img']) missingImg = true;
+  }
+  return missingImg ? 'noimg' : 'ok';
+}
+// reflects GRAPH_COMPLETENESS_ON onto the button, the legend, and the live
+// graph. Toggling only adds/removes one class across existing nodes -- no
+// re-render and no re-layout, so the view doesn't jump while you're working.
+function updateGraphCompletenessVisibility(){
+  const on = GRAPH_COMPLETENESS_ON;
+  $('graphCompletenessToggle').innerHTML =
+    `<i class="fa-${on ? 'solid fa-square-check' : 'regular fa-square'}"></i> Completeness`;
+  $('graphCompletenessLegend').style.display = on ? 'flex' : 'none';
+  if(GRAPH_CY) GRAPH_CY.nodes()[on ? 'addClass' : 'removeClass']('cmode');
+}
+$('graphCompletenessToggle').onclick = () => {
+  GRAPH_COMPLETENESS_ON = !GRAPH_COMPLETENESS_ON;
+  updateGraphCompletenessVisibility();
+};
+
 function graphScopeKey(line, rootSeq){
   return line.id + '|' + (rootSeq && rootSeq.length ? positionKey(fenForSeq(rootSeq)) : '__all__');
 }
@@ -2488,8 +2567,49 @@ async function showTranspositionGraph(){
       coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
     $('graphCoverageToggle').style.display = totalCastleRooms ? '' : 'none';
     updateGraphCoverageVisibility();
+    updateGraphCompletenessVisibility();   // keeps the button/legend in step with a mode left on across re-renders
 
     populateGraphCastleSelect();
+
+    /* Too big to be worth drawing. A whole opening system can run to thousands
+       of moves, where dagre takes a long time AND the result is unreadable --
+       nodes end up too small to read and zooming in doesn't help, since you
+       lose the structure that was the reason to look. So bail BEFORE building
+       elements (the expensive half: elements + cytoscape + dagre layout) and
+       say how to narrow it instead.
+       Counted in MOVES (edges) to match the vocabulary of the status line
+       just above, which is what the user reads the size off. The status line
+       and the Show Castle dropdown are both deliberately populated before
+       this point, so the numbers are visible and the fastest way to narrow
+       is one click away rather than behind a re-open.
+       renderAnyway is a per-call escape hatch, not a saved setting -- it
+       resets on the next open, so the guard can't be silently disabled
+       forever by one impatient click. */
+    if(edges.length > GRAPH_MAX_MOVES && !GRAPH_RENDER_ANYWAY){
+      $('graphContainer').innerHTML = `
+        <div style="padding:2rem;max-width:34em;margin:0 auto;color:#444;line-height:1.5">
+          <h3 style="margin-top:0">Too large to graph</h3>
+          <p>This scope has <strong>${edges.length} moves</strong>, past the ${GRAPH_MAX_MOVES}-move
+          limit for a readable diagram. Drawing it takes a while and comes out too small to
+          read, so it isn't drawn.</p>
+          <p>Narrow it down first:</p>
+          <ul>
+            <li>pick one castle from <strong>Show Castle</strong> above, or</li>
+            <li>close this and use <strong>Focus on this Variation</strong> from a row's menu in
+            the move table, then reopen the graph.</li>
+          </ul>
+          <p style="font-size:.85em;color:#777">
+            <a href="#" id="graphRenderAnywayLink">Draw it anyway</a> — expect it to be slow and hard to read.
+          </p>
+        </div>`;
+      $('graphRenderAnywayLink').onclick = (e) => {
+        e.preventDefault();
+        GRAPH_RENDER_ANYWAY = true;
+        showTranspositionGraph();
+      };
+      GRAPH_CY = null;   // nothing rendered, so the completeness toggle has nothing to restyle
+      return;
+    }
 
     // a room's user-assigned name lives on the opponent-move row that leads into
     // it (room.seq ends in OUR reply, so the name is keyed one ply back);
@@ -2560,6 +2680,10 @@ async function showTranspositionGraph(){
       return { track: 'right', chainIdx: box.runs[1].indexOf(r.id) };
     };
 
+    // read fresh rather than trusting the MNEMONICS global: that's only
+    // populated by the flows that manage mnemonics (Manage Mnemonics, restore),
+    // so it can be empty here and would score every node as "needs a word".
+    const mnemForGraph = await getAllMnemonics();
     const elements = [
       ...(needsStartNode ? [{data:{id:'start', label:''}, classes:'start'}] : []),
       // box compound parents are NEVER given to dagre (they crash it); they are
@@ -2600,9 +2724,20 @@ async function showTranspositionGraph(){
         // thick green border: reserved for "all done" (both memorized AND
         // decorated) so it reads at a glance even zoomed out too far to make
         // out the glyphs -- memorized/decorated alone show only their glyph.
+        // completeness class rides along on EVERY render (cheap, and it means
+        // toggling the view mode never needs a re-render) but only paints
+        // once 'cmode' joins it -- see updateGraphCompletenessVisibility.
+        // atoms first (a room with no word yet can't be judged on decoration
+        // -- there's nothing to put on the wall). Only once its vocabulary is
+        // complete does "is this room actually built out" become the question.
+        // A node with no roomKey isn't a castle room at all, so there's no
+        // decoration state to judge and it stays at its atom score.
+        const atomState = pairCompleteness(r.seq, mnemForGraph);
+        const cmp = 'cmp-' + (atomState === 'ok' && roomKey && !decorated ? 'undecorated' : atomState);
         return {
           data,
-          classes: [baseClass, (memorized && decorated) ? 'all-done' : ''].filter(Boolean).join(' ')
+          classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp,
+                    GRAPH_COMPLETENESS_ON ? 'cmode' : ''].filter(Boolean).join(' ')
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
@@ -2618,7 +2753,7 @@ async function showTranspositionGraph(){
       classes:'cycle-edge'
     }] : []);
 
-    const cy = cytoscape({
+    const cy = GRAPH_CY = cytoscape({
       container: $('graphContainer'),
       elements,
       style: [
@@ -2655,6 +2790,16 @@ async function showTranspositionGraph(){
         { selector:'node.locked', style:{
           'background-color':'#c62828', 'padding':'8px', 'font-size':11
         }},
+        // completeness view mode -- LAST among the node selectors so it wins
+        // over role/status fills while it's on (see the section comment on
+        // GRAPH_COMPLETENESS_ON). Box parents never carry a cmp- class, so
+        // run/two-track containers keep their own styling and the castle's
+        // structure stays readable in this mode.
+        { selector:'node.cmode.cmp-ok',          style:{ 'background-color':'#2e7d32' } },
+        { selector:'node.cmode.cmp-undecorated', style:{ 'background-color':'#00838f' } },
+        { selector:'node.cmode.cmp-noimg',       style:{ 'background-color':'#ef6c00' } },
+        { selector:'node.cmode.cmp-noword',      style:{ 'background-color':'#c62828' } },
+        { selector:'node.cmode.cmp-none',        style:{ 'background-color':'#9e9e9e' } },
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
           'target-arrow-shape':'triangle', 'curve-style':'bezier',
@@ -2812,6 +2957,10 @@ $('graphCloseBtn').onclick = () => {
   hideGraphCtxMenu();
   GRAPH_FOCUS_SEQ = null;      // each fresh open starts at the move-table scope
   GRAPH_COVERAGE_OPEN = false;   // ...and with the coverage panel collapsed
+  GRAPH_COMPLETENESS_ON = false; // ...and in the normal (role-coloured) view
+  GRAPH_RENDER_ANYWAY = false;   // ...and with the size guard back in force
+  GRAPH_CY = null;               // the instance dies with the overlay's container
+  updateGraphCompletenessVisibility();
 };
 
 // reflects GRAPH_COVERAGE_OPEN onto the toggle button's icon/title and the

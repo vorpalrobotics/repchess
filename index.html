@@ -1109,8 +1109,17 @@
     </div>
     <div style="display:flex;align-items:baseline;gap:.5rem">
       <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em;flex:1"></div>
+      <button id="graphCompletenessToggle" style="flex:0 0 auto;font-size:.8rem;color:#555;background:none;border:none;cursor:pointer;padding:.1rem .3rem"
+        title="Recolor rooms by how much mnemonic work is left (word/image), instead of by role"><i class="fa-regular fa-square"></i> Completeness</button>
       <button id="graphCoverageToggle" style="display:none;flex:0 0 auto;font-size:.8rem;color:#555;background:none;border:none;cursor:pointer;padding:.1rem .3rem"
         title="Show coverage stats"><i class="fa-solid fa-caret-right"></i> Coverage</button>
+    </div>
+    <div id="graphCompletenessLegend" style="display:none;gap:.9rem;align-items:center;font-size:.78rem;color:#555;padding:.15rem 0 .3rem">
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#2e7d32;margin-right:.3em"></span>done</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#00838f;margin-right:.3em"></span>room not decorated yet</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#ef6c00;margin-right:.3em"></span>word, needs image</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#c62828;margin-right:.3em"></span>needs a word</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#9e9e9e;margin-right:.3em"></span>no mnemonic of its own</span>
     </div>
     <div id="graphCoverage" class="graph-coverage" style="display:none"></div>
     <!-- overflow:hidden (not auto): cytoscape does its own pan/zoom, and an auto
@@ -1713,6 +1722,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-358"></script>
+<script type="module" src="js/app.js?v=20260804-361"></script>
 </body>
 </html>
