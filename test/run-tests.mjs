@@ -19682,5 +19682,212 @@ try {
 } catch(e){ bad('Phase EF: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EG: room review grading in VR, R2 -- the brain icon becomes a
+//     grading control once a room is memorized, and 1/2/3 grade it straight
+//     off the keyboard. The two things worth testing hardest: the digits are
+//     bound BARE (so they must do nothing at all outside a memorized castle
+//     room, or a stray keypress invents a schedule), and re-grading in one
+//     visit REPLACES rather than compounds (so a mis-keyed 1 when you meant
+//     2 is correctable, and a double-press isn't two reviews). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEG = await launchApp();
+try {
+  const keys = await appEG.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appEG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEG.page);
+  const E = (fn, ...args) => appEG.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const press = (k) => appEG.page.evaluate(
+    (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key })), k);
+  // re-enter the room fresh: enterRoom clears the per-visit re-grade window,
+  // so each test below starts from the room's stored record rather than
+  // replacing the previous test's grade.
+  const revisit = async () => { await E('enter', keys.alpha); await appEG.page.waitForTimeout(150); };
+
+  // 370. Clicking the brain in an ALREADY-memorized room opens the grading
+  //      menu instead of unmarking it -- unmarking moved inside the menu,
+  //      because grading is what you come back to do over and over.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    assert(await E('memorized'), 'setup: expected the room memorized');
+    await E('clickMemBtn');
+    const menu = await E('gradeMenu');
+    assert(menu.open, 'expected clicking the brain in a memorized room to open the grading menu');
+    assert(menu.items.length === 5,
+      `expected five choices (three grades, unmark, cancel), got ${JSON.stringify(menu.items)}`);
+    assert(/perfectly/i.test(menu.items[0]) && /mostly/i.test(menu.items[1]) && /fail/i.test(menu.items[2]),
+      `expected the three grades first, got ${JSON.stringify(menu.items)}`);
+    assert(await E('memorized'), 'expected the room to STILL be memorized -- the click must not have unmarked it');
+    await E('clickGradeMenuItem', 4);   // Cancel
+    assert(!(await E('gradeMenu')).open, 'expected Cancel to close the menu');
+    ok('Review grading: the brain opens a grading menu in a memorized room (and Cancel closes it)');
+  } catch(e){ bad('Review grading: brain opens the grading menu', e); }
+
+  // 371. Pressing 1 grades the room perfect: a record lands at step 1, the
+  //      due date moves out past the bootstrapped one, and a toast says so.
+  try {
+    await revisit();
+    assert(!(await E('reviewRecord')), 'setup: expected no stored record before the first grade');
+    const boot = await E('reviewFor');
+    assert(boot && boot.step === 0, `setup: expected a bootstrapped record at step 0, got ${JSON.stringify(boot)}`);
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    const rec = await E('reviewRecord');
+    assert(rec && rec.step === 1 && rec.lastGrade === 'A',
+      `expected the bare '1' key to grade the room A and advance it to step 1, got ${JSON.stringify(rec)}`);
+    assert(rec.due > boot.due, 'expected the new due date past the bootstrapped one');
+    const toast = await E('toastText');
+    assert(toast && /perfectly/i.test(toast) && /next review/i.test(toast),
+      `expected a toast naming the grade and the new interval, got ${JSON.stringify(toast)}`);
+    ok('Review grading: a bare 1/2/3 keypress grades the current room and toasts the new interval');
+  } catch(e){ bad('Review grading: keyboard grading', e); }
+
+  // 372. Grading AGAIN in the same visit replaces rather than compounds. A
+  //      fresh room graded A then B must land where a lone B from the
+  //      ORIGINAL record lands (step 0, held), not where a B after the A
+  //      would (step 1) -- that difference is the whole point.
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);    // back to just-memorized
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert((await E('reviewRecord')).step === 1, 'setup: expected the A to advance to step 1');
+    await press('2');
+    await appEG.page.waitForTimeout(120);
+    const rec = await E('reviewRecord');
+    assert(rec.step === 0 && rec.lastGrade === 'B',
+      `expected the second grade to REPLACE the first (B on the pre-grade record holds at step 0), got ${JSON.stringify(rec)}`);
+    // ...but a later visit grades afresh, on top of what's now stored
+    await revisit();
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert((await E('reviewRecord')).step === 1,
+      'expected a NEW visit to grade on top of the stored record, not replace it');
+    ok('Review grading: re-grading in one visit replaces; a new visit grades afresh');
+  } catch(e){ bad('Review grading: re-grade replaces within a visit', e); }
+
+  // 373. The digits are bound bare, so the guard is what keeps them safe:
+  //      nothing at all happens in an unmemorized room, or off the castle
+  //      grid entirely (mainStreet has no position to review).
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);
+    await E('toggleMemorized');                       // now UNmemorized
+    assert(!(await E('memorized')), 'setup: expected the room unmemorized');
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert(!(await E('reviewRecord')),
+      'expected a grade keypress in an unmemorized room to do nothing at all');
+
+    await E('enter', 'mainStreet');
+    await appEG.page.waitForTimeout(150);
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    const street = await appEG.page.evaluate(() => window.__reviewTestHooks.getReviews());
+    assert(!street.mainStreet, `expected no record invented on mainStreet, got ${JSON.stringify(street)}`);
+    ok('Review grading: grade keys do nothing outside a memorized castle room');
+  } catch(e){ bad('Review grading: keys are inert where there is nothing to grade', e); }
+
+  // 374. While the menu is up it owns the keyboard -- a stray walk key must
+  //      not carry you out of the room you are in the middle of grading.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    await E('clickMemBtn');
+    assert((await E('gradeMenu')).open, 'setup: expected the menu open');
+    await press('b');                                  // "take the back door"
+    await appEG.page.waitForTimeout(150);
+    const room = await appEG.page.evaluate(() => window.__threeTestState.room);
+    assert(room === keys.alpha, `expected the menu to swallow the walk key, but we moved to ${room}`);
+    assert((await E('gradeMenu')).open, 'expected the menu still open after a swallowed key');
+    await press('Escape');
+    await appEG.page.waitForTimeout(100);
+    assert(!(await E('gradeMenu')).open, 'expected Escape to close the menu');
+    assert(!(await E('reviewRecord')), 'expected Escape to grade nothing');
+    ok('Review grading: the open menu swallows walk keys; Escape cancels without grading');
+  } catch(e){ bad('Review grading: menu owns the keyboard', e); }
+
+  // 375. Unmarking from the menu drops the review history with it -- a
+  //      re-marked room must not inherit an interval it earned before
+  //      whatever made the user unmark it.
+  try {
+    await revisit();
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert(await E('reviewRecord'), 'setup: expected a stored record to drop');
+    await E('clickMemBtn');
+    await E('clickGradeMenuItem', 3);                  // "Mark not memorized"
+    await appEG.page.waitForTimeout(150);
+    assert(!(await E('memorized')), 'expected the menu item to unmark the room');
+    assert(!(await E('reviewRecord')), 'expected the review record dropped along with the memorized flag');
+    assert(!(await E('reviewFor')), 'expected no effective schedule for an unmemorized room');
+    ok('Review grading: unmarking memorized drops the review history with it');
+  } catch(e){ bad('Review grading: unmark clears the schedule', e); }
+
+  // 376. The brain doubles as the room's due light, so the one thing worth
+  //      doing in the room is visible from inside it.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    const DAY = 86400000;
+    const tint = async (rec) => {
+      await E('setReviewRecord', keys.alpha, rec);
+      await appEG.page.waitForTimeout(60);
+      return (await E('memBtnStyle')).background;
+    };
+    const now = Date.now();
+    const notdue  = await tint({ last: now, due: now + 10 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    const due     = await tint({ last: now, due: now,            step: 0, lapses: 0, lastGrade: 'A' });
+    const overdue = await tint({ last: now, due: now - 5 * DAY,  step: 0, lapses: 0, lastGrade: 'A' });
+    assert(/56, ?142, ?60/.test(notdue),  `expected green while the schedule is satisfied, got ${notdue}`);
+    assert(/245, ?124, ?0/.test(due),     `expected amber once a review is due, got ${due}`);
+    assert(/198, ?40, ?40/.test(overdue), `expected red once well overdue, got ${overdue}`);
+    const title = await E('memBtnTitle');
+    assert(/overdue/i.test(title) && /1\/2\/3/.test(title),
+      `expected the tooltip to report the state and the grade keys, got ${JSON.stringify(title)}`);
+    ok('Review grading: the brain icon tints by due state and its tooltip reports the schedule');
+  } catch(e){ bad('Review grading: due-state tint', e); }
+
+  // 377. The graded record goes through real IndexedDB on threeVR's own load
+  //      path (loadReviews at openThreeTest), not just the app-side hooks
+  //      Phase EF already covers.
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);
+    await press('1');
+    await appEG.page.waitForTimeout(150);
+    const before = await E('reviewRecord');
+    assert(before && before.step === 1, 'setup: expected a graded record before the reload');
+
+    await appEG.page.reload({ waitUntil: 'domcontentloaded' });
+    await appEG.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appEG.page);
+    await revisit();
+    const after = await E('reviewRecord');
+    assert(after && after.step === 1 && after.lastGrade === 'A',
+      `expected the graded record to survive a reload, got ${JSON.stringify(after)}`);
+    ok('Review grading: a grade persists to IndexedDB and survives a full reload');
+  } catch(e){ bad('Review grading: grade survives a reload', e); }
+} finally {
+  await appEG.close();
+}
+} catch(e){ bad('Phase EG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
