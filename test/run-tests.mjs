@@ -26,6 +26,15 @@ function assert(cond, msg){ if(!cond) throw new Error(msg); }
 const pWhite = (opp='opp') => ({ white: { user: { name: 'tester' } }, black: { user: { name: opp } } });
 const pBlack = (opp='opp') => ({ white: { user: { name: opp } }, black: { user: { name: 'tester' } } });
 
+// Switch the Opening Graph's View lens (Normal / Completeness / Review).
+// Setting .value doesn't fire change on its own, so the handler is called
+// directly -- same shape as the other "drive the real handler" helpers here.
+const setGraphViewMode = (page, mode) => page.evaluate((m) => {
+  const sel = document.getElementById('graphViewMode');
+  sel.value = m;
+  sel.onchange();
+}, mode);
+
 // console errors we expect and ignore. The un-mocked CDNs (cm-chessboard, web
 // fonts, Chart.js, Stockfish) are intentionally aborted and the app degrades
 // gracefully; blocking the COOP/COEP service worker makes its index.html
@@ -19339,9 +19348,9 @@ try {
     ok('Graph completeness: complete atoms still score "not decorated" until the room itself is built out');
   } catch(e){ bad('Graph completeness: decoration folded into the score', e); }
 
-  // 353. The mode itself: off by default, and toggling only adds/removes the
-  //      'cmode' class -- no re-render, so node identity (and the user's
-  //      manual layout) survives switching back and forth.
+  // 353. The mode itself: Normal by default, and switching lens only adds/
+  //      removes the 'cmode' class -- no re-render, so node identity (and the
+  //      user's manual layout) survives switching back and forth.
   try {
     const offAtFirst = await appEC.page.evaluate(() =>
       window.__graphTestHooks.cy().nodes('.cmode').length);
@@ -19350,7 +19359,7 @@ try {
       getComputedStyle(document.getElementById('graphCompletenessLegend')).display);
     assert(legendHidden === 'none', `expected the legend hidden while the mode is off, got "${legendHidden}"`);
 
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'completeness');
     const on = await appEC.page.evaluate(() => ({
       inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
       total: window.__graphTestHooks.cy().nodes().length,
@@ -19359,21 +19368,25 @@ try {
     assert(on.inMode === on.total && on.total > 0, `expected every node in the mode, got ${on.inMode} of ${on.total}`);
     assert(on.legend !== 'none', 'expected the legend shown while the mode is on');
 
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'normal');
     const backOff = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
-    assert(backOff === 0, `expected toggling back off to leave no node in the mode, got ${backOff}`);
-    ok('Graph completeness: the view mode toggles on and off without re-rendering the graph');
-  } catch(e){ bad('Graph completeness: view-mode toggle', e); }
+    assert(backOff === 0, `expected switching back to Normal to leave no node in the mode, got ${backOff}`);
+    ok('Graph completeness: the view mode switches on and off without re-rendering the graph');
+  } catch(e){ bad('Graph completeness: view-mode switch', e); }
 
   // 354. Closing the graph resets the mode, so a later open starts in the
   //      normal role-coloured view rather than silently still recoloured.
   try {
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'completeness');
     await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
-    const after = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
-    assert(after === 0, `expected a fresh open to start out of the completeness mode, got ${after} nodes in it`);
+    const after = await appEC.page.evaluate(() => ({
+      inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      dropdown: document.getElementById('graphViewMode').value,
+    }));
+    assert(after.inMode === 0, `expected a fresh open to start out of the completeness mode, got ${after.inMode} nodes in it`);
+    assert(after.dropdown === 'normal', `expected the dropdown itself back on Normal, got "${after.dropdown}"`);
     ok('Graph completeness: closing the graph resets the mode for the next open');
   } catch(e){ bad('Graph completeness: mode resets on close', e); }
 } finally {
@@ -19887,6 +19900,163 @@ try {
   await appEG.close();
 }
 } catch(e){ bad('Phase EG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EH: the opening graph's Review lens, R3. Three mutually exclusive
+//     view modes behind one dropdown (a node has one fill, so stacked
+//     checkboxes would imply an impossible combination). The review lens
+//     colours each room by when it next falls due, and a memorized room with
+//     no graded record yet still shows a real due state -- bootstrapped from
+//     the memorized timestamp -- so an existing repertoire isn't a wall of
+//     grey. ---
+if(shouldRunPhase(['digraph','move-table'])){
+try {
+const appEH = await launchApp();
+try {
+  // same castle shape Phase EC uses -- rooms under 1.d4 Nf6 2.c4 get real VR
+  // roomKeys, which is what a review record hangs off.
+  await seedBackup(appEH.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEH.page.click('.line-row');
+  await appEH.page.waitForSelector('.data-row', { timeout: 40000 });
+  const openGraph = async () => {
+    await appEH.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEH.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+  };
+  const reopenGraph = async () => {
+    await appEH.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+  };
+  const revClassOf = (roomKey) => appEH.page.evaluate((k) => {
+    const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+    return n.nonempty() ? (n.classes().find(c => c.startsWith('rev-')) || null) : null;
+  }, roomKey);
+  await openGraph();
+
+  const roomKeys = await appEH.page.evaluate(() => Object.fromEntries(
+    window.__graphTestHooks.cy().nodes()
+      .filter(n => !!n.data('roomKey'))
+      .map(n => [(n.data('seq') || []).join(','), n.data('roomKey')])));
+  const allKeys = [...new Set(Object.values(roomKeys))];
+  if(allKeys.length < 2) throw new Error(`setup: expected at least two castle rooms with roomKeys, got ${JSON.stringify(roomKeys)}`);
+  const rootKey = roomKeys['d4,Nf6,c4'] || allKeys[0];
+  const branchKey = allKeys.find(k => k !== rootKey);
+
+  // 378. A room that was never memorized has no schedule at all, and must
+  //      read differently from one that's memorized and simply not due --
+  //      otherwise an untouched castle looks identical to a mastered one.
+  try {
+    const before = await revClassOf(rootKey);
+    assert(before === 'rev-none', `expected an unmemorized room to score rev-none, got ${before}`);
+
+    // memorized but NEVER graded: still has a due date, derived from when it
+    // was memorized (a day later), so it lands notdue/soon rather than none
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), rootKey);
+    await reopenGraph();
+    const bootstrapped = await revClassOf(rootKey);
+    assert(bootstrapped === 'rev-notdue' || bootstrapped === 'rev-soon',
+      `expected a memorized-but-ungraded room to pick up a bootstrapped schedule, got ${bootstrapped}`);
+    ok('Graph review: a memorized room with no graded record still shows a real due state');
+  } catch(e){ bad('Graph review: bootstrapped due state', e); }
+
+  // 379. The stored record decides the colour, across the whole ramp.
+  try {
+    const DAY = 86400000, now = Date.now();
+    const seed = async (rec) => {
+      await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+        { k: rootKey, r: rec });
+      await reopenGraph();
+      return revClassOf(rootKey);
+    };
+    assert(await seed({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' }) === 'rev-notdue',
+      'expected a record due well out to read up-to-date');
+    assert(await seed({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' }) === 'rev-due',
+      'expected a record due today to read due');
+    assert(await seed({ last: now, due: now - 5 * DAY, step: 0, lapses: 2, lastGrade: 'C' }) === 'rev-overdue',
+      'expected a long-past record to read overdue');
+    ok('Graph review: each room is coloured by its own stored due date');
+  } catch(e){ bad('Graph review: due-state scoring', e); }
+
+  // 380. The three lenses are mutually exclusive -- one fill per node, so
+  //      switching must swap both the class and the legend, never stack them.
+  try {
+    const state = () => appEH.page.evaluate(() => ({
+      cmode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      rmode: window.__graphTestHooks.cy().nodes('.rmode').length,
+      total: window.__graphTestHooks.cy().nodes().length,
+      cLegend: getComputedStyle(document.getElementById('graphCompletenessLegend')).display,
+      rLegend: getComputedStyle(document.getElementById('graphReviewLegend')).display,
+    }));
+    const atOpen = await state();
+    assert(atOpen.cmode === 0 && atOpen.rmode === 0, 'expected a fresh open in the Normal lens');
+    assert(atOpen.rLegend === 'none', 'expected the review legend hidden in the Normal lens');
+
+    await setGraphViewMode(appEH.page, 'completeness');
+    const c = await state();
+    assert(c.cmode === c.total && c.rmode === 0, `expected completeness only, got ${JSON.stringify(c)}`);
+    assert(c.cLegend !== 'none' && c.rLegend === 'none', 'expected only the completeness legend shown');
+
+    await setGraphViewMode(appEH.page, 'review');
+    const r = await state();
+    assert(r.rmode === r.total && r.cmode === 0,
+      `expected switching to Review to drop the completeness class, got ${JSON.stringify(r)}`);
+    assert(r.rLegend !== 'none' && r.cLegend === 'none', 'expected only the review legend shown');
+
+    await setGraphViewMode(appEH.page, 'normal');
+    const n = await state();
+    assert(n.cmode === 0 && n.rmode === 0, `expected Normal to clear both, got ${JSON.stringify(n)}`);
+    ok('Graph review: the three view lenses are mutually exclusive and swap their legends');
+  } catch(e){ bad('Graph review: lens switching', e); }
+
+  // 381. The summary counts what's actually on screen -- the lens exists to
+  //      answer "is there anything to do in this castle?", and a count says
+  //      it outright instead of leaving you to hunt for coloured nodes.
+  try {
+    const DAY = 86400000, now = Date.now();
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' } });
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), branchKey);
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: branchKey, r: { last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' } });
+    await reopenGraph();
+    await setGraphViewMode(appEH.page, 'review');
+    const text = await appEH.page.evaluate(() => document.getElementById('graphReviewSummary').textContent);
+    assert(/2 memorized/.test(text), `expected both memorized rooms counted, got "${text}"`);
+    assert(/1 due/.test(text) && /1 overdue/.test(text), `expected the due and overdue counts, got "${text}"`);
+    ok('Graph review: the legend summarises how many rooms are memorized, due and overdue');
+  } catch(e){ bad('Graph review: due-count summary', e); }
+
+  // 382. A lens is a way of looking at the graph right now, not a setting --
+  //      reopening starts back on Normal rather than silently still recoloured.
+  try {
+    await setGraphViewMode(appEH.page, 'review');
+    await reopenGraph();
+    const after = await appEH.page.evaluate(() => ({
+      mode: window.__graphTestHooks.viewMode(),
+      dropdown: document.getElementById('graphViewMode').value,
+      rmode: window.__graphTestHooks.cy().nodes('.rmode').length,
+      rLegend: getComputedStyle(document.getElementById('graphReviewLegend')).display,
+    }));
+    assert(after.mode === 'normal' && after.dropdown === 'normal',
+      `expected a fresh open back on Normal, got ${JSON.stringify(after)}`);
+    assert(after.rmode === 0 && after.rLegend === 'none',
+      `expected no review styling left over, got ${JSON.stringify(after)}`);
+    ok('Graph review: closing the graph resets the lens for the next open');
+  } catch(e){ bad('Graph review: lens resets on close', e); }
+} finally {
+  await appEH.close();
+}
+} catch(e){ bad('Phase EH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

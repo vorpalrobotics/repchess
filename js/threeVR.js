@@ -1438,7 +1438,7 @@ function persistReviews(){ return setRoomReviews(REVIEWS); }
 // memorized at all -- "not started" has to stay distinguishable from
 // "started and not due".
 function reviewFor(roomKey){
-  return REVIEWS[roomKey] || bootstrapRoomReview(MEMORIZED[roomKey]);
+  return effectiveRoomReview(REVIEWS, MEMORIZED, roomKey);
 }
 
 // Toggles the CURRENT room's memorized flag. No-op outside a real castle room

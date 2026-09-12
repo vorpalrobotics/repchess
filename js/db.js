@@ -922,6 +922,17 @@ function bootstrapRoomReview(memorizedAt){
   return { last: null, due: startOfLocalDay(memorizedAt + DAY_MS), step: 0, lapses: 0, lastGrade: null };
 }
 
+/* The record a room is EFFECTIVELY on -- the stored one, or a bootstrapped
+   one for a room marked memorized but never graded. Both callers want exactly
+   this (threeVR.js to grade and tint the brain, app.js to colour the opening
+   graph), so the "stored, else bootstrapped, else nothing" rule lives here
+   once instead of being written twice and drifting. Takes the two maps rather
+   than reading them, since each module keeps its own copy. */
+function effectiveRoomReview(reviews, memorized, roomKey){
+  if(!roomKey) return null;
+  return (reviews && reviews[roomKey]) || bootstrapRoomReview(memorized && memorized[roomKey]);
+}
+
 /* Four states, not three: "not memorized at all" has to read differently
    from "memorized and not due yet", or an untouched castle and a
    fully-reviewed one look identical.
