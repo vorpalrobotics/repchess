@@ -1441,6 +1441,63 @@ function reviewFor(roomKey){
   return effectiveRoomReview(REVIEWS, MEMORIZED, roomKey);
 }
 
+/* ---------- structural demotion (R5) ----------
+   A memorized room that has picked up a new door since you memorized it is no
+   longer quite the room you learned, so its interval shouldn't keep running
+   out to 180 days on the strength of reviews that predate the change. One
+   step back down the ladder, once per change.
+
+   "Once" is the whole difficulty. isRoomDirty stays true until the user
+   actually re-memorizes the room (that's what the ⚠️ badge is for), so
+   demoting on the flag itself would dock the room again on every single walk.
+   Clearing the dirty state instead would fix the repetition by destroying the
+   badge -- the signal that sent the user to look at the room in the first
+   place. So the record carries `dirtySeen`: the exit posKeys this room has
+   already been docked for. A door already in that list is settled; a
+   genuinely new one still costs a step, which is right -- two separate
+   changes deserve two demotions. */
+function newDirtyExits(roomKey, record){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  const live = ROOMS[roomKey] && ROOMS[roomKey].shape;
+  // same guard isRoomDirty uses: a room whose shape didn't survive at all
+  // isn't well served by a "new door" framing -- see its own comment.
+  if(!snap || !live || snap.kind !== live.kind) return [];
+  const settled = new Set([...(snap.exitPosKeys || []), ...((record && record.dirtySeen) || [])]);
+  return (live.exitPosKeys || []).filter(k => !settled.has(k));
+}
+/* One pass over every room with a real review record, run at the start of a
+   walk -- the checkpoint where MEMORIZED_SHAPES and the live castle shapes
+   are both in hand, and the same evaluate-at-a-checkpoint discipline DECORATED
+   already uses. Returns how many rooms were demoted.
+
+   Only rooms with a STORED record are considered: a room memorized but never
+   graded is on a bootstrapped step-0 schedule already at the bottom of the
+   ladder, so there's nothing to demote and no reason to write a record just
+   to say so. Its first real grade will happen after the change anyway.
+
+   The new due date is measured from the last actual review, not from now --
+   the point is to pull the room forward, and dating it from today would push
+   a long-overdue room further out for having changed. */
+async function applyStructuralDemotions(){
+  let demoted = 0;
+  for(const roomKey of Object.keys(REVIEWS)){
+    const rec = REVIEWS[roomKey];
+    if(!rec || !MEMORIZED[roomKey]) continue;
+    const fresh = newDirtyExits(roomKey, rec);
+    if(!fresh.length) continue;
+    const step = Math.max(0, (rec.step || 0) - 1);
+    REVIEWS[roomKey] = {
+      ...rec,
+      step,
+      due: startOfLocalDay((rec.last || Date.now()) + ROOM_REVIEW_LADDER[step] * DAY_MS),
+      dirtySeen: [...new Set([...(rec.dirtySeen || []), ...fresh])],
+    };
+    demoted++;
+  }
+  if(demoted) await persistReviews();
+  return demoted;
+}
+
 // Toggles the CURRENT room's memorized flag. No-op outside a real castle room
 // (currentRoomFen() is null on mainStreet/buildings) -- the toolbar icon that
 // calls this is hidden there for the same reason. No scene rebuild needed:
@@ -7658,7 +7715,7 @@ function buildTopToolbar(){
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
   dirtyBadge  = makeIconBtn('fa-triangle-exclamation', 'A new variation added a door here since you memorized this room',
-                             () => showToast('New door since you memorized this room -- give it a look!'));
+                             () => showToast('New door since you memorized this room -- its review was moved up; give it a look!'));
   // once a room is memorized the brain stops being a plain toggle: clicking
   // it opens the grading menu (unmarking moved in there, as one of its
   // choices), because grading is the thing you come back to do over and over
@@ -9028,9 +9085,19 @@ export async function openThreeTest(containerEl, opts){
   // an explicit start room (e.g. "Jump to VR" from the digraph) wins over both
   // -- it lands the freshly-opened world directly on the target room instead
   // of the street or a castle's own entry.
+  // R5: dock a step off any memorized room that's picked up a new door since
+  // you memorized it. Here rather than up with the IDB loads because a
+  // single-castle preview registers its rooms just above -- the shapes have
+  // to be live for every castle in the walk, not just the main world's. Runs
+  // before the first enterRoom so the door badges it may light up are drawn
+  // from the already-demoted schedule.
+  const demoted = await applyStructuralDemotions();
   if(threeOpts.startRoomKey && ROOMS[threeOpts.startRoomKey]) enterRoom(threeOpts.startRoomKey, { x:0, z:0, yaw:0 });
   else if(cas) enterRoom(cas.entryKey, cas.spawn);
   else enterRoom(START_ROOM, START_SPAWN);
+  // said out loud: a schedule that silently moved is exactly the kind of
+  // thing that quietly erodes trust in the schedule.
+  if(demoted) showToast(`${demoted} changed room${demoted === 1 ? '' : 's'} moved up for review`);
   tick();
 
   // test-only hook (off unless the debug flag is set) so the layout editor can
@@ -9147,6 +9214,17 @@ export async function openThreeTest(containerEl, opts){
       // buildRoom (see doorSignLog).
       doorDueState: (targetKey) => doorDueState(targetKey),
       doorSigns: () => doorSignLog.map(s => ({ ...s })),
+      // R5: overwrite a room's frozen shape snapshot, so a test can make a
+      // room "pick up a new door" by shrinking what it remembers -- far
+      // cheaper than regenerating a castle with an extra variation, and it
+      // exercises exactly the same snapshot-vs-live diff. Plus the sweep
+      // itself, and the exits it considers new.
+      setMemorizedShape: (key, shape) => {
+        if(shape) MEMORIZED_SHAPES[key] = shape; else delete MEMORIZED_SHAPES[key];
+        return persistMemorizedShapes();
+      },
+      newDirtyExits: (key) => newDirtyExits(key, REVIEWS[key]),
+      runStructuralDemotions: () => applyStructuralDemotions(),
       clickGradeMenuItem: (idx) => {
         if(!gradeMenuEl) return false;
         const btns = [...gradeMenuEl.querySelectorAll('button')];

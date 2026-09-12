@@ -20184,5 +20184,154 @@ try {
 } catch(e){ bad('Phase EI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EJ: structural demotion, R5. A memorized room that picks up a new
+//     door isn't quite the room you learned, so it steps back down the ladder
+//     rather than coasting out to 180 days on reviews that predate the change.
+//     Applying it ONCE is the hard part: isRoomDirty stays true until the user
+//     re-memorizes (that's what the badge is for), so the record tracks which
+//     doors it has already been docked for. Tests shrink the frozen snapshot
+//     instead of regenerating a castle with an extra variation -- same
+//     snapshot-vs-live diff, a fraction of the setup. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEJ = await launchApp();
+try {
+  const keys = await appEJ.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appEJ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEJ.page);
+  const E = (fn, ...args) => appEJ.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const DAY = 86400000;
+  const LADDER = [1, 3, 7, 21, 60, 180];
+
+  await E('enter', keys.alpha);
+  await appEJ.page.waitForTimeout(200);
+  await E('toggleMemorized');                       // captures the shape snapshot
+  const liveShape = await E('roomShape', keys.alpha);
+  if(!liveShape || (liveShape.exitPosKeys || []).length < 2){
+    throw new Error(`setup: expected the branching root room to have 2+ exits, got ${JSON.stringify(liveShape)}`);
+  }
+  const allExits = liveShape.exitPosKeys.slice();
+  // "a new door landed" == the snapshot doesn't know about one of the live
+  // exits. Forgetting one is indistinguishable from a door being added, and
+  // it's the exact diff isRoomDirty/newDirtyExits run.
+  const forget = (n) => E('setMemorizedShape', keys.alpha,
+    { ...liveShape, exitPosKeys: allExits.slice(0, allExits.length - n) });
+  const seedRecord = (rec) => E('setReviewRecord', keys.alpha, rec);
+  const record = () => E('reviewRecord', keys.alpha);
+
+  // 386. The demotion actually runs as part of starting a walk -- not just
+  //      when a test pokes it -- and pulls the due date in with it.
+  try {
+    const last = Date.now() - DAY;
+    await seedRecord({ last, due: last + LADDER[4] * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await forget(1);
+
+    await appEJ.page.reload({ waitUntil: 'domcontentloaded' });
+    await appEJ.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appEJ.page);
+
+    const rec = await record();
+    assert(rec && rec.step === 3,
+      `expected the changed room stepped back from 4 to 3 on the next walk, got ${JSON.stringify(rec)}`);
+    // dated from the LAST REVIEW, not from today -- the point is to pull the
+    // room forward, and dating it from now would push a changed room further out
+    assert(rec.due <= last + LADDER[3] * DAY && rec.due > last + (LADDER[3] - 1) * DAY,
+      `expected the due date re-measured from the last review (~${LADDER[3]}d after it), got ${rec.due - last}ms after`);
+    assert((rec.dirtySeen || []).includes(allExits[allExits.length - 1]),
+      `expected the door it was docked for recorded, got ${JSON.stringify(rec.dirtySeen)}`);
+    const toast = await E('toastText');
+    assert(toast && /moved up for review/i.test(toast),
+      `expected the walk to say the schedule moved, got ${JSON.stringify(toast)}`);
+    ok('Structural demotion: a changed room steps back down the ladder when the walk starts');
+  } catch(e){ bad('Structural demotion: applied on VR open', e); }
+
+  // 387. ...and exactly once. isRoomDirty is still true (the badge has to
+  //      keep showing until the user re-memorizes), so a naive implementation
+  //      would dock the room again on every single walk.
+  try {
+    const before = await record();
+    assert(before.step === 3, 'setup: expected the demoted record from the previous test');
+    assert(await E('isRoomDirty', keys.alpha),
+      'setup: expected the room to STILL read dirty -- that badge is the point of the idempotency problem');
+
+    const again = await E('runStructuralDemotions');
+    assert(again === 0, `expected no second demotion for the same door, got ${again}`);
+    const after = await record();
+    assert(after.step === 3 && after.due === before.due,
+      `expected the record untouched by a repeat sweep, got ${JSON.stringify(after)}`);
+    assert((await E('newDirtyExits', keys.alpha)).length === 0,
+      'expected the already-docked door to count as settled');
+    ok('Structural demotion: a room is docked once per change, not once per walk');
+  } catch(e){ bad('Structural demotion: idempotent across walks', e); }
+
+  // 388. A SECOND, genuinely new door is a separate change and costs a
+  //      separate step -- the ledger settles doors, it doesn't switch the
+  //      whole mechanism off.
+  try {
+    await forget(2);                                 // a second exit goes unknown
+    const fresh = await E('newDirtyExits', keys.alpha);
+    assert(fresh.length === 1 && fresh[0] === allExits[allExits.length - 2],
+      `expected only the newly-unknown door to count, got ${JSON.stringify(fresh)}`);
+    const n = await E('runStructuralDemotions');
+    assert(n === 1, `expected the new door to cost a step, got ${n} demotions`);
+    const rec = await record();
+    assert(rec.step === 2, `expected a second demotion to step 2, got ${JSON.stringify(rec)}`);
+    assert((rec.dirtySeen || []).length === 2, `expected both doors recorded, got ${JSON.stringify(rec.dirtySeen)}`);
+    ok('Structural demotion: a second, separate change costs a second step');
+  } catch(e){ bad('Structural demotion: a further change demotes again', e); }
+
+  // 389. Grading carries the ledger through. Without this, every grade would
+  //      re-arm every door already accounted for and the room would be docked
+  //      again on the next walk -- the same repetition, one step removed.
+  try {
+    await E('enter', keys.alpha);
+    await appEJ.page.waitForTimeout(150);
+    await E('gradeCurrentRoom', 'A');
+    const graded = await record();
+    assert(graded.step === 3, `setup: expected the A to advance 2 -> 3, got ${JSON.stringify(graded)}`);
+    assert((graded.dirtySeen || []).length === 2,
+      `expected the docked-doors ledger to survive a grade, got ${JSON.stringify(graded.dirtySeen)}`);
+    const n = await E('runStructuralDemotions');
+    assert(n === 0, `expected no demotion after grading the room as it now stands, got ${n}`);
+    ok('Structural demotion: grading carries the ledger, so the same doors never re-arm');
+  } catch(e){ bad('Structural demotion: ledger survives a grade', e); }
+
+  // 390. A room memorized but never graded is already at the bottom of the
+  //      ladder -- there's nothing to demote, and no reason to invent a
+  //      stored record just to say so.
+  try {
+    await seedRecord(null);
+    assert(!(await record()), 'setup: expected no stored record');
+    assert(await E('isRoomDirty', keys.alpha), 'setup: expected the room still dirty');
+    const n = await E('runStructuralDemotions');
+    assert(n === 0, `expected an ungraded room left alone, got ${n} demotions`);
+    assert(!(await record()), `expected no record invented, got ${JSON.stringify(await record())}`);
+    ok('Structural demotion: an ungraded room is left alone rather than given a record');
+  } catch(e){ bad('Structural demotion: ungraded rooms untouched', e); }
+} finally {
+  await appEJ.close();
+}
+} catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

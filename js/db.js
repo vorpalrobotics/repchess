@@ -904,13 +904,20 @@ function applyRoomReviewGrade(record, grade, now = Date.now(), rand = Math.rando
   const prev = record || { step: 0, lapses: 0, lastGrade: null };
   const step = nextReviewStep(prev.step || 0, grade, prev.lastGrade);
   const days = fuzzedDays(ROOM_REVIEW_LADDER[step], rand);
-  return {
+  const out = {
     last: now,
     due: startOfLocalDay(now + days * DAY_MS),
     step,
     lapses: (prev.lapses || 0) + (grade === 'C' ? 1 : 0),
     lastGrade: grade,
   };
+  // Structural bookkeeping, not grade state -- which doors this room has
+  // already been docked a step for (see threeVR.js applyStructuralDemotions).
+  // Carried through a grade rather than reset by it: grading says you've
+  // reviewed the room as it now stands, so the SAME door shouldn't cost it
+  // another step, while a genuinely new one still should.
+  if(prev.dirtySeen) out.dirtySeen = prev.dirtySeen;
+  return out;
 }
 
 /* A room marked memorized but never reviewed still needs a due date, and the
