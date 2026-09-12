@@ -20068,5 +20068,121 @@ try {
 } catch(e){ bad('Phase EH: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EI: due-state badges on door signs, R4. The point is spotting a
+//     waiting review from the corridor instead of trying every door, so ONLY
+//     the actionable states badge: a pill on every door of a memorized wing
+//     would be wallpaper. The plaque is a canvas texture with nothing in the
+//     scene graph to read a badge back off, so buildDoorHint records what it
+//     built (doorSigns) -- the real render path, not a reimplementation. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEI = await launchApp();
+try {
+  const keys = await appEI.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  // TWO continuations out of the root, deliberately: a single linear one gets
+  // merged into a corridor room with no door between its members at all, and
+  // this phase is entirely about door signs.
+  await seedBackup(appEI.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEI.page);
+  const E = (fn, ...args) => appEI.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const revisit = async () => { await E('enter', keys.alpha); await appEI.page.waitForTimeout(200); };
+  await revisit();
+
+  const fwd = (await E('exits')).find(e => !e.back);
+  if(!fwd) throw new Error('setup: expected the castle root room to have a forward door');
+  const target = fwd.target;
+  const DAY = 86400000;
+  // put the room beyond the door on a given schedule, then rebuild so the
+  // sign is drawn fresh against it
+  const setTargetReview = async (rec) => {
+    await E('setMemorized', target, !!rec);
+    await E('setReviewRecord', target, rec);
+    await revisit();
+  };
+  const signFor = async () => (await E('doorSigns')).find(s => s.target === target) || null;
+
+  // 383. Only the actionable states badge. "Memorized and up to date" has to
+  //      read the same as "no badge" from the corridor, or the badge stops
+  //      meaning "stop here" and becomes decoration.
+  try {
+    await setTargetReview(null);
+    assert(await E('doorDueState', target) === null,
+      'expected no badge for a room that was never memorized');
+
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    assert(await E('doorDueState', target) === null,
+      'expected no badge for a memorized room that is up to date');
+
+    await setTargetReview({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' });
+    assert(await E('doorDueState', target) === 'due', 'expected a DUE badge for a room due now');
+
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    assert(await E('doorDueState', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
+    ok('Door badge: only due and overdue badge -- up-to-date and unmemorized rooms stay silent');
+  } catch(e){ bad('Door badge: only actionable states badge', e); }
+
+  // 384. The state actually reaches the sign that gets drawn, and tracks the
+  //      room beyond the door rather than the one you're standing in.
+  try {
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    const overdue = await signFor();
+    assert(overdue && overdue.built, `expected a sign built for the door, got ${JSON.stringify(overdue)}`);
+    assert(overdue.dueState === 'overdue',
+      `expected the drawn sign to carry the overdue badge, got ${JSON.stringify(overdue)}`);
+
+    await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    const settled = await signFor();
+    assert(settled && settled.dueState === null,
+      `expected the badge gone once the room beyond is up to date, got ${JSON.stringify(settled)}`);
+    ok('Door badge: the drawn sign carries the badge state of the room beyond the door');
+  } catch(e){ bad('Door badge: badge reaches the rendered sign', e); }
+
+  // 385. The badge rides on the door plaque, so it's hint-gated along with
+  //      it: hints off is self-test mode, where no sign is drawn at all.
+  //      Worth pinning because it's the one place the badge is deliberately
+  //      NOT shown, and a future change to door hints could quietly take it
+  //      with them in the other direction too.
+  try {
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    assert((await signFor())?.dueState === 'overdue', 'setup: expected the badge showing with hints on');
+
+    const toggleHints = () => appEI.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await toggleHints();
+    await appEI.page.waitForTimeout(300);
+    const off = await E('doorSigns');
+    assert(off.length === 0, `expected no door signs drawn at all with hints off, got ${JSON.stringify(off)}`);
+
+    await toggleHints();
+    await appEI.page.waitForTimeout(300);
+    assert((await signFor())?.dueState === 'overdue',
+      'expected the badge back once hints are re-enabled');
+    ok('Door badge: hint-gated along with the plaque it rides on');
+  } catch(e){ bad('Door badge: hint gating', e); }
+} finally {
+  await appEI.close();
+}
+} catch(e){ bad('Phase EI: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
