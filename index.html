@@ -4,6 +4,22 @@
 <meta charset="UTF-8">
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Every file this page loads carries a ?v= cache-buster -- but this document
+     is the thing that NAMES those versions, and nothing can bust it. A stale
+     copy keeps requesting the previous app.js?v=, so the build tag in the
+     heading stays put however current the deploy is: the repeated "I still see
+     -N on githack" confusion.
+
+     "no-cache", not "no-store": the browser may still keep its copy, it just
+     has to revalidate before using it. That's a conditional request answered
+     with a 304 on an unchanged deploy -- cheap -- while a changed one lands
+     immediately. no-store would also throw away the back/forward cache for no
+     benefit here.
+
+     Note this only governs the BROWSER's cache. A CDN in front of the page
+     (raw.githack.com, say) reads real HTTP headers, not meta tags, so a stale
+     copy there still needs a query string on the URL to shake loose. -->
+<meta http-equiv="Cache-Control" content="no-cache">
 <!-- Cross-origin isolation via a service worker (GitHub Pages can't set COOP/COEP
      headers itself). This is what unlocks SharedArrayBuffer, and therefore the
      multi-threaded Stockfish build in js/engine.js. Must load first, same-origin.
@@ -1751,6 +1767,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-367"></script>
+<script type="module" src="js/app.js?v=20260804-368"></script>
 </body>
 </html>
