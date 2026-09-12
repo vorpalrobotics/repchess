@@ -5689,7 +5689,16 @@ try {
   //      it faces.
   try {
     await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 13, h: 6 }), root);   // back to normal depth
-    await appAJ.page.waitForTimeout(200);
+    // The resize rebuilds the room, which MOVES the label (its z is d/2 - 4).
+    // Snapshotting the position on a fixed timeout races that rebuild: on a
+    // slow run `before` is the label's OLD spot, the teleports below then sit
+    // at the wrong offset from where it actually is, and the facing assertions
+    // fail for a reason that has nothing to do with facing. Wait for the label
+    // to actually land at its new depth instead.
+    await appAJ.page.waitForFunction(() => {
+      const l = window.__threeTestEdit.roomNameFloorLabel();
+      return l && Math.abs(l.z - (13 / 2 - 4)) < 0.05;
+    }, { timeout: 5000 });
     const before = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
     await appAJ.page.evaluate(({ x, z }) => window.__threeTestEdit.teleport(x, z, 0), { x: before.x + 5, z: before.z });
     await appAJ.page.waitForTimeout(300);
