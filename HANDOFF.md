@@ -4,13 +4,14 @@ Written at the end of a long session so a fresh agent (new chat, no memory of
 the conversation that produced this) can pick up context quickly instead of
 re-deriving it. **This file is a snapshot, not a standing doc** — update or
 delete it as things change; don't let it silently rot into a source of stale
-claims. (The version this replaced described `BUILD_TAG -250` and PR #152,
-long after both were history — that is exactly the failure mode to avoid.)
+claims. (One earlier version of this file described `BUILD_TAG -250` and
+PR #152 long after both were history — that is exactly the failure mode to
+avoid.)
 
 ## State at time of writing
 
-- `main` is at commit `b96d050` (PR #198 merged). `js/app.js`'s `BUILD_TAG`
-  is `-358`.
+- `main` is at commit `3a2bada` (PR #202 merged). `js/app.js`'s `BUILD_TAG`
+  is `-368`.
 - No open PRs and nothing in flight. Everything requested this session
   shipped and merged.
 - Working branch used throughout: `claude/project-onboarding-iozvt5`,
@@ -20,7 +21,7 @@ long after both were history — that is exactly the failure mode to avoid.)
 ## The one genuinely open problem: VR slowness
 
 **Read `Documents/VR-Slow-Bug-info.md` before touching this.** It is a full
-writeup and is current as of this note. The short version:
+writeup and is still current. The short version:
 
 VR becomes unusable (~5 s per keypress) on the user's main PC for hours or
 days, then clears up on its own. Never reproduces on another machine or in
@@ -34,6 +35,12 @@ which describes queries running 10–40× slower after a mass add/delete cycle
 until a lazy compaction runs. That implicates the app's own restore path,
 which deletes ~18,000 game records and immediately re-inserts ~18,000.
 It is a strong fit, **not a proven finding** — don't report it as settled.
+
+**Status of the trail:** the last data point was the user updating Chrome to
+152.0.7977.82, on the theory that a recent Chromium regression might have
+introduced it and the update might have fixed it. There has been **no report
+either way since** — the issue has neither recurred nor been confirmed gone.
+Treat it as open and unverified, not as fixed.
 
 Two things were deliberately left undone, both awaiting the user's word:
 
@@ -49,48 +56,84 @@ Two things were deliberately left undone, both awaiting the user's word:
    user's dataset) after every single push.
 
 Also unexplained and worth a look: the persisted position-index cache has
-been stamped `-324` for a dozen-plus builds, meaning its re-save never lands.
-See the doc's "loose ends" section.
+been stamped `-324` for many builds, meaning its re-save never lands. See
+the doc's "loose ends" section.
 
 Diagnostic instrumentation tagged `[perf-debug]` is still in place in
 `index.html` and `js/app.js`, deliberately — do not strip it until this is
 root-caused. It is all commented as TEMP.
 
-## What shipped this session (PRs #195–198)
+## What shipped this session (PRs #199–202)
 
-- **Transposition/redirect fixes.** A background scan racing a full restore;
-  concurrent `gatherBuiltCastles` calls racing on the shared `PREFS` global;
-  `findBrokenRedirects` matching by a stale `anchor.seq` instead of by
-  position; and the same function being blind to positions folded into a
-  corridor/two-track room, which made hiding one branch of a fork wrongly
-  clear an untouched sibling's redirect.
-- **Find Transpositions folds descendant collisions into their ancestor.**
-  Redirecting via the report auto-ports the source's subtree to the target,
-  so after a later repair both castles share every position below the
-  transposition point — which used to list as one group each (the user's
-  "six pairs found" for what was really one). Only the top-most is
-  actionable, so descendants now fold in and are counted on the survivor.
-- **Find Transpositions batch resolve.** Radios per room plus one
-  "Redirect Selected" button, so several groups resolve in a single press
-  with one re-scan, instead of a full castle rebuild between each click.
-- **VR CPU guardrail.** Entering VR caps the engine to one thread
-  (`Engine.setThreadBudget`) and blocks Perfect Opening and the manual
-  analysis queue from starting new jobs; both restored on exit.
-- **UX:** a "Reading backup file…" spinner over the previously silent
-  read/parse gap before the restore confirm; and the auto-repair toast
-  reworded ("N rooms restored to normal — target disappeared (potential
-  transposition)") since the old wording implied a redirect had been *fixed*
-  when it had actually been cleared.
+**Spaced-repetition room reviews (PR #202, phases R1–R5).** The largest piece,
+and the one most likely to need follow-up:
 
-## Test-suite gotcha
+- **The schedule** lives in `js/db.js` — a fixed ladder `1/3/7/21/60/180`
+  days rather than SM-2's ease factor. `db.js` is a classic `<script>`, so
+  both `threeVR.js` and `app.js` reach its functions as globals; they don't
+  import each other, and both need the same rules. Put anything else shared
+  between them there for the same reason.
+- **A** advances and clamps, **C** resets to the bottom, **B** holds but a
+  second consecutive B demotes. ±15% fuzz, due dates snapped to local
+  midnight. Note the fuzz does nothing below ~a week (±15% of 3 days is
+  absorbed by the midnight snap) — that's deliberate and commented.
+- A memorized room with **no stored record** derives one from the memorized
+  timestamp (`effectiveRoomReview`), so an existing repertoire joined the
+  schedule with no migration.
+- **In VR:** the brain icon tints by due state and opens a grading menu;
+  `1`/`2`/`3` grade directly. Re-grading within one visit *replaces* rather
+  than compounds (`preGradeRecord`).
+- **In the graph:** the old Completeness checkbox became a **View dropdown**
+  (Normal / Completeness / Review). Both lenses ride along as classes on
+  every render, so switching is a pure restyle.
+- **On door signs:** DUE / OVERDUE pills, also on elevator floor panels.
+  Only those two states badge, by design.
+- **R5** docks a step off a room that's picked up a new door. The record
+  carries a `dirtySeen` ledger of doors already accounted for — the dirty
+  flag itself stays true until the user re-memorizes, so it can't be the
+  trigger. `applyRoomReviewGrade` carries that ledger through a grade.
 
-The `VR cache: invalidated by …` group in `test/run-tests.mjs` is **flaky in
-this environment** — a different sub-test fails on each run (manual reply
-add/remove, hide/unhide toggle, local file import, manual-only engine
-import), and it fails on unmodified `main` too. Don't chase it as a
-regression from your own change without first confirming against a stash;
-per `CLAUDE.md`, either fix the root cause if it's quick and obvious or
-comment the case out with a one-line reason.
+**Earlier in the session (PRs #199–201):**
+
+- **Graph Completeness view** — recolours rooms by how much mnemonic work is
+  left. Note the design correction that produced its fourth state: mnemonic
+  atoms are a *global* `(square × piece)` vocabulary and the app ships a
+  complete default set, so scoring on atoms alone painted every castle green.
+  Room decoration is the axis that actually varies per castle.
+- **Graph size guard** — refuses to draw past 500 moves and says how to
+  narrow the scope.
+- **Click-feedback flash** on the opening-system icon row.
+- `Documents/MultiDomainArchitecture.md` — a long design discussion about
+  generalising beyond chess. **Nothing in it is built**, and the user
+  explicitly deferred the refactor. Read it before proposing anything in that
+  direction; don't start building from it without being asked.
+
+## Open decisions the user has not settled
+
+- **The ladder values** (`1/3/7/21/60/180`) and whether 180 days is the top
+  step. Raised twice, never answered. They are now shipped and will start
+  accruing real history, so changing them later means existing records sit at
+  steps that mean something slightly different.
+- **A due list / session planner** ("which rooms are due across everything")
+  — proposed and explicitly deferred by the user. The data is all there now.
+
+## Test-suite notes
+
+- The full suite takes roughly an hour. **Do not run it unprompted** — see
+  `CLAUDE.md`'s testing policy, which is explicit about the cost. Targeted
+  runs (`npm test -- vr-castle`, `core`, etc.) are cheap and are what to use
+  while iterating.
+- The `VR cache: invalidated by …` group was flaky in this environment — a
+  different sub-test failing per run, and failing on unmodified `main` too.
+  It did **not** fire in the last full run (626 passed, 1 failed at `-365`),
+  so it may have been load-related. Don't chase it as a regression from your
+  own change without first confirming against a stash.
+- The one failure in that run was a **race in the floor-label facing test**,
+  not a regression: it snapshotted the label's position on a fixed timeout
+  while a resize was still rebuilding the room. Fixed here (it now waits for
+  the label to reach its new depth). Mentioned because the same
+  fixed-`waitForTimeout`-after-a-rebuild pattern appears elsewhere in the
+  suite and is a latent source of the same flake.
 
 ## Known environment gotcha (already documented in `CLAUDE.md`)
 
@@ -101,6 +144,15 @@ the exact recovery commands. Nothing has ever been lost from git history
 from this — only uncommitted edits are at risk, so commit+push promptly
 rather than sitting on a large uncommitted diff.
 
+## Deploy/caching note
+
+`index.html` now carries `<meta http-equiv="Cache-Control" content="no-cache">`.
+Every other file has a `?v=` cache-buster, but the document that *names* those
+versions had nothing that could bust it, which is why a stale build tag kept
+showing when testing branch builds through raw.githack.com. That meta governs
+the **browser** only — a CDN in front of the page reads real HTTP headers, so
+a stale copy there still needs a query string on the URL (`index.html?x=368`).
+
 ## Where to look for more
 
 - `CLAUDE.md` — standing conventions (testing policy, build/version
@@ -109,6 +161,9 @@ rather than sitting on a large uncommitted diff.
 - `Documents/VR-Slow-Bug-info.md` — the open bug above, in full.
 - `Documents/` — design notes for the castle/room model, each explicitly
   labeled with what's shipped vs. still proposed.
+- `help/marking-memorized.html` and `help/digraph-view.html` — the
+  user-facing description of the review system and the graph's view modes.
+  Useful as a plain-language spec of what shipped.
 - `git log --oneline` / the PR list on GitHub — the authoritative history of
   what's been done and why (commit messages are written to explain the
   "why," not just the "what").
