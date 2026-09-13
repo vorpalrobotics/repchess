@@ -759,6 +759,14 @@ let DECORATED = {};
 // capture-only. { [roomKey]: { kind, members?|left?/right?, exitPosKeys } }.
 const MEMORIZED_SHAPE_KEY = 'threeMemorizedShapes';
 let MEMORIZED_SHAPES = {};
+// spaced-repetition review records, keyed exactly like MEMORIZED:
+// { [roomKey]: { last, due, step, lapses, lastGrade } }. Only rooms actually
+// GRADED appear here -- a memorized-but-never-graded room derives its first
+// due date from the memorized timestamp instead (see reviewFor). The
+// scheduling rules themselves live in db.js, not here: app.js needs the same
+// rules to colour the opening graph by due state and the two modules don't
+// import each other, so they share db.js's globals rather than a copy each.
+let REVIEWS = {};
 let raycaster = null;
 let pointer = null;
 let billboards = [];           // cylindrical billboards needing per-frame facing
@@ -1418,6 +1426,78 @@ async function loadMemorizedShapes(){
 }
 function persistMemorizedShapes(){ return setMeta(MEMORIZED_SHAPE_KEY, JSON.stringify(MEMORIZED_SHAPES)); }
 
+// getRoomReviews/setRoomReviews are db.js globals (classic <script>, so both
+// this module and app.js can reach them) -- see db.js's review section.
+async function loadReviews(){ REVIEWS = await getRoomReviews(); }
+function persistReviews(){ return setRoomReviews(REVIEWS); }
+// A memorized room ALWAYS has a schedule, graded or not: with no record yet
+// the due date is derived from the memorized timestamp (bootstrapRoomReview),
+// so a repertoire memorized long before any of this existed joins the
+// schedule with no migration pass and no backfill write. Nothing is stored
+// until the room is actually graded. Returns null for a room that isn't
+// memorized at all -- "not started" has to stay distinguishable from
+// "started and not due".
+function reviewFor(roomKey){
+  return effectiveRoomReview(REVIEWS, MEMORIZED, roomKey);
+}
+
+/* ---------- structural demotion (R5) ----------
+   A memorized room that has picked up a new door since you memorized it is no
+   longer quite the room you learned, so its interval shouldn't keep running
+   out to 180 days on the strength of reviews that predate the change. One
+   step back down the ladder, once per change.
+
+   "Once" is the whole difficulty. isRoomDirty stays true until the user
+   actually re-memorizes the room (that's what the ⚠️ badge is for), so
+   demoting on the flag itself would dock the room again on every single walk.
+   Clearing the dirty state instead would fix the repetition by destroying the
+   badge -- the signal that sent the user to look at the room in the first
+   place. So the record carries `dirtySeen`: the exit posKeys this room has
+   already been docked for. A door already in that list is settled; a
+   genuinely new one still costs a step, which is right -- two separate
+   changes deserve two demotions. */
+function newDirtyExits(roomKey, record){
+  const snap = MEMORIZED_SHAPES[roomKey];
+  const live = ROOMS[roomKey] && ROOMS[roomKey].shape;
+  // same guard isRoomDirty uses: a room whose shape didn't survive at all
+  // isn't well served by a "new door" framing -- see its own comment.
+  if(!snap || !live || snap.kind !== live.kind) return [];
+  const settled = new Set([...(snap.exitPosKeys || []), ...((record && record.dirtySeen) || [])]);
+  return (live.exitPosKeys || []).filter(k => !settled.has(k));
+}
+/* One pass over every room with a real review record, run at the start of a
+   walk -- the checkpoint where MEMORIZED_SHAPES and the live castle shapes
+   are both in hand, and the same evaluate-at-a-checkpoint discipline DECORATED
+   already uses. Returns how many rooms were demoted.
+
+   Only rooms with a STORED record are considered: a room memorized but never
+   graded is on a bootstrapped step-0 schedule already at the bottom of the
+   ladder, so there's nothing to demote and no reason to write a record just
+   to say so. Its first real grade will happen after the change anyway.
+
+   The new due date is measured from the last actual review, not from now --
+   the point is to pull the room forward, and dating it from today would push
+   a long-overdue room further out for having changed. */
+async function applyStructuralDemotions(){
+  let demoted = 0;
+  for(const roomKey of Object.keys(REVIEWS)){
+    const rec = REVIEWS[roomKey];
+    if(!rec || !MEMORIZED[roomKey]) continue;
+    const fresh = newDirtyExits(roomKey, rec);
+    if(!fresh.length) continue;
+    const step = Math.max(0, (rec.step || 0) - 1);
+    REVIEWS[roomKey] = {
+      ...rec,
+      step,
+      due: startOfLocalDay((rec.last || Date.now()) + ROOM_REVIEW_LADDER[step] * DAY_MS),
+      dirtySeen: [...new Set([...(rec.dirtySeen || []), ...fresh])],
+    };
+    demoted++;
+  }
+  if(demoted) await persistReviews();
+  return demoted;
+}
+
 // Toggles the CURRENT room's memorized flag. No-op outside a real castle room
 // (currentRoomFen() is null on mainStreet/buildings) -- the toolbar icon that
 // calls this is hidden there for the same reason. No scene rebuild needed:
@@ -1434,13 +1514,157 @@ async function toggleMemorized(){
   if(MEMORIZED[currentRoomKey]){
     delete MEMORIZED[currentRoomKey];
     delete MEMORIZED_SHAPES[currentRoomKey];
+    // unmarking drops the review history too, same reasoning as the shape
+    // snapshot: a schedule is only meaningful while the room is memorized,
+    // and keeping a stale one would have a re-marked room inherit an interval
+    // earned before whatever made the user unmark it.
+    delete REVIEWS[currentRoomKey];
   } else {
     MEMORIZED[currentRoomKey] = Date.now();
     const shape = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].shape;
     if(shape) MEMORIZED_SHAPES[currentRoomKey] = shape;
   }
   updateToolbar();
-  await Promise.all([persistMemorized(), persistMemorizedShapes()]);
+  await Promise.all([persistMemorized(), persistMemorizedShapes(), persistReviews()]);
+}
+
+/* ---------- self-graded review (R2) ----------
+   Standing in a memorized room, the brain icon stops being a toggle and
+   becomes "grade this review": you quiz yourself on the room from memory,
+   then say how it went. 1/2/3 do the same thing without the menu, which is
+   the mode that actually gets used once the habit forms -- walk in, recall,
+   press a key, walk on.
+
+   The rules (which grade moves the interval where) are db.js's; everything
+   here is the UI around them. */
+const GRADE_LABEL = { A: 'Recalled perfectly', B: 'Mostly correct', C: 'Failed' };
+const GRADE_KEY   = { '1': 'A', '2': 'B', '3': 'C' };
+
+/* Grading the same room again REPLACES the previous grade instead of stacking
+   on top of it. Two reasons, and both matter: a mis-keyed 1 when you meant 2
+   is otherwise uncorrectable (re-grading would apply the second grade to the
+   already-advanced record, compounding the error), and pressing a grade twice
+   in one visit isn't two reviews of a room in any meaningful sense. So the
+   record as it stood BEFORE this visit's first grade is kept and re-used as
+   the base each time. Cleared on entering any room, so it's strictly
+   per-visit -- come back tomorrow and you're grading afresh. */
+let preGradeRecord = null;      // { roomKey, record } | null
+
+// "in 7 days" / "tomorrow" -- measured from the START of today, since due
+// dates are midnight-snapped (see db.js startOfLocalDay); a raw now-to-due
+// subtraction would report a 1-day interval as 0 days from any afternoon.
+function dueInDays(rec, now = Date.now()){
+  return Math.max(0, Math.round((rec.due - startOfLocalDay(now)) / DAY_MS));
+}
+function duePhrase(rec, now = Date.now()){
+  const d = dueInDays(rec, now);
+  if(d <= 0) return 'today';
+  if(d === 1) return 'tomorrow';
+  return `in ${d} days`;
+}
+// how the room's schedule stands right now, for the menu header
+function reviewSummary(roomKey, now = Date.now()){
+  const rec = reviewFor(roomKey);
+  if(!rec) return 'Not memorized';
+  const state = roomReviewState(rec, now);
+  const when = rec.last
+    ? `Last reviewed ${Math.max(0, Math.round((startOfLocalDay(now) - startOfLocalDay(rec.last)) / DAY_MS))}d ago`
+    : 'Never reviewed';
+  const due = state === 'overdue' ? 'overdue'
+            : state === 'due'     ? 'due now'
+            : `due ${duePhrase(rec, now)}`;
+  return `${when} — ${due}`;
+}
+
+// Applies one grade to the current room. No-op outside a memorized castle
+// room, so a stray keypress on Main Street can't invent a record. Returns
+// the new record (or null), and awaits the write so a test can too.
+async function gradeCurrentRoom(grade){
+  if(!currentRoomFen() || !MEMORIZED[currentRoomKey]) return null;
+  if(!GRADE_LABEL[grade]) return null;
+  const key = currentRoomKey;
+  if(!preGradeRecord || preGradeRecord.roomKey !== key){
+    preGradeRecord = { roomKey: key, record: reviewFor(key) };
+  }
+  const rec = applyRoomReviewGrade(preGradeRecord.record, grade);
+  REVIEWS[key] = rec;
+  updateToolbar();
+  showToast(`${GRADE_LABEL[grade]} — next review ${duePhrase(rec)}`);
+  await persistReviews();
+  return rec;
+}
+
+/* The grading menu. Lives inside the VR container (not a document.body
+   `.overlay` like the room-geometry dialog) specifically so it does NOT set
+   foreignModalOpen -- that flag makes onKeyDown bail at the top, which would
+   kill the 1/2/3 keys while the menu that documents them is on screen.
+   inputLocked stops the walk instead, and onKeyDown swallows everything else
+   for as long as the menu is up. */
+let gradeMenuEl = null;
+let gradeMenuDismiss = null;
+// Early-returns when no menu is open rather than just clearing everything --
+// several callers (setEditMode, toggleHelp, enterRoom) invoke it blind, and
+// unconditionally dropping inputLocked would release a lock some OTHER thing
+// (an open picker) is holding.
+function closeGradeMenu(){
+  if(!gradeMenuEl && !gradeMenuDismiss) return;
+  if(gradeMenuDismiss && container) container.removeEventListener('pointerdown', gradeMenuDismiss, true);
+  gradeMenuDismiss = null;
+  if(gradeMenuEl && gradeMenuEl.parentNode) gradeMenuEl.parentNode.removeChild(gradeMenuEl);
+  gradeMenuEl = null;
+  inputLocked = false;
+}
+function toggleGradeMenu(){
+  if(gradeMenuEl){ closeGradeMenu(); return; }
+  openGradeMenu();
+}
+function openGradeMenu(){
+  if(!container || !currentRoomFen() || !MEMORIZED[currentRoomKey]) return;
+  closeGradeMenu();
+  const box = document.createElement('div');
+  box.dataset.gradeMenu = '1';
+  // above the toolbar (6), below the help overlay (8)
+  box.style.cssText = 'position:absolute;top:52px;right:8px;z-index:7;min-width:15rem;'
+    + 'display:flex;flex-direction:column;gap:3px;padding:6px;border-radius:10px;'
+    + 'background:rgba(28,38,58,.96);border:1px solid rgba(255,255,255,.35);'
+    + 'box-shadow:0 6px 20px rgba(0,0,0,.45);color:#fff;font:600 .85rem sans-serif;';
+  const head = document.createElement('div');
+  head.style.cssText = 'padding:.2rem .45rem .35rem;font-weight:400;font-size:.72rem;opacity:.75;';
+  head.textContent = reviewSummary(currentRoomKey);
+  box.appendChild(head);
+  const row = (label, onTap, extra) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'text-align:left;padding:.4rem .45rem;border-radius:6px;cursor:pointer;'
+      + 'border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);'
+      + 'color:#fff;font:inherit;-webkit-user-select:none;user-select:none;' + (extra || '');
+    // same guard every VR overlay button uses -- without it the click also
+    // lands on the canvas and starts a prop selection behind the menu.
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onTap(); });
+    box.appendChild(b);
+    return b;
+  };
+  const grade = g => { closeGradeMenu(); gradeCurrentRoom(g); };
+  row('1  I recalled perfectly',        () => grade('A'), 'background:rgba(56,142,60,.55);');
+  row('2  Mostly correct, not perfect', () => grade('B'), 'background:rgba(245,124,0,.5);');
+  row('3  Fail',                        () => grade('C'), 'background:rgba(198,40,40,.5);');
+  row('Mark not memorized',             () => { closeGradeMenu(); toggleMemorized(); },
+      'margin-top:4px;opacity:.85;');
+  row('Cancel',                         () => closeGradeMenu(), 'opacity:.7;');
+  container.appendChild(box);
+  gradeMenuEl = box;
+  inputLocked = true;
+  // click-away dismiss. The canvas click handler bails outright while
+  // inputLocked, so without this a click outside the menu would do nothing at
+  // all and leave it stuck open. memBtn is excluded deliberately: dismissing
+  // on its pointerdown would let its own click re-open the menu immediately,
+  // so it keeps toggling instead.
+  gradeMenuDismiss = (ev) => {
+    if(box.contains(ev.target)) return;
+    if(memBtn && memBtn.contains(ev.target)) return;
+    closeGradeMenu();
+  };
+  container.addEventListener('pointerdown', gradeMenuDismiss, true);
 }
 
 async function loadDecorated(){
@@ -3832,6 +4056,73 @@ function buildExitSign(size, wall, offset){
   return mesh;
 }
 
+/* ---------- due-state badge on a door sign (R4) ----------
+   A small coloured pill on the sign's stat line, saying the room through this
+   door is ready for a review. ONLY 'due' and 'overdue' get one: a badge on
+   every door of a memorized wing would be wallpaper, where a badge that means
+   "stop here" is worth walking over to look for. 'soon' and 'up to date' stay
+   silent for the same reason -- the brain icon inside the room reports the
+   full state (all four) once you're actually there. */
+const DUE_BADGE = {
+  due:     { text: 'DUE',     fill: '#ef6c00' },
+  overdue: { text: 'OVERDUE', fill: '#c62828' },
+};
+// The badge state for the room beyond a door -- null when there's nothing
+// worth flagging. Reads exactly what the room's own brain icon reads, so the
+// sign can never disagree with what you find when you walk through it.
+function doorDueState(targetKey){
+  const state = roomReviewState(reviewFor(targetKey));
+  return DUE_BADGE[state] ? state : null;
+}
+// Width the badge will occupy at this text size (0 for no badge). Leaves
+// ctx.font clobbered -- callers measure with this BEFORE setting their own.
+function dueBadgeWidth(ctx, state, fontPx){
+  const b = DUE_BADGE[state];
+  if(!b) return 0;
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  return ctx.measureText(b.text).width + fontPx * 1.1;
+}
+// Draws the pill with its LEFT edge at x, vertically centred on y (the canvas
+// is in textBaseline 'middle' throughout these builders). Returns its width.
+// Restores textAlign to 'center', which is what every caller wants next.
+function drawDueBadge(ctx, state, x, y, fontPx){
+  const b = DUE_BADGE[state];
+  if(!b) return 0;
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  const w = ctx.measureText(b.text).width + fontPx * 1.1;
+  const h = fontPx * 1.5;
+  ctx.fillStyle = b.fill;
+  ctx.beginPath();
+  ctx.roundRect(x, y - h / 2, w, h, h / 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText(b.text, x + w / 2, y + 1);
+  return w;
+}
+/* Lays out the sign's stat line: the occurrence text and the due badge side
+   by side, centred as a pair (either alone simply centres itself). Shared by
+   both sign builders so the two never drift apart. */
+function drawSignStatLine(ctx, { occurrence, dueState, cw, y, font, badgeFont, color, weight }){
+  const bw = dueBadgeWidth(ctx, dueState, badgeFont);
+  const gap = (occurrence && bw) ? 12 : 0;
+  let f = font;
+  ctx.font = `${weight}${f}px serif`;
+  while(f > 12 && ctx.measureText(occurrence || '').width + gap + bw > cw - 36){
+    f -= 2; ctx.font = `${weight}${f}px serif`;
+  }
+  const tw = occurrence ? ctx.measureText(occurrence).width : 0;
+  let x = (cw - (tw + gap + bw)) / 2;
+  if(occurrence){
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.fillText(occurrence, x, y);
+    x += tw + gap;
+  }
+  drawDueBadge(ctx, dueState, x, y, badgeFont);
+  ctx.textAlign = 'center';
+}
+
 // name placard for the room beyond a door (text only -- the move sits beside it
 // as its own square decoration). `occurrence`, when given, is a small muted
 // second line -- "N (M%)": how often this exact door has actually been taken
@@ -3839,8 +4130,12 @@ function buildExitSign(size, wall, offset){
 // (0 = never played against them). Grows the plaque a bit taller to fit it;
 // with no occurrence (or no name -- an as-yet-unnamed room can still show
 // just the stat) it renders exactly as before.
-function makeNameSignMesh(name, occurrence){
-  const hasName = !!name, hasOcc = !!occurrence;
+// `dueState` ('due' / 'overdue' / null, see doorDueState) rides on that same
+// second line as a coloured pill -- so a stat line exists whenever EITHER is
+// present, and a room with a name and nothing else grows the taller plaque
+// once it falls due.
+function makeNameSignMesh(name, occurrence, dueState){
+  const hasName = !!name, hasOcc = !!occurrence || !!DUE_BADGE[dueState];
   const cw = 300, ch = (hasName && hasOcc) ? 140 : 110;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
@@ -3859,11 +4154,14 @@ function makeNameSignMesh(name, occurrence){
     ctx.fillText(name, cw/2, hasOcc ? ch * 0.36 : ch/2 + 2);
   }
   if(hasOcc){
-    const weight = hasName ? '' : 'bold ';
-    ctx.fillStyle = hasName ? '#5a5148' : '#1a1a1a';
-    let font2 = hasName ? 30 : 44; ctx.font = `${weight}${font2}px serif`;
-    while(font2 > 12 && ctx.measureText(occurrence).width > cw - 36){ font2 -= 2; ctx.font = `${weight}${font2}px serif`; }
-    ctx.fillText(occurrence, cw/2, hasName ? ch * 0.76 : ch/2 + 2);
+    drawSignStatLine(ctx, {
+      occurrence, dueState, cw,
+      y: hasName ? ch * 0.76 : ch/2 + 2,
+      font: hasName ? 30 : 44,
+      badgeFont: hasName ? 24 : 30,
+      color: hasName ? '#5a5148' : '#1a1a1a',
+      weight: hasName ? '' : 'bold ',
+    });
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -3874,8 +4172,8 @@ function makeNameSignMesh(name, occurrence){
 // smaller/muted). Same off-white + gold-frame styling as makeNameSignMesh; the
 // 0.9-wide plane keeps buildDoorHint's uniform scaling working. `occurrence`
 // (see makeNameSignMesh) is an optional third, even smaller/muted line.
-function makeCastleDoorSignMesh(castleName, roomName, occurrence){
-  const hasRoom = !!roomName, hasOcc = !!occurrence;
+function makeCastleDoorSignMesh(castleName, roomName, occurrence, dueState){
+  const hasRoom = !!roomName, hasOcc = !!occurrence || !!DUE_BADGE[dueState];
   const cw = 300, ch = (hasRoom && hasOcc) ? 190 : 150;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
@@ -3902,10 +4200,14 @@ function makeCastleDoorSignMesh(castleName, roomName, occurrence){
   // occurrence stat (bottom, even smaller/muted -- or in the room-name slot
   // when this door has no room name yet)
   if(hasOcc){
-    ctx.fillStyle = '#6b6258';
-    let f3 = hasRoom ? 26 : 34; ctx.font = `${f3}px serif`;
-    while(f3 > 12 && ctx.measureText(occurrence).width > cw - 36){ f3 -= 2; ctx.font = `${f3}px serif`; }
-    ctx.fillText(occurrence, cw/2, hasRoom ? ch * 0.83 : ch * 0.72);
+    drawSignStatLine(ctx, {
+      occurrence, dueState, cw,
+      y: hasRoom ? ch * 0.83 : ch * 0.72,
+      font: hasRoom ? 26 : 34,
+      badgeFont: hasRoom ? 22 : 26,
+      color: '#6b6258',
+      weight: '',
+    });
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -4031,6 +4333,13 @@ function buildRoomNameFloorLabel(room, roomKey){
 // `occurrence` ("N (M%)", see makeNameSignMesh) is shown as a small second line
 // so an as-yet-unnamed room still gets a plaque when there's a stat to show --
 // this is exactly the case ("should I bother memorizing this?") the stat is for.
+/* What each door sign in the CURRENT room was built with, refreshed by every
+   buildRoom. The plaque is a canvas texture, so there is nothing in the scene
+   graph a test can read a badge back off -- and reimplementing the decision
+   test-side would test the reimplementation rather than the render. This is
+   written by buildDoorHint itself, so it always reflects what actually got
+   drawn. A handful of small objects per room; not worth gating. */
+let doorSignLog = [];
 function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   const group = new THREE.Group();
   const name = roomNameFor(targetKey);
@@ -4044,11 +4353,18 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
   const ownerCastle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
   const crossCastle = !!destCastle && destCastle !== ownerCastle;
-  if(!name && !crossCastle && !occurrence) return group;
+  // a due room is worth a plaque of its own even with nothing else to say --
+  // "there's a review waiting through here" is exactly the kind of thing you
+  // want to see from the corridor rather than by trying every door.
+  const dueState = doorDueState(targetKey);
+  const built = !!(name || crossCastle || occurrence || dueState);
+  doorSignLog.push({ target: targetKey, name: name || null, occurrence: occurrence || null, dueState, built });
+  if(!built) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
   const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
-  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name, occurrence) : makeNameSignMesh(name, occurrence);
+  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name, occurrence, dueState)
+                        : makeNameSignMesh(name, occurrence, dueState);
   const NAME_H = NAME_W * m.geometry.parameters.height / 0.9;   // keep the plane's aspect
   const GAP = 0.12;                       // gap between the door top and the plaque
   const nameY = DOOR_H + GAP + NAME_H / 2;
@@ -4381,6 +4697,13 @@ function makeElevatorPanelTexture(floors, contents, selectedOrdinal){
       ctx.fillStyle = '#999';
       ctx.fillText(pct, x + 6 + nameW + 8, cy);
     }
+    // due-state badge (R4) on its own line under the name. The elevator panel
+    // IS the door chooser for these floors -- it replaces their door hints
+    // entirely -- so "there's a review waiting on 3" belongs here just as much
+    // as on an ordinary door's plaque. Its own line rather than trailing the
+    // stat: the name column is already tight enough for the name to need
+    // fitText, and the 140px row has vertical room to spare.
+    if(f.dueState) drawDueBadge(ctx, f.dueState, x + 6, cy + 34, 22);
     x += ELEV_COL.name;
 
     // move pair: opponent raised (upper-left), response lowered (lower-right),
@@ -5672,6 +5995,7 @@ function buildRoom(roomKey){
   scene.clear();
   billboards = [];
   floorLabels = [];
+  doorSignLog = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
   const sun = new THREE.DirectionalLight(0xffffff, room.outdoor ? 0.9 : 0.7);
@@ -5833,6 +6157,7 @@ function buildRoom(roomKey){
               // gets, since it has no door hint of its own (the panel replaces
               // it). Only the "(M%)" tail is drawn (see makeElevatorPanelTexture).
               occurrence: fe.occurrence || null,
+              dueState: doorDueState(fe.target),   // R4 badge -- see makeElevatorPanelTexture
               target: fe.target,
               spawn: computeSpawnForExit(roomKey, room, fe)
             };
@@ -6157,6 +6482,10 @@ function enterRoom(roomKey, spawn, preserveYaw){
   // selectedProp.roomKey with no check it matches where you are), and leave
   // the gear-icon visuals pointing at now-disposed geometry.
   deselectProp();
+  // the grading menu (and the re-grade window behind it) belong to the room
+  // being LEFT -- carrying either across a doorway would grade the wrong room.
+  closeGradeMenu();
+  preGradeRecord = null;
   buildRoom(roomKey);
   pos.x = spawn.x; pos.z = spawn.z; yaw = keepYaw;
   teleportLockUntil = clock.getElapsedTime() + 0.6;
@@ -7269,6 +7598,7 @@ function updateEditHud(){
 
 function setEditMode(on){
   const wasOn = editMode;
+  closeGradeMenu();   // it owns the keyboard; editing needs it back
   editMode = on;
   if(!on) deselectProp();
   if(renderer) renderer.domElement.style.cursor = on ? 'crosshair' : 'default';
@@ -7385,8 +7715,13 @@ function buildTopToolbar(){
   infoBtn     = makeIconBtn('fa-circle-info',    'Help',          () => toggleHelp());
   decoratedBadge = makeIconBtn('fa-palette',     'This room is fully decorated', () => showToast('This room is fully decorated!'));
   dirtyBadge  = makeIconBtn('fa-triangle-exclamation', 'A new variation added a door here since you memorized this room',
-                             () => showToast('New door since you memorized this room -- give it a look!'));
-  memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized', () => toggleMemorized());
+                             () => showToast('New door since you memorized this room -- its review was moved up; give it a look!'));
+  // once a room is memorized the brain stops being a plain toggle: clicking
+  // it opens the grading menu (unmarking moved in there, as one of its
+  // choices), because grading is the thing you come back to do over and over
+  // and unmarking is the rare one.
+  memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized',
+                             () => { if(MEMORIZED[currentRoomKey]) toggleGradeMenu(); else toggleMemorized(); });
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
   // bordered "chip" so they read as a single grouped tool cluster, distinct
@@ -7443,8 +7778,19 @@ function updateToolbar(){
   if(memBtn){
     memBtn.style.display = currentRoomFen() ? '' : 'none';
     const on = !!MEMORIZED[currentRoomKey];
-    memBtn.style.background = on ? 'rgba(56,142,60,.92)' : 'rgba(28,38,58,.78)';
-    memBtn.title = on ? 'Memorized -- click to unmark' : 'Mark this room memorized';
+    // a memorized room's brain is also its due-state light: green while the
+    // schedule is satisfied, amber when a review is due, red once it's well
+    // past. That makes the one thing worth doing in the room visible from
+    // inside it, without having to consult a list first.
+    const state = on ? roomReviewState(reviewFor(currentRoomKey)) : 'none';
+    const tint = state === 'overdue' ? 'rgba(198,40,40,.92)'
+               : state === 'due'     ? 'rgba(245,124,0,.92)'
+               : on                  ? 'rgba(56,142,60,.92)'
+               :                       'rgba(28,38,58,.78)';
+    memBtn.style.background = tint;
+    memBtn.title = on
+      ? `Memorized — ${reviewSummary(currentRoomKey)}. Click to grade a review (or press 1/2/3)`
+      : 'Mark this room memorized';
   }
   // decorated is a computed, read-only badge (see evaluateDecorated) -- shown
   // only when true, so it never competes with memorize's on/off toggle look.
@@ -7475,6 +7821,7 @@ function buildHelpOverlay(){
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street, B to instantly take the room's own back door.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). Each grade moves the room along the review ladder: 1 → 3 → 7 → 21 → 60 → 180 days, a fail drops it back to the start. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, so you can spot a waiting review from the corridor rather than trying every door — elevator panels tag their floors the same way.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode. Ctrl+Z (or <i class="fa-solid fa-rotate-left"></i>) undoes the last edit, Ctrl+Shift+Z (or <i class="fa-solid fa-rotate-right"></i>) redoes it.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
@@ -7485,6 +7832,7 @@ function buildHelpOverlay(){
 }
 function toggleHelp(show){
   if(!helpOverlay) return;
+  closeGradeMenu();   // help sits above it, and would strand it open
   const on = show === undefined ? helpOverlay.style.display === 'none' : show;
   helpOverlay.style.display = on ? 'flex' : 'none';
 }
@@ -8539,6 +8887,15 @@ export function setForeignModalOpen(open){
 
 function onKeyDown(e){
   if(foreignModalOpen) return;
+  // the grading menu owns the keyboard while it's up: 1/2/3 grade, Esc
+  // cancels, everything else is swallowed so a stray w/b doesn't walk you out
+  // of the room you're in the middle of grading.
+  if(gradeMenuEl){
+    if(e.key === 'Escape'){ closeGradeMenu(); return; }
+    const g = GRADE_KEY[e.key];
+    if(g){ closeGradeMenu(); gradeCurrentRoom(g); }
+    return;
+  }
   // Undo/redo -- ahead of the selectedProp branch below so it works whether
   // or not something is currently selected. Ctrl+Z / Cmd+Z undoes; adding
   // Shift, or Ctrl+Y, redoes (Ctrl+Y is the common Windows-only alt binding).
@@ -8576,6 +8933,15 @@ function onKeyDown(e){
   // deliberately NOT an edit-mode shortcut; use the pencil toolbar button. Esc
   // still exits edit mode.
   if(e.key === 'Escape' && editMode){ setEditMode(false); return; }
+  // 1/2/3 grade the current room's review straight off the keyboard, no menu.
+  // Safe to bind bare: digits aren't otherwise used anywhere in the walk, and
+  // the guard means they do nothing at all outside a memorized castle room.
+  // A mis-press is recoverable -- see preGradeRecord, re-grading in the same
+  // visit replaces rather than compounds -- and the toast says what landed.
+  if(GRADE_KEY[e.key] && !inputLocked && MEMORIZED[currentRoomKey] && currentRoomFen()){
+    gradeCurrentRoom(GRADE_KEY[e.key]);
+    return;
+  }
   // R resets to THIS room's own entrance (handy after wandering off while
   // decorating); H is the "go all the way back" shortcut, to Main Street.
   // On Main Street itself there's no separate "entrance" to distinguish --
@@ -8635,13 +9001,15 @@ export async function openThreeTest(containerEl, opts){
 
   editMode = false;
   inputLocked = false;
+  closeGradeMenu(); preGradeRecord = null;   // nothing carries over from a previous walk
   editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
-  // five independent IDB reads, each populating its own module global with no
+  // independent IDB reads, each populating its own module global with no
   // cross-dependency on the others' results -- run concurrently rather than
   // one round-trip after another.
-  await Promise.all([loadLayout(), loadMemorized(), loadMemorizedShapes(), loadDecorated(), refreshAssetMap(), refreshObjectLists()]);
+  await Promise.all([loadLayout(), loadMemorized(), loadMemorizedShapes(), loadDecorated(),
+                     loadReviews(), refreshAssetMap(), refreshObjectLists()]);
 
   container.innerHTML = '';
   renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -8717,9 +9085,19 @@ export async function openThreeTest(containerEl, opts){
   // an explicit start room (e.g. "Jump to VR" from the digraph) wins over both
   // -- it lands the freshly-opened world directly on the target room instead
   // of the street or a castle's own entry.
+  // R5: dock a step off any memorized room that's picked up a new door since
+  // you memorized it. Here rather than up with the IDB loads because a
+  // single-castle preview registers its rooms just above -- the shapes have
+  // to be live for every castle in the walk, not just the main world's. Runs
+  // before the first enterRoom so the door badges it may light up are drawn
+  // from the already-demoted schedule.
+  const demoted = await applyStructuralDemotions();
   if(threeOpts.startRoomKey && ROOMS[threeOpts.startRoomKey]) enterRoom(threeOpts.startRoomKey, { x:0, z:0, yaw:0 });
   else if(cas) enterRoom(cas.entryKey, cas.spawn);
   else enterRoom(START_ROOM, START_SPAWN);
+  // said out loud: a schedule that silently moved is exactly the kind of
+  // thing that quietly erodes trust in the schedule.
+  if(demoted) showToast(`${demoted} changed room${demoted === 1 ? '' : 's'} moved up for review`);
   tick();
 
   // test-only hook (off unless the debug flag is set) so the layout editor can
@@ -8811,6 +9189,49 @@ export async function openThreeTest(containerEl, opts){
       roomShape: (roomKeyArg) => (ROOMS[roomKeyArg || currentRoomKey] || {}).shape || null,
       memorizedShape: (roomKeyArg) => MEMORIZED_SHAPES[roomKeyArg || currentRoomKey] || null,
       memBtnStyle: () => memBtn ? { display: memBtn.style.display, background: memBtn.style.background } : null,
+      memBtnTitle: () => memBtn ? memBtn.title : null,
+      clickMemBtn: () => { if(memBtn) memBtn.click(); },
+      // review scheduling (R2): the stored record, the effective one (which
+      // may be bootstrapped from the memorized timestamp rather than stored),
+      // the grade path itself, and a way to seed a record so a test can place
+      // a room anywhere on the ladder without waiting days for it.
+      reviewRecord: (keyArg) => REVIEWS[keyArg || currentRoomKey] || null,
+      reviewFor: (keyArg) => reviewFor(keyArg || currentRoomKey),
+      gradeCurrentRoom: (g) => gradeCurrentRoom(g),
+      setReviewRecord: (key, rec) => {
+        if(rec) REVIEWS[key] = rec; else delete REVIEWS[key];
+        updateToolbar();
+        return persistReviews();
+      },
+      // the grading menu's open state and its row labels in order -- the menu
+      // has no ids, so this is how a test reads it without scraping the pane.
+      gradeMenu: () => gradeMenuEl
+        ? { open: true, items: [...gradeMenuEl.querySelectorAll('button')].map(b => b.textContent) }
+        : { open: false, items: [] },
+      // R4: the badge state a door sign shows for the room beyond it
+      // ('due' / 'overdue' / null -- see doorDueState), and what each of the
+      // current room's door signs was actually built with on the last
+      // buildRoom (see doorSignLog).
+      doorDueState: (targetKey) => doorDueState(targetKey),
+      doorSigns: () => doorSignLog.map(s => ({ ...s })),
+      // R5: overwrite a room's frozen shape snapshot, so a test can make a
+      // room "pick up a new door" by shrinking what it remembers -- far
+      // cheaper than regenerating a castle with an extra variation, and it
+      // exercises exactly the same snapshot-vs-live diff. Plus the sweep
+      // itself, and the exits it considers new.
+      setMemorizedShape: (key, shape) => {
+        if(shape) MEMORIZED_SHAPES[key] = shape; else delete MEMORIZED_SHAPES[key];
+        return persistMemorizedShapes();
+      },
+      newDirtyExits: (key) => newDirtyExits(key, REVIEWS[key]),
+      runStructuralDemotions: () => applyStructuralDemotions(),
+      clickGradeMenuItem: (idx) => {
+        if(!gradeMenuEl) return false;
+        const btns = [...gradeMenuEl.querySelectorAll('button')];
+        if(!btns[idx]) return false;
+        btns[idx].click();
+        return true;
+      },
       decoratedBadgeStyle: () => decoratedBadge ? { display: decoratedBadge.style.display } : null,
       // memorized-room-stability Phase 2: the dirty badge's visibility, and
       // the underlying computed flag directly (roomKeyArg optional, defaults
@@ -9414,6 +9835,10 @@ export function closeThreeTest(){
   clearGeneratedCastle();   // drop synthesized cas:* rooms so a later normal walk is clean
   editMode = false;
   inputLocked = false;
+  // the menu element went with container.innerHTML above, but the reference
+  // and its click-away listener haven't -- a stale gradeMenuEl would have
+  // onKeyDown swallowing every key on the next walk.
+  closeGradeMenu(); preGradeRecord = null;
   editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   billboards = [];
   floorLabels = [];

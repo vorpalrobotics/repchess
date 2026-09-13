@@ -4,6 +4,22 @@
 <meta charset="UTF-8">
 <title>REPchess</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Every file this page loads carries a ?v= cache-buster -- but this document
+     is the thing that NAMES those versions, and nothing can bust it. A stale
+     copy keeps requesting the previous app.js?v=, so the build tag in the
+     heading stays put however current the deploy is: the repeated "I still see
+     -N on githack" confusion.
+
+     "no-cache", not "no-store": the browser may still keep its copy, it just
+     has to revalidate before using it. That's a conditional request answered
+     with a 304 on an unchanged deploy -- cheap -- while a changed one lands
+     immediately. no-store would also throw away the back/forward cache for no
+     benefit here.
+
+     Note this only governs the BROWSER's cache. A CDN in front of the page
+     (raw.githack.com, say) reads real HTTP headers, not meta tags, so a stale
+     copy there still needs a query string on the URL to shake loose. -->
+<meta http-equiv="Cache-Control" content="no-cache">
 <!-- Cross-origin isolation via a service worker (GitHub Pages can't set COOP/COEP
      headers itself). This is what unlocks SharedArrayBuffer, and therefore the
      multi-threaded Stockfish build in js/engine.js. Must load first, same-origin.
@@ -1125,8 +1141,13 @@
     </div>
     <div style="display:flex;align-items:baseline;gap:.5rem">
       <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em;flex:1"></div>
-      <button id="graphCompletenessToggle" style="flex:0 0 auto;font-size:.8rem;color:#555;background:none;border:none;cursor:pointer;padding:.1rem .3rem"
-        title="Recolor rooms by how much mnemonic work is left (word/image), instead of by role"><i class="fa-regular fa-square"></i> Completeness</button>
+      <label for="graphViewMode" style="flex:0 0 auto;font-size:.8rem;color:#555">View:</label>
+      <select id="graphViewMode" style="flex:0 0 auto;font-size:.8rem;padding:.1rem .2rem"
+        title="Recolour the rooms: by role (normal), by how much mnemonic work is left, or by when each is due for review">
+        <option value="normal">Normal</option>
+        <option value="completeness">Completeness</option>
+        <option value="review">Review</option>
+      </select>
       <button id="graphCoverageToggle" style="display:none;flex:0 0 auto;font-size:.8rem;color:#555;background:none;border:none;cursor:pointer;padding:.1rem .3rem"
         title="Show coverage stats"><i class="fa-solid fa-caret-right"></i> Coverage</button>
     </div>
@@ -1136,6 +1157,14 @@
       <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#ef6c00;margin-right:.3em"></span>word, needs image</span>
       <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#c62828;margin-right:.3em"></span>needs a word</span>
       <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#9e9e9e;margin-right:.3em"></span>no mnemonic of its own</span>
+    </div>
+    <div id="graphReviewLegend" style="display:none;gap:.9rem;align-items:center;font-size:.78rem;color:#555;padding:.15rem 0 .3rem;flex-wrap:wrap">
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#c62828;margin-right:.3em"></span>overdue</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#ef6c00;margin-right:.3em"></span>due now</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#827717;margin-right:.3em"></span>due soon</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#2e7d32;margin-right:.3em"></span>up to date</span>
+      <span><span style="display:inline-block;width:.7em;height:.7em;border-radius:2px;background:#9e9e9e;margin-right:.3em"></span>not memorized yet</span>
+      <span id="graphReviewSummary" style="margin-left:auto;font-weight:600"></span>
     </div>
     <div id="graphCoverage" class="graph-coverage" style="display:none"></div>
     <!-- overflow:hidden (not auto): cytoscape does its own pan/zoom, and an auto
@@ -1721,7 +1750,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-56"></script>
+<script src="js/db.js?v=20260804-59"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1738,6 +1767,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-362"></script>
+<script type="module" src="js/app.js?v=20260804-368"></script>
 </body>
 </html>

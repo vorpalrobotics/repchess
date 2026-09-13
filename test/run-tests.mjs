@@ -26,6 +26,15 @@ function assert(cond, msg){ if(!cond) throw new Error(msg); }
 const pWhite = (opp='opp') => ({ white: { user: { name: 'tester' } }, black: { user: { name: opp } } });
 const pBlack = (opp='opp') => ({ white: { user: { name: opp } }, black: { user: { name: 'tester' } } });
 
+// Switch the Opening Graph's View lens (Normal / Completeness / Review).
+// Setting .value doesn't fire change on its own, so the handler is called
+// directly -- same shape as the other "drive the real handler" helpers here.
+const setGraphViewMode = (page, mode) => page.evaluate((m) => {
+  const sel = document.getElementById('graphViewMode');
+  sel.value = m;
+  sel.onchange();
+}, mode);
+
 // console errors we expect and ignore. The un-mocked CDNs (cm-chessboard, web
 // fonts, Chart.js, Stockfish) are intentionally aborted and the app degrades
 // gracefully; blocking the COOP/COEP service worker makes its index.html
@@ -5680,7 +5689,16 @@ try {
   //      it faces.
   try {
     await appAJ.page.evaluate((k) => window.__threeTestEdit.resize(k, { w: 11, d: 13, h: 6 }), root);   // back to normal depth
-    await appAJ.page.waitForTimeout(200);
+    // The resize rebuilds the room, which MOVES the label (its z is d/2 - 4).
+    // Snapshotting the position on a fixed timeout races that rebuild: on a
+    // slow run `before` is the label's OLD spot, the teleports below then sit
+    // at the wrong offset from where it actually is, and the facing assertions
+    // fail for a reason that has nothing to do with facing. Wait for the label
+    // to actually land at its new depth instead.
+    await appAJ.page.waitForFunction(() => {
+      const l = window.__threeTestEdit.roomNameFloorLabel();
+      return l && Math.abs(l.z - (13 / 2 - 4)) < 0.05;
+    }, { timeout: 5000 });
     const before = await appAJ.page.evaluate(() => window.__threeTestEdit.roomNameFloorLabel());
     await appAJ.page.evaluate(({ x, z }) => window.__threeTestEdit.teleport(x, z, 0), { x: before.x + 5, z: before.z });
     await appAJ.page.waitForTimeout(300);
@@ -19339,9 +19357,9 @@ try {
     ok('Graph completeness: complete atoms still score "not decorated" until the room itself is built out');
   } catch(e){ bad('Graph completeness: decoration folded into the score', e); }
 
-  // 353. The mode itself: off by default, and toggling only adds/removes the
-  //      'cmode' class -- no re-render, so node identity (and the user's
-  //      manual layout) survives switching back and forth.
+  // 353. The mode itself: Normal by default, and switching lens only adds/
+  //      removes the 'cmode' class -- no re-render, so node identity (and the
+  //      user's manual layout) survives switching back and forth.
   try {
     const offAtFirst = await appEC.page.evaluate(() =>
       window.__graphTestHooks.cy().nodes('.cmode').length);
@@ -19350,7 +19368,7 @@ try {
       getComputedStyle(document.getElementById('graphCompletenessLegend')).display);
     assert(legendHidden === 'none', `expected the legend hidden while the mode is off, got "${legendHidden}"`);
 
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'completeness');
     const on = await appEC.page.evaluate(() => ({
       inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
       total: window.__graphTestHooks.cy().nodes().length,
@@ -19359,21 +19377,25 @@ try {
     assert(on.inMode === on.total && on.total > 0, `expected every node in the mode, got ${on.inMode} of ${on.total}`);
     assert(on.legend !== 'none', 'expected the legend shown while the mode is on');
 
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'normal');
     const backOff = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
-    assert(backOff === 0, `expected toggling back off to leave no node in the mode, got ${backOff}`);
-    ok('Graph completeness: the view mode toggles on and off without re-rendering the graph');
-  } catch(e){ bad('Graph completeness: view-mode toggle', e); }
+    assert(backOff === 0, `expected switching back to Normal to leave no node in the mode, got ${backOff}`);
+    ok('Graph completeness: the view mode switches on and off without re-rendering the graph');
+  } catch(e){ bad('Graph completeness: view-mode switch', e); }
 
   // 354. Closing the graph resets the mode, so a later open starts in the
   //      normal role-coloured view rather than silently still recoloured.
   try {
-    await appEC.page.evaluate(() => document.getElementById('graphCompletenessToggle').click());
+    await setGraphViewMode(appEC.page, 'completeness');
     await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
     await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
-    const after = await appEC.page.evaluate(() => window.__graphTestHooks.cy().nodes('.cmode').length);
-    assert(after === 0, `expected a fresh open to start out of the completeness mode, got ${after} nodes in it`);
+    const after = await appEC.page.evaluate(() => ({
+      inMode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      dropdown: document.getElementById('graphViewMode').value,
+    }));
+    assert(after.inMode === 0, `expected a fresh open to start out of the completeness mode, got ${after.inMode} nodes in it`);
+    assert(after.dropdown === 'normal', `expected the dropdown itself back on Normal, got "${after.dropdown}"`);
     ok('Graph completeness: closing the graph resets the mode for the next open');
   } catch(e){ bad('Graph completeness: mode resets on close', e); }
 } finally {
@@ -19531,6 +19553,784 @@ try {
   await appEE.close();
 }
 } catch(e){ bad('Phase EE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EF: room review scheduling, R1 -- the data model and the ladder,
+//     deliberately ahead of any UI. A fixed ladder rather than SM-2's ease
+//     factor: with a few hundred rooms reviewed by one person a per-item ease
+//     never converges, and "step 4 of 6" is inspectable where an ease of 2.36
+//     is not. The rule worth testing hardest is B: it HOLDS, but a second
+//     consecutive B demotes -- one miss in a room of several move-pairs is
+//     the ordinary outcome, so demoting on every B would pin everything at
+//     short intervals, while holding forever lets a never-quite-mastered room
+//     drift out to 180 days. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEF = await launchApp();
+try {
+  const H = (fn, ...args) => appEF.page.evaluate(
+    ({ f, a }) => window.__reviewTestHooks[f](...a), { f: fn, a: args });
+  const DAY = await H('dayMs');
+  const LADDER = await H('ladder');
+  const T0 = Date.UTC(2026, 0, 15, 12, 0, 0);   // midday, so local-midnight snapping is unambiguous
+
+  // 363. The ladder walks forward on A, resets to the bottom on C.
+  try {
+    assert(await H('nextStep', 0, 'A', null) === 1, 'expected A to advance a step');
+    assert(await H('nextStep', 3, 'A', null) === 4, 'expected A to advance from mid-ladder');
+    assert(await H('nextStep', LADDER.length - 1, 'A', null) === LADDER.length - 1,
+      'expected A at the top of the ladder to stay there, not run off the end');
+    assert(await H('nextStep', 4, 'C', null) === 0, 'expected C to reset to the bottom');
+    assert(await H('nextStep', 0, 'C', null) === 0, 'expected C at the bottom to stay there');
+    ok('Review scheduling: A advances and clamps at the top, C resets to the bottom');
+  } catch(e){ bad('Review scheduling: A and C step rules', e); }
+
+  // 364. B holds on its own, and only demotes when it follows another B --
+  //      the rule this whole design turns on.
+  try {
+    assert(await H('nextStep', 3, 'B', 'A') === 3, 'expected a single B (after an A) to hold');
+    assert(await H('nextStep', 3, 'B', null) === 3, 'expected a first-ever B to hold');
+    assert(await H('nextStep', 3, 'B', 'C') === 3, 'expected B after a C to hold, not demote');
+    assert(await H('nextStep', 3, 'B', 'B') === 2, 'expected a SECOND consecutive B to demote one step');
+    assert(await H('nextStep', 0, 'B', 'B') === 0, 'expected consecutive B at the bottom to stay there');
+    ok('Review scheduling: B holds, but a second consecutive B demotes one step');
+  } catch(e){ bad('Review scheduling: the B rule', e); }
+
+  // 365. Applying a grade produces a whole record: the due date lands the
+  //      ladder's interval out, lapses count only failures, and the grade is
+  //      remembered so the next B knows whether it's the second one.
+  try {
+    const first = await H('applyGrade', null, 'A', T0, 0.5);   // rand 0.5 -> no fuzz offset
+    assert(first.step === 1, `expected a first A to reach step 1, got ${first.step}`);
+    assert(first.lapses === 0, `expected no lapses after an A, got ${first.lapses}`);
+    assert(first.lastGrade === 'A', `expected the grade recorded, got ${first.lastGrade}`);
+    assert(first.last === T0, 'expected the review time recorded');
+    const failed = await H('applyGrade', first, 'C', T0, 0.5);
+    assert(failed.step === 0, `expected C to drop to step 0, got ${failed.step}`);
+    assert(failed.lapses === 1, `expected a C to count a lapse, got ${failed.lapses}`);
+    const secondFail = await H('applyGrade', failed, 'C', T0, 0.5);
+    assert(secondFail.lapses === 2, `expected lapses to accumulate, got ${secondFail.lapses}`);
+    ok('Review scheduling: a grade produces a full record (step, due, lapses, last grade)');
+  } catch(e){ bad('Review scheduling: applying a grade', e); }
+
+  // 366. Fuzz keeps due dates inside ±15% of the nominal interval, so a wing
+  //      memorized in one sitting stops coming due all on the same day -- but
+  //      never wanders outside the band.
+  try {
+    const nominal = LADDER[1];   // step 1 after a first A
+    const spread = await H('fuzz');
+    for(const rand of [0, 0.25, 0.5, 0.75, 1]){
+      const rec = await H('applyGrade', null, 'A', T0, rand);
+      const days = (rec.due - T0) / DAY;
+      // due is snapped to local midnight, so allow a day of slack either way
+      // on top of the fuzz band itself
+      assert(days >= nominal * (1 - spread) - 1 && days <= nominal * (1 + spread) + 1,
+        `expected a due date within ±${spread * 100}% of ${nominal}d (rand=${rand}), got ${days.toFixed(2)}d`);
+    }
+    // Variation only shows once 15% of the interval clears a whole day --
+    // below that, midnight-snapping absorbs it (deliberately: pile-ups hurt
+    // at long intervals, not when you're reviewing every few days anyway).
+    // So assert the spread where it actually matters, at a long step.
+    const atStep3 = { step: 3, lapses: 0, lastGrade: 'A' };   // A from here -> step 4, 60 days
+    const lo = await H('applyGrade', atStep3, 'A', T0, 0);
+    const hi = await H('applyGrade', atStep3, 'A', T0, 1);
+    assert(lo.step === 4 && hi.step === 4, 'expected both to land on the same ladder step');
+    assert(hi.due > lo.due,
+      `expected fuzz to spread due dates at a long interval, got ${(hi.due - lo.due) / DAY}d apart`);
+    const spreadDays = (hi.due - lo.due) / DAY;
+    assert(spreadDays <= LADDER[4] * spread * 2 + 2,
+      `expected the spread to stay inside the fuzz band, got ${spreadDays}d`);
+    ok('Review scheduling: fuzz varies due dates within ±15%, never outside it');
+  } catch(e){ bad('Review scheduling: interval fuzz', e); }
+
+  // 367. A memorized-but-never-reviewed room bootstraps from its memorized
+  //      timestamp, so an existing repertoire joins the schedule with no
+  //      migration and nothing is stranded.
+  try {
+    const rec = await H('bootstrap', T0);
+    assert(rec && rec.step === 0, 'expected a bootstrapped record at the bottom of the ladder');
+    assert(rec.last === null, 'expected no review time yet -- it has never been reviewed');
+    const days = (rec.due - T0) / DAY;
+    assert(days >= 0.4 && days <= 1.6, `expected the first review due about a day after memorizing, got ${days.toFixed(2)}d`);
+    assert(await H('bootstrap', null) === null, 'expected a room that was never memorized to get no schedule');
+    ok('Review scheduling: a memorized room bootstraps its first review from the memorized timestamp');
+  } catch(e){ bad('Review scheduling: bootstrap from memorized', e); }
+
+  // 368. Four due states, with soon/overdue windows proportional to the
+  //      interval -- a 1-day item goes overdue almost at once where a
+  //      180-day one gets weeks of slack.
+  try {
+    assert(await H('state', null, T0) === 'none', 'expected no record to read as "none"');
+    const rec = { due: T0, step: 3, lapses: 0, lastGrade: 'A' };   // 21-day interval
+    assert(await H('state', rec, T0 - 10 * DAY) === 'notdue', 'expected well before the due date to read not-due');
+    assert(await H('state', rec, T0 - 2 * DAY) === 'soon', 'expected just before the due date to read due-soon');
+    assert(await H('state', rec, T0) === 'due', 'expected the due date itself to read due');
+    assert(await H('state', rec, T0 + 20 * DAY) === 'overdue', 'expected well past the due date to read overdue');
+    // proportional: the same lateness that is merely "due" on a long
+    // interval is already "overdue" on a short one
+    const shortRec = { due: T0, step: 0, lapses: 0, lastGrade: 'A' };   // 1-day interval
+    assert(await H('state', shortRec, T0 + 2 * DAY) === 'overdue', 'expected a short-interval room to go overdue quickly');
+    assert(await H('state', rec, T0 + 2 * DAY) === 'due', 'expected a long-interval room to still be merely due at the same lateness');
+    ok('Review scheduling: four due states, with windows proportional to the interval');
+  } catch(e){ bad('Review scheduling: due states', e); }
+
+  // 369. Records persist, and survive a real Full Backup round-trip -- the
+  //      part that would quietly lose review history if the new key were
+  //      missed in the backup format.
+  try {
+    const seeded = { 'cas:L1_X:abc': { last: T0, due: T0 + 21 * DAY, step: 3, lapses: 1, lastGrade: 'A' } };
+    await appEF.page.evaluate((m) => window.__reviewTestHooks.setReviews(m), seeded);
+    const readBack = await H('getReviews');
+    assert(readBack['cas:L1_X:abc']?.step === 3, `expected the record to persist, got ${JSON.stringify(readBack)}`);
+
+    const exported = await appEF.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    assert(typeof exported.roomReviews === 'string' && /cas:L1_X:abc/.test(exported.roomReviews),
+      `expected review records carried in the backup, got ${JSON.stringify(exported.roomReviews)}`);
+
+    // and back in through a REAL restore, which clears the meta store first --
+    // so this proves the round trip, not just that the field is written
+    await seedBackup(appEF.page, {
+      version: 6, user: 'tester', lines: [], games: [],
+      roomReviews: exported.roomReviews,
+    });
+    const restored = await H('getReviews');
+    assert(restored['cas:L1_X:abc']?.step === 3,
+      `expected review history to survive a full restore, got ${JSON.stringify(restored)}`);
+    ok('Review scheduling: records persist and survive a Full Backup round trip');
+  } catch(e){ bad('Review scheduling: persistence and backup', e); }
+} finally {
+  await appEF.close();
+}
+} catch(e){ bad('Phase EF: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EG: room review grading in VR, R2 -- the brain icon becomes a
+//     grading control once a room is memorized, and 1/2/3 grade it straight
+//     off the keyboard. The two things worth testing hardest: the digits are
+//     bound BARE (so they must do nothing at all outside a memorized castle
+//     room, or a stray keypress invents a schedule), and re-grading in one
+//     visit REPLACES rather than compounds (so a mis-keyed 1 when you meant
+//     2 is correctable, and a double-press isn't two reviews). ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEG = await launchApp();
+try {
+  const keys = await appEG.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appEG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEG.page);
+  const E = (fn, ...args) => appEG.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const press = (k) => appEG.page.evaluate(
+    (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key })), k);
+  // re-enter the room fresh: enterRoom clears the per-visit re-grade window,
+  // so each test below starts from the room's stored record rather than
+  // replacing the previous test's grade.
+  const revisit = async () => { await E('enter', keys.alpha); await appEG.page.waitForTimeout(150); };
+
+  // 370. Clicking the brain in an ALREADY-memorized room opens the grading
+  //      menu instead of unmarking it -- unmarking moved inside the menu,
+  //      because grading is what you come back to do over and over.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    assert(await E('memorized'), 'setup: expected the room memorized');
+    await E('clickMemBtn');
+    const menu = await E('gradeMenu');
+    assert(menu.open, 'expected clicking the brain in a memorized room to open the grading menu');
+    assert(menu.items.length === 5,
+      `expected five choices (three grades, unmark, cancel), got ${JSON.stringify(menu.items)}`);
+    assert(/perfectly/i.test(menu.items[0]) && /mostly/i.test(menu.items[1]) && /fail/i.test(menu.items[2]),
+      `expected the three grades first, got ${JSON.stringify(menu.items)}`);
+    assert(await E('memorized'), 'expected the room to STILL be memorized -- the click must not have unmarked it');
+    await E('clickGradeMenuItem', 4);   // Cancel
+    assert(!(await E('gradeMenu')).open, 'expected Cancel to close the menu');
+    ok('Review grading: the brain opens a grading menu in a memorized room (and Cancel closes it)');
+  } catch(e){ bad('Review grading: brain opens the grading menu', e); }
+
+  // 371. Pressing 1 grades the room perfect: a record lands at step 1, the
+  //      due date moves out past the bootstrapped one, and a toast says so.
+  try {
+    await revisit();
+    assert(!(await E('reviewRecord')), 'setup: expected no stored record before the first grade');
+    const boot = await E('reviewFor');
+    assert(boot && boot.step === 0, `setup: expected a bootstrapped record at step 0, got ${JSON.stringify(boot)}`);
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    const rec = await E('reviewRecord');
+    assert(rec && rec.step === 1 && rec.lastGrade === 'A',
+      `expected the bare '1' key to grade the room A and advance it to step 1, got ${JSON.stringify(rec)}`);
+    assert(rec.due > boot.due, 'expected the new due date past the bootstrapped one');
+    const toast = await E('toastText');
+    assert(toast && /perfectly/i.test(toast) && /next review/i.test(toast),
+      `expected a toast naming the grade and the new interval, got ${JSON.stringify(toast)}`);
+    ok('Review grading: a bare 1/2/3 keypress grades the current room and toasts the new interval');
+  } catch(e){ bad('Review grading: keyboard grading', e); }
+
+  // 372. Grading AGAIN in the same visit replaces rather than compounds. A
+  //      fresh room graded A then B must land where a lone B from the
+  //      ORIGINAL record lands (step 0, held), not where a B after the A
+  //      would (step 1) -- that difference is the whole point.
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);    // back to just-memorized
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert((await E('reviewRecord')).step === 1, 'setup: expected the A to advance to step 1');
+    await press('2');
+    await appEG.page.waitForTimeout(120);
+    const rec = await E('reviewRecord');
+    assert(rec.step === 0 && rec.lastGrade === 'B',
+      `expected the second grade to REPLACE the first (B on the pre-grade record holds at step 0), got ${JSON.stringify(rec)}`);
+    // ...but a later visit grades afresh, on top of what's now stored
+    await revisit();
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert((await E('reviewRecord')).step === 1,
+      'expected a NEW visit to grade on top of the stored record, not replace it');
+    ok('Review grading: re-grading in one visit replaces; a new visit grades afresh');
+  } catch(e){ bad('Review grading: re-grade replaces within a visit', e); }
+
+  // 373. The digits are bound bare, so the guard is what keeps them safe:
+  //      nothing at all happens in an unmemorized room, or off the castle
+  //      grid entirely (mainStreet has no position to review).
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);
+    await E('toggleMemorized');                       // now UNmemorized
+    assert(!(await E('memorized')), 'setup: expected the room unmemorized');
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert(!(await E('reviewRecord')),
+      'expected a grade keypress in an unmemorized room to do nothing at all');
+
+    await E('enter', 'mainStreet');
+    await appEG.page.waitForTimeout(150);
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    const street = await appEG.page.evaluate(() => window.__reviewTestHooks.getReviews());
+    assert(!street.mainStreet, `expected no record invented on mainStreet, got ${JSON.stringify(street)}`);
+    ok('Review grading: grade keys do nothing outside a memorized castle room');
+  } catch(e){ bad('Review grading: keys are inert where there is nothing to grade', e); }
+
+  // 374. While the menu is up it owns the keyboard -- a stray walk key must
+  //      not carry you out of the room you are in the middle of grading.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    await E('clickMemBtn');
+    assert((await E('gradeMenu')).open, 'setup: expected the menu open');
+    await press('b');                                  // "take the back door"
+    await appEG.page.waitForTimeout(150);
+    const room = await appEG.page.evaluate(() => window.__threeTestState.room);
+    assert(room === keys.alpha, `expected the menu to swallow the walk key, but we moved to ${room}`);
+    assert((await E('gradeMenu')).open, 'expected the menu still open after a swallowed key');
+    await press('Escape');
+    await appEG.page.waitForTimeout(100);
+    assert(!(await E('gradeMenu')).open, 'expected Escape to close the menu');
+    assert(!(await E('reviewRecord')), 'expected Escape to grade nothing');
+    ok('Review grading: the open menu swallows walk keys; Escape cancels without grading');
+  } catch(e){ bad('Review grading: menu owns the keyboard', e); }
+
+  // 375. Unmarking from the menu drops the review history with it -- a
+  //      re-marked room must not inherit an interval it earned before
+  //      whatever made the user unmark it.
+  try {
+    await revisit();
+    await press('1');
+    await appEG.page.waitForTimeout(120);
+    assert(await E('reviewRecord'), 'setup: expected a stored record to drop');
+    await E('clickMemBtn');
+    await E('clickGradeMenuItem', 3);                  // "Mark not memorized"
+    await appEG.page.waitForTimeout(150);
+    assert(!(await E('memorized')), 'expected the menu item to unmark the room');
+    assert(!(await E('reviewRecord')), 'expected the review record dropped along with the memorized flag');
+    assert(!(await E('reviewFor')), 'expected no effective schedule for an unmemorized room');
+    ok('Review grading: unmarking memorized drops the review history with it');
+  } catch(e){ bad('Review grading: unmark clears the schedule', e); }
+
+  // 376. The brain doubles as the room's due light, so the one thing worth
+  //      doing in the room is visible from inside it.
+  try {
+    await revisit();
+    await E('toggleMemorized');
+    const DAY = 86400000;
+    const tint = async (rec) => {
+      await E('setReviewRecord', keys.alpha, rec);
+      await appEG.page.waitForTimeout(60);
+      return (await E('memBtnStyle')).background;
+    };
+    const now = Date.now();
+    const notdue  = await tint({ last: now, due: now + 10 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    const due     = await tint({ last: now, due: now,            step: 0, lapses: 0, lastGrade: 'A' });
+    const overdue = await tint({ last: now, due: now - 5 * DAY,  step: 0, lapses: 0, lastGrade: 'A' });
+    assert(/56, ?142, ?60/.test(notdue),  `expected green while the schedule is satisfied, got ${notdue}`);
+    assert(/245, ?124, ?0/.test(due),     `expected amber once a review is due, got ${due}`);
+    assert(/198, ?40, ?40/.test(overdue), `expected red once well overdue, got ${overdue}`);
+    const title = await E('memBtnTitle');
+    assert(/overdue/i.test(title) && /1\/2\/3/.test(title),
+      `expected the tooltip to report the state and the grade keys, got ${JSON.stringify(title)}`);
+    ok('Review grading: the brain icon tints by due state and its tooltip reports the schedule');
+  } catch(e){ bad('Review grading: due-state tint', e); }
+
+  // 377. The graded record goes through real IndexedDB on threeVR's own load
+  //      path (loadReviews at openThreeTest), not just the app-side hooks
+  //      Phase EF already covers.
+  try {
+    await revisit();
+    await E('setReviewRecord', keys.alpha, null);
+    await press('1');
+    await appEG.page.waitForTimeout(150);
+    const before = await E('reviewRecord');
+    assert(before && before.step === 1, 'setup: expected a graded record before the reload');
+
+    await appEG.page.reload({ waitUntil: 'domcontentloaded' });
+    await appEG.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appEG.page);
+    await revisit();
+    const after = await E('reviewRecord');
+    assert(after && after.step === 1 && after.lastGrade === 'A',
+      `expected the graded record to survive a reload, got ${JSON.stringify(after)}`);
+    ok('Review grading: a grade persists to IndexedDB and survives a full reload');
+  } catch(e){ bad('Review grading: grade survives a reload', e); }
+} finally {
+  await appEG.close();
+}
+} catch(e){ bad('Phase EG: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EH: the opening graph's Review lens, R3. Three mutually exclusive
+//     view modes behind one dropdown (a node has one fill, so stacked
+//     checkboxes would imply an impossible combination). The review lens
+//     colours each room by when it next falls due, and a memorized room with
+//     no graded record yet still shows a real due state -- bootstrapped from
+//     the memorized timestamp -- so an existing repertoire isn't a wall of
+//     grey. ---
+if(shouldRunPhase(['digraph','move-table'])){
+try {
+const appEH = await launchApp();
+try {
+  // same castle shape Phase EC uses -- rooms under 1.d4 Nf6 2.c4 get real VR
+  // roomKeys, which is what a review record hangs off.
+  await seedBackup(appEH.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEH.page.click('.line-row');
+  await appEH.page.waitForSelector('.data-row', { timeout: 40000 });
+  const openGraph = async () => {
+    await appEH.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEH.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+  };
+  const reopenGraph = async () => {
+    await appEH.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await openGraph();
+  };
+  const revClassOf = (roomKey) => appEH.page.evaluate((k) => {
+    const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+    return n.nonempty() ? (n.classes().find(c => c.startsWith('rev-')) || null) : null;
+  }, roomKey);
+  await openGraph();
+
+  const roomKeys = await appEH.page.evaluate(() => Object.fromEntries(
+    window.__graphTestHooks.cy().nodes()
+      .filter(n => !!n.data('roomKey'))
+      .map(n => [(n.data('seq') || []).join(','), n.data('roomKey')])));
+  const allKeys = [...new Set(Object.values(roomKeys))];
+  if(allKeys.length < 2) throw new Error(`setup: expected at least two castle rooms with roomKeys, got ${JSON.stringify(roomKeys)}`);
+  const rootKey = roomKeys['d4,Nf6,c4'] || allKeys[0];
+  const branchKey = allKeys.find(k => k !== rootKey);
+
+  // 378. A room that was never memorized has no schedule at all, and must
+  //      read differently from one that's memorized and simply not due --
+  //      otherwise an untouched castle looks identical to a mastered one.
+  try {
+    const before = await revClassOf(rootKey);
+    assert(before === 'rev-none', `expected an unmemorized room to score rev-none, got ${before}`);
+
+    // memorized but NEVER graded: still has a due date, derived from when it
+    // was memorized (a day later), so it lands notdue/soon rather than none
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), rootKey);
+    await reopenGraph();
+    const bootstrapped = await revClassOf(rootKey);
+    assert(bootstrapped === 'rev-notdue' || bootstrapped === 'rev-soon',
+      `expected a memorized-but-ungraded room to pick up a bootstrapped schedule, got ${bootstrapped}`);
+    ok('Graph review: a memorized room with no graded record still shows a real due state');
+  } catch(e){ bad('Graph review: bootstrapped due state', e); }
+
+  // 379. The stored record decides the colour, across the whole ramp.
+  try {
+    const DAY = 86400000, now = Date.now();
+    const seed = async (rec) => {
+      await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+        { k: rootKey, r: rec });
+      await reopenGraph();
+      return revClassOf(rootKey);
+    };
+    assert(await seed({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' }) === 'rev-notdue',
+      'expected a record due well out to read up-to-date');
+    assert(await seed({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' }) === 'rev-due',
+      'expected a record due today to read due');
+    assert(await seed({ last: now, due: now - 5 * DAY, step: 0, lapses: 2, lastGrade: 'C' }) === 'rev-overdue',
+      'expected a long-past record to read overdue');
+    ok('Graph review: each room is coloured by its own stored due date');
+  } catch(e){ bad('Graph review: due-state scoring', e); }
+
+  // 380. The three lenses are mutually exclusive -- one fill per node, so
+  //      switching must swap both the class and the legend, never stack them.
+  try {
+    const state = () => appEH.page.evaluate(() => ({
+      cmode: window.__graphTestHooks.cy().nodes('.cmode').length,
+      rmode: window.__graphTestHooks.cy().nodes('.rmode').length,
+      total: window.__graphTestHooks.cy().nodes().length,
+      cLegend: getComputedStyle(document.getElementById('graphCompletenessLegend')).display,
+      rLegend: getComputedStyle(document.getElementById('graphReviewLegend')).display,
+    }));
+    const atOpen = await state();
+    assert(atOpen.cmode === 0 && atOpen.rmode === 0, 'expected a fresh open in the Normal lens');
+    assert(atOpen.rLegend === 'none', 'expected the review legend hidden in the Normal lens');
+
+    await setGraphViewMode(appEH.page, 'completeness');
+    const c = await state();
+    assert(c.cmode === c.total && c.rmode === 0, `expected completeness only, got ${JSON.stringify(c)}`);
+    assert(c.cLegend !== 'none' && c.rLegend === 'none', 'expected only the completeness legend shown');
+
+    await setGraphViewMode(appEH.page, 'review');
+    const r = await state();
+    assert(r.rmode === r.total && r.cmode === 0,
+      `expected switching to Review to drop the completeness class, got ${JSON.stringify(r)}`);
+    assert(r.rLegend !== 'none' && r.cLegend === 'none', 'expected only the review legend shown');
+
+    await setGraphViewMode(appEH.page, 'normal');
+    const n = await state();
+    assert(n.cmode === 0 && n.rmode === 0, `expected Normal to clear both, got ${JSON.stringify(n)}`);
+    ok('Graph review: the three view lenses are mutually exclusive and swap their legends');
+  } catch(e){ bad('Graph review: lens switching', e); }
+
+  // 381. The summary counts what's actually on screen -- the lens exists to
+  //      answer "is there anything to do in this castle?", and a count says
+  //      it outright instead of leaving you to hunt for coloured nodes.
+  try {
+    const DAY = 86400000, now = Date.now();
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' } });
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), branchKey);
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: branchKey, r: { last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' } });
+    await reopenGraph();
+    await setGraphViewMode(appEH.page, 'review');
+    const text = await appEH.page.evaluate(() => document.getElementById('graphReviewSummary').textContent);
+    assert(/2 memorized/.test(text), `expected both memorized rooms counted, got "${text}"`);
+    assert(/1 due/.test(text) && /1 overdue/.test(text), `expected the due and overdue counts, got "${text}"`);
+    ok('Graph review: the legend summarises how many rooms are memorized, due and overdue');
+  } catch(e){ bad('Graph review: due-count summary', e); }
+
+  // 382. A lens is a way of looking at the graph right now, not a setting --
+  //      reopening starts back on Normal rather than silently still recoloured.
+  try {
+    await setGraphViewMode(appEH.page, 'review');
+    await reopenGraph();
+    const after = await appEH.page.evaluate(() => ({
+      mode: window.__graphTestHooks.viewMode(),
+      dropdown: document.getElementById('graphViewMode').value,
+      rmode: window.__graphTestHooks.cy().nodes('.rmode').length,
+      rLegend: getComputedStyle(document.getElementById('graphReviewLegend')).display,
+    }));
+    assert(after.mode === 'normal' && after.dropdown === 'normal',
+      `expected a fresh open back on Normal, got ${JSON.stringify(after)}`);
+    assert(after.rmode === 0 && after.rLegend === 'none',
+      `expected no review styling left over, got ${JSON.stringify(after)}`);
+    ok('Graph review: closing the graph resets the lens for the next open');
+  } catch(e){ bad('Graph review: lens resets on close', e); }
+} finally {
+  await appEH.close();
+}
+} catch(e){ bad('Phase EH: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EI: due-state badges on door signs, R4. The point is spotting a
+//     waiting review from the corridor instead of trying every door, so ONLY
+//     the actionable states badge: a pill on every door of a memorized wing
+//     would be wallpaper. The plaque is a canvas texture with nothing in the
+//     scene graph to read a badge back off, so buildDoorHint records what it
+//     built (doorSigns) -- the real render path, not a reimplementation. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEI = await launchApp();
+try {
+  const keys = await appEI.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  // TWO continuations out of the root, deliberately: a single linear one gets
+  // merged into a corridor room with no door between its members at all, and
+  // this phase is entirely about door signs.
+  await seedBackup(appEI.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEI.page);
+  const E = (fn, ...args) => appEI.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const revisit = async () => { await E('enter', keys.alpha); await appEI.page.waitForTimeout(200); };
+  await revisit();
+
+  const fwd = (await E('exits')).find(e => !e.back);
+  if(!fwd) throw new Error('setup: expected the castle root room to have a forward door');
+  const target = fwd.target;
+  const DAY = 86400000;
+  // put the room beyond the door on a given schedule, then rebuild so the
+  // sign is drawn fresh against it
+  const setTargetReview = async (rec) => {
+    await E('setMemorized', target, !!rec);
+    await E('setReviewRecord', target, rec);
+    await revisit();
+  };
+  const signFor = async () => (await E('doorSigns')).find(s => s.target === target) || null;
+
+  // 383. Only the actionable states badge. "Memorized and up to date" has to
+  //      read the same as "no badge" from the corridor, or the badge stops
+  //      meaning "stop here" and becomes decoration.
+  try {
+    await setTargetReview(null);
+    assert(await E('doorDueState', target) === null,
+      'expected no badge for a room that was never memorized');
+
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    assert(await E('doorDueState', target) === null,
+      'expected no badge for a memorized room that is up to date');
+
+    await setTargetReview({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' });
+    assert(await E('doorDueState', target) === 'due', 'expected a DUE badge for a room due now');
+
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    assert(await E('doorDueState', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
+    ok('Door badge: only due and overdue badge -- up-to-date and unmemorized rooms stay silent');
+  } catch(e){ bad('Door badge: only actionable states badge', e); }
+
+  // 384. The state actually reaches the sign that gets drawn, and tracks the
+  //      room beyond the door rather than the one you're standing in.
+  try {
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    const overdue = await signFor();
+    assert(overdue && overdue.built, `expected a sign built for the door, got ${JSON.stringify(overdue)}`);
+    assert(overdue.dueState === 'overdue',
+      `expected the drawn sign to carry the overdue badge, got ${JSON.stringify(overdue)}`);
+
+    await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    const settled = await signFor();
+    assert(settled && settled.dueState === null,
+      `expected the badge gone once the room beyond is up to date, got ${JSON.stringify(settled)}`);
+    ok('Door badge: the drawn sign carries the badge state of the room beyond the door');
+  } catch(e){ bad('Door badge: badge reaches the rendered sign', e); }
+
+  // 385. The badge rides on the door plaque, so it's hint-gated along with
+  //      it: hints off is self-test mode, where no sign is drawn at all.
+  //      Worth pinning because it's the one place the badge is deliberately
+  //      NOT shown, and a future change to door hints could quietly take it
+  //      with them in the other direction too.
+  try {
+    const now = Date.now();
+    await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    assert((await signFor())?.dueState === 'overdue', 'setup: expected the badge showing with hints on');
+
+    const toggleHints = () => appEI.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await toggleHints();
+    await appEI.page.waitForTimeout(300);
+    const off = await E('doorSigns');
+    assert(off.length === 0, `expected no door signs drawn at all with hints off, got ${JSON.stringify(off)}`);
+
+    await toggleHints();
+    await appEI.page.waitForTimeout(300);
+    assert((await signFor())?.dueState === 'overdue',
+      'expected the badge back once hints are re-enabled');
+    ok('Door badge: hint-gated along with the plaque it rides on');
+  } catch(e){ bad('Door badge: hint gating', e); }
+} finally {
+  await appEI.close();
+}
+} catch(e){ bad('Phase EI: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EJ: structural demotion, R5. A memorized room that picks up a new
+//     door isn't quite the room you learned, so it steps back down the ladder
+//     rather than coasting out to 180 days on reviews that predate the change.
+//     Applying it ONCE is the hard part: isRoomDirty stays true until the user
+//     re-memorizes (that's what the badge is for), so the record tracks which
+//     doors it has already been docked for. Tests shrink the frozen snapshot
+//     instead of regenerating a castle with an extra variation -- same
+//     snapshot-vs-live diff, a fraction of the setup. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEJ = await launchApp();
+try {
+  const keys = await appEJ.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { alpha: pk(['d4','Nf6','c4']) };
+  });
+  await seedBackup(appEJ.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEJ.page);
+  const E = (fn, ...args) => appEJ.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const DAY = 86400000;
+  const LADDER = [1, 3, 7, 21, 60, 180];
+
+  await E('enter', keys.alpha);
+  await appEJ.page.waitForTimeout(200);
+  await E('toggleMemorized');                       // captures the shape snapshot
+  const liveShape = await E('roomShape', keys.alpha);
+  if(!liveShape || (liveShape.exitPosKeys || []).length < 2){
+    throw new Error(`setup: expected the branching root room to have 2+ exits, got ${JSON.stringify(liveShape)}`);
+  }
+  const allExits = liveShape.exitPosKeys.slice();
+  // "a new door landed" == the snapshot doesn't know about one of the live
+  // exits. Forgetting one is indistinguishable from a door being added, and
+  // it's the exact diff isRoomDirty/newDirtyExits run.
+  const forget = (n) => E('setMemorizedShape', keys.alpha,
+    { ...liveShape, exitPosKeys: allExits.slice(0, allExits.length - n) });
+  const seedRecord = (rec) => E('setReviewRecord', keys.alpha, rec);
+  const record = () => E('reviewRecord', keys.alpha);
+
+  // 386. The demotion actually runs as part of starting a walk -- not just
+  //      when a test pokes it -- and pulls the due date in with it.
+  try {
+    const last = Date.now() - DAY;
+    await seedRecord({ last, due: last + LADDER[4] * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await forget(1);
+
+    await appEJ.page.reload({ waitUntil: 'domcontentloaded' });
+    await appEJ.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    await openVR(appEJ.page);
+
+    const rec = await record();
+    assert(rec && rec.step === 3,
+      `expected the changed room stepped back from 4 to 3 on the next walk, got ${JSON.stringify(rec)}`);
+    // dated from the LAST REVIEW, not from today -- the point is to pull the
+    // room forward, and dating it from now would push a changed room further out
+    assert(rec.due <= last + LADDER[3] * DAY && rec.due > last + (LADDER[3] - 1) * DAY,
+      `expected the due date re-measured from the last review (~${LADDER[3]}d after it), got ${rec.due - last}ms after`);
+    assert((rec.dirtySeen || []).includes(allExits[allExits.length - 1]),
+      `expected the door it was docked for recorded, got ${JSON.stringify(rec.dirtySeen)}`);
+    const toast = await E('toastText');
+    assert(toast && /moved up for review/i.test(toast),
+      `expected the walk to say the schedule moved, got ${JSON.stringify(toast)}`);
+    ok('Structural demotion: a changed room steps back down the ladder when the walk starts');
+  } catch(e){ bad('Structural demotion: applied on VR open', e); }
+
+  // 387. ...and exactly once. isRoomDirty is still true (the badge has to
+  //      keep showing until the user re-memorizes), so a naive implementation
+  //      would dock the room again on every single walk.
+  try {
+    const before = await record();
+    assert(before.step === 3, 'setup: expected the demoted record from the previous test');
+    assert(await E('isRoomDirty', keys.alpha),
+      'setup: expected the room to STILL read dirty -- that badge is the point of the idempotency problem');
+
+    const again = await E('runStructuralDemotions');
+    assert(again === 0, `expected no second demotion for the same door, got ${again}`);
+    const after = await record();
+    assert(after.step === 3 && after.due === before.due,
+      `expected the record untouched by a repeat sweep, got ${JSON.stringify(after)}`);
+    assert((await E('newDirtyExits', keys.alpha)).length === 0,
+      'expected the already-docked door to count as settled');
+    ok('Structural demotion: a room is docked once per change, not once per walk');
+  } catch(e){ bad('Structural demotion: idempotent across walks', e); }
+
+  // 388. A SECOND, genuinely new door is a separate change and costs a
+  //      separate step -- the ledger settles doors, it doesn't switch the
+  //      whole mechanism off.
+  try {
+    await forget(2);                                 // a second exit goes unknown
+    const fresh = await E('newDirtyExits', keys.alpha);
+    assert(fresh.length === 1 && fresh[0] === allExits[allExits.length - 2],
+      `expected only the newly-unknown door to count, got ${JSON.stringify(fresh)}`);
+    const n = await E('runStructuralDemotions');
+    assert(n === 1, `expected the new door to cost a step, got ${n} demotions`);
+    const rec = await record();
+    assert(rec.step === 2, `expected a second demotion to step 2, got ${JSON.stringify(rec)}`);
+    assert((rec.dirtySeen || []).length === 2, `expected both doors recorded, got ${JSON.stringify(rec.dirtySeen)}`);
+    ok('Structural demotion: a second, separate change costs a second step');
+  } catch(e){ bad('Structural demotion: a further change demotes again', e); }
+
+  // 389. Grading carries the ledger through. Without this, every grade would
+  //      re-arm every door already accounted for and the room would be docked
+  //      again on the next walk -- the same repetition, one step removed.
+  try {
+    await E('enter', keys.alpha);
+    await appEJ.page.waitForTimeout(150);
+    await E('gradeCurrentRoom', 'A');
+    const graded = await record();
+    assert(graded.step === 3, `setup: expected the A to advance 2 -> 3, got ${JSON.stringify(graded)}`);
+    assert((graded.dirtySeen || []).length === 2,
+      `expected the docked-doors ledger to survive a grade, got ${JSON.stringify(graded.dirtySeen)}`);
+    const n = await E('runStructuralDemotions');
+    assert(n === 0, `expected no demotion after grading the room as it now stands, got ${n}`);
+    ok('Structural demotion: grading carries the ledger, so the same doors never re-arm');
+  } catch(e){ bad('Structural demotion: ledger survives a grade', e); }
+
+  // 390. A room memorized but never graded is already at the bottom of the
+  //      ladder -- there's nothing to demote, and no reason to invent a
+  //      stored record just to say so.
+  try {
+    await seedRecord(null);
+    assert(!(await record()), 'setup: expected no stored record');
+    assert(await E('isRoomDirty', keys.alpha), 'setup: expected the room still dirty');
+    const n = await E('runStructuralDemotions');
+    assert(n === 0, `expected an ungraded room left alone, got ${n} demotions`);
+    assert(!(await record()), `expected no record invented, got ${JSON.stringify(await record())}`);
+    ok('Structural demotion: an ungraded room is left alone rather than given a record');
+  } catch(e){ bad('Structural demotion: ungraded rooms untouched', e); }
+} finally {
+  await appEJ.close();
+}
+} catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

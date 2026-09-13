@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-273';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-277';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-362';
+const BUILD_TAG = '-368';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2352,6 +2352,11 @@ async function loadDecoratedRooms(){
   try { DECORATED_ROOMS = JSON.parse(await getMeta('threeDecoratedRooms') || '{}'); }
   catch { DECORATED_ROOMS = {}; }
 }
+// spaced-repetition review records (see js/threeVR.js's own REVIEWS, which
+// this mirrors) -- same independent-read pattern again. The scheduling rules
+// themselves are db.js's, shared by both modules rather than duplicated.
+let ROOM_REVIEWS = {};
+async function loadRoomReviews(){ ROOM_REVIEWS = await getRoomReviews(); }
 // frozen shape snapshots for memorized rooms (see js/threeVR.js's own
 // MEMORIZED_SHAPES, which this mirrors) -- same independent-read pattern.
 // Used by isRoomDirty below to badge a memorized room whose live shape has
@@ -2428,10 +2433,15 @@ if(localStorage.getItem('threeTestDebug')){
     maxMoves: () => GRAPH_MAX_MOVES,
   };
 }
-let GRAPH_COMPLETENESS_ON = false;
-// the live cytoscape instance, so the toggle can restyle in place. `cy` itself
-// is local to showTranspositionGraph (one per render); this just holds the
-// current one, and is cleared when the overlay closes.
+/* Which lens the graph is being read through: 'normal' (role colours -- root,
+   transposition, all-done), 'completeness' (how much mnemonic work is left),
+   or 'review' (when each memorized room next falls due). One dropdown rather
+   than a checkbox per lens: they're mutually exclusive by nature -- a node has
+   one fill -- and stacked checkboxes would imply otherwise. */
+let GRAPH_VIEW_MODE = 'normal';
+// the live cytoscape instance, so the view-mode switch can restyle in place.
+// `cy` itself is local to showTranspositionGraph (one per render); this just
+// holds the current one, and is cleared when the overlay closes.
 let GRAPH_CY = null;
 function pairCompleteness(seq, mnem){
   const atoms = [lastMoveInfo(seq), lastMoveInfo((seq || []).slice(0, -1))].filter(Boolean);
@@ -2446,19 +2456,45 @@ function pairCompleteness(seq, mnem){
   }
   return missingImg ? 'noimg' : 'ok';
 }
-// reflects GRAPH_COMPLETENESS_ON onto the button, the legend, and the live
-// graph. Toggling only adds/removes one class across existing nodes -- no
-// re-render and no re-layout, so the view doesn't jump while you're working.
-function updateGraphCompletenessVisibility(){
-  const on = GRAPH_COMPLETENESS_ON;
-  $('graphCompletenessToggle').innerHTML =
-    `<i class="fa-${on ? 'solid fa-square-check' : 'regular fa-square'}"></i> Completeness`;
-  $('graphCompletenessLegend').style.display = on ? 'flex' : 'none';
-  if(GRAPH_CY) GRAPH_CY.nodes()[on ? 'addClass' : 'removeClass']('cmode');
+/* Every node carries its cmp-* (completeness) and rev-* (review) class on
+   EVERY render regardless of mode -- they're cheap to compute and it means
+   switching lens is a pure restyle: one class added across existing nodes, no
+   re-render and no re-layout, so the view doesn't jump and a manual drag
+   survives. This reflects GRAPH_VIEW_MODE onto the dropdown, the legends and
+   the live graph. */
+function updateGraphViewMode(){
+  const mode = GRAPH_VIEW_MODE;
+  if($('graphViewMode').value !== mode) $('graphViewMode').value = mode;
+  $('graphCompletenessLegend').style.display = mode === 'completeness' ? 'flex' : 'none';
+  $('graphReviewLegend').style.display       = mode === 'review'       ? 'flex' : 'none';
+  if(GRAPH_CY){
+    const nodes = GRAPH_CY.nodes();
+    nodes[mode === 'completeness' ? 'addClass' : 'removeClass']('cmode');
+    nodes[mode === 'review'       ? 'addClass' : 'removeClass']('rmode');
+  }
+  updateGraphReviewSummary();   // cheap, and it keeps a hidden legend from carrying a stale count into its next showing
 }
-$('graphCompletenessToggle').onclick = () => {
-  GRAPH_COMPLETENESS_ON = !GRAPH_COMPLETENESS_ON;
-  updateGraphCompletenessVisibility();
+/* "12 memorized · 3 due · 1 overdue" beside the review legend. The whole
+   point of the lens is answering "is there anything to do in this castle?",
+   and a count says it outright instead of leaving you to scan for coloured
+   nodes -- particularly in a scope big enough to need panning. Counted off
+   the rendered nodes, so it always describes exactly what's on screen. */
+function updateGraphReviewSummary(){
+  const el = $('graphReviewSummary');
+  if(!el) return;
+  if(!GRAPH_CY){ el.textContent = ''; return; }
+  const n = cls => GRAPH_CY.nodes('.rev-' + cls).length;
+  const memorized = n('notdue') + n('soon') + n('due') + n('overdue');
+  if(!memorized){ el.textContent = 'nothing memorized in this view yet'; return; }
+  const parts = [`${memorized} memorized`];
+  if(n('due'))     parts.push(`${n('due')} due`);
+  if(n('overdue')) parts.push(`${n('overdue')} overdue`);
+  if(!n('due') && !n('overdue')) parts.push('none due');
+  el.textContent = parts.join(' · ');
+}
+$('graphViewMode').onchange = () => {
+  GRAPH_VIEW_MODE = $('graphViewMode').value;
+  updateGraphViewMode();
 };
 
 function graphScopeKey(line, rootSeq){
@@ -2478,6 +2514,10 @@ async function showTranspositionGraph(){
   if(!CURRENT_LINE || !GAMES){ return; }
   $('graphOverlay').style.display='flex';
   $('graphContainer').innerHTML='';
+  // the previous instance's canvas just went with that innerHTML -- drop the
+  // reference too, so nothing between here and the new cytoscape() call (the
+  // view-mode/legend sync, notably) reads a dead graph.
+  GRAPH_CY = null;
 
   const spinner = showSpinner('Building graph…');
   await nextPaint();
@@ -2487,6 +2527,7 @@ async function showTranspositionGraph(){
     await loadMemorizedRooms();
     await loadDecoratedRooms();
     await loadMemorizedShapes();
+    await loadRoomReviews();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
     const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
@@ -2567,7 +2608,7 @@ async function showTranspositionGraph(){
       coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
     $('graphCoverageToggle').style.display = totalCastleRooms ? '' : 'none';
     updateGraphCoverageVisibility();
-    updateGraphCompletenessVisibility();   // keeps the button/legend in step with a mode left on across re-renders
+    updateGraphViewMode();   // keeps the dropdown/legends in step with a mode left on across re-renders
 
     populateGraphCastleSelect();
 
@@ -2726,7 +2767,7 @@ async function showTranspositionGraph(){
         // out the glyphs -- memorized/decorated alone show only their glyph.
         // completeness class rides along on EVERY render (cheap, and it means
         // toggling the view mode never needs a re-render) but only paints
-        // once 'cmode' joins it -- see updateGraphCompletenessVisibility.
+        // once 'cmode' joins it -- see updateGraphViewMode.
         // atoms first (a room with no word yet can't be judged on decoration
         // -- there's nothing to put on the wall). Only once its vocabulary is
         // complete does "is this room actually built out" become the question.
@@ -2734,10 +2775,16 @@ async function showTranspositionGraph(){
         // decoration state to judge and it stays at its atom score.
         const atomState = pairCompleteness(r.seq, mnemForGraph);
         const cmp = 'cmp-' + (atomState === 'ok' && roomKey && !decorated ? 'undecorated' : atomState);
+        // review lens, same ride-along treatment. A memorized room with no
+        // graded record yet still has a schedule (bootstrapped from when it
+        // was memorized -- see db.js effectiveRoomReview), so an existing
+        // repertoire shows real due states rather than a wall of grey.
+        const rev = 'rev-' + roomReviewState(effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, roomKey));
         return {
           data,
-          classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp,
-                    GRAPH_COMPLETENESS_ON ? 'cmode' : ''].filter(Boolean).join(' ')
+          classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp, rev,
+                    GRAPH_VIEW_MODE === 'completeness' ? 'cmode' : '',
+                    GRAPH_VIEW_MODE === 'review' ? 'rmode' : ''].filter(Boolean).join(' ')
         };
       }),
       ...leaves.map(l=>({ data:{id:l.id, label:'?', fen:l.fen}, classes:'locked' })),
@@ -2790,16 +2837,29 @@ async function showTranspositionGraph(){
         { selector:'node.locked', style:{
           'background-color':'#c62828', 'padding':'8px', 'font-size':11
         }},
-        // completeness view mode -- LAST among the node selectors so it wins
-        // over role/status fills while it's on (see the section comment on
-        // GRAPH_COMPLETENESS_ON). Box parents never carry a cmp- class, so
+        // the two view-mode lenses -- LAST among the node selectors so they
+        // win over role/status fills while one is on (see the section comment
+        // on GRAPH_VIEW_MODE). Box parents never carry a cmp-/rev- class, so
         // run/two-track containers keep their own styling and the castle's
-        // structure stays readable in this mode.
+        // structure stays readable in either mode.
         { selector:'node.cmode.cmp-ok',          style:{ 'background-color':'#2e7d32' } },
         { selector:'node.cmode.cmp-undecorated', style:{ 'background-color':'#00838f' } },
         { selector:'node.cmode.cmp-noimg',       style:{ 'background-color':'#ef6c00' } },
         { selector:'node.cmode.cmp-noword',      style:{ 'background-color':'#c62828' } },
         { selector:'node.cmode.cmp-none',        style:{ 'background-color':'#9e9e9e' } },
+        // review: a green -> olive -> orange -> red ramp by urgency, with
+        // "not memorized yet" left grey so an unlearned castle reads as
+        // absent from the schedule rather than as up to date.
+        { selector:'node.rmode.rev-none',        style:{ 'background-color':'#9e9e9e' } },
+        { selector:'node.rmode.rev-notdue',      style:{ 'background-color':'#2e7d32' } },
+        { selector:'node.rmode.rev-soon',        style:{ 'background-color':'#827717' } },
+        { selector:'node.rmode.rev-due',         style:{ 'background-color':'#ef6c00' } },
+        { selector:'node.rmode.rev-overdue',     style:{ 'background-color':'#c62828' } },
+        // The '?' dead-end leaves aren't rooms and carry no score in either
+        // lens. Left alone they keep their red 'locked' fill, which in these
+        // modes reads as "needs a word" / "overdue" -- so grey them out and
+        // let the real scores own the colour scale.
+        { selector:'node.cmode.locked, node.rmode.locked', style:{ 'background-color':'#bdbdbd' } },
         { selector:'edge', style:{
           'width':1.5, 'line-color':'#999', 'target-arrow-color':'#999',
           'target-arrow-shape':'triangle', 'curve-style':'bezier',
@@ -2856,6 +2916,10 @@ async function showTranspositionGraph(){
       $('graphStatus').textContent += ` · ⟳ ${backEdges.size} repetition move(s) drawn dashed`;
     }
     if(flat || deferredEdgeEls.length) cy.fit(cy.elements(), 30);
+    // again now the nodes actually exist: the earlier call (up with the
+    // coverage panel) only had the dropdown and legends to sync, and the
+    // review summary counts real rendered nodes.
+    updateGraphViewMode();
     attachGraphClickHandler(cy);
     attachGraphContextMenu(cy, scopeKey);
     attachGraphHoverTooltip(cy);
@@ -2902,6 +2966,15 @@ async function showTranspositionGraph(){
           if(val) map[roomKey] = Date.now(); else delete map[roomKey];
           await setMeta('threeDecoratedRooms', JSON.stringify(map));
         },
+        // ...and for a room's spaced-repetition record, so a test can place a
+        // room anywhere on the ladder (or well overdue) without waiting days
+        // for the schedule to actually move.
+        setReviewRecord: async (roomKey, rec) => {
+          const map = await getRoomReviews();
+          if(rec) map[roomKey] = rec; else delete map[roomKey];
+          await setRoomReviews(map);
+        },
+        viewMode: () => GRAPH_VIEW_MODE,
         // a node's rendered label (carries the moveQuality glyph and, once
         // decorated, the 🎨 glyph appended in showTranspositionGraph).
         labelOf: (fen) => {
@@ -2957,10 +3030,10 @@ $('graphCloseBtn').onclick = () => {
   hideGraphCtxMenu();
   GRAPH_FOCUS_SEQ = null;      // each fresh open starts at the move-table scope
   GRAPH_COVERAGE_OPEN = false;   // ...and with the coverage panel collapsed
-  GRAPH_COMPLETENESS_ON = false; // ...and in the normal (role-coloured) view
+  GRAPH_VIEW_MODE = 'normal';    // ...and in the normal (role-coloured) view
   GRAPH_RENDER_ANYWAY = false;   // ...and with the size guard back in force
   GRAPH_CY = null;               // the instance dies with the overlay's container
-  updateGraphCompletenessVisibility();
+  updateGraphViewMode();
 };
 
 // reflects GRAPH_COVERAGE_OPEN onto the toggle button's icon/title and the
@@ -6480,6 +6553,7 @@ async function buildBackupData(){
     threeLayout: await getMeta('threeLayout'),   // VR memory-palace layout: object placements, per-building style defaults & presets
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
     decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
+    roomReviews: await getMeta(ROOM_REVIEWS_KEY),           // VR room progress: spaced-repetition review history
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     assets: await getAllAssets(),
@@ -6598,6 +6672,13 @@ async function applyBackupData(data, onMnemProgress){
     if(typeof data.threeLayout === 'string') await setMeta('threeLayout', data.threeLayout);
     if(typeof data.memorizedRooms === 'string') await setMeta('threeMemorizedRooms', data.memorizedRooms);
     if(typeof data.decoratedRooms === 'string') await setMeta('threeDecoratedRooms', data.decoratedRooms);
+    // absent in any backup taken before review scheduling existed. Restoring
+    // one of those leaves no review history -- clearAllData() has already
+    // emptied the meta store by this point -- which is the same thing that
+    // happens to memorized/decorated flags, and is what a full restore means.
+    // Every memorized room then re-bootstraps a schedule from its own
+    // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
+    if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
@@ -11494,6 +11575,31 @@ if(localStorage.getItem('threeTestDebug')){
       try { return aqProgressHtml(item); }
       finally { aqCurrentItem = savedItem; aqCurrentProgress = savedProgress; }
     },
+  };
+}
+
+// test-only hook for room review scheduling (R1: the data model and the
+// ladder, ahead of any UI). The scheduling functions live in db.js as plain
+// globals so both modules can reach them -- exposed here because app.js is
+// where the harness drives things from. `now`/`rand` are passed straight
+// through so a test can be deterministic about both the clock and the fuzz.
+if(localStorage.getItem('threeTestDebug')){
+  window.__reviewTestHooks = {
+    ladder: () => ROOM_REVIEW_LADDER.slice(),
+    fuzz: () => ROOM_REVIEW_FUZZ,
+    nextStep: (step, grade, lastGrade) => nextReviewStep(step, grade, lastGrade),
+    // `rand == null`, not a falsy check: rand 0 is a legitimate value (the
+    // bottom of the fuzz band) and would otherwise be passed straight through
+    // as a non-function.
+    applyGrade: (record, grade, now, rand) =>
+      applyRoomReviewGrade(record, grade, now, rand == null ? undefined : () => rand),
+    bootstrap: (memorizedAt) => bootstrapRoomReview(memorizedAt),
+    state: (record, now) => roomReviewState(record, now),
+    getReviews: () => getRoomReviews(),
+    setReviews: (map) => setRoomReviews(map),
+    // the raw meta value, for asserting what a backup actually round-tripped
+    rawMeta: () => getMeta(ROOM_REVIEWS_KEY),
+    dayMs: () => DAY_MS,
   };
 }
 
