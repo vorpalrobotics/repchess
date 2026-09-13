@@ -15291,6 +15291,146 @@ try {
 } catch(e){ bad('Phase CS: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EK: the auto-import's own toasts. The #progress line Phase CS
+//     covers is easy to miss; these are the part you actually notice. One per
+//     platform rather than one combined message, because the two fetches
+//     finish at different times -- and they STACK, since a single-slot toast
+//     would have chess.com's result wipe out Lichess's. ---
+if(shouldRunPhase(['auto-import'])){
+try {
+const appEK = await launchApp();
+try {
+  const acKeysEK = await appEK.page.evaluate(() => window.__autoImportTestHooks.keys);
+  const toasts = () => appEK.page.evaluate(() => window.__autoImportTestHooks.toastTexts());
+  const clearToasts = () => appEK.page.evaluate(() =>
+    document.querySelectorAll('#toastStack .app-toast').forEach(t => t.remove()));
+
+  // 391. Both platforms bring in new games: two toasts, both readable at
+  //      once, each naming its own platform and count. Driven through a real
+  //      page reload rather than the hook -- enabling the feature while the
+  //      boot-time check is still in flight and THEN calling the hook runs
+  //      the check twice, which is a test artifact but produces duplicate
+  //      toasts that look exactly like a product bug. Reloading lets the
+  //      real boot trigger be the only caller, and proves the toasts fire on
+  //      the path the user actually hits.
+  try {
+    // let the page's OWN boot check finish first. It's fired fire-and-forget
+    // and launchApp returns before it settles, so enabling the feature while
+    // it's still in flight has it pick the new settings up mid-run -- and
+    // then the reload below is a second run, with the two together looking
+    // just like a duplicated toast.
+    await appEK.page.evaluate(() => window.__appBootSettled);
+    // deliberately NOT localStorage.clear() -- that would drop threeTestDebug,
+    // and the reload below would come back with no test hooks at all
+    await appEK.page.evaluate((keys) => {
+      localStorage.setItem('lichess_lastUser', 'toastli');
+      localStorage.setItem('chesscom_lastUser', 'toastcc');
+      localStorage.setItem(keys.autoImport, '1');
+      localStorage.removeItem(keys.lichessCheck);
+      localStorage.removeItem(keys.chesscomCheck);
+    }, acKeysEK);
+    await mockLichessGames(appEK.page, 'toastli', [
+      { id: 'tl1', moves: 'e4 e5', createdAt: 1000, players: { white: { user: { name: 'toastli' } }, black: { user: { name: 'opp' } } } },
+      { id: 'tl2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'toastli' } }, black: { user: { name: 'opp' } } } },
+    ]);
+    await mockChessComGames(appEK.page, 'toastcc', [
+      {
+        uuid: 'tc1', url: 'https://www.chess.com/game/live/1', rated: true, time_class: 'blitz', end_time: 1700000000,
+        pgn: '1. d4 d5 2. c4 e6',
+        white: { username: 'toastcc', rating: 1500, result: 'win' },
+        black: { username: 'opp2', rating: 1500, result: 'resigned' },
+      },
+    ]);
+    await appEK.page.reload({ waitUntil: 'domcontentloaded' });
+    await appEK.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0;
+    }, { timeout: 15000 });
+    // the reloaded page's own boot chain -- resolves the moment both imports
+    // are done, so the first toast is read as soon as possible rather than
+    // being polled for while its dismiss timer runs down
+    await appEK.page.waitForFunction(() => !!window.__appBootSettled, { timeout: 15000 });
+    await appEK.page.evaluate(() => window.__appBootSettled);
+    assert(!(await appEK.page.evaluate(() => window.__autoImportTestHooks.shouldAutoCheck('lichess')))
+      && !(await appEK.page.evaluate(() => window.__autoImportTestHooks.shouldAutoCheck('chesscom'))),
+      'setup: expected the boot check to have run both platforms');
+
+    const shown = await toasts();
+    assert(shown.length === 2, `expected one toast per platform, got ${JSON.stringify(shown)}`);
+    assert(shown.some(t => /2 new games from Lichess/.test(t)),
+      `expected a Lichess toast naming its own count, got ${JSON.stringify(shown)}`);
+    assert(shown.some(t => /1 new game from chess\.com/.test(t)),
+      `expected a chess.com toast naming its own count (singular), got ${JSON.stringify(shown)}`);
+    ok('auto-import toast: one per platform, both stacked and readable at once');
+  } catch(e){ bad('auto-import toast: one per platform, stacked', e); }
+
+  // 392. Nothing new from a platform means nothing said about it. A daily
+  //      background check announcing "0 new" every morning is noise, and
+  //      staying out of the way is this feature's whole discipline.
+  try {
+    await clearToasts();
+    await appEK.page.evaluate((keys) => {
+      localStorage.removeItem(keys.lichessCheck);
+      localStorage.removeItem(keys.chesscomCheck);
+    }, acKeysEK);
+    // same mocks, and everything they return is now already on file
+    await appEK.page.evaluate(() => window.__autoImportTestHooks.runAutoImportCheck());
+    const shown = await toasts();
+    assert(shown.length === 0, `expected no toast when every fetched game was a duplicate, got ${JSON.stringify(shown)}`);
+    ok('auto-import toast: silent when a check turns up nothing new');
+  } catch(e){ bad('auto-import toast: silent on zero new games', e); }
+
+  // 393. The toasts share the corner with the persistent new-transposition
+  //      toast rather than covering it -- an auto-import is exactly what
+  //      raises one of those, so the overlap is real, not hypothetical.
+  //      Both must be in the stack and neither positioned on top of the other.
+  try {
+    await clearToasts();
+    await appEK.page.evaluate(() => {
+      window.__autoImportTestHooks.showAppToast('first toast');
+      window.__autoImportTestHooks.showAppToast('second toast');
+      window.__redirectTestHooks.showNewTranspositionsToast(3);
+    });
+    const boxes = await appEK.page.evaluate(() => {
+      const stack = document.getElementById('toastStack');
+      const inStack = (el) => !!el && el.parentElement === stack;
+      const rects = [...stack.children]
+        .filter(el => getComputedStyle(el).display !== 'none')
+        .map(el => el.getBoundingClientRect())
+        .map(r => ({ top: r.top, bottom: r.bottom }));
+      return { transpInStack: inStack(document.getElementById('newTranspToast')), rects };
+    });
+    assert(boxes.transpInStack, 'expected the persistent transposition toast to live in the shared stack');
+    assert(boxes.rects.length === 3, `expected all three toasts laid out, got ${boxes.rects.length}`);
+    const sorted = boxes.rects.slice().sort((a, b) => a.top - b.top);
+    for(let i = 1; i < sorted.length; i++){
+      assert(sorted[i].top >= sorted[i - 1].bottom - 0.5,
+        `expected the toasts stacked clear of each other, got ${JSON.stringify(sorted)}`);
+    }
+    // and the dismiss button of a stacked toast is still actually clickable
+    // (the container sets pointer-events:none -- each toast has to take it back)
+    await appEK.page.click('#newTranspToastDismissBtn');
+    assert(!(await appEK.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible())),
+      'expected the transposition toast dismissable while transient toasts sit alongside it');
+    ok('auto-import toast: stacks clear of the persistent transposition toast, all still clickable');
+  } catch(e){ bad('auto-import toast: shares the corner with the transposition toast', e); }
+
+  // 394. They clear themselves. A background notification that piles up
+  //      until reload would end up covering the corner of the app.
+  try {
+    await clearToasts();
+    await appEK.page.evaluate(() => window.__autoImportTestHooks.showAppToast('fades away', 150));
+    assert((await toasts()).length === 1, 'setup: expected the toast up');
+    await appEK.page.waitForTimeout(900);
+    assert((await toasts()).length === 0, `expected the toast gone after its timeout, got ${JSON.stringify(await toasts())}`);
+    ok('auto-import toast: auto-dismisses rather than piling up');
+  } catch(e){ bad('auto-import toast: auto-dismiss', e); }
+} finally {
+  await appEK.close();
+}
+} catch(e){ bad('Phase EK: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase CT: migrateLegacyUserData -- the reported bug. Before CURRENT_USER
 //     was removed as an identity concept, games/lines/analysisQueue were
 //     stored keyed by whatever real username had been bootstrapped as the
