@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-368';
+const BUILD_TAG = '-369';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -113,6 +113,43 @@ const $   = id => document.getElementById(id);
 const log = (m,e=false)=>{ $('progress').textContent=m; $('progress').classList.toggle('error',e); };
 const clr = ()=>{ $('progress').textContent='';$('progress').classList.remove('error'); };
 const logDl = (m,e=false)=>{ $('downloadProgress').textContent=m; $('downloadProgress').classList.toggle('error',e); };
+
+/* ---------- transient toast ----------
+   A short message in the bottom-right stack (#toastStack, shared with the
+   persistent new-transposition toast). STACKS rather than replacing: the
+   auto-import check reports each platform separately and finishes them at
+   different times, so one overwriting the other would lose half the news.
+
+   Longer-lived than the VR walk's own toast (3.5s), because this one reports
+   something that happened while you weren't necessarily looking -- a
+   background import finishing on its own. Carries a manual dismiss for the
+   same reason: a timeout long enough to be read is long enough to be in the
+   way. Returns the element so a caller can close it early. */
+const APP_TOAST_MS = 9000;
+function showAppToast(msg, { timeout = APP_TOAST_MS } = {}){
+  const stack = $('toastStack');
+  if(!stack) return null;
+  const el = document.createElement('div');
+  el.className = 'toast-card app-toast';
+  const text = document.createElement('span');
+  text.textContent = msg;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toast-dismiss';
+  btn.title = 'Dismiss';
+  btn.setAttribute('aria-label', 'Dismiss');
+  btn.innerHTML = '<i class="fa-solid fa-circle-xmark"></i>';
+  const close = () => {
+    if(!el.isConnected) return;
+    el.classList.add('fading');
+    setTimeout(() => el.remove(), 400);   // matches the CSS opacity transition
+  };
+  btn.addEventListener('click', close);
+  el.append(text, btn);
+  stack.appendChild(el);
+  if(timeout) setTimeout(close, timeout);
+  return el;
+}
 
 /* ---------- general-purpose spinner ----------
    showSpinner(label) shows the overlay and returns a handle; hideSpinner(handle)
@@ -1097,6 +1134,7 @@ async function importGamesFromPlatform(source, username, sizeParam, { onFetchPro
 // (new games found), left completely alone otherwise. Checks both platforms
 // independently; one platform's failure doesn't stop the other from being
 // checked.
+const AUTO_IMPORT_SOURCE_LABEL = { lichess: 'Lichess', chesscom: 'chess.com' };
 async function runAutoImportCheck(){
   if(!GAMES) GAMES = await getGames(LOCAL_USER);
   autoImportLog('daily check starting…');
@@ -1116,7 +1154,16 @@ async function runAutoImportCheck(){
       const result = await importGamesFromPlatform(source, username, sizeParam);
       markAutoCheckSucceeded(source);
       autoImportLog(`[${source}] check succeeded: ${result.newCount} new game(s), ${result.duplicateCount} already had`);
-      if(result.newCount > 0) newGamesBySource.push({ source, newCount: result.newCount });
+      if(result.newCount > 0){
+        newGamesBySource.push({ source, newCount: result.newCount });
+        // Toasted here, per platform, rather than as one combined message
+        // after the loop: the two fetches finish at different times, and the
+        // Lichess result is worth showing while chess.com is still going.
+        // Nothing is said for a platform with no new games -- a daily
+        // background check announcing "0 new" twice every morning is noise,
+        // and this feature's whole discipline is staying out of the way.
+        showAppToast(`Imported ${result.newCount} new game${result.newCount === 1 ? '' : 's'} from ${AUTO_IMPORT_SOURCE_LABEL[source]}`);
+      }
     } catch(err){
       // deliberately NOT marking today's check done -- see markAutoCheckSucceeded's
       // own doc comment: a transient failure should retry on the next refresh,
@@ -1126,9 +1173,10 @@ async function runAutoImportCheck(){
       autoImportLog(`[${source}] check FAILED: ${err.message} -- will retry on the next refresh`);
     }
   }
+  // The #progress line stays alongside the toasts, deliberately: the toasts
+  // fade, and this is the persistent trace of what the last check did.
   if(newGamesBySource.length){
-    const label = { lichess: 'Lichess', chesscom: 'chess.com' };
-    const parts = newGamesBySource.map(r => `${r.newCount} from ${label[r.source]}`);
+    const parts = newGamesBySource.map(r => `${r.newCount} from ${AUTO_IMPORT_SOURCE_LABEL[r.source]}`);
     log(`Auto-imported ${parts.join(', ')}`);
   }
 }
@@ -1149,6 +1197,12 @@ if(localStorage.getItem('threeTestDebug')){
     importGamesFromPlatform: (source, username, sizeParam) => importGamesFromPlatform(source, username, sizeParam),
     isAutoImportVerbose: () => isAutoImportVerbose(),
     runAutoImportCheck: () => runAutoImportCheck(),
+    // the transient toasts currently in the bottom-right stack, oldest
+    // first -- #newTranspToast lives there too but is markup, not one of
+    // these, so it never shows up here.
+    toastTexts: () => [...document.querySelectorAll('#toastStack .app-toast')]
+      .map(t => t.querySelector('span').textContent),
+    showAppToast: (msg, timeout) => { showAppToast(msg, { timeout }); },
     getGames: () => getGames(LOCAL_USER),
   };
 }
@@ -6321,7 +6375,7 @@ $('dlBtn').onclick = async ()=>{
 // ran second. .catch() (not a try/catch inside the function) so a migration
 // failure can never hang the rest of boot -- same "never blocks rendering"
 // guarantee maybeRecoverFromInterruptedRestore already gives itself internally.
-migrateLegacyUserData(LOCAL_USER)
+const APP_BOOT_CHAIN = migrateLegacyUserData(LOCAL_USER)
   .catch(err => console.error('[migration] failed to migrate pre-CURRENT_USER-removal data', err))
   .then(() => maybeRecoverFromInterruptedRestore())
   .then(() => {
@@ -6338,10 +6392,17 @@ migrateLegacyUserData(LOCAL_USER)
     // tests' "clean slate" build-count assertions; Phase DO/DP's own tests
     // drive this explicitly instead (see checkTranspositionsAtBoot's own
     // doc comment).
-    runAutoImportCheck().finally(() => {
+    // returned (not fired bare) so APP_BOOT_CHAIN resolves only once the
+    // auto-import check has actually settled. Nothing in the app awaits the
+    // chain -- this is purely so a test can wait for the one-shot boot check
+    // to be over before changing the settings it reads. Flipping the feature
+    // on while it's still in flight makes it run against half-applied state,
+    // which looks exactly like a product bug (a duplicated toast) and isn't.
+    return runAutoImportCheck().finally(() => {
       if(!localStorage.getItem('threeTestDebug')) checkTranspositionsAtBoot();
     });
   });
+if(localStorage.getItem('threeTestDebug')) window.__appBootSettled = APP_BOOT_CHAIN;
 
 // auto-start the background analysis queue: load whatever's left over from a
 // prior session and let it start chugging as soon as the engine is ready (see

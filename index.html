@@ -419,12 +419,27 @@
   #spinnerLabel{font-size:.9em;color:#333;background:#fff;padding:.2em .7em;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
   @keyframes spinnerSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
+  /* Bottom-right toast stack. Everything that pops a toast lives in this one
+     column so two can never land on top of each other -- the auto-import
+     reports (one per platform, transient) and the new-transposition toast
+     (persistent) share it, and an auto-import is exactly the thing that can
+     raise a new transposition, so that overlap is real, not hypothetical.
+     Newest goes to the bottom, nearest the corner. The container ignores
+     pointer events so it can span the corner without stealing clicks from
+     the page underneath; each toast in it takes them back. */
+  #toastStack{position:fixed;right:1.2rem;bottom:1.2rem;z-index:200;display:flex;flex-direction:column;align-items:flex-end;gap:.5rem;pointer-events:none}
+  #toastStack > *{pointer-events:auto}
+  .toast-card{background:#fff;border:1px solid #888;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.3);padding:.6em .8em;align-items:center;gap:.6em;font-size:.9em;max-width:min(24rem,80vw)}
+  .toast-dismiss{background:none;border:none;cursor:pointer;font-size:1.15em;color:#888;padding:.1em .25em;line-height:1;min-width:1.6em;min-height:1.6em}
+  .toast-dismiss:hover{color:#333}
   /* new-transposition toast -- persistent (no auto-dismiss timer), sits
-     bottom-right until the user clicks Show or dismisses it. */
-  #newTranspToast{position:fixed;right:1.2rem;bottom:1.2rem;background:#fff;border:1px solid #888;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.3);padding:.6em .8em;display:none;align-items:center;gap:.6em;z-index:200;font-size:.9em}
+     there until the user clicks Show or dismisses it. */
+  #newTranspToast{display:none}
   #newTranspToastShowBtn{white-space:nowrap;padding:.3rem .7rem}
-  #newTranspToastDismissBtn{background:none;border:none;cursor:pointer;font-size:1.15em;color:#888;padding:.1em .25em;line-height:1;min-width:1.6em;min-height:1.6em}
-  #newTranspToastDismissBtn:hover{color:#333}
+  /* transient informational toast (see showAppToast) -- same card, fades
+     itself out on a timer. */
+  .app-toast{display:flex;opacity:1;transition:opacity .4s}
+  .app-toast.fading{opacity:0}
 
   .main-layout{display:flex;align-items:flex-start;gap:1.5rem}
   #tree-col{flex:1 1 auto;min-width:0}
@@ -1270,13 +1285,17 @@
   </div>
 </div>
 
-<!-- persistent toast: raised when an edit/import creates a new cross-castle
-     transposition (see findTransposedRooms) -- stays up until Show or
-     dismiss, doesn't survive a reload. -->
-<div id="newTranspToast">
-  <span id="newTranspToastText"></span>
-  <button type="button" id="newTranspToastShowBtn">Show</button>
-  <button type="button" id="newTranspToastDismissBtn" title="Dismiss" aria-label="Dismiss"><i class="fa-solid fa-circle-xmark"></i></button>
+<!-- bottom-right toast column; see #toastStack in the stylesheet. Transient
+     toasts (showAppToast) are appended here at runtime. -->
+<div id="toastStack">
+  <!-- persistent toast: raised when an edit/import creates a new cross-castle
+       transposition (see findTransposedRooms) -- stays up until Show or
+       dismiss, doesn't survive a reload. -->
+  <div id="newTranspToast" class="toast-card">
+    <span id="newTranspToastText"></span>
+    <button type="button" id="newTranspToastShowBtn">Show</button>
+    <button type="button" id="newTranspToastDismissBtn" class="toast-dismiss" title="Dismiss" aria-label="Dismiss"><i class="fa-solid fa-circle-xmark"></i></button>
+  </div>
 </div>
 
 <!-- node attributes modal (Set Attributes on a row) -->
@@ -1767,6 +1786,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-368"></script>
+<script type="module" src="js/app.js?v=20260804-369"></script>
 </body>
 </html>
