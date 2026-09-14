@@ -5028,8 +5028,13 @@ try {
     await appAF.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
   } catch(e){ bad('room-info modal: Jump to VR hidden without a roomKey', e); }
 
-  // 91. Clicking Jump with VR closed (re)builds the main world and lands
-  //     directly in the target room, closing the room-info modal.
+  // 91. Clicking Jump with VR closed (re)builds the main world and lands at
+  //     the door INTO the target room, closing the room-info modal. A jump
+  //     is for reviewing the room: standing at its door with the sign in
+  //     view is the position to recall it from, where landing inside puts
+  //     the answers on the walls around you. This castle's target IS its
+  //     entry room, which no door leads to -- it's reached through the
+  //     street building, so the door to stand at is the building's own.
   try {
     await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
     await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
@@ -5042,30 +5047,43 @@ try {
       room: window.__threeTestEdit.room(),
       overlay: document.getElementById('roomInfoOverlay').style.display,
     }));
-    assert(state.room === roomKey, `expected to land directly in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.room === 'mainStreet',
+      `expected to land OUTSIDE the entry room, on the street by its building door, got ${state.room}`);
     assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
-    ok('room-info modal: "Jump to VR" with VR closed builds the world and lands in the target room');
+    // ...and facing it: the whole point is that one step forward walks in
+    const arrived = await appAF.page.evaluate(async (target) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room() === target;
+    }, roomKey);
+    assert(arrived, 'expected to be facing the door -- walking forward should enter the target room');
+    ok('room-info modal: "Jump to VR" with VR closed lands at the door into the target room, facing it');
   } catch(e){ bad('room-info modal: Jump to VR with VR closed', e); }
 
   // 92. With VR already open (fast path via jumpToRoom, no rebuild), jumping
   //     from a room-info modal opened UNDERNEATH the still-open VR overlay
-  //     lands in the target room instantly.
+  //     puts you at the same door the slow path does -- the two must not
+  //     disagree about where a jump lands you.
   try {
-    // step 91 left VR open in the target room -- walk back out to Main Street
-    // first so this is a real jump, not a no-op re-entry into the same room.
-    await appAF.page.evaluate(() => window.__threeTestEdit.enter('mainStreet'));
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    // stand INSIDE the target room first, so the jump has somewhere to move
+    // us from (landing on the street is now the expected result, not a no-op).
+    await appAF.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
     await appAF.page.waitForTimeout(100);
+    assert(await appAF.page.evaluate(() => window.__threeTestEdit.room()) === roomKey,
+      'setup: expected to be standing in the target room before jumping');
     await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
     await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
     await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').click());
     await appAF.page.waitForTimeout(200);
-    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
     const state = await appAF.page.evaluate(() => ({
       room: window.__threeTestEdit.room(),
       overlay: document.getElementById('roomInfoOverlay').style.display,
       graphOverlay: document.getElementById('graphOverlay').style.display,
     }));
-    assert(state.room === roomKey, `expected the fast path to land in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.room === 'mainStreet',
+      `expected the fast path to land at the entry room's street door too, got ${state.room} (target was ${roomKey})`);
     assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
     assert(state.graphOverlay === 'flex', 'expected the digraph overlay to stay open underneath, not close on jump');
     ok('room-info modal: "Jump to VR" with VR already open takes the fast path (no rebuild)');
@@ -20556,6 +20574,114 @@ try {
   await appEJ.close();
 }
 } catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EL: a jump lands you at a door INTO the room, not inside it.
+//     Reviewing a room means standing at its door and recalling what's in
+//     there before walking in to check; landing in the middle puts the
+//     answers on the walls around you and the name sign behind your head.
+//     A transposition can be reached through several doors -- any will do,
+//     except that one in the room's own castle is preferred. ---
+if(shouldRunPhase(['vr-castle','digraph'])){
+try {
+const appEL = await launchApp();
+try {
+  const keys = await appEL.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { root: pk(['d4','Nf6','c4']), viaE6: pk(['d4','Nf6','c4','e6','Nc3']) };
+  });
+  // Branching, so the root is a room of its own with real doors off it -- a
+  // single linear continuation would merge into one corridor with no interior
+  // door to stand at. And the e6 branch continues PAST Nc3, so that room is
+  // not a dead end: a dead end's door is deliberately locked (no teleport
+  // trigger at all -- see buildRoom's `locked` check), which is also why the
+  // room-info modal hides Jump for one.
+  await seedBackup(appEL.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEL.page);
+  const E = (fn, ...args) => appEL.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+
+  // 397. Jumping to a room reached by an interior door puts you in the room
+  //      that HOLDS that door, a couple of metres back, facing it.
+  try {
+    await E('enter', 'mainStreet');
+    await appEL.page.waitForTimeout(150);
+    await E('jumpToRoom', keys.viaE6);
+    await appEL.page.waitForTimeout(250);
+    const landed = await E('room');
+    assert(landed !== keys.viaE6,
+      'expected NOT to land inside the target room -- the whole point is to stand outside it');
+    assert(landed === keys.root,
+      `expected to land in the room holding the door (the castle root), got ${landed}`);
+
+    // roughly 2-3m back: close enough to read the sign over the lintel, far
+    // enough not to be standing in the doorway (whose trigger reaches 1m in)
+    const { pos, door } = await appEL.page.evaluate((target) => {
+      const dbg = window.__threeTestEdit;
+      const ex = dbg.exits().find(e => e.target === target);
+      return { pos: dbg.pos(), door: ex };
+    }, keys.viaE6);
+    assert(door, 'setup: expected the root room to have a door to the target');
+    // distance from the doorway along the wall's inward axis
+    const away = (door.wall === 'north' || door.wall === 'south')
+      ? Math.abs(pos.z) : Math.abs(pos.x);
+    assert(away > 1.2, `expected to be standing clear of the doorway's own trigger box, got ${away.toFixed(2)}m from the wall`);
+    ok('Jump to VR: lands in the room holding the door, standing back from it');
+  } catch(e){ bad('Jump to VR: lands at the door, not inside the room', e); }
+
+  // 398. And facing it -- walking forward from where the jump put you goes
+  //      straight through. This is the assertion that actually pins "facing
+  //      the door"; a yaw check would only restate the arithmetic.
+  try {
+    const arrived = await appEL.page.evaluate(async (target) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room();
+    }, keys.viaE6);
+    assert(arrived === keys.viaE6,
+      `expected walking forward from the jump spot to enter the target room, ended up in ${arrived}`);
+    ok('Jump to VR: you arrive facing the door -- walking forward goes through it');
+  } catch(e){ bad('Jump to VR: arrives facing the door', e); }
+
+  // 399. A castle's entry room has no interior door into it at all; it's
+  //      reached through the street building. The jump goes to the street,
+  //      which is where that room's own sign and move images live anyway.
+  try {
+    await E('enter', keys.viaE6);
+    await appEL.page.waitForTimeout(150);
+    await E('jumpToRoom', keys.root);
+    await appEL.page.waitForTimeout(250);
+    const landed = await E('room');
+    assert(landed === 'mainStreet',
+      `expected a jump to the entry room to land on the street outside its building, got ${landed}`);
+    const arrived = await appEL.page.evaluate(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room();
+    });
+    assert(arrived === keys.root,
+      `expected to be facing the building's front door, ended up in ${arrived}`);
+    ok("Jump to VR: a castle's entry room is approached from the street, facing its building");
+  } catch(e){ bad('Jump to VR: entry room approached from the street', e); }
+} finally {
+  await appEL.close();
+}
+} catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

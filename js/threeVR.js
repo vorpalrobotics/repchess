@@ -5615,6 +5615,124 @@ function doorSpawn(size, wall, offset, origin, inside){
   return { x: x + origin.x, z: z + origin.z, yaw };
 }
 
+/* ---------- standing outside a room, looking at its door ----------
+   Reviewing a room means standing at its door and recalling what's inside --
+   the name on the sign, the doors leading off it, its objects and move
+   images -- before walking in to check. Landing in the middle of the room
+   instead puts the answer on the walls around you and the sign behind your
+   head, which spoils the recall before it starts. So a jump to a room
+   arrives at a door INTO it. */
+const DOOR_VIEW_DIST = 2.6;      // back far enough to take in the sign above the lintel
+
+// The mirror of doorSpawn's "inside" spawn: the same side of the wall, but
+// stepped further back and turned around to FACE the doorway.
+function doorViewSpawn(size, wall, offset, origin){
+  origin = origin || { x: 0, z: 0 };
+  const { fixed } = wallSpan(size, wall);
+  // capped by the room's own depth, exactly as doorSpawn caps its own inset:
+  // a short room would otherwise stand you out past its opposite wall. The
+  // door's trigger box only reaches 1m in (doorTriggerBox), so the full
+  // 2.6m also means arriving here never immediately walks you through.
+  const depthDim = (wall === 'north' || wall === 'south') ? size.d : size.w;
+  const inset = Math.min(DOOR_VIEW_DIST, Math.max(0.6, depthDim/2 - 0.3));
+  let x, z, yaw;
+  if(wall === 'north'){ x = offset; z = fixed + inset; yaw = 0; }
+  if(wall === 'south'){ x = offset; z = fixed - inset; yaw = Math.PI; }
+  if(wall === 'west'){  z = offset; x = fixed + inset; yaw = Math.PI/2; }
+  if(wall === 'east'){  z = offset; x = fixed - inset; yaw = -Math.PI/2; }
+  return { x: x + origin.x, z: z + origin.z, yaw };
+}
+
+/* Which door to walk up to in order to look at `targetKey` from outside.
+   Returns { roomKey, spawn } -- the room to stand in and where to stand in
+   it -- or null when nothing leads there at all (a linked foreign castle's
+   entry with neither a street building nor an incoming door).
+
+   A transposition room can be reached through several doors, and which one
+   hardly matters so long as it leads there -- except that a door in the
+   room's OWN castle is preferred, since recalling a room while standing in
+   some foreign corridor that happens to transpose into it is recalling it in
+   the wrong context. Elevator doors are the last resort: a floor panel is a
+   lift directory, not a door with a sign over it. */
+function doorApproachTo(targetKey){
+  const targetCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || null;
+  let best = null, bestScore = Infinity;
+  const consider = (roomKey, spawn, sameCastle, isElevator) => {
+    const score = (sameCastle ? 0 : 2) + (isElevator ? 1 : 0);
+    if(score < bestScore){ bestScore = score; best = { roomKey, spawn }; }
+  };
+  for(const roomKey of Object.keys(ROOMS)){
+    if(roomKey === targetKey) continue;
+    const room = mergedRoom(roomKey);
+    if(!room) continue;
+    // A castle's entry room has no incoming door at all -- it's reached
+    // through a building on the street. Standing on the street facing that
+    // front door is exactly where its sign and its move images are, so it's
+    // the right spot for a castle's first room, and it always wins.
+    for(const b of (room.buildings || [])){
+      if(b.target !== targetKey) continue;
+      // doorSpawn's "outside" puts you on the street facing AWAY (the
+      // step-out-of-the-building spawn); turn around to look at the door.
+      const sp = doorSpawn(b.size, b.doorWall, b.doorOffset, b.origin, false);
+      consider(roomKey, { x: sp.x, z: sp.z, yaw: sp.yaw + Math.PI }, true, false);
+    }
+    // `back` exits skipped: the door you'd LEAVE by isn't the door into this
+    // room, and standing at it faces you out of the castle.
+    for(const ex of (room.exits || [])){
+      if(ex.back || ex.target !== targetKey) continue;
+      consider(roomKey, doorViewSpawn(room.size, ex.wall, ex.offset, null),
+               !!targetCastle && (room.ownerCastle || null) === targetCastle,
+               ex.type === 'elevator');
+    }
+  }
+  return best;
+}
+/* Stands at a door into roomKey, facing it.
+
+   Two steps, and the second is the important one: doorApproachTo picks WHICH
+   room to stand in, but the door's placement is then read back off exitMeta
+   -- the runtime list buildRoom actually wires its triggers from -- rather
+   than off the exit's own stored wall/offset. Those two disagree: buildRoom
+   distributes a branching room's doors across its walls itself, and a
+   memorized corridor's side-doors are placed against a member rather than
+   the anchor. Positioning from the stored values put you facing a blank wall
+   while the real door was somewhere else entirely. Reading the trigger box
+   means "facing the door" is true by construction: it's the same box, and
+   the same through-direction, that walking forward will fire.
+
+   Falls back to entering the room itself if there's no approach at all, or
+   no live trigger once we get there -- better to arrive inside than not at
+   all. */
+function enterAtDoorTo(roomKey){
+  const approach = doorApproachTo(roomKey);
+  if(!approach){ enterRoom(roomKey, { x: 0, z: 0, yaw: 0 }); return; }
+  enterRoom(approach.roomKey, approach.spawn);
+  // exitMeta/elevatorMeta are now live for the room just built
+  let box = null, thru = null;
+  const ex = exitMeta.find(m => !m.back && m.target === roomKey);
+  if(ex){ box = ex.box; thru = ex.thru; }
+  else {
+    // an elevator floor: stand in front of the car's door, which is where
+    // its panel (that floor's whole door hint) is read from.
+    const em = elevatorMeta.find(m => (m.floors || []).some(f => f.target === roomKey));
+    if(em){ box = em.box; thru = em.thru; }
+  }
+  if(!box || !thru){ enterRoom(roomKey, { x: 0, z: 0, yaw: 0 }); return; }
+  const cx = (box.minX + box.maxX) / 2, cz = (box.minZ + box.maxZ) / 2;
+  // clamped, so a room too shallow to step that far back doesn't put you
+  // through its opposite wall -- the same guard doorSpawn caps its own inset
+  // with, just applied after the fact since this step-back is measured from
+  // a trigger box rather than from the wall.
+  const room = mergedRoom(approach.roomKey);
+  const spot = room
+    ? clampToRoom(room.size, cx - thru.x * DOOR_VIEW_DIST, cz - thru.z * DOOR_VIEW_DIST)
+    : { x: cx - thru.x * DOOR_VIEW_DIST, z: cz - thru.z * DOOR_VIEW_DIST };
+  pos.x = spot.x; pos.z = spot.z;
+  // face along `thru`, the direction walking through the door travels --
+  // same conversion the camera's own forward vector (-sin yaw, -cos yaw) uses
+  yaw = Math.atan2(-thru.x, -thru.z);
+}
+
 // "just inside the entrance" spot a room with no matching exit to spawn
 // against falls back to -- mainStreet, or a linked foreign castle's entry
 // (see gatherLinkedCastles) with no exits built yet. Matches
@@ -6547,7 +6665,9 @@ export async function refreshAssetsLive(){
 // openThreeTest's startRoomKey opt in that case.
 export function jumpToRoom(roomKey){
   if(!scene || !ROOMS[roomKey]) return false;
-  enterRoom(roomKey, { x:0, z:0, yaw:0 });
+  // lands at a door INTO the room, not in the middle of it -- see
+  // doorApproachTo for why, and for which door gets picked.
+  enterAtDoorTo(roomKey);
   return true;
 }
 
@@ -9177,7 +9297,10 @@ export async function openThreeTest(containerEl, opts){
   // before the first enterRoom so the door badges it may light up are drawn
   // from the already-demoted schedule.
   const demoted = await applyStructuralDemotions();
-  if(threeOpts.startRoomKey && ROOMS[threeOpts.startRoomKey]) enterRoom(threeOpts.startRoomKey, { x:0, z:0, yaw:0 });
+  // startRoomKey is the same "Jump to VR" request as jumpToRoom, just on a
+  // world that wasn't open yet -- so it lands at the room's door too, rather
+  // than the two paths disagreeing about where a jump puts you.
+  if(threeOpts.startRoomKey && ROOMS[threeOpts.startRoomKey]) enterAtDoorTo(threeOpts.startRoomKey);
   else if(cas) enterRoom(cas.entryKey, cas.spawn);
   else enterRoom(START_ROOM, START_SPAWN);
   // said out loud: a schedule that silently moved is exactly the kind of
