@@ -5028,8 +5028,13 @@ try {
     await appAF.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
   } catch(e){ bad('room-info modal: Jump to VR hidden without a roomKey', e); }
 
-  // 91. Clicking Jump with VR closed (re)builds the main world and lands
-  //     directly in the target room, closing the room-info modal.
+  // 91. Clicking Jump with VR closed (re)builds the main world and lands at
+  //     the door INTO the target room, closing the room-info modal. A jump
+  //     is for reviewing the room: standing at its door with the sign in
+  //     view is the position to recall it from, where landing inside puts
+  //     the answers on the walls around you. This castle's target IS its
+  //     entry room, which no door leads to -- it's reached through the
+  //     street building, so the door to stand at is the building's own.
   try {
     await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
     await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
@@ -5042,30 +5047,43 @@ try {
       room: window.__threeTestEdit.room(),
       overlay: document.getElementById('roomInfoOverlay').style.display,
     }));
-    assert(state.room === roomKey, `expected to land directly in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.room === 'mainStreet',
+      `expected to land OUTSIDE the entry room, on the street by its building door, got ${state.room}`);
     assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
-    ok('room-info modal: "Jump to VR" with VR closed builds the world and lands in the target room');
+    // ...and facing it: the whole point is that one step forward walks in
+    const arrived = await appAF.page.evaluate(async (target) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room() === target;
+    }, roomKey);
+    assert(arrived, 'expected to be facing the door -- walking forward should enter the target room');
+    ok('room-info modal: "Jump to VR" with VR closed lands at the door into the target room, facing it');
   } catch(e){ bad('room-info modal: Jump to VR with VR closed', e); }
 
   // 92. With VR already open (fast path via jumpToRoom, no rebuild), jumping
   //     from a room-info modal opened UNDERNEATH the still-open VR overlay
-  //     lands in the target room instantly.
+  //     puts you at the same door the slow path does -- the two must not
+  //     disagree about where a jump lands you.
   try {
-    // step 91 left VR open in the target room -- walk back out to Main Street
-    // first so this is a real jump, not a no-op re-entry into the same room.
-    await appAF.page.evaluate(() => window.__threeTestEdit.enter('mainStreet'));
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    // stand INSIDE the target room first, so the jump has somewhere to move
+    // us from (landing on the street is now the expected result, not a no-op).
+    await appAF.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
     await appAF.page.waitForTimeout(100);
+    assert(await appAF.page.evaluate(() => window.__threeTestEdit.room()) === roomKey,
+      'setup: expected to be standing in the target room before jumping');
     await appAF.page.evaluate((fen) => window.__graphTestHooks.openRoomInfo(fen), fens.room);
     await appAF.page.waitForSelector('#roomInfoOverlay', { state: 'visible', timeout: 5000 });
     await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').click());
     await appAF.page.waitForTimeout(200);
-    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
     const state = await appAF.page.evaluate(() => ({
       room: window.__threeTestEdit.room(),
       overlay: document.getElementById('roomInfoOverlay').style.display,
       graphOverlay: document.getElementById('graphOverlay').style.display,
     }));
-    assert(state.room === roomKey, `expected the fast path to land in the target room, got ${state.room} (wanted ${roomKey})`);
+    assert(state.room === 'mainStreet',
+      `expected the fast path to land at the entry room's street door too, got ${state.room} (target was ${roomKey})`);
     assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
     assert(state.graphOverlay === 'flex', 'expected the digraph overlay to stay open underneath, not close on jump');
     ok('room-info modal: "Jump to VR" with VR already open takes the fast path (no rebuild)');
@@ -8184,14 +8202,14 @@ try {
 
     const quiet = await streetSign();
     assert(quiet, `expected the street entry pair logged as a sign, got ${JSON.stringify(await E('doorSigns'))}`);
-    assert(quiet.dueState === null,
-      `expected no badge for an unmemorized entry room, got ${JSON.stringify(quiet)}`);
+    assert(quiet.mark === 'unmemorized',
+      `expected the not-learned brain for an unmemorized entry room, got ${JSON.stringify(quiet)}`);
 
     const DAY = 86400000, now = Date.now();
     await E('setMemorized', entryKey, true);
     await E('setReviewRecord', entryKey, { last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
     const flagged = await streetSign();
-    assert(flagged && flagged.dueState === 'overdue',
+    assert(flagged && flagged.mark === 'overdue',
       `expected the street billboard to carry the entry room's overdue badge, got ${JSON.stringify(flagged)}`);
 
     // the strip was already there for the occurrence stat, so a badge coming
@@ -8202,7 +8220,7 @@ try {
 
     await E('setReviewRecord', entryKey, { last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
     const settled = await streetSign();
-    assert(settled && settled.dueState === null,
+    assert(settled && settled.mark === null,
       `expected the badge gone once the entry room is up to date, got ${JSON.stringify(settled)}`);
     ok('street entry billboard carries the entry room\'s due badge (the one room no door leads to)');
   } catch(e){ bad('street entry billboard due badge', e); }
@@ -20090,6 +20108,35 @@ try {
       `expected the graded record to survive a reload, got ${JSON.stringify(after)}`);
     ok('Review grading: a grade persists to IndexedDB and survives a full reload');
   } catch(e){ bad('Review grading: grade survives a reload', e); }
+
+  // 396. Marking a room memorized is the moment it joins the review schedule,
+  //      and nothing else on screen says so -- the brain icon just turns
+  //      green, which it would anyway. The toast reads the date back off the
+  //      bootstrapped record rather than stating the ladder's first rung as a
+  //      constant, so the message can't drift from the schedule it reports.
+  try {
+    await revisit();
+    if(await E('memorized')) await E('toggleMemorized');
+    assert(!(await E('memorized')), 'setup: expected the room unmemorized to start');
+
+    await E('toggleMemorized');
+    const toast = await E('toastText');
+    assert(toast && /memorized/i.test(toast) && /first review/i.test(toast),
+      `expected a toast confirming when the first review falls due, got ${JSON.stringify(toast)}`);
+    assert(/tomorrow/i.test(toast),
+      `expected the first review one day out (the ladder's bottom rung), got ${JSON.stringify(toast)}`);
+    assert(await E('memorized'), 'expected the room actually memorized');
+    assert(!(await E('reviewRecord')),
+      'expected no record WRITTEN by marking -- the schedule is derived from the memorized timestamp');
+
+    // and the destructive direction says what it cost: the icon going dark
+    // shows the flag cleared but not that a ladder position went with it
+    await E('toggleMemorized');
+    const cleared = await E('toastText');
+    assert(cleared && /review history cleared/i.test(cleared),
+      `expected unmarking to say the review history went with it, got ${JSON.stringify(cleared)}`);
+    ok('Review grading: marking a room memorized confirms when its first review falls due');
+  } catch(e){ bad('Review grading: memorize confirmation toast', e); }
 } finally {
   await appEG.close();
 }
@@ -20302,26 +20349,31 @@ try {
   };
   const signFor = async () => (await E('doorSigns')).find(s => s.target === target) || null;
 
-  // 383. Only the actionable states badge. "Memorized and up to date" has to
-  //      read the same as "no badge" from the corridor, or the badge stops
-  //      meaning "stop here" and becomes decoration.
+  // 383. One marker per sign, across the four states. The silent one is the
+  //      point: "memorized and up to date" must read the same as "nothing to
+  //      say", or the markers stop meaning anything and become decoration.
   try {
     await setTargetReview(null);
-    assert(await E('doorDueState', target) === null,
-      'expected no badge for a room that was never memorized');
+    assert(await E('doorRoomMark', target) === 'unmemorized',
+      'expected the not-learned brain for a room that was never memorized');
 
     const now = Date.now();
     await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
-    assert(await E('doorDueState', target) === null,
-      'expected no badge for a memorized room that is up to date');
+    assert(await E('doorRoomMark', target) === null,
+      'expected NOTHING for a memorized room that is up to date -- the one silent state');
 
     await setTargetReview({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' });
-    assert(await E('doorDueState', target) === 'due', 'expected a DUE badge for a room due now');
+    assert(await E('doorRoomMark', target) === 'due', 'expected a DUE badge for a room due now');
 
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
-    assert(await E('doorDueState', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
-    ok('Door badge: only due and overdue badge -- up-to-date and unmemorized rooms stay silent');
-  } catch(e){ bad('Door badge: only actionable states badge', e); }
+    assert(await E('doorRoomMark', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
+
+    // the street and the buildings on it have no position to memorize, so
+    // they must never pick up a brain
+    assert(await E('doorRoomMark', 'mainStreet') === null,
+      'expected no marker for a room with no chess position of its own');
+    ok('Door sign markers: unmemorized / due / overdue, and silence when up to date');
+  } catch(e){ bad('Door sign markers: one marker per sign across the four states', e); }
 
   // 384. The state actually reaches the sign that gets drawn, and tracks the
   //      room beyond the door rather than the one you're standing in.
@@ -20330,15 +20382,21 @@ try {
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
     const overdue = await signFor();
     assert(overdue && overdue.built, `expected a sign built for the door, got ${JSON.stringify(overdue)}`);
-    assert(overdue.dueState === 'overdue',
+    assert(overdue.mark === 'overdue',
       `expected the drawn sign to carry the overdue badge, got ${JSON.stringify(overdue)}`);
 
     await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
     const settled = await signFor();
-    assert(settled && settled.dueState === null,
+    assert(settled && settled.mark === null,
       `expected the badge gone once the room beyond is up to date, got ${JSON.stringify(settled)}`);
-    ok('Door badge: the drawn sign carries the badge state of the room beyond the door');
-  } catch(e){ bad('Door badge: badge reaches the rendered sign', e); }
+
+    // and back to the brain when the room stops being memorized at all
+    await setTargetReview(null);
+    const unlearned = await signFor();
+    assert(unlearned && unlearned.mark === 'unmemorized',
+      `expected the not-learned brain once the room beyond is unmemorized, got ${JSON.stringify(unlearned)}`);
+    ok('Door badge: the drawn sign carries the marker for the room beyond the door');
+  } catch(e){ bad('Door badge: marker reaches the rendered sign', e); }
 
   // 385. The badge rides on the door plaque, so it's hint-gated along with
   //      it: hints off is self-test mode, where no sign is drawn at all.
@@ -20348,7 +20406,7 @@ try {
   try {
     const now = Date.now();
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
-    assert((await signFor())?.dueState === 'overdue', 'setup: expected the badge showing with hints on');
+    assert((await signFor())?.mark === 'overdue', 'setup: expected the badge showing with hints on');
 
     const toggleHints = () => appEI.page.evaluate(() =>
       document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
@@ -20359,7 +20417,7 @@ try {
 
     await toggleHints();
     await appEI.page.waitForTimeout(300);
-    assert((await signFor())?.dueState === 'overdue',
+    assert((await signFor())?.mark === 'overdue',
       'expected the badge back once hints are re-enabled');
     ok('Door badge: hint-gated along with the plaque it rides on');
   } catch(e){ bad('Door badge: hint gating', e); }
@@ -20516,6 +20574,114 @@ try {
   await appEJ.close();
 }
 } catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EL: a jump lands you at a door INTO the room, not inside it.
+//     Reviewing a room means standing at its door and recalling what's in
+//     there before walking in to check; landing in the middle puts the
+//     answers on the walls around you and the name sign behind your head.
+//     A transposition can be reached through several doors -- any will do,
+//     except that one in the room's own castle is preferred. ---
+if(shouldRunPhase(['vr-castle','digraph'])){
+try {
+const appEL = await launchApp();
+try {
+  const keys = await appEL.page.evaluate(() => {
+    const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+    return { root: pk(['d4','Nf6','c4']), viaE6: pk(['d4','Nf6','c4','e6','Nc3']) };
+  });
+  // Branching, so the root is a room of its own with real doors off it -- a
+  // single linear continuation would merge into one corridor with no interior
+  // door to stand at. And the e6 branch continues PAST Nc3, so that room is
+  // not a dead end: a dead end's door is deliberately locked (no teleport
+  // trigger at all -- see buildRoom's `locked` check), which is also why the
+  // room-info modal hides Jump for one.
+  await seedBackup(appEL.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appEL.page);
+  const E = (fn, ...args) => appEL.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+
+  // 397. Jumping to a room reached by an interior door puts you in the room
+  //      that HOLDS that door, a couple of metres back, facing it.
+  try {
+    await E('enter', 'mainStreet');
+    await appEL.page.waitForTimeout(150);
+    await E('jumpToRoom', keys.viaE6);
+    await appEL.page.waitForTimeout(250);
+    const landed = await E('room');
+    assert(landed !== keys.viaE6,
+      'expected NOT to land inside the target room -- the whole point is to stand outside it');
+    assert(landed === keys.root,
+      `expected to land in the room holding the door (the castle root), got ${landed}`);
+
+    // roughly 2-3m back: close enough to read the sign over the lintel, far
+    // enough not to be standing in the doorway (whose trigger reaches 1m in)
+    const { pos, door } = await appEL.page.evaluate((target) => {
+      const dbg = window.__threeTestEdit;
+      const ex = dbg.exits().find(e => e.target === target);
+      return { pos: dbg.pos(), door: ex };
+    }, keys.viaE6);
+    assert(door, 'setup: expected the root room to have a door to the target');
+    // distance from the doorway along the wall's inward axis
+    const away = (door.wall === 'north' || door.wall === 'south')
+      ? Math.abs(pos.z) : Math.abs(pos.x);
+    assert(away > 1.2, `expected to be standing clear of the doorway's own trigger box, got ${away.toFixed(2)}m from the wall`);
+    ok('Jump to VR: lands in the room holding the door, standing back from it');
+  } catch(e){ bad('Jump to VR: lands at the door, not inside the room', e); }
+
+  // 398. And facing it -- walking forward from where the jump put you goes
+  //      straight through. This is the assertion that actually pins "facing
+  //      the door"; a yaw check would only restate the arithmetic.
+  try {
+    const arrived = await appEL.page.evaluate(async (target) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room();
+    }, keys.viaE6);
+    assert(arrived === keys.viaE6,
+      `expected walking forward from the jump spot to enter the target room, ended up in ${arrived}`);
+    ok('Jump to VR: you arrive facing the door -- walking forward goes through it');
+  } catch(e){ bad('Jump to VR: arrives facing the door', e); }
+
+  // 399. A castle's entry room has no interior door into it at all; it's
+  //      reached through the street building. The jump goes to the street,
+  //      which is where that room's own sign and move images live anyway.
+  try {
+    await E('enter', keys.viaE6);
+    await appEL.page.waitForTimeout(150);
+    await E('jumpToRoom', keys.root);
+    await appEL.page.waitForTimeout(250);
+    const landed = await E('room');
+    assert(landed === 'mainStreet',
+      `expected a jump to the entry room to land on the street outside its building, got ${landed}`);
+    const arrived = await appEL.page.evaluate(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+      await new Promise(res => setTimeout(res, 2500));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
+      return window.__threeTestEdit.room();
+    });
+    assert(arrived === keys.root,
+      `expected to be facing the building's front door, ended up in ${arrived}`);
+    ok("Jump to VR: a castle's entry room is approached from the street, facing its building");
+  } catch(e){ bad('Jump to VR: entry room approached from the street', e); }
+} finally {
+  await appEL.close();
+}
+} catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
