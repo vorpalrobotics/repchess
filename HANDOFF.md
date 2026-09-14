@@ -10,8 +10,8 @@ avoid.)
 
 ## State at time of writing
 
-- `main` is at commit `3a2bada` (PR #202 merged). `js/app.js`'s `BUILD_TAG`
-  is `-368`.
+- `main` is at commit `9823d79` (PR #206 merged). `js/app.js`'s `BUILD_TAG`
+  is `-374`.
 - No open PRs and nothing in flight. Everything requested this session
   shipped and merged.
 - Working branch used throughout: `claude/project-onboarding-iozvt5`,
@@ -63,7 +63,7 @@ Diagnostic instrumentation tagged `[perf-debug]` is still in place in
 `index.html` and `js/app.js`, deliberately — do not strip it until this is
 root-caused. It is all commented as TEMP.
 
-## What shipped this session (PRs #199–202)
+## What shipped this session (PRs #199–206)
 
 **Spaced-repetition room reviews (PR #202, phases R1–R5).** The largest piece,
 and the one most likely to need follow-up:
@@ -87,13 +87,37 @@ and the one most likely to need follow-up:
   (Normal / Completeness / Review). Both lenses ride along as classes on
   every render, so switching is a pure restyle.
 - **On door signs:** DUE / OVERDUE pills, also on elevator floor panels.
-  Only those two states badge, by design.
 - **R5** docks a step off a room that's picked up a new door. The record
   carries a `dirtySeen` ledger of doors already accounted for — the dirty
   flag itself stays true until the user re-memorizes, so it can't be the
   trigger. `applyRoomReviewGrade` carries that ledger through a grade.
+  **Its sweep runs on VR open only** — `MEMORIZED_SHAPES` is threeVR's to
+  maintain, and one writer beats a graph render writing to a mirror copy, so
+  a structural change reaches the graph's Review lens one walk late.
 
-**Earlier in the session (PRs #199–201):**
+**Follow-ups from actually using it (PRs #204–206).** These came back as
+reports after R1–R5 shipped, and are the shape of feedback to expect more of:
+
+- **Marking a room memorized toasts its first review date**, and unmarking
+  warns that the review history went with it.
+- **A door sign carries one `mark`**, not just a due badge: a dim grey 🧠 for
+  a room never learned, the DUE/OVERDUE pill for one with a review waiting,
+  nothing at all when it's learned and up to date. The brain is the **emoji**,
+  not Font Awesome — FA is a CDN webfont and a canvas draw of it is tofu
+  whenever it hasn't loaded, which is every run under the offline harness.
+- **A castle's entry room** is reached through a street building, not a door,
+  so it had no sign to mark. Its marker rides the stat strip on the street
+  entry billboard instead.
+- **Jump to VR lands at a door INTO the room**, ~2.6m back and facing it,
+  rather than inside — that's the position a review is done from. The door's
+  placement is read off `exitMeta`, **not** the exit's stored `wall`/`offset`:
+  `buildRoom` distributes a branching room's doors itself, and a memorized
+  corridor's side-doors sit against a member, so the stored values point at
+  the wrong wall. That cost a debugging round — don't "simplify" it back.
+- **Manage Mnemonics' piece views honour the coverage scope**, greying the
+  squares that piece never reaches inside it.
+
+**Earlier in the session (PRs #199–203):**
 
 - **Graph Completeness view** — recolours rooms by how much mnemonic work is
   left. Note the design correction that produced its fourth state: mnemonic
@@ -103,6 +127,18 @@ and the one most likely to need follow-up:
 - **Graph size guard** — refuses to draw past 500 moves and says how to
   narrow the scope.
 - **Click-feedback flash** on the opening-system icon row.
+- **Auto-import toasts** — one per platform, only when something new came in.
+  The bottom-right corner became a single `#toastStack` column shared with the
+  persistent new-transposition toast, since an auto-import is exactly what
+  raises one of those.
+- **`window.__appBootSettled`** (test flag only) — the boot promise chain is
+  now returned rather than fired bare. The boot auto-import check is
+  fire-and-forget and `launchApp` returns before it settles, so a test that
+  changes the settings it reads mid-flight makes it run against half-applied
+  state. Two test failures looked exactly like product bugs before this
+  existed; anything else touching those settings wants the same wait.
+- **A `no-cache` meta on `index.html`** — see the "Deploy/caching note"
+  section below for why.
 - `Documents/MultiDomainArchitecture.md` — a long design discussion about
   generalising beyond chess. **Nothing in it is built**, and the user
   explicitly deferred the refactor. Read it before proposing anything in that
@@ -123,6 +159,10 @@ and the one most likely to need follow-up:
   `CLAUDE.md`'s testing policy, which is explicit about the cost. Targeted
   runs (`npm test -- vr-castle`, `core`, etc.) are cheap and are what to use
   while iterating.
+- **The last FULL run was at `-365`** (626 passed, 1 failed — see below).
+  Everything from `-366` to `-374` was verified by targeted runs only. Not a
+  concern in itself (each change ran the phases it touched), but if a full
+  run is ever wanted before a release, that's the gap it would close.
 - The `VR cache: invalidated by …` group was flaky in this environment — a
   different sub-test failing per run, and failing on unmodified `main` too.
   It did **not** fire in the last full run (626 passed, 1 failed at `-365`),
@@ -161,9 +201,14 @@ a stale copy there still needs a query string on the URL (`index.html?x=368`).
 - `Documents/VR-Slow-Bug-info.md` — the open bug above, in full.
 - `Documents/` — design notes for the castle/room model, each explicitly
   labeled with what's shipped vs. still proposed.
-- `help/marking-memorized.html` and `help/digraph-view.html` — the
-  user-facing description of the review system and the graph's view modes.
-  Useful as a plain-language spec of what shipped.
+- `help/` — the in-app Help topics, and the closest thing to a plain-language
+  spec of what shipped. `marking-memorized.html` (the whole review system),
+  `digraph-view.html` (the graph's view modes and size guard),
+  `transpositions.html` (Find Transpositions and redirects),
+  `mnemonics-customizing.html` (the coverage scope). **Several features still
+  have no topic at all** — Analysis Queue, Perfect Opening, VR Assets, VR
+  Object Lists, and full backup/restore. Worth writing if you're asked for a
+  documentation pass.
 - `git log --oneline` / the PR list on GitHub — the authoritative history of
   what's been done and why (commit messages are written to explain the
   "why," not just the "what").

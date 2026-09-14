@@ -1,0 +1,57 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Transpositions Between Castles</h2>
+
+<p>Chess openings transpose: two different move orders reach the same
+position. In the move tree that's harmless, but in the memory palace it
+isn't -- each castle is generated from its own branch, so the same position
+can end up as two separate rooms in two separate buildings, both of which
+you'd have to decorate and memorize independently.</p>
+
+<h3>Finding them</h3>
+<p>Menu &rarr; <strong>Find Transpositions</strong> scans every built castle
+and lists the positions reached by more than one of them. Each group shows
+the rooms involved, with the castle and move sequence that reaches each.</p>
+
+<p>You don't have to go looking. When an edit or an import creates a new
+cross-castle transposition, a toast appears in the bottom-right corner
+saying how many were found, with a <strong>Show</strong> button that opens
+the report. It stays up until you deal with it or dismiss it, and once you've
+seen a particular collision it won't nag you about that one again for the
+rest of the session -- only genuinely new ones raise it again.</p>
+
+<h3>Resolving one</h3>
+<p>In each group, pick the room you want to <em>keep</em> building out --
+usually the one in the castle where the line more naturally belongs, or the
+one you've already decorated -- and press <strong>Redirect Selected</strong>.
+Every other room in that group is redirected to it: their door now routes
+straight into the kept room in VR, so walking either move order arrives in
+the same place. Any prepared responses the redirected rooms already had are
+ported over automatically, so nothing is lost.</p>
+
+<p>You can select in several groups first and resolve them all in one press.
+A group you leave unselected is left alone -- there's no obligation to
+resolve anything, and two rooms for one position is a legitimate choice if
+you genuinely think of the two move orders as different.</p>
+
+<h3>What resolving does to the rest of the group</h3>
+<p>Redirecting also carries everything <em>below</em> the transposition
+point: once two castles meet at a position, they share every position past
+it too. Those deeper collisions aren't listed separately -- only the
+topmost one in each family is actionable, and resolving it settles the rest.
+If you've seen the report claim fewer groups than you expected, that's why.</p>
+
+<h3>When a redirect breaks</h3>
+<p>A redirect points at a specific room. If that room later disappears --
+its castle is renamed or removed, or the variation it sat on is deleted --
+the redirect has nowhere to go.
+<span class="repchess-brand">REPchess</span> notices and quietly restores the
+affected rooms to being ordinary rooms of their own, reporting
+<em>"N rooms restored to normal -- target disappeared"</em>. That's a repair,
+not a loss: the position is still there, it's simply a separate room again,
+and the report will list it as a fresh transposition next time it's scanned
+if another castle still reaches it.</p>
+
+<h3>Seeing them in the graph</h3>
+<p>In the Opening Graph's normal view, a room reachable more than one way is
+coloured distinctly, so you can spot the junctions in a castle's structure
+without opening the report. See <em>The Digraph View</em>.</p>

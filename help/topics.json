@@ -4,6 +4,7 @@
   { "id": "importing-games", "title": "Importing Your Games", "file": "importing-games.html" },
   { "id": "exploring-games", "title": "Exploring Your Games", "file": "exploring-games.html" },
   { "id": "digraph-view", "title": "The Digraph View", "file": "digraph-view.html" },
+  { "id": "transpositions", "title": "Transpositions Between Castles", "file": "transpositions.html" },
   { "id": "mnemonics-default", "title": "Move Mnemonics: The Default System", "file": "mnemonics-default.html" },
   { "id": "mnemonics-customizing", "title": "Move Mnemonics: Customizing Your Images", "file": "mnemonics-customizing.html" },
   { "id": "mnemonics-testing", "title": "Move Mnemonics: Testing Yourself", "file": "mnemonics-testing.html" },
