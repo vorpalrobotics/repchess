@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-373';
+const BUILD_TAG = '-374';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8508,18 +8508,29 @@ async function renderMnemonicsGrid(){
   MNEMONICS = await getAllMnemonics();
   const grid = $('mnemonicsGrid');
   grid.innerHTML='';
-  // image-review modes (MNEM_VIEW_MODE = a piece name) show one piece's picture
-  // per square; coverage highlighting doesn't apply there.
+  // image-review modes (MNEM_VIEW_MODE = a piece name) show one piece's
+  // picture per square. Coverage applies here too, but as dimming rather than
+  // the words view's three-state colouring: the question a piece view answers
+  // is "which of these images do I actually need", and greying the squares
+  // this piece never lands on in the selected scope answers it at a glance.
   const imgMode = MNEM_VIEW_MODE !== 'words';
   let missingWords = 0, missingImages = 0;
+  let pieceUsed = 0;   // image mode: squares of this piece the scope actually uses
   for(let row=0;row<8;row++){
     for(let col=0;col<8;col++){
       const sq = squareName(col,row);
       const isLight = (col+row)%2===0;
       const entry = MNEMONICS[sq] || {};
-      let pieceHtml;
+      let pieceHtml, unused = false, unusedTitle = '';
       if(imgMode){
         const p = MNEM_VIEW_MODE;
+        // mnemNeeded() is true for everything when no scope is selected, so
+        // with "(none selected)" nothing dims and the view is unchanged.
+        if(mnemNeeded(sq, p)) pieceUsed++;
+        else {
+          unused = true;
+          unusedTitle = `No ${p} move to ${sq} in the selected scope`;
+        }
         pieceHtml = entry[p+'Img']
           ? `<img class="mnem-cell-img" src="${entry[p+'Img']}" alt="">`
           : `<div class="mnem-cell-empty"><i class="fa-solid ${MNEM_PIECE_ICON[p]}"></i></div>`;
@@ -8548,8 +8559,9 @@ async function renderMnemonicsGrid(){
           .join('');
       }
       const div = document.createElement('div');
-      div.className = `mnem-square ${isLight?'light':'dark'}${imgMode?' mnem-img-mode':''}`;
+      div.className = `mnem-square ${isLight?'light':'dark'}${imgMode?' mnem-img-mode':''}${unused?' mnem-unused':''}`;
       div.dataset.square = sq;
+      if(unusedTitle) div.title = unusedTitle;
       div.innerHTML =
         (row===7 ? `<span class="mnem-coord-file">${sq[0]}</span>` : '') +
         (col===0 ? `<span class="mnem-coord-rank">${sq[1]}</span>` : '') +
@@ -8564,6 +8576,11 @@ async function renderMnemonicsGrid(){
     counts.innerHTML = `${usedCount} used` +
       (missingWords ? ` · <span class="mc-missing">${missingWords} missing words</span>` : '') +
       (missingImages ? ` · <span class="mc-missing">${missingImages} missing images</span>` : '');
+  } else if(MNEM_COVERAGE){
+    // the counts slot is otherwise blank in a piece view, and "how much of
+    // this piece's vocabulary does the selected scope actually ask for" is
+    // exactly what the dimming is showing -- so say it as a number too.
+    counts.textContent = `${pieceUsed} of 64 ${MNEM_VIEW_MODE} squares used here`;
   } else {
     counts.textContent = '';
   }
