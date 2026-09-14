@@ -1519,10 +1519,19 @@ async function toggleMemorized(){
     // and keeping a stale one would have a re-marked room inherit an interval
     // earned before whatever made the user unmark it.
     delete REVIEWS[currentRoomKey];
+    // said out loud because it's the destructive direction: the icon going
+    // dark shows the flag cleared, but not that a hard-won ladder position
+    // went with it.
+    showToast('No longer memorized — review history cleared');
   } else {
     MEMORIZED[currentRoomKey] = Date.now();
     const shape = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].shape;
     if(shape) MEMORIZED_SHAPES[currentRoomKey] = shape;
+    // Marking a room memorized is also the moment it joins the review
+    // schedule -- that's the whole mechanism starting up, and nothing else on
+    // screen says so. Read back through reviewFor rather than stated as a
+    // constant, so the message can't drift from the ladder it's reporting.
+    showToast(`Memorized — first review ${duePhrase(reviewFor(currentRoomKey))}`);
   }
   updateToolbar();
   await Promise.all([persistMemorized(), persistMemorizedShapes(), persistReviews()]);

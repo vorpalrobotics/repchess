@@ -20090,6 +20090,35 @@ try {
       `expected the graded record to survive a reload, got ${JSON.stringify(after)}`);
     ok('Review grading: a grade persists to IndexedDB and survives a full reload');
   } catch(e){ bad('Review grading: grade survives a reload', e); }
+
+  // 396. Marking a room memorized is the moment it joins the review schedule,
+  //      and nothing else on screen says so -- the brain icon just turns
+  //      green, which it would anyway. The toast reads the date back off the
+  //      bootstrapped record rather than stating the ladder's first rung as a
+  //      constant, so the message can't drift from the schedule it reports.
+  try {
+    await revisit();
+    if(await E('memorized')) await E('toggleMemorized');
+    assert(!(await E('memorized')), 'setup: expected the room unmemorized to start');
+
+    await E('toggleMemorized');
+    const toast = await E('toastText');
+    assert(toast && /memorized/i.test(toast) && /first review/i.test(toast),
+      `expected a toast confirming when the first review falls due, got ${JSON.stringify(toast)}`);
+    assert(/tomorrow/i.test(toast),
+      `expected the first review one day out (the ladder's bottom rung), got ${JSON.stringify(toast)}`);
+    assert(await E('memorized'), 'expected the room actually memorized');
+    assert(!(await E('reviewRecord')),
+      'expected no record WRITTEN by marking -- the schedule is derived from the memorized timestamp');
+
+    // and the destructive direction says what it cost: the icon going dark
+    // shows the flag cleared but not that a ladder position went with it
+    await E('toggleMemorized');
+    const cleared = await E('toastText');
+    assert(cleared && /review history cleared/i.test(cleared),
+      `expected unmarking to say the review history went with it, got ${JSON.stringify(cleared)}`);
+    ok('Review grading: marking a room memorized confirms when its first review falls due');
+  } catch(e){ bad('Review grading: memorize confirmation toast', e); }
 } finally {
   await appEG.close();
 }
