@@ -8184,14 +8184,14 @@ try {
 
     const quiet = await streetSign();
     assert(quiet, `expected the street entry pair logged as a sign, got ${JSON.stringify(await E('doorSigns'))}`);
-    assert(quiet.dueState === null,
-      `expected no badge for an unmemorized entry room, got ${JSON.stringify(quiet)}`);
+    assert(quiet.mark === 'unmemorized',
+      `expected the not-learned brain for an unmemorized entry room, got ${JSON.stringify(quiet)}`);
 
     const DAY = 86400000, now = Date.now();
     await E('setMemorized', entryKey, true);
     await E('setReviewRecord', entryKey, { last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
     const flagged = await streetSign();
-    assert(flagged && flagged.dueState === 'overdue',
+    assert(flagged && flagged.mark === 'overdue',
       `expected the street billboard to carry the entry room's overdue badge, got ${JSON.stringify(flagged)}`);
 
     // the strip was already there for the occurrence stat, so a badge coming
@@ -8202,7 +8202,7 @@ try {
 
     await E('setReviewRecord', entryKey, { last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
     const settled = await streetSign();
-    assert(settled && settled.dueState === null,
+    assert(settled && settled.mark === null,
       `expected the badge gone once the entry room is up to date, got ${JSON.stringify(settled)}`);
     ok('street entry billboard carries the entry room\'s due badge (the one room no door leads to)');
   } catch(e){ bad('street entry billboard due badge', e); }
@@ -20331,26 +20331,31 @@ try {
   };
   const signFor = async () => (await E('doorSigns')).find(s => s.target === target) || null;
 
-  // 383. Only the actionable states badge. "Memorized and up to date" has to
-  //      read the same as "no badge" from the corridor, or the badge stops
-  //      meaning "stop here" and becomes decoration.
+  // 383. One marker per sign, across the four states. The silent one is the
+  //      point: "memorized and up to date" must read the same as "nothing to
+  //      say", or the markers stop meaning anything and become decoration.
   try {
     await setTargetReview(null);
-    assert(await E('doorDueState', target) === null,
-      'expected no badge for a room that was never memorized');
+    assert(await E('doorRoomMark', target) === 'unmemorized',
+      'expected the not-learned brain for a room that was never memorized');
 
     const now = Date.now();
     await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
-    assert(await E('doorDueState', target) === null,
-      'expected no badge for a memorized room that is up to date');
+    assert(await E('doorRoomMark', target) === null,
+      'expected NOTHING for a memorized room that is up to date -- the one silent state');
 
     await setTargetReview({ last: now, due: now, step: 0, lapses: 0, lastGrade: 'A' });
-    assert(await E('doorDueState', target) === 'due', 'expected a DUE badge for a room due now');
+    assert(await E('doorRoomMark', target) === 'due', 'expected a DUE badge for a room due now');
 
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
-    assert(await E('doorDueState', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
-    ok('Door badge: only due and overdue badge -- up-to-date and unmemorized rooms stay silent');
-  } catch(e){ bad('Door badge: only actionable states badge', e); }
+    assert(await E('doorRoomMark', target) === 'overdue', 'expected an OVERDUE badge for a long-past room');
+
+    // the street and the buildings on it have no position to memorize, so
+    // they must never pick up a brain
+    assert(await E('doorRoomMark', 'mainStreet') === null,
+      'expected no marker for a room with no chess position of its own');
+    ok('Door sign markers: unmemorized / due / overdue, and silence when up to date');
+  } catch(e){ bad('Door sign markers: one marker per sign across the four states', e); }
 
   // 384. The state actually reaches the sign that gets drawn, and tracks the
   //      room beyond the door rather than the one you're standing in.
@@ -20359,15 +20364,21 @@ try {
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
     const overdue = await signFor();
     assert(overdue && overdue.built, `expected a sign built for the door, got ${JSON.stringify(overdue)}`);
-    assert(overdue.dueState === 'overdue',
+    assert(overdue.mark === 'overdue',
       `expected the drawn sign to carry the overdue badge, got ${JSON.stringify(overdue)}`);
 
     await setTargetReview({ last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
     const settled = await signFor();
-    assert(settled && settled.dueState === null,
+    assert(settled && settled.mark === null,
       `expected the badge gone once the room beyond is up to date, got ${JSON.stringify(settled)}`);
-    ok('Door badge: the drawn sign carries the badge state of the room beyond the door');
-  } catch(e){ bad('Door badge: badge reaches the rendered sign', e); }
+
+    // and back to the brain when the room stops being memorized at all
+    await setTargetReview(null);
+    const unlearned = await signFor();
+    assert(unlearned && unlearned.mark === 'unmemorized',
+      `expected the not-learned brain once the room beyond is unmemorized, got ${JSON.stringify(unlearned)}`);
+    ok('Door badge: the drawn sign carries the marker for the room beyond the door');
+  } catch(e){ bad('Door badge: marker reaches the rendered sign', e); }
 
   // 385. The badge rides on the door plaque, so it's hint-gated along with
   //      it: hints off is self-test mode, where no sign is drawn at all.
@@ -20377,7 +20388,7 @@ try {
   try {
     const now = Date.now();
     await setTargetReview({ last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
-    assert((await signFor())?.dueState === 'overdue', 'setup: expected the badge showing with hints on');
+    assert((await signFor())?.mark === 'overdue', 'setup: expected the badge showing with hints on');
 
     const toggleHints = () => appEI.page.evaluate(() =>
       document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
@@ -20388,7 +20399,7 @@ try {
 
     await toggleHints();
     await appEI.page.waitForTimeout(300);
-    assert((await signFor())?.dueState === 'overdue',
+    assert((await signFor())?.mark === 'overdue',
       'expected the badge back once hints are re-enabled');
     ok('Door badge: hint-gated along with the plaque it rides on');
   } catch(e){ bad('Door badge: hint gating', e); }

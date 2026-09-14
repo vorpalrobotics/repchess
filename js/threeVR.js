@@ -3909,13 +3909,13 @@ function drawMoveNumberBadge(ctx, qx, qy, boxSize, moveNumber){
 // only ever passed for a castle's street-level entry pair -- see
 // buildStreetEntryPair) adds a small muted strip below the two quadrants, so
 // castles can be compared at a glance for which to prioritize memorizing.
-// `dueState` ('due'/'overdue', see doorDueState) rides in that same strip as a
+// `mark` ('due'/'overdue'/'unmemorized', see doorRoomMark) rides in that strip as a
 // coloured pill. The castle's entry room is the one room reached through a
 // STREET building rather than a door, so it never gets an R4 door plaque and
 // was the only memorized room with no due indicator anywhere outside itself.
 // This strip is the entry room's equivalent of that plaque.
-function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality, occurrence, dueState){
-  const stripH = (occurrence || DUE_BADGE[dueState]) ? 90 : 0;
+function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality, occurrence, mark){
+  const stripH = (occurrence || mark) ? 90 : 0;
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE + stripH;
@@ -3934,7 +3934,7 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
     // stat line (drawSignStatLine) -- either alone simply centres itself.
     const y = MNEM_PAIR_SIZE + stripH / 2 + 2;
     const badgeFont = 40;
-    const bw = dueBadgeWidth(ctx, dueState, badgeFont);
+    const bw = markWidth(ctx, mark, badgeFont);
     const gap = (occurrence && bw) ? 20 : 0;
     let font = 56; ctx.font = `bold ${font}px sans-serif`;
     while(font > 20 && ctx.measureText(occurrence || '').width + gap + bw > MNEM_PAIR_SIZE - 40){
@@ -3948,7 +3948,7 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
       ctx.fillText(occurrence, x, y);
       x += tw + gap;
     }
-    drawDueBadge(ctx, dueState, x, y, badgeFont);
+    drawMark(ctx, mark, x, y, badgeFont);
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -3992,14 +3992,14 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
 // with the immediate notation fallback plus the async graphic/word resolve.
 // Position and interactive userData are the caller's job -- shared by the
 // in-room mnemonic slots and the new door-side pairs.
-function buildMnemPairSprite(pair, userScale, occurrence, dueState){
+function buildMnemPairSprite(pair, userScale, occurrence, mark){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
   sprite.userData.userScale = userScale || 1;
   const oppQ = pair.opponent.quality;
   renderMnemPairCanvas(sprite,
     { text: pair.opponent.san, moveNumber: pair.opponent.moveNumber },
     { text: pair.response.san, moveNumber: pair.response.moveNumber },
-    null, oppQ, occurrence, dueState);
+    null, oppQ, occurrence, mark);
   const myGen = buildGeneration;
   Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
@@ -4008,7 +4008,7 @@ function buildMnemPairSprite(pair, userScale, occurrence, dueState){
       resolveMoveContent(pair.response, mnemonicsBySquare)
     ]).then(([oppContent, respContent]) => {
       if(buildGeneration !== myGen) return;
-      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ, occurrence, dueState);
+      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ, occurrence, mark);
     });
   });
   return sprite;
@@ -4095,26 +4095,73 @@ const DUE_BADGE = {
   due:     { text: 'DUE',     fill: '#ef6c00' },
   overdue: { text: 'OVERDUE', fill: '#c62828' },
 };
-// The badge state for the room beyond a door -- null when there's nothing
-// worth flagging. Reads exactly what the room's own brain icon reads, so the
-// sign can never disagree with what you find when you walk through it.
-function doorDueState(targetKey){
+// The "not learned yet" marker: the same brain the toolbar's own memorize
+// button carries and the opening graph puts on memorized nodes, but greyed
+// and faded so it reads as an absence. Deliberately NOT the Font Awesome
+// glyph the toolbar uses -- that's a webfont from a CDN, and a canvas draw
+// would render tofu whenever it hasn't loaded (which is every run under the
+// offline test harness). The emoji comes from the system font, same as the
+// graph's own 🧠.
+const MARK_BRAIN = '\u{1F9E0}';
+
+// Whether a room key names a real castle room -- one with a chess position,
+// as opposed to the street, a building, or a non-FEN fallback id. The gate
+// for anything position-dependent: the mini board, the memorize toggle, and
+// the room markers below.
+function roomHasPosition(roomKey){
+  const pk = ROOMS[roomKey] && ROOMS[roomKey].posKey;
+  return !!(pk && pk.includes('/'));
+}
+
+/* What a sign should say about the room beyond it. ONE marker per sign, and
+   these can't overlap by construction: a room that isn't memorized has no
+   schedule to be due on.
+
+     'due' / 'overdue'  a review is waiting -- stop here
+     'unmemorized'      a real castle room you haven't learned at all
+     null               memorized and up to date; nothing worth saying
+
+   Reads exactly what the room's own brain icon reads, so a sign can never
+   disagree with what you find when you walk through it. Non-castle targets
+   (the street, a building) get nothing: there's no position to memorize. */
+function doorRoomMark(targetKey){
+  if(!roomHasPosition(targetKey)) return null;
+  if(!MEMORIZED[targetKey]) return 'unmemorized';
   const state = roomReviewState(reviewFor(targetKey));
   return DUE_BADGE[state] ? state : null;
 }
-// Width the badge will occupy at this text size (0 for no badge). Leaves
+// Width the marker will occupy at this text size (0 for none). Leaves
 // ctx.font clobbered -- callers measure with this BEFORE setting their own.
-function dueBadgeWidth(ctx, state, fontPx){
-  const b = DUE_BADGE[state];
+function markWidth(ctx, mark, fontPx){
+  if(mark === 'unmemorized'){
+    ctx.font = `${fontPx}px sans-serif`;
+    return ctx.measureText(MARK_BRAIN).width;
+  }
+  const b = DUE_BADGE[mark];
   if(!b) return 0;
   ctx.font = `bold ${fontPx}px sans-serif`;
   return ctx.measureText(b.text).width + fontPx * 1.1;
 }
-// Draws the pill with its LEFT edge at x, vertically centred on y (the canvas
-// is in textBaseline 'middle' throughout these builders). Returns its width.
-// Restores textAlign to 'center', which is what every caller wants next.
-function drawDueBadge(ctx, state, x, y, fontPx){
-  const b = DUE_BADGE[state];
+// Draws the marker with its LEFT edge at x, vertically centred on y (the
+// canvas is in textBaseline 'middle' throughout these builders). Returns its
+// width. Restores textAlign to 'center', which is what every caller wants next.
+function drawMark(ctx, mark, x, y, fontPx){
+  if(mark === 'unmemorized'){
+    const w = markWidth(ctx, mark, fontPx);
+    ctx.save();
+    // grey + faded: this marker is the quiet one. The DUE/OVERDUE pills are
+    // the ones asking you to stop, and they have to stay louder than a state
+    // that's simply true of most of a castle you're still working through.
+    ctx.globalAlpha = 0.5;
+    if('filter' in ctx) ctx.filter = 'grayscale(1)';
+    ctx.font = `${fontPx}px sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText(MARK_BRAIN, x, y);
+    ctx.restore();
+    ctx.textAlign = 'center';
+    return w;
+  }
+  const b = DUE_BADGE[mark];
   if(!b) return 0;
   ctx.font = `bold ${fontPx}px sans-serif`;
   const w = ctx.measureText(b.text).width + fontPx * 1.1;
@@ -4128,11 +4175,11 @@ function drawDueBadge(ctx, state, x, y, fontPx){
   ctx.fillText(b.text, x + w / 2, y + 1);
   return w;
 }
-/* Lays out the sign's stat line: the occurrence text and the due badge side
-   by side, centred as a pair (either alone simply centres itself). Shared by
+/* Lays out the sign's stat line: the occurrence text and the marker side by
+   side, centred as a pair (either alone simply centres itself). Shared by
    both sign builders so the two never drift apart. */
-function drawSignStatLine(ctx, { occurrence, dueState, cw, y, font, badgeFont, color, weight }){
-  const bw = dueBadgeWidth(ctx, dueState, badgeFont);
+function drawSignStatLine(ctx, { occurrence, mark, cw, y, font, badgeFont, color, weight }){
+  const bw = markWidth(ctx, mark, badgeFont);
   const gap = (occurrence && bw) ? 12 : 0;
   let f = font;
   ctx.font = `${weight}${f}px serif`;
@@ -4147,7 +4194,7 @@ function drawSignStatLine(ctx, { occurrence, dueState, cw, y, font, badgeFont, c
     ctx.fillText(occurrence, x, y);
     x += tw + gap;
   }
-  drawDueBadge(ctx, dueState, x, y, badgeFont);
+  drawMark(ctx, mark, x, y, badgeFont);
   ctx.textAlign = 'center';
 }
 
@@ -4158,12 +4205,12 @@ function drawSignStatLine(ctx, { occurrence, dueState, cw, y, font, badgeFont, c
 // (0 = never played against them). Grows the plaque a bit taller to fit it;
 // with no occurrence (or no name -- an as-yet-unnamed room can still show
 // just the stat) it renders exactly as before.
-// `dueState` ('due' / 'overdue' / null, see doorDueState) rides on that same
+// `mark` (see doorRoomMark) rides on that same
 // second line as a coloured pill -- so a stat line exists whenever EITHER is
 // present, and a room with a name and nothing else grows the taller plaque
 // once it falls due.
-function makeNameSignMesh(name, occurrence, dueState){
-  const hasName = !!name, hasOcc = !!occurrence || !!DUE_BADGE[dueState];
+function makeNameSignMesh(name, occurrence, mark){
+  const hasName = !!name, hasOcc = !!occurrence || !!mark;
   const cw = 300, ch = (hasName && hasOcc) ? 140 : 110;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
@@ -4183,7 +4230,7 @@ function makeNameSignMesh(name, occurrence, dueState){
   }
   if(hasOcc){
     drawSignStatLine(ctx, {
-      occurrence, dueState, cw,
+      occurrence, mark, cw,
       y: hasName ? ch * 0.76 : ch/2 + 2,
       font: hasName ? 30 : 44,
       badgeFont: hasName ? 24 : 30,
@@ -4200,8 +4247,8 @@ function makeNameSignMesh(name, occurrence, dueState){
 // smaller/muted). Same off-white + gold-frame styling as makeNameSignMesh; the
 // 0.9-wide plane keeps buildDoorHint's uniform scaling working. `occurrence`
 // (see makeNameSignMesh) is an optional third, even smaller/muted line.
-function makeCastleDoorSignMesh(castleName, roomName, occurrence, dueState){
-  const hasRoom = !!roomName, hasOcc = !!occurrence || !!DUE_BADGE[dueState];
+function makeCastleDoorSignMesh(castleName, roomName, occurrence, mark){
+  const hasRoom = !!roomName, hasOcc = !!occurrence || !!mark;
   const cw = 300, ch = (hasRoom && hasOcc) ? 190 : 150;
   const canvas = document.createElement('canvas');
   canvas.width = cw; canvas.height = ch;
@@ -4229,7 +4276,7 @@ function makeCastleDoorSignMesh(castleName, roomName, occurrence, dueState){
   // when this door has no room name yet)
   if(hasOcc){
     drawSignStatLine(ctx, {
-      occurrence, dueState, cw,
+      occurrence, mark, cw,
       y: hasRoom ? ch * 0.83 : ch * 0.72,
       font: hasRoom ? 26 : 34,
       badgeFont: hasRoom ? 22 : 26,
@@ -4381,18 +4428,19 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   const destCastle = (ROOMS[targetKey] && ROOMS[targetKey].castle) || '';
   const ownerCastle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
   const crossCastle = !!destCastle && destCastle !== ownerCastle;
-  // a due room is worth a plaque of its own even with nothing else to say --
-  // "there's a review waiting through here" is exactly the kind of thing you
-  // want to see from the corridor rather than by trying every door.
-  const dueState = doorDueState(targetKey);
-  const built = !!(name || crossCastle || occurrence || dueState);
-  doorSignLog.push({ target: targetKey, kind: 'door', name: name || null, occurrence: occurrence || null, dueState, built });
+  // a marked room is worth a plaque of its own even with nothing else to say
+  // -- "there's a review waiting through here", or "you've never learned this
+  // one", is exactly the kind of thing you want to see from the corridor
+  // rather than by trying every door.
+  const mark = doorRoomMark(targetKey);
+  const built = !!(name || crossCastle || occurrence || mark);
+  doorSignLog.push({ target: targetKey, kind: 'door', name: name || null, occurrence: occurrence || null, mark, built });
   if(!built) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
   const NAME_W = 1.8;                     // plaque width, <= door width (2.2)
-  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name, occurrence, dueState)
-                        : makeNameSignMesh(name, occurrence, dueState);
+  const m = crossCastle ? makeCastleDoorSignMesh(destCastle, name, occurrence, mark)
+                        : makeNameSignMesh(name, occurrence, mark);
   const NAME_H = NAME_W * m.geometry.parameters.height / 0.9;   // keep the plane's aspect
   const GAP = 0.12;                       // gap between the door top and the plaque
   const nameY = DOOR_H + GAP + NAME_H / 2;
@@ -4464,10 +4512,10 @@ function doorPairContent(target, exPair, listFallback){
 // without a roomSlots entry. `occurrence` (only ever passed by
 // buildStreetEntryPair -- "which castles should I prioritize memorizing?" is a
 // street-level, not per-door, question) is a small line drawn under the pair.
-// `dueState` likewise comes only from buildStreetEntryPair: every interior
+// `mark` likewise comes only from buildStreetEntryPair: every interior
 // door already carries its own due badge on its plaque (see buildDoorHint),
 // so the street entry is the one place that needs it here.
-function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallback, dueState){
+function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallback, mark){
   const group = new THREE.Group();
   const { pair, asset, word, slotId } = doorPairContent(target, exPair, listFallback);
   if(hintsOn && pair){
@@ -4476,7 +4524,7 @@ function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallba
     // `dbb-<target>`, base pos on userData (no roomSlots entry).
     const bbId = 'dbb-' + target;
     const xf = slotXformFor(roomKey, bbId) || {};
-    const bb = buildMnemPairSprite(pair, xf.scale || 1, occurrence, dueState);
+    const bb = buildMnemPairSprite(pair, xf.scale || 1, occurrence, mark);
     bb.userData.kind = 'accessory';
     bb.userData.slotId = bbId;
     bb.userData.doorBill = true;
@@ -4529,13 +4577,13 @@ function buildStreetEntryPair(roomKey, room, b, size){
   let x, z;
   if(axis === 'x'){ x = b.origin.x + along;               z = b.origin.z + fixed + out.z * clear; }
   else            { z = b.origin.z + along;               x = b.origin.x + fixed + out.x * clear; }
-  const dueState = doorDueState(b.target);
+  const mark = doorRoomMark(b.target);
   // logged like a door sign (it does the same job for the one room no door
   // leads to), flagged by kind so a test can tell the two apart. `built`
   // follows the hint gate buildPairAt applies to the billboard itself.
   doorSignLog.push({ target: b.target, kind: 'street-entry', name: roomNameFor(b.target) || null,
-                     occurrence: b.entryOccurrence || null, dueState, built: !!hintsOn });
-  return buildPairAt(roomKey, room, x, z, b.target, null, b.entryOccurrence, undefined, dueState);
+                     occurrence: b.entryOccurrence || null, mark, built: !!hintsOn });
+  return buildPairAt(roomKey, room, x, z, b.target, null, b.entryOccurrence, undefined, mark);
 }
 
 // Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
@@ -4734,13 +4782,14 @@ function makeElevatorPanelTexture(floors, contents, selectedOrdinal){
       ctx.fillStyle = '#999';
       ctx.fillText(pct, x + 6 + nameW + 8, cy);
     }
-    // due-state badge (R4) on its own line under the name. The elevator panel
-    // IS the door chooser for these floors -- it replaces their door hints
-    // entirely -- so "there's a review waiting on 3" belongs here just as much
-    // as on an ordinary door's plaque. Its own line rather than trailing the
-    // stat: the name column is already tight enough for the name to need
-    // fitText, and the 140px row has vertical room to spare.
-    if(f.dueState) drawDueBadge(ctx, f.dueState, x + 6, cy + 34, 22);
+    // the room marker on its own line under the name. The elevator panel IS
+    // the door chooser for these floors -- it replaces their door hints
+    // entirely -- so "there's a review waiting on 3", or "you haven't learned
+    // 3 at all", belongs here just as much as on an ordinary door's plaque.
+    // Its own line rather than trailing the stat: the name column is already
+    // tight enough for the name to need fitText, and the 140px row has
+    // vertical room to spare.
+    if(f.mark) drawMark(ctx, f.mark, x + 6, cy + 34, 22);
     x += ELEV_COL.name;
 
     // move pair: opponent raised (upper-left), response lowered (lower-right),
@@ -6194,7 +6243,7 @@ function buildRoom(roomKey){
               // gets, since it has no door hint of its own (the panel replaces
               // it). Only the "(M%)" tail is drawn (see makeElevatorPanelTexture).
               occurrence: fe.occurrence || null,
-              dueState: doorDueState(fe.target),   // R4 badge -- see makeElevatorPanelTexture
+              mark: doorRoomMark(fe.target),   // due badge / not-learned brain -- see makeElevatorPanelTexture
               target: fe.target,
               spawn: computeSpawnForExit(roomKey, room, fe)
             };
@@ -7858,7 +7907,7 @@ function buildHelpOverlay(){
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street, B to instantly take the room's own back door.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
-      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). Each grade moves the room along the review ladder: 1 → 3 → 7 → 21 → 60 → 180 days, a fail drops it back to the start. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, so you can spot a waiting review from the corridor rather than trying every door — elevator panels tag their floors the same way, and a castle's entry room shows its tag on the stat strip out on the street.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). Each grade moves the room along the review ladder: 1 → 3 → 7 → 21 → 60 → 180 days, a fail drops it back to the start. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, and one you have never memorized carries a dim grey brain 🧠 — so a sign says either “never learned this”, “a review is waiting”, or nothing at all, which means learned and up to date. Elevator panels mark their floors the same way, and a castle's entry room shows its marker on the stat strip out on the street.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode. Ctrl+Z (or <i class="fa-solid fa-rotate-left"></i>) undoes the last edit, Ctrl+Shift+Z (or <i class="fa-solid fa-rotate-right"></i>) redoes it.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
@@ -7881,8 +7930,7 @@ function toggleHelp(show){
 // the position string for the current room, or null when the room has none
 // (the street / start) or it's a non-FEN fallback id.
 function currentRoomFen(){
-  const pk = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].posKey;
-  return (pk && pk.includes('/')) ? pk : null;
+  return roomHasPosition(currentRoomKey) ? ROOMS[currentRoomKey].posKey : null;
 }
 // the same cm-chessboard piece sprite the app's real boards (analysis, hover
 // preview) use, so the VR mini board's pieces are pixel-identical artwork, not
@@ -9246,10 +9294,10 @@ export async function openThreeTest(containerEl, opts){
         ? { open: true, items: [...gradeMenuEl.querySelectorAll('button')].map(b => b.textContent) }
         : { open: false, items: [] },
       // R4: the badge state a door sign shows for the room beyond it
-      // ('due' / 'overdue' / null -- see doorDueState), and what each of the
+      // ('due' / 'overdue' / 'unmemorized' / null -- see doorRoomMark), and what each of the
       // current room's door signs was actually built with on the last
       // buildRoom (see doorSignLog).
-      doorDueState: (targetKey) => doorDueState(targetKey),
+      doorRoomMark: (targetKey) => doorRoomMark(targetKey),
       doorSigns: () => doorSignLog.map(s => ({ ...s })),
       // R5: overwrite a room's frozen shape snapshot, so a test can make a
       // room "pick up a new door" by shrinking what it remembers -- far
