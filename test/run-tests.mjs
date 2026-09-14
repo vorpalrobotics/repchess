@@ -8161,6 +8161,51 @@ try {
       `expected the street entry billboard's canvas to grow a 90px occurrence strip (768x858), got ${JSON.stringify(size)}`);
     ok("street entry billboard's canvas grows an occurrence-stat strip below the move pair");
   } catch(e){ bad('street entry billboard occurrence stat', e); }
+
+  // 395. R4 follow-up (numbered out of order to reuse this phase's street +
+  //      castle fixture rather than build another). The castle's ENTRY room
+  //      is reached through a street building, not through a door, so it
+  //      never gets a door plaque -- it was the one memorized room with no
+  //      due indicator anywhere outside itself. Its due state rides on the
+  //      street billboard's stat strip instead.
+  try {
+    const entryKey = await appBC.page.evaluate(() => {
+      const pk = mv => { const c = new Chess(); for(const m of mv) c.move(m,{sloppy:true});
+        return window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_'); };
+      return 'cas:L1_Alpha:' + pk(['d4','Nf6','c4']);
+    });
+    const E = (fn, ...args) => appBC.page.evaluate(
+      ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+    const streetSign = async () => {
+      await E('enter', 'mainStreet');
+      await appBC.page.waitForTimeout(250);
+      return (await E('doorSigns')).find(s => s.kind === 'street-entry' && s.target === entryKey) || null;
+    };
+
+    const quiet = await streetSign();
+    assert(quiet, `expected the street entry pair logged as a sign, got ${JSON.stringify(await E('doorSigns'))}`);
+    assert(quiet.dueState === null,
+      `expected no badge for an unmemorized entry room, got ${JSON.stringify(quiet)}`);
+
+    const DAY = 86400000, now = Date.now();
+    await E('setMemorized', entryKey, true);
+    await E('setReviewRecord', entryKey, { last: now, due: now - 5 * DAY, step: 0, lapses: 1, lastGrade: 'C' });
+    const flagged = await streetSign();
+    assert(flagged && flagged.dueState === 'overdue',
+      `expected the street billboard to carry the entry room's overdue badge, got ${JSON.stringify(flagged)}`);
+
+    // the strip was already there for the occurrence stat, so a badge coming
+    // and going must not resize the billboard -- no shifting street furniture
+    const size = await appBC.page.evaluate((slotId) => window.__threeTestEdit.spriteCanvasSize(slotId), 'dbb-' + entryKey);
+    assert(size && size.width === 768 && size.height === 858,
+      `expected the billboard unchanged in size with a badge on it, got ${JSON.stringify(size)}`);
+
+    await E('setReviewRecord', entryKey, { last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    const settled = await streetSign();
+    assert(settled && settled.dueState === null,
+      `expected the badge gone once the entry room is up to date, got ${JSON.stringify(settled)}`);
+    ok('street entry billboard carries the entry room\'s due badge (the one room no door leads to)');
+  } catch(e){ bad('street entry billboard due badge', e); }
 } finally {
   await appBC.close();
 }

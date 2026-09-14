@@ -3900,8 +3900,13 @@ function drawMoveNumberBadge(ctx, qx, qy, boxSize, moveNumber){
 // only ever passed for a castle's street-level entry pair -- see
 // buildStreetEntryPair) adds a small muted strip below the two quadrants, so
 // castles can be compared at a glance for which to prioritize memorizing.
-function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality, occurrence){
-  const stripH = occurrence ? 90 : 0;
+// `dueState` ('due'/'overdue', see doorDueState) rides in that same strip as a
+// coloured pill. The castle's entry room is the one room reached through a
+// STREET building rather than a door, so it never gets an R4 door plaque and
+// was the only memorized room with no due indicator anywhere outside itself.
+// This strip is the entry room's equivalent of that plaque.
+function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQuality, occurrence, dueState){
+  const stripH = (occurrence || DUE_BADGE[dueState]) ? 90 : 0;
   const canvas = document.createElement('canvas');
   canvas.width = MNEM_PAIR_SIZE;
   canvas.height = MNEM_PAIR_SIZE + stripH;
@@ -3912,15 +3917,29 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
   if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, MNEM_QUADRANT, oppContent.moveNumber);
   if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, MNEM_QUADRANT, respContent.moveNumber);
-  if(occurrence){
+  if(stripH){
     ctx.fillStyle = 'rgba(15,15,20,0.75)';
     ctx.fillRect(0, MNEM_PAIR_SIZE, MNEM_PAIR_SIZE, stripH);
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // stat and badge laid out as a centred pair, same as a door sign's own
+    // stat line (drawSignStatLine) -- either alone simply centres itself.
+    const y = MNEM_PAIR_SIZE + stripH / 2 + 2;
+    const badgeFont = 40;
+    const bw = dueBadgeWidth(ctx, dueState, badgeFont);
+    const gap = (occurrence && bw) ? 20 : 0;
     let font = 56; ctx.font = `bold ${font}px sans-serif`;
-    while(font > 20 && ctx.measureText(occurrence).width > MNEM_PAIR_SIZE - 40){ font -= 4; ctx.font = `bold ${font}px sans-serif`; }
-    ctx.fillText(occurrence, MNEM_PAIR_SIZE / 2, MNEM_PAIR_SIZE + stripH / 2 + 2);
+    while(font > 20 && ctx.measureText(occurrence || '').width + gap + bw > MNEM_PAIR_SIZE - 40){
+      font -= 4; ctx.font = `bold ${font}px sans-serif`;
+    }
+    const tw = occurrence ? ctx.measureText(occurrence).width : 0;
+    let x = (MNEM_PAIR_SIZE - (tw + gap + bw)) / 2;
+    if(occurrence){
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.fillText(occurrence, x, y);
+      x += tw + gap;
+    }
+    drawDueBadge(ctx, dueState, x, y, badgeFont);
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -3964,14 +3983,14 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
 // with the immediate notation fallback plus the async graphic/word resolve.
 // Position and interactive userData are the caller's job -- shared by the
 // in-room mnemonic slots and the new door-side pairs.
-function buildMnemPairSprite(pair, userScale, occurrence){
+function buildMnemPairSprite(pair, userScale, occurrence, dueState){
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff, transparent: true }));
   sprite.userData.userScale = userScale || 1;
   const oppQ = pair.opponent.quality;
   renderMnemPairCanvas(sprite,
     { text: pair.opponent.san, moveNumber: pair.opponent.moveNumber },
     { text: pair.response.san, moveNumber: pair.response.moveNumber },
-    null, oppQ, occurrence);
+    null, oppQ, occurrence, dueState);
   const myGen = buildGeneration;
   Promise.all([getMnemonicsCached(), loadBeardImage()]).then(([mnemonicsBySquare, beardImg]) => {
     if(buildGeneration !== myGen) return;
@@ -3980,7 +3999,7 @@ function buildMnemPairSprite(pair, userScale, occurrence){
       resolveMoveContent(pair.response, mnemonicsBySquare)
     ]).then(([oppContent, respContent]) => {
       if(buildGeneration !== myGen) return;
-      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ, occurrence);
+      renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQ, occurrence, dueState);
     });
   });
   return sprite;
@@ -4358,7 +4377,7 @@ function buildDoorHint(size, wall, offset, targetKey, roomKey, occurrence){
   // want to see from the corridor rather than by trying every door.
   const dueState = doorDueState(targetKey);
   const built = !!(name || crossCastle || occurrence || dueState);
-  doorSignLog.push({ target: targetKey, name: name || null, occurrence: occurrence || null, dueState, built });
+  doorSignLog.push({ target: targetKey, kind: 'door', name: name || null, occurrence: occurrence || null, dueState, built });
   if(!built) return group;
   const { fixed } = wallSpan(size, wall);
   const clearance = WALL_THICK/2 + 0.03;
@@ -4436,7 +4455,10 @@ function doorPairContent(target, exPair, listFallback){
 // without a roomSlots entry. `occurrence` (only ever passed by
 // buildStreetEntryPair -- "which castles should I prioritize memorizing?" is a
 // street-level, not per-door, question) is a small line drawn under the pair.
-function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallback){
+// `dueState` likewise comes only from buildStreetEntryPair: every interior
+// door already carries its own due badge on its plaque (see buildDoorHint),
+// so the street entry is the one place that needs it here.
+function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallback, dueState){
   const group = new THREE.Group();
   const { pair, asset, word, slotId } = doorPairContent(target, exPair, listFallback);
   if(hintsOn && pair){
@@ -4445,7 +4467,7 @@ function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallba
     // `dbb-<target>`, base pos on userData (no roomSlots entry).
     const bbId = 'dbb-' + target;
     const xf = slotXformFor(roomKey, bbId) || {};
-    const bb = buildMnemPairSprite(pair, xf.scale || 1, occurrence);
+    const bb = buildMnemPairSprite(pair, xf.scale || 1, occurrence, dueState);
     bb.userData.kind = 'accessory';
     bb.userData.slotId = bbId;
     bb.userData.doorBill = true;
@@ -4498,7 +4520,13 @@ function buildStreetEntryPair(roomKey, room, b, size){
   let x, z;
   if(axis === 'x'){ x = b.origin.x + along;               z = b.origin.z + fixed + out.z * clear; }
   else            { z = b.origin.z + along;               x = b.origin.x + fixed + out.x * clear; }
-  return buildPairAt(roomKey, room, x, z, b.target, null, b.entryOccurrence);
+  const dueState = doorDueState(b.target);
+  // logged like a door sign (it does the same job for the one room no door
+  // leads to), flagged by kind so a test can tell the two apart. `built`
+  // follows the hint gate buildPairAt applies to the billboard itself.
+  doorSignLog.push({ target: b.target, kind: 'street-entry', name: roomNameFor(b.target) || null,
+                     occurrence: b.entryOccurrence || null, dueState, built: !!hintsOn });
+  return buildPairAt(roomKey, room, x, z, b.target, null, b.entryOccurrence, undefined, dueState);
 }
 
 // Phase 4: a wall-mounted parchment plaque showing an applied list's mnemonic
@@ -7821,7 +7849,7 @@ function buildHelpOverlay(){
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street, B to instantly take the room's own back door.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
-      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). Each grade moves the room along the review ladder: 1 → 3 → 7 → 21 → 60 → 180 days, a fail drops it back to the start. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, so you can spot a waiting review from the corridor rather than trying every door — elevator panels tag their floors the same way.</p>
+      <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). Each grade moves the room along the review ladder: 1 → 3 → 7 → 21 → 60 → 180 days, a fail drops it back to the start. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, so you can spot a waiting review from the corridor rather than trying every door — elevator panels tag their floors the same way, and a castle's entry room shows its tag on the stat strip out on the street.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-pencil"></i> Edit mode:</strong> click the floor, a wall, stairs, a slot, or a doorway to skin/assign it. With an item selected, arrows nudge it, &lt; &gt; rotate, +/− scale. <i class="fa-solid fa-ruler-combined"></i> opens room geometry, <i class="fa-solid fa-list-ol"></i> assigns object lists to the walls, <i class="fa-solid fa-cubes"></i> the asset library. Press Esc (or the pencil) to leave edit mode. Ctrl+Z (or <i class="fa-solid fa-rotate-left"></i>) undoes the last edit, Ctrl+Shift+Z (or <i class="fa-solid fa-rotate-right"></i>) redoes it.</p>
       <p style="margin:.4rem 0"><strong>Touch:</strong> use the on-screen joystick to walk; in edit mode an on-screen pad moves/scales the selected item.</p>
       <div style="text-align:right;margin-top:.9rem"><button id="threeHelpCloseBtn">Close</button></div>
