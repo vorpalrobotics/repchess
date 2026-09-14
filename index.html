@@ -711,6 +711,13 @@
   .mnem-square.mnem-img-mode{padding:0;align-items:center;justify-content:center}
   .mnem-square .mnem-cell-img{width:100%;height:100%;object-fit:contain;display:block}
   .mnem-square .mnem-cell-empty{color:#0003;font-size:1.6rem}
+  /* A piece view with a scope selected: squares that piece never lands on
+     within the scope are greyed right back, so what's left is the vocabulary
+     this castle actually asks of you. Dims the CONTENT, not the square, so
+     the board's own light/dark pattern stays readable underneath. Still
+     clickable -- filling one in ahead of time is legitimate. */
+  .mnem-square.mnem-unused .mnem-cell-img{opacity:.18;filter:grayscale(1)}
+  .mnem-square.mnem-unused .mnem-cell-empty{opacity:.35}
 
   #quizOverlay .modal{min-width:24em;text-align:center}
   .quiz-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
@@ -1786,6 +1793,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-373"></script>
+<script type="module" src="js/app.js?v=20260804-374"></script>
 </body>
 </html>

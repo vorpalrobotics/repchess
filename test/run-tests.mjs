@@ -20684,5 +20684,99 @@ try {
 } catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
+//     out the squares that piece never lands on inside it. The words view
+//     has always coloured by coverage; a piece view answers a narrower
+//     question -- "which of these images do I actually need for this castle"
+//     -- and greying the rest answers it at a glance. ---
+if(shouldRunPhase(['mnemonics'])){
+try {
+const appEM = await launchApp();
+try {
+  await seedBackup(appEM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    mnemonics: [
+      { square: 'c3', knight: 'cane', knightImg: 'data:image/png;base64,iVBORw0KGgo=' },
+      { square: 'a1', knight: 'anchor', knightImg: 'data:image/png;base64,iVBORw0KGgo=' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEM.page.evaluate(() => document.getElementById('menuMnemonics').click());
+  await appEM.page.waitForFunction(
+    () => document.getElementById('mnemonicsOverlay').style.display === 'flex', { timeout: 15000 });
+
+  const setScope = (val) => appEM.page.evaluate(async (v) => {
+    const sel = document.getElementById('mnemonicsCoverageSelect');
+    sel.value = v;
+    await sel.onchange({ target: sel });
+  }, val);
+  const setMode = async (mode) => {
+    await appEM.page.evaluate((m) =>
+      document.querySelector(`#mnemModeBar .mnem-mode-btn[data-mode="${m}"]`).click(), mode);
+    // the click handler kicks off an async re-render it doesn't await
+    await appEM.page.waitForFunction((m) => {
+      const first = document.querySelector('#mnemonicsGrid .mnem-square');
+      return first && (m === 'words'
+        ? !first.classList.contains('mnem-img-mode')
+        : first.classList.contains('mnem-img-mode'));
+    }, mode, { timeout: 10000 });
+  };
+  const dimmed = () => appEM.page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll('#mnemonicsGrid .mnem-square')]
+      .map(el => [el.dataset.square, el.classList.contains('mnem-unused')])));
+
+  // 400. With a castle picked and the knight view on, c3 (the castle's own
+  //      Nc3 reply) stays lit while squares no knight reaches in it go grey.
+  try {
+    const castleVal = await appEM.page.evaluate(() => {
+      const sel = document.getElementById('mnemonicsCoverageSelect');
+      const opt = [...sel.options].find(o => o.value.startsWith('castle:'));
+      return opt ? opt.value : null;
+    });
+    assert(castleVal, 'setup: expected a castle option in the coverage dropdown');
+    await setScope(castleVal);
+    await setMode('knight');
+    const d = await dimmed();
+    assert(d.c3 === false, 'expected c3 (the castle plays Nc3) to stay lit');
+    assert(d.a1 === true, 'expected a1 -- no knight goes there in this castle -- to be greyed out');
+    const greyCount = Object.values(d).filter(Boolean).length;
+    assert(greyCount > 55 && greyCount < 64,
+      `expected most of the board greyed but not all of it, got ${greyCount} of 64`);
+    ok('Mnemonics piece view: a selected castle greys the squares that piece never reaches');
+  } catch(e){ bad('Mnemonics piece view: coverage dimming', e); }
+
+  // 401. ...and the count says the same thing as a number, in a slot that
+  //      was otherwise blank in a piece view.
+  try {
+    const counts = await appEM.page.evaluate(() =>
+      document.getElementById('mnemonicsCoverageCounts').textContent);
+    assert(/knight squares used here/.test(counts) && /^[1-9]/.test(counts),
+      `expected a "N of 64 knight squares used here" readout, got "${counts}"`);
+    ok('Mnemonics piece view: the counts line reports how many of that piece\'s squares the scope uses');
+  } catch(e){ bad('Mnemonics piece view: used-square count', e); }
+
+  // 402. With no scope selected there is nothing to be outside of, so
+  //      nothing dims -- the piece view looks exactly as it always did.
+  try {
+    await setScope('');
+    await appEM.page.waitForTimeout(150);
+    const d = await dimmed();
+    const greyCount = Object.values(d).filter(Boolean).length;
+    assert(greyCount === 0, `expected nothing greyed with no scope selected, got ${greyCount} squares`);
+    const counts = await appEM.page.evaluate(() =>
+      document.getElementById('mnemonicsCoverageCounts').textContent);
+    assert(counts === '', `expected no count with no scope selected, got "${counts}"`);
+    ok('Mnemonics piece view: with no scope selected nothing is greyed');
+  } catch(e){ bad('Mnemonics piece view: no scope means no dimming', e); }
+} finally {
+  await appEM.close();
+}
+} catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
