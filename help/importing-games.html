@@ -16,6 +16,23 @@ result, and a link back to the original game -- not just the moves, so you
 can dig back into any of them later. See <em>Exploring Your Games</em> for
 what that unlocks.</p>
 
+<h3>Keeping it up to date automatically</h3>
+<p>The import dialog carries a checkbox: <strong>"Automatically import new
+games from these each day."</strong> With it on, and a username remembered
+for either platform, the first time you open
+<span class="repchess-brand">REPchess</span> on a given day it checks both
+sources in the background and merges in anything new. It sizes each request
+from how long it's been since the last successful check, so a daily user
+pulls a small batch and someone returning after a month pulls a bigger
+one.</p>
+<p>It's deliberately unobtrusive: it never opens a dialog or interrupts what
+you're doing. If it finds new games, a toast reports how many and from which
+platform -- one per source, since the two finish at different times -- and a
+line in the status bar keeps the summary after the toast fades. A check that
+finds nothing says nothing. A check that fails (network down, platform
+unreachable) is silent too, and simply retries on your next refresh rather
+than waiting out the day.</p>
+
 <h3>Pasting variations</h3>
 <p>Menu &rarr; Import &rarr; Variations lets you paste move lists directly
 (useful for lines from a book, a database, or a friend) without needing a

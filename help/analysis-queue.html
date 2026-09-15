@@ -1,0 +1,53 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Background Analysis</h2>
+
+<p>Choosing a standard response is easier with an engine evaluation in front
+of you, but a deep search on a single position takes real time, and a
+repertoire has hundreds of them. The <strong>Analysis Queue</strong> is how
+<span class="repchess-brand">REPchess</span> does that work without you
+waiting on it: you line positions up, and the engine grinds through them in
+the background while you carry on building.</p>
+
+<h3>Queueing positions</h3>
+<p>From a move row's &vellip; menu:</p>
+<ul>
+<li><strong>Add to Analysis Queue</strong> queues that one position.</li>
+<li><strong>Add Children to Analysis Queue</strong> queues every reply out of
+it at once -- the usual way to fill in a whole branch's evals before deciding
+which move to prepare.</li>
+</ul>
+<p>Either way you're asked for a <strong>depth</strong> and a <strong>number
+of lines</strong> (how many alternatives the engine should keep track of, up
+to 6). Deeper and wider costs more time per position; there's no single right
+answer, and you can queue the same position again later at a greater depth if
+you want a second opinion.</p>
+
+<h3>Watching it work</h3>
+<p>Menu &rarr; <strong>Analysis Queue</strong> shows what's pending. The item
+being worked on reports its progress live -- current depth against the target,
+and the best lines found so far with their evaluations. Rows can be dragged to
+reorder them, or deleted outright. A <strong>Threads</strong> control sets how
+much CPU the background search may use.</p>
+<p>Results are written straight onto the repertoire tree as each position
+finishes, so the evals simply appear on the rows as the queue works down the
+list. A finished item leaves the queue by itself.</p>
+
+<h3>It keeps its place</h3>
+<p>The queue is stored, not just held in memory. Close the tab mid-run and
+whatever hadn't finished is still there when you come back, and starts again
+on its own as soon as the engine is ready -- there's no "start" button to
+remember. An item interrupted partway (by you opening the live analysis board,
+say) goes back to queued rather than being lost, and resumes when the engine
+is free again.</p>
+
+<h3>Jumping the line</h3>
+<p><strong>Analyze Others</strong> -- the lightning-bolt icon in the Compare
+Games table -- also uses the queue, but puts its work at the front and
+interrupts whatever's running. That's deliberate: it's a quick "let me see"
+about moves you've actually played, not something to leave churning. See
+<em>Exploring Your Games</em>.</p>
+
+<h3>A note on VR</h3>
+<p>Walking the memory palace is demanding on its own, so entering VR stops the
+queue from starting new work and caps the engine's threads while you're in
+there. It picks up again when you come out.</p>

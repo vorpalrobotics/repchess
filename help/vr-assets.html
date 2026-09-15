@@ -1,0 +1,62 @@
+<!-- Fragment; see help/README.md. -->
+<h2>VR Assets</h2>
+
+<p>An "asset" is a piece of art the memory palace can use: an object to stand
+in a room, a texture for a floor or wall, a skin for a door or a sign.
+<span class="repchess-brand">REPchess</span> ships hundreds of them, and
+Menu &rarr; <strong>VR Assets</strong> is where you browse, edit, and add your
+own.</p>
+
+<h3>Types</h3>
+<p>An asset's type decides where it can be used, so it's worth picking the
+right one:</p>
+<ul>
+<li><strong>Prop: Billboard</strong> -- a flat image that always turns to face
+you. The usual choice for an object standing in a room.</li>
+<li><strong>Prop: Extruded</strong> -- a silhouette given thickness, so it
+reads as a solid object from the side rather than vanishing edge-on.</li>
+<li><strong>Surface</strong> -- a texture that tiles across a floor or
+wall.</li>
+<li><strong>Surface: Facade</strong> -- one large, non-tiled image stretched
+across a whole building front on the street.</li>
+<li><strong>Surface: Sign skin</strong> and <strong>Surface: Door
+skin</strong> -- artwork for a castle's street sign or an individual
+door.</li>
+</ul>
+
+<h3>Adding one</h3>
+<p><strong>New Asset</strong> takes an image you upload, or one generated for
+you (below). You give it an id and keywords -- the keywords are what the
+search box matches, so they're worth filling in on anything you'll want to
+find again among hundreds.</p>
+<p>Uploaded images are down-converted on import to a size appropriate for how
+the asset is actually used: a tiled floor texture doesn't need the pixels a
+building facade does. A <strong>resolution</strong> choice (Low / Normal /
+High) sets the tier. Aspect ratio is always preserved -- nothing is cropped or
+squashed.</p>
+<p>The crop editor can trim an image and erase its background (brush or
+bucket/flood-fill, with undo and redo) before you save it -- worth doing for a
+prop, since a rectangular photo with a white background reads as a floating
+card in the room rather than as an object.</p>
+
+<h3>Generating images</h3>
+<p>If you have an OpenAI API key you can generate art directly: enter the key
+once, then describe what you want. A <strong>standing instructions</strong>
+field is appended to every prompt -- put your style there ("flat cartoon
+style, thick outlines, bright colors, no text") so a set of assets generated
+over many sessions still looks like a set. The key is stored only in this
+browser and sent only to OpenAI; generation is billed to your own account.</p>
+
+<h3>Using them</h3>
+<p>Assets are offered wherever the VR walk needs art -- clicking an empty
+move-object slot in a room, skinning a floor or wall, choosing a door or sign
+image. The picker only offers types valid for that spot, so you can't
+accidentally put a floor texture on a door. See <em>Decorating Your
+Castle</em>.</p>
+
+<h3>Exporting</h3>
+<p>The manager exports your whole asset collection, either as one JSON bundle
+or as individual image + metadata file pairs. Menu &rarr; Export &rarr;
+Assets does the same thing from outside. This is separate from a full
+backup -- useful for sharing a set, or keeping your own artwork safe
+independently of your repertoire.</p>

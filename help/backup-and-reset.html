@@ -1,0 +1,51 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Backup, Restore, and Starting Over</h2>
+
+<p>Everything <span class="repchess-brand">REPchess</span> knows lives in
+<em>this browser, on this machine</em> -- there is no account and no server
+copy. Clearing site data, switching browsers, or a new laptop all mean
+starting from nothing unless you've exported first. A full backup is the only
+copy you have.</p>
+
+<h3>Full Backup</h3>
+<p>Menu &rarr; Export &rarr; <strong>Full Backup</strong> writes one file
+containing everything: your opening systems and every prepared response,
+notes, engine evaluations and move-quality marks, castle roots and names, your
+downloaded games, your mnemonics (words, descriptions and images), the VR
+memory-palace layout and decoration, your object lists, your review progress,
+and your remembered Lichess/Chess.com handles.</p>
+<p>It's worth making one before anything drastic, and worth making one
+periodically regardless -- the images alone represent a lot of work that
+exists nowhere else.</p>
+
+<h3>Restoring</h3>
+<p>Menu &rarr; Import &rarr; <strong>Backup / Data File</strong> takes a
+backup file and replaces what's here with it. It is a replace, not a merge:
+the current contents are wiped first. You're asked to confirm before anything
+happens.</p>
+<p>A restore takes a safety snapshot of the current state before touching
+anything, and that snapshot is written to storage rather than just held in
+memory -- so it survives the tab being closed or the browser crashing
+part-way through. If the restore fails mid-flight it rolls back to the
+snapshot automatically; if even that can't complete, the snapshot is left in
+place and the app offers to finish recovering it the next time you open it.
+You should never end up with half a repertoire.</p>
+<p>The same importer also recognises the narrower bundles -- a mnemonics-only
+export, an assets-only export, or an object-list room database -- and runs the
+matching partial import instead, so you don't have to pick the right menu item
+for the file you have.</p>
+
+<h3>Reset to Factory</h3>
+<p>Menu &rarr; About &rarr; <strong>Reset to Factory</strong> (a small link at
+the bottom) permanently erases everything this app has stored in this browser
+and returns it to a fresh install: every opening system, move, note and
+mnemonic, every downloaded game, the whole VR layout and room progress, and
+all saved settings.</p>
+<p><strong>There is no undo</strong>, so it asks twice -- a warning with a
+link to make a backup first, then a final confirmation you have to type out.
+Take the backup. Even if you're sure.</p>
+<p>It's worth knowing this exists for one non-obvious reason besides starting
+over: it deletes the underlying database outright rather than emptying it,
+which is a stronger operation than a restore performs, and has occasionally
+been the cure for storage-level problems that nothing else shifted. Restore
+your backup afterwards and you're back where you were.</p>
