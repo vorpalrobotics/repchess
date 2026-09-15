@@ -20778,5 +20778,121 @@ try {
 } catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+/* --- Phase EN: DISABLED -- it documents a CONFIRMED BUG, so it fails today.
+   Enabling it is the acceptance test for the fix; don't "fix" it by
+   weakening the assertions.
+
+   "Only test memorized rooms" does not understand corridor rooms. A linear
+   run of positions is merged into ONE VR room anchored at the first; the
+   rest are members of it and are not separately memorizable (the graph's
+   own coverage code says so outright). But every seq->roomKey call in the
+   app builds the key naively from the position's own FEN, which only ever
+   matches the ANCHOR -- nothing maps a member position back to its room.
+   genRoomPosKeys knows how, but is used only by the redirect repair.
+
+   Measured 2026-09-15 against a castle that merges to one corridor room of
+   three members, anchor marked memorized:
+     ✓ setup: the castle is one corridor room (1 room, 3 members)
+     ✗ a corridor MEMBER position reads memorized  -> got false
+     ✗ the quiz walks THROUGH the corridor         -> offered [], dead-ends
+
+   Symptom: with memorized-only on, a quiz asks the first move into a
+   corridor and the question ends there, however well you know the rest of
+   it -- so long forcing lines are largely unreachable by memorized-only
+   quizzing, and it reads as sessions being oddly shallow.
+
+   The same naive mapping is roomKeyForRoom in the graph render, so the
+   🧠/🎨 glyphs and the Review/Completeness lenses probably light only each
+   corridor's anchor too -- unverified, same one-line pattern, worth
+   checking in the same pass. --- */
+if(false && shouldRunPhase(['quiz'])){
+try {
+const appEN = await launchApp();
+try {
+  const seqs = {
+    r0: ['d4','Nf6','c4'],
+    r1: ['d4','Nf6','c4','e6','Nc3'],
+    r2: ['d4','Nf6','c4','e6','Nc3','Bb4','e3'],
+  };
+  const keyFor = (page, seq) => page.evaluate((mv) => {
+    const c = new Chess(); for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, seq);
+  const posKeyFor = (page, seq) => page.evaluate((mv) => {
+    const c = new Chess(); for(const m of mv) c.move(m, { sloppy: true });
+    return window.__positionKey(c.fen());
+  }, seq);
+
+  const r0Key = await keyFor(appEN.page, seqs.r0);
+  const r0Pos = await posKeyFor(appEN.page, seqs.r0);
+  const r1Pos = await posKeyFor(appEN.page, seqs.r1);
+
+  // a purely LINEAR castle: one continuation at every step, so the whole
+  // thing merges into a single corridor room. Only the anchor is marked
+  // memorized -- which is the only thing the user CAN mark, since the
+  // members have no room of their own to stand in.
+  await seedBackup(appEN.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' }],
+    memorizedRooms: JSON.stringify({ [r0Key]: Date.now() }),
+  }, { defaultPlayerColor: 'white' });
+  await appEN.page.click('.line-row');
+  await appEN.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  // setup sanity: the castle really is one corridor, anchored at r0, with r1
+  // folded into it as a member rather than being a room of its own.
+  try {
+    const built = await appEN.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const alpha = built.find(c => c.castleName === 'Alpha');
+    assert(alpha, `setup: expected an Alpha castle, got ${JSON.stringify(built.map(b => b.castleName))}`);
+    const anchors = alpha.genRooms.map(g => g.posKey);
+    assert(anchors.includes(r0Pos), `setup: expected r0 to be a room anchor, anchors were ${JSON.stringify(anchors)}`);
+    assert(!anchors.includes(r1Pos),
+      `setup: expected r1 to be FOLDED INTO a corridor, but it is its own room -- this fixture is not linear enough to test the bug. anchors: ${JSON.stringify(anchors)}`);
+    const corridor = alpha.genRooms.find(g => g.posKey === r0Pos);
+    const members = (corridor.shape && corridor.shape.members) || [];
+    assert(members.includes(r1Pos),
+      `setup: expected r1 among the corridor's members, got ${JSON.stringify(members)}`);
+    ok(`DIAGNOSTIC setup: the castle is one corridor room (${alpha.genRooms.length} room(s), ${members.length} members)`);
+  } catch(e){ bad('DIAGNOSTIC setup: linear castle merges into a corridor', e); }
+
+  // the actual question. A quiz session scoped to the whole system, memorized-only.
+  try {
+    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, true));
+    assert(!err, `setup: startSession refused: ${err}`);
+
+    const atAnchor = await appEN.page.evaluate((sq) => window.__oqTestHooks.roomMemorized(sq), seqs.r0);
+    assert(atAnchor === true, `expected the corridor's ANCHOR to read memorized, got ${atAnchor}`);
+
+    // THE CLAIM: r1 is part of the same memorized room, so it must read
+    // memorized too. The user's own framing: a move deep inside the MASTER
+    // BEDROOM's object list belongs to the MASTER BEDROOM.
+    const atMember = await appEN.page.evaluate((sq) => window.__oqTestHooks.roomMemorized(sq), seqs.r1);
+    assert(atMember === true,
+      `expected a corridor MEMBER position to read memorized (it is part of the same room as the anchor), got ${atMember}`);
+    ok('memorized filter: a corridor member position reads as memorized, like its anchor');
+  } catch(e){ bad('memorized filter: corridor member reads memorized', e); }
+
+  // ...and the consequence: the walk dead-ends on entering the corridor.
+  try {
+    const fromAnchor = await appEN.page.evaluate((sq) => window.__oqTestHooks.memorizedFilter(sq, ['e6']), seqs.r0);
+    assert(Array.isArray(fromAnchor) && fromAnchor.length === 1,
+      `expected the anchor's own branch to be offered, got ${JSON.stringify(fromAnchor)}`);
+    const fromMember = await appEN.page.evaluate((sq) => window.__oqTestHooks.memorizedFilter(sq, ['Bb4']), seqs.r1);
+    assert(Array.isArray(fromMember) && fromMember.length === 1,
+      `expected the quiz to keep walking THROUGH a memorized corridor, but it offered ${JSON.stringify(fromMember)} -- the line dead-ends one move in`);
+    ok('memorized filter: a memorized corridor is walked through, not dead-ended at its first member');
+  } catch(e){ bad('memorized filter: corridor is walked through', e); }
+} finally {
+  await appEN.close();
+}
+} catch(e){ bad('Phase EN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

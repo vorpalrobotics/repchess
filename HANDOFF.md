@@ -144,6 +144,33 @@ reports after R1–R5 shipped, and are the shape of feedback to expect more of:
   explicitly deferred the refactor. Read it before proposing anything in that
   direction; don't start building from it without being asked.
 
+## Confirmed open bug: corridor members have no room identity
+
+A linear run of positions merges into ONE VR room, anchored at the first;
+the rest are **members** of it and aren't separately memorizable. Every
+`seq -> roomKey` call in the app, though, builds the key naively from the
+position's own FEN — which only ever matches the anchor. Nothing maps a
+member position back to its room. `genRoomPosKeys` knows how (anchor +
+`shape.members`/`left`/`right`) but is used only by the redirect repair.
+
+**Confirmed** for `oqRoomMemorized` by a test: with "only test memorized
+rooms" on, a quiz asks the first move into a memorized corridor and the
+question ends right there, however well the rest is known. Long forcing
+lines are therefore largely unreachable by memorized-only quizzing, and it
+reads as sessions being oddly shallow rather than as a bug.
+
+**Suspected, unverified:** `roomKeyForRoom` in the graph render uses the
+same naive mapping, so the 🧠/🎨 glyphs and the Review/Completeness lenses
+probably light only each corridor's anchor. Same one-line pattern — check
+it in the same pass.
+
+The acceptance test is written and sits in `test/run-tests.mjs` as **Phase
+EN, deliberately disabled** (`if(false && shouldRunPhase(...))`) because it
+documents the bug and so fails today. Enable it with the fix; don't weaken
+its assertions. It was written while designing the quiz/spaced-repetition
+tie-in, where it's the "Q0" prerequisite — a miss inside a corridor
+otherwise computes a key nothing is stored under and silently does nothing.
+
 ## Open decisions the user has not settled
 
 - **The ladder values** (`1/3/7/21/60/180`) and whether 180 days is the top
