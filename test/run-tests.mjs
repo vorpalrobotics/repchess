@@ -20839,7 +20839,8 @@ try {
   await seedBackup(appEN.page, {
     version: 6, user: 'tester',
     lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
-      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      // named, so a miss has a room NAME to report and not just a key
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1, name: 'Solarium' },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
     ]}],
@@ -20954,7 +20955,10 @@ try {
     await seedReview(r0Key, { last, due: last + 60 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
     await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
     const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
-    assert(res && res.from === 4 && res.to === 3, `expected a single step down from 4, got ${JSON.stringify(res)}`);
+    assert(res && res.reason === 'demoted' && res.demoted.from === 4 && res.demoted.to === 3,
+      `expected a single step down from 4, got ${JSON.stringify(res)}`);
+    assert(res.name === 'Solarium',
+      `expected the miss attributed to the room BY NAME, got ${JSON.stringify(res.name)}`);
     const rec = await reviewOf(r0Key);
     assert(rec.step === 3, `expected the stored record at step 3, got ${JSON.stringify(rec)}`);
     assert(rec.due <= last + 21 * DAY && rec.due > last + 20 * DAY,
@@ -20969,7 +20973,11 @@ try {
   //      answers to -- none of that is fresh evidence.
   try {
     const again = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
-    assert(again === null, `expected a second miss in the same room to change nothing, got ${JSON.stringify(again)}`);
+    assert(again && again.demoted === null && again.reason === 'already',
+      `expected a second miss in the same room to change nothing, got ${JSON.stringify(again)}`);
+    // ...but still to SAY where the move lives: "attributed to the Solarium,
+    // nothing changed" is a different thing from "attributed to nothing".
+    assert(again.name === 'Solarium', `expected the room still named on a repeat miss, got ${JSON.stringify(again.name)}`);
     const rec = await reviewOf(r0Key);
     assert(rec.step === 3, `expected the record untouched by the repeat, got step ${rec.step}`);
     const ledger = await appEN.page.evaluate(() => window.__oqTestHooks.demotedRooms());
@@ -20988,7 +20996,9 @@ try {
     }, r0Key);
     await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
     const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
-    assert(res === null, `expected no demotion for a room with no schedule, got ${JSON.stringify(res)}`);
+    assert(res && res.demoted === null && res.reason === 'no-record',
+      `expected no demotion for a room with no schedule, got ${JSON.stringify(res)}`);
+    assert(res.name === 'Solarium', 'expected the room named even when nothing changed');
     assert((await reviewOf(r0Key)) === null, 'expected no record invented by the miss');
     ok('Quiz miss: a room with no schedule is left alone, not given one');
   } catch(e){ bad('Quiz miss: no record, no demotion', e); }
@@ -21003,12 +21013,27 @@ try {
     await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
     await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
     const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r1);
-    assert(res && res.to === 2,
+    assert(res && res.demoted && res.demoted.to === 2,
       `expected a miss at a MEMBER position to demote the room it belongs to, got ${JSON.stringify(res)}`);
+    // and it reports the CORRIDOR's name, not a name for a position that has
+    // no room -- which is the half of this the user actually reads
+    assert(res.name === 'Solarium',
+      `expected a miss inside the corridor reported against the corridor's name, got ${JSON.stringify(res.name)}`);
     const rec = await reviewOf(r0Key);
     assert(rec.step === 2, `expected the corridor's own record demoted, got ${JSON.stringify(rec)}`);
-    ok("Quiz miss: a miss inside a corridor blames the whole corridor, not a room that doesn't exist");
+    ok("Quiz miss: a miss inside a corridor blames the whole corridor, by name, not a room that doesn't exist");
   } catch(e){ bad('Quiz miss: corridor member attribution', e); }
+
+  // 408. An unnamed room still gets reported -- most rooms are unnamed while
+  //      a castle is being built out, and "moved up for review: (nothing)"
+  //      would be useless. The fallback names the moves that reach it.
+  try {
+    const label = await appEN.page.evaluate(({ k, sq }) => window.__oqTestHooks.roomLabel(k, sq),
+      { k: 'cas:L1_Alpha:__no_such_room__', sq: seqs.r1 });
+    assert(/unnamed room/.test(label) && /d4/.test(label),
+      `expected an unnamed room to fall back to the moves that reach it, got ${JSON.stringify(label)}`);
+    ok('Quiz miss: an unnamed room is reported by the moves that reach it');
+  } catch(e){ bad('Quiz miss: unnamed room label', e); }
 } finally {
   await appEN.close();
 }
