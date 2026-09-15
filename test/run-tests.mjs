@@ -6950,8 +6950,22 @@ try {
       // Nc3 exists in VR -- but nothing is built past it, making it a genuine
       // forward dead-end (a locked door leads into it).
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      // THREE branches off the root, deliberately. This phase is about a
+      // dead-end room OF ITS OWN, and a root with one continuation merges the
+      // whole castle into a single corridor (the dead end then isn't a room
+      // at all, it's a member of the entry room -- Phase EN covers that
+      // case). A root with exactly two would instead pair them into one
+      // two-track room (analyzeCastleStructure needs outDeg === 2), merging
+      // it again. Three is the smallest branch count that leaves each reply
+      // standing as its own room.
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'cxd5' },
     ]}],
-    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
   }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
   await appAS.page.waitForSelector('.data-row', { timeout: 40000 });
@@ -6985,6 +6999,11 @@ try {
       roomKey: window.__graphTestHooks.roomKeyOf(fen),
     }), fens.deadEnd);
     assert(info.roomKey, `test setup issue: expected the dead-end room to have a roomKey, got ${JSON.stringify(info.roomKey)}`);
+    // and it really is a room of its OWN, not one merged into the entry --
+    // that distinction is the whole reason this fixture branches three ways
+    const rootKey = await appAS.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.root);
+    assert(info.roomKey !== rootKey,
+      `test setup issue: the dead end merged into the entry room (${info.roomKey}) -- it needs to be its own room for this test to mean anything`);
     assert(info.display === 'none', `expected Jump hidden for a locked-door dead-end room, got display=${JSON.stringify(info.display)}`);
     ok('room-info modal: Jump to VR is hidden for a locked-door dead-end room');
   } catch(e){ bad('room-info modal: Jump hidden for locked-door dead-end', e); }
@@ -20778,34 +20797,20 @@ try {
 } catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
-/* --- Phase EN: DISABLED -- it documents a CONFIRMED BUG, so it fails today.
-   Enabling it is the acceptance test for the fix; don't "fix" it by
-   weakening the assertions.
+/* --- Phase EN: a position inside a merged room belongs to that room.
+   A linear run of positions becomes ONE VR room anchored at the first; the
+   rest are members with no room of their own to stand in, decorate or
+   memorize. Keying off a position's own FEN (what every call site used to
+   do) produces a key for a room that doesn't exist, and everything stored
+   per-room then reads as absent for it.
 
-   "Only test memorized rooms" does not understand corridor rooms. A linear
-   run of positions is merged into ONE VR room anchored at the first; the
-   rest are members of it and are not separately memorizable (the graph's
-   own coverage code says so outright). But every seq->roomKey call in the
-   app builds the key naively from the position's own FEN, which only ever
-   matches the ANCHOR -- nothing maps a member position back to its room.
-   genRoomPosKeys knows how, but is used only by the redirect repair.
-
-   Measured 2026-09-15 against a castle that merges to one corridor room of
-   three members, anchor marked memorized:
-     ✓ setup: the castle is one corridor room (1 room, 3 members)
-     ✗ a corridor MEMBER position reads memorized  -> got false
-     ✗ the quiz walks THROUGH the corridor         -> offered [], dead-ends
-
-   Symptom: with memorized-only on, a quiz asks the first move into a
-   corridor and the question ends there, however well you know the rest of
-   it -- so long forcing lines are largely unreachable by memorized-only
-   quizzing, and it reads as sessions being oddly shallow.
-
-   The same naive mapping is roomKeyForRoom in the graph render, so the
-   🧠/🎨 glyphs and the Review/Completeness lenses probably light only each
-   corridor's anchor too -- unverified, same one-line pattern, worth
-   checking in the same pass. --- */
-if(false && shouldRunPhase(['quiz'])){
+   The bug this pins, measured before the fix: a memorized ten-move corridor
+   read as memorized at its first position and unmemorized at the other
+   nine, so "only test memorized rooms" dead-ended one move into every
+   corridor -- long forcing lines were largely unreachable by memorized-only
+   quizzing, and it presented as sessions being oddly shallow rather than as
+   a bug. Don't "fix" a failure here by weakening the assertions. --- */
+if(shouldRunPhase(['quiz','digraph'])){
 try {
 const appEN = await launchApp();
 try {
@@ -20858,8 +20863,8 @@ try {
     const members = (corridor.shape && corridor.shape.members) || [];
     assert(members.includes(r1Pos),
       `setup: expected r1 among the corridor's members, got ${JSON.stringify(members)}`);
-    ok(`DIAGNOSTIC setup: the castle is one corridor room (${alpha.genRooms.length} room(s), ${members.length} members)`);
-  } catch(e){ bad('DIAGNOSTIC setup: linear castle merges into a corridor', e); }
+    ok(`Corridor rooms: a linear castle merges into one room (${alpha.genRooms.length} room(s), ${members.length} members)`);
+  } catch(e){ bad('Corridor rooms: linear castle merges into a corridor', e); }
 
   // the actual question. A quiz session scoped to the whole system, memorized-only.
   try {
@@ -20888,6 +20893,31 @@ try {
       `expected the quiz to keep walking THROUGH a memorized corridor, but it offered ${JSON.stringify(fromMember)} -- the line dead-ends one move in`);
     ok('memorized filter: a memorized corridor is walked through, not dead-ended at its first member');
   } catch(e){ bad('memorized filter: corridor is walked through', e); }
+  // the same blindness in the opening graph: a node is a POSITION, so most
+  // nodes in a castle are members of a merged room rather than rooms of
+  // their own. Keying off each node's own FEN badged only the anchor -- and
+  // gave every other node a roomKey matching no real room, so "Jump to VR"
+  // from one silently landed you on Main Street.
+  try {
+    await appEN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appEN.page.evaluate(() => Object.fromEntries(
+      window.__graphTestHooks.cy().nodes()
+        .filter(n => !!n.data('seq'))
+        .map(n => [(n.data('seq') || []).join(','), { roomKey: n.data('roomKey'), label: n.data('label') }])));
+    const anchor = nodes[seqs.r0.join(',')];
+    const member = nodes[seqs.r1.join(',')];
+    assert(anchor && member, `setup: expected both positions as graph nodes, got ${JSON.stringify(Object.keys(nodes))}`);
+    assert(anchor.roomKey === r0Key,
+      `expected the anchor node to carry the corridor's room key, got ${anchor.roomKey}`);
+    assert(member.roomKey === anchor.roomKey,
+      `expected a member node to resolve to the SAME room as its anchor, got ${member.roomKey} vs ${anchor.roomKey}`);
+    // and so the memorized glyph follows: the whole corridor is memorized,
+    // not just the node that happens to anchor it
+    assert(/\u{1F9E0}/u.test(anchor.label) && /\u{1F9E0}/u.test(member.label),
+      `expected the memorized glyph on every node of a memorized corridor, got anchor=${JSON.stringify(anchor.label)} member=${JSON.stringify(member.label)}`);
+    ok('Corridor rooms: graph nodes inside a merged room resolve to that room, glyphs and all');
+  } catch(e){ bad('Corridor rooms: graph node mapping', e); }
 } finally {
   await appEN.close();
 }

@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-376';
+const BUILD_TAG = '-377';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2076,6 +2076,42 @@ const sanitizeKeyPart = s => String(s || '').replace(/[^a-zA-Z0-9]/g, '_');
 const castleInstanceId = (lineId, castleName) =>
   castleName ? `${sanitizeKeyPart(lineId)}_${sanitizeKeyPart(castleName)}` : 'preview';
 const castleRoomKey = (instanceId, posKey) => `cas:${instanceId}:${sanitizeKeyPart(posKey)}`;
+
+/* ---------- position -> the room that CONTAINS it ----------
+   castleRoomKey above takes a position and makes a key out of it, which is
+   right only for a room's ANCHOR position. A linear run of positions is
+   merged into one VR room anchored at its first (see buildGeneratedCastle's
+   run/two-track analysis); every later position in the run is a MEMBER of
+   that room with no room of its own to stand in, decorate, or memorize.
+
+   Calling castleRoomKey on a member therefore produces a key for a room that
+   does not exist, and everything stored per-room -- memorized, decorated,
+   review schedule, layout -- reads as absent for it. That was a real bug
+   with no error to show for it: a memorized ten-move corridor read as
+   memorized at its first position and unmemorized at the other nine, so the
+   quiz's "only test memorized rooms" filter dead-ended one move into every
+   corridor, and the opening graph badged only each corridor's first node.
+
+   So: build an index from the generated castles once, then resolve through
+   it. Keyed "<instanceId>|<posKey>" so one index covers every castle in a
+   line at once. */
+function buildRoomAnchorIndex(castleList){
+  const index = {};
+  for(const c of castleList || []){
+    for(const gr of (c && c.genRooms) || []){
+      for(const k of genRoomPosKeys(gr)) index[`${c.instanceId}|${k}`] = gr.posKey;
+    }
+  }
+  return index;
+}
+/* The VR room key for a position, resolving a merged-away member to the room
+   it lives in. Falls back to treating the position as its own anchor when the
+   index doesn't know it -- a position outside any built castle, or a caller
+   with no index to hand -- which is exactly what the bare castleRoomKey call
+   used to do, so an unindexed caller is no worse off than before. */
+function roomKeyForPosKey(index, instanceId, posKey){
+  return castleRoomKey(instanceId, (index && index[`${instanceId}|${posKey}`]) || posKey);
+}
 // Map every VR room key to the pref that stores its name, so a rename done in
 // the VR walk edits the SAME idb item as the node's Attributes → Room Name.
 // castleList entries: { lineId, instanceId, genRooms }.
@@ -2588,12 +2624,23 @@ async function showTranspositionGraph(){
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount }
       = analyzeCastleStructure(graph);
 
-    // a room's VR key, for the node-label glyphs further down -- r.seq always
-    // ends in OUR move, same convention threeVR.js's own MEMORIZED/DECORATED
-    // maps key against.
+    /* A node's VR room key, for the glyphs and lenses further down. r.seq
+       always ends in OUR move, the same convention threeVR.js's own
+       MEMORIZED/DECORATED maps key against.
+
+       Resolved through roomAnchorIndex, populated by the coverage loop just
+       below (it already generates every castle in scope, so this rides along
+       rather than costing a second pass). A graph node is a POSITION, and
+       most positions in a castle are members of a merged corridor or
+       two-track room rather than rooms of their own -- keying straight off
+       the node's own FEN badged only each corridor's first node, and made
+       "Jump to VR" on any other node silently land you on Main Street
+       instead, since the key it produced matched no real room. */
+    const roomAnchorIndex = {};
     const roomKeyForRoom = r => {
       const ownCastle = inheritedCastle(r.seq);
-      return ownCastle ? castleRoomKey(castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen)) : null;
+      if(!ownCastle) return null;
+      return roomKeyForPosKey(roomAnchorIndex, castleInstanceId(CURRENT_LINE.id, ownCastle), positionKey(r.fen));
     };
 
     // "castle rooms": the real VR room count, distinct from `rooms.length`
@@ -2631,6 +2678,9 @@ async function showTranspositionGraph(){
       for(const gr of genRooms){
         totalCastleMoves += gr.moveCount;
         const roomKey = castleRoomKey(instanceId, gr.posKey);
+        // every position this room swallowed maps back to it -- see
+        // buildRoomAnchorIndex for why the node loop can't do without this
+        for(const k of genRoomPosKeys(gr)) roomAnchorIndex[`${instanceId}|${k}`] = gr.posKey;
         liveShapeByRoomKey.set(roomKey, gr.shape);
         if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.moveCount; }
         if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
@@ -9219,7 +9269,12 @@ function oqRoomMemorized(roomSeq){
   // open in the tree view), and inheritedCastle's PREFS lookups must match.
   const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
   if(!castle) return false;
-  const key = castleRoomKey(castleInstanceId(OQ.line.id, castle), positionKey(fenForSeq(roomSeq)));
+  // resolved through the anchor index, NOT castleRoomKey directly: most
+  // positions in a castle are members of a merged corridor/two-track room
+  // rather than rooms of their own, and only the room they were merged into
+  // carries the memorized flag. See buildRoomAnchorIndex.
+  const instanceId = castleInstanceId(OQ.line.id, castle);
+  const key = roomKeyForPosKey(OQ.roomAnchors, instanceId, positionKey(fenForSeq(roomSeq)));
   return !!OQ.memorizedRooms[key];
 }
 function oqMemorizedFilter(seq, candidates){
@@ -9624,6 +9679,13 @@ async function oqStartSession(coverageVal, n, depth, onlyMemorized){
     castleName: sel.isCastle ? sel.castleName : null,
     onlyMemorized: !!onlyMemorized,
     memorizedRooms: onlyMemorized ? JSON.parse(await getMeta('threeMemorizedRooms') || '{}') : {},
+    // Built once per session and held on OQ, because oqRoomMemorized is
+    // called from synchronous filter code mid-walk and this needs the
+    // generated castles to exist. Only when it's actually consulted:
+    // gatherBuiltCastles is cached, but a cold build is slow enough
+    // (a large repertoire takes tens of seconds) that a quiz which never
+    // asks about memorized rooms shouldn't pay for it.
+    roomAnchors: onlyMemorized ? buildRoomAnchorIndex(await gatherBuiltCastles(lines)) : null,
   };
   return null;
 }
