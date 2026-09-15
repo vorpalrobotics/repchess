@@ -20918,6 +20918,97 @@ try {
       `expected the memorized glyph on every node of a memorized corridor, got anchor=${JSON.stringify(anchor.label)} member=${JSON.stringify(member.label)}`);
     ok('Corridor rooms: graph nodes inside a merged room resolve to that room, glyphs and all');
   } catch(e){ bad('Corridor rooms: graph node mapping', e); }
+
+  /* --- Q1: a missed move shortens its room's review interval --- */
+  const reviewOf = (key) => appEN.page.evaluate(async (k) =>
+    (await window.__reviewTestHooks.getReviews())[k] || null, key);
+  const seedReview = (key, rec) => appEN.page.evaluate(async ({ k, r }) => {
+    const m = await window.__reviewTestHooks.getReviews();
+    m[k] = r; await window.__reviewTestHooks.setReviews(m);
+  }, { k: key, r: rec });
+  const DAY = 86400000;
+
+  // 403. The room a miss blames is the one you're STANDING IN -- the move
+  //      sits on one of its doors -- not the room that door leads into.
+  //      SOLARIUM, not STUDY.
+  try {
+    // OQ.seq at answer time ends with the OPPONENT's move
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }),
+      [...seqs.r0, 'e6']);
+    const blamed = await appEN.page.evaluate(() => window.__oqTestHooks.missedRoomSeq());
+    assert(JSON.stringify(blamed) === JSON.stringify(seqs.r0),
+      `expected the miss blamed on the room holding the door (${seqs.r0.join(' ')}), got ${JSON.stringify(blamed)}`);
+
+    // and at the very first move of a white line there is no room yet
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ seq: [] }));
+    assert((await appEN.page.evaluate(() => window.__oqTestHooks.missedRoomSeq())) === null,
+      'expected no room blamed before any room has been reached');
+    ok('Quiz miss: blames the room holding the door, not the room beyond it');
+  } catch(e){ bad('Quiz miss: room attribution', e); }
+
+  // 404. It demotes ONE step and re-dates from the LAST REVIEW -- the point
+  //      is to pull the room forward, and dating from today would push a
+  //      room that just gave you trouble further out.
+  try {
+    const last = Date.now() - 5 * DAY;
+    await seedReview(r0Key, { last, due: last + 60 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(res && res.from === 4 && res.to === 3, `expected a single step down from 4, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 3, `expected the stored record at step 3, got ${JSON.stringify(rec)}`);
+    assert(rec.due <= last + 21 * DAY && rec.due > last + 20 * DAY,
+      `expected the due date re-measured ~21d from the last review, got ${(rec.due - last) / DAY}d after it`);
+    assert(rec.lastGrade === 'A', 'expected the demotion to leave the grade history alone -- it is not a grade');
+    ok('Quiz miss: demotes one step and re-dates from the last review');
+  } catch(e){ bad('Quiz miss: one-step demotion', e); }
+
+  // 405. Once per room per session. A wrong answer can be retried until
+  //      it's right, a path can re-enter a room through a transposition, and
+  //      "Again, same questions" replays a set you were just shown the
+  //      answers to -- none of that is fresh evidence.
+  try {
+    const again = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(again === null, `expected a second miss in the same room to change nothing, got ${JSON.stringify(again)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 3, `expected the record untouched by the repeat, got step ${rec.step}`);
+    const ledger = await appEN.page.evaluate(() => window.__oqTestHooks.demotedRooms());
+    assert(Object.keys(ledger).length === 1, `expected one room in the session ledger, got ${JSON.stringify(ledger)}`);
+    ok('Quiz miss: a room is shortened once per session, however many times it is missed');
+  } catch(e){ bad('Quiz miss: once per session', e); }
+
+  // 406. A room with no stored record is left alone -- never memorized means
+  //      no schedule to shorten, and memorized-but-never-graded is already at
+  //      the bottom of the ladder. Inventing one from a miss isn't the
+  //      quiz's call. (Same rule R5's structural demotion uses.)
+  try {
+    await appEN.page.evaluate(async (k) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      delete m[k]; await window.__reviewTestHooks.setReviews(m);
+    }, r0Key);
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(res === null, `expected no demotion for a room with no schedule, got ${JSON.stringify(res)}`);
+    assert((await reviewOf(r0Key)) === null, 'expected no record invented by the miss');
+    ok('Quiz miss: a room with no schedule is left alone, not given one');
+  } catch(e){ bad('Quiz miss: no record, no demotion', e); }
+
+  // 407. A miss deep inside a corridor blames the whole corridor -- the
+  //      user's MASTER BEDROOM case. This is what Q0's mapping bought: the
+  //      member position has no room of its own, so without it the miss
+  //      would compute a key nothing is stored under and silently do
+  //      nothing at all.
+  try {
+    const last = Date.now() - 2 * DAY;
+    await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r1);
+    assert(res && res.to === 2,
+      `expected a miss at a MEMBER position to demote the room it belongs to, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 2, `expected the corridor's own record demoted, got ${JSON.stringify(rec)}`);
+    ok("Quiz miss: a miss inside a corridor blames the whole corridor, not a room that doesn't exist");
+  } catch(e){ bad('Quiz miss: corridor member attribution', e); }
 } finally {
   await appEN.close();
 }

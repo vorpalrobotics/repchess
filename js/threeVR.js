@@ -1485,11 +1485,12 @@ async function applyStructuralDemotions(){
     if(!rec || !MEMORIZED[roomKey]) continue;
     const fresh = newDirtyExits(roomKey, rec);
     if(!fresh.length) continue;
-    const step = Math.max(0, (rec.step || 0) - 1);
+    // the ladder arithmetic is db.js's (demoteRoomReview) -- shared with the
+    // board quiz's own "you missed a move in this room" demotion, so the two
+    // can't drift into meaning different things. Only the dirtySeen ledger
+    // below is this caller's own business.
     REVIEWS[roomKey] = {
-      ...rec,
-      step,
-      due: startOfLocalDay((rec.last || Date.now()) + ROOM_REVIEW_LADDER[step] * DAY_MS),
+      ...demoteRoomReview(rec),
       dirtySeen: [...new Set([...(rec.dirtySeen || []), ...fresh])],
     };
     demoted++;
