@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-378';
+const BUILD_TAG = '-379';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9295,6 +9295,15 @@ function oqRoomMemorized(roomSeq){
    the quiz can report trouble but can't award mastery. Promotion stays
    something you grade yourself, standing in the room, having recalled all
    of it. */
+/* Both room indexes from ONE gatherBuiltCastles: which room a position
+   belongs to, and what that room is called. Always built together -- they
+   answer the two halves of the same question and splitting them has already
+   produced one bug (a memorized-only session pre-built the first and every
+   miss then reported an unnamed room). */
+async function oqRoomIndexes(lines){
+  const built = await gatherBuiltCastles(lines || await getLines(LOCAL_USER));
+  return { roomAnchors: buildRoomAnchorIndex(built), roomNames: buildRoomNameIndex(built) };
+}
 function oqMissedRoomSeq(){
   const s = (OQ.seq || []).slice(0, -1);
   return s.length ? s : null;
@@ -9307,36 +9316,83 @@ let oqReviewWrites = Promise.resolve();
 function oqNoteMissedRoom(){
   const roomSeq = oqMissedRoomSeq();
   if(!roomSeq) return;
+  // the status text as it stands right now, so the follow-up below only
+  // appends to the message about THIS miss -- by the time the write settles
+  // the player may already have answered correctly and moved on.
+  const statusAtMiss = $('oqStatus') ? $('oqStatus').textContent : null;
   oqReviewWrites = oqReviewWrites
     .then(() => oqDemoteMissedRoom(roomSeq))
+    .then(res => oqReportMissedRoom(res, statusAtMiss))
     .catch(err => console.error('[quiz] could not record a missed room', err));
 }
+
+/* The room's own name, for saying WHERE a missed move lives -- which is the
+   useful half of the attribution: "you missed something in the Solarium"
+   tells you where to go. A merged corridor is named by its ANCHOR (the room
+   you actually stand in), which is what buildRoomNameIndex keys on, so a
+   miss anywhere along the corridor reports the corridor's name rather than
+   the name of a position that has no room. Unnamed rooms are ordinary while
+   a castle is still being built out, so the fallback names the moves that
+   reach it instead of saying nothing. */
+function oqRoomLabel(roomKey, roomSeq){
+  const t = OQ.roomNames && OQ.roomNames[roomKey];
+  const named = t && t.nameSeq ? (PREFS[prefKey(t.lineId, t.nameSeq)]?.name || '') : '';
+  if(named) return named;
+  const locator = (t && t.nameSeq) || roomSeq;
+  return `unnamed room (${formatMoveListPgn(locator)})`;
+}
+/* Says which room a miss was attributed to, whether or not it moved -- the
+   two are separately worth knowing. "Attributed to the Solarium, nothing
+   changed because it isn't on the schedule" is a different situation from
+   "attributed to nothing at all", and only naming the ones that moved would
+   make those look identical. */
+function oqReportMissedRoom(res, statusAtMiss){
+  if(!res) return;
+  const moved = res.demoted
+    ? `review moved up (step ${res.demoted.from} → ${res.demoted.to})`
+    : { already: 'already moved up earlier this session',
+        'no-record': 'not on the review schedule, so nothing changed' }[res.reason] || 'nothing changed';
+  console.log(`[quiz] miss in "${res.name}" (${res.key}) — ${moved}`);
+  const el = $('oqStatus');
+  // only if the player is still looking at the message for this miss
+  if(el && statusAtMiss && el.textContent === statusAtMiss){
+    el.textContent = `${statusAtMiss} · that move lives in ${res.name}`;
+  }
+}
+
 async function oqDemoteMissedRoom(roomSeq){
   const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
   if(!castle) return null;
   // built lazily rather than at session start: a cold gatherBuiltCastles is
   // slow on a large repertoire, and a session with no misses shouldn't pay
   // for it. Safe to assign from here -- these calls are serialized above.
-  if(!OQ.roomAnchors) OQ.roomAnchors = buildRoomAnchorIndex(await gatherBuiltCastles(await getLines(LOCAL_USER)));
+  // The name index comes from the same build rather than a second one.
+  // both indexes, guarded on both -- a memorized-only session pre-builds
+  // roomAnchors at startup, and a guard on that alone would skip roomNames
+  // and leave every miss reporting an unnamed room.
+  // both indexes, guarded on both -- a memorized-only session pre-builds
+  // them at startup, and a guard on one alone would leave the other null.
+  if(!OQ.roomAnchors || !OQ.roomNames) Object.assign(OQ, await oqRoomIndexes());
   const key = roomKeyForPosKey(OQ.roomAnchors, castleInstanceId(OQ.line.id, castle),
                                positionKey(fenForSeq(roomSeq)));
+  const name = oqRoomLabel(key, roomSeq);
   // once per room per session. A path can re-enter a room through a
   // transposition, a wrong answer can be retried until it's right, and
   // "Again, same questions" replays a set whose answers you were just shown
   // -- none of those are fresh evidence about the room.
   if(!OQ.demoted) OQ.demoted = {};
-  if(OQ.demoted[key]) return null;
+  if(OQ.demoted[key]) return { key, name, demoted: null, reason: 'already' };
   const reviews = await getRoomReviews();
   const rec = reviews[key];
   // no stored record: either never memorized (no schedule to shorten) or
   // memorized but never graded, which is already at the bottom of the
   // ladder. Same rule R5's structural demotion uses.
-  if(!rec) return null;
+  if(!rec) return { key, name, demoted: null, reason: 'no-record' };
   const next = demoteRoomReview(rec);
   reviews[key] = next;
   await setRoomReviews(reviews);
-  OQ.demoted[key] = { from: rec.step || 0, to: next.step };
-  return OQ.demoted[key];
+  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name };
+  return { key, name, demoted: OQ.demoted[key], reason: 'demoted' };
 }
 
 function oqMemorizedFilter(seq, candidates){
@@ -9594,11 +9650,13 @@ function oqFinish(){
   $('oqScorePct').textContent = total ? `${pct}%` : 'No moves to test';
   // a schedule that moved silently is what erodes trust in the schedule --
   // same reasoning as the VR walk's own "N changed rooms moved up" toast.
-  const movedUp = Object.keys(OQ.demoted || {}).length;
+  // named, not just counted: "2 rooms moved up" leaves you to go and find
+  // out which, and the names are the actionable part.
+  const movedNames = Object.values(OQ.demoted || {}).map(d => d.name).filter(Boolean);
   $('oqScoreDetail').textContent = total
     ? `${OQ.hits} hit${OQ.hits===1?'':'s'}, ${OQ.misses} miss${OQ.misses===1?'':'es'}` +
       (OQ.mode === 'session' ? ` across ${OQ.questionsTotal} question${OQ.questionsTotal===1?'':'s'}` : '') +
-      (movedUp ? ` · ${movedUp} room${movedUp===1?'':'s'} moved up for review` : '')
+      (movedNames.length ? ` · moved up for review: ${movedNames.join(', ')}` : '')
     : '';
   // "same choices" replay isn't tracked across a whole multi-question session
   // (only within one question) -- only offer it after a single row-quiz run.
@@ -9752,7 +9810,7 @@ async function oqStartSession(coverageVal, n, depth, onlyMemorized){
     // gatherBuiltCastles is cached, but a cold build is slow enough
     // (a large repertoire takes tens of seconds) that a quiz which never
     // asks about memorized rooms shouldn't pay for it.
-    roomAnchors: onlyMemorized ? buildRoomAnchorIndex(await gatherBuiltCastles(lines)) : null,
+    ...(onlyMemorized ? await oqRoomIndexes(lines) : { roomAnchors: null, roomNames: null }),
     // roomKey -> {from, to} for every room a miss has already shortened this
     // session; see oqDemoteMissedRoom for why it's once per room.
     demoted: {},
@@ -9820,6 +9878,7 @@ if(localStorage.getItem('threeTestDebug')){
     missedRoomSeq: () => oqMissedRoomSeq(),
     demoteMissedRoom: (roomSeq) => oqDemoteMissedRoom(roomSeq),
     demotedRooms: () => JSON.parse(JSON.stringify((OQ && OQ.demoted) || {})),
+    roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
     startSession: (coverageVal, n, depth, onlyMemorized) => oqStartSession(coverageVal, n, depth, onlyMemorized),
     restorePrefs: () => oqRestorePrefsIfSwapped(),
