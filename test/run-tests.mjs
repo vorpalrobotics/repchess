@@ -4156,7 +4156,7 @@ try {
   // 73. Starting a castle-scoped session with the checkbox on threads
   //     castleName/onlyMemorized/memorizedRooms onto OQ correctly.
   try {
-    const err = await appAA.page.evaluate((val) => window.__oqTestHooks.startSession(val, 5, 10, true), castleVal);
+    const err = await appAA.page.evaluate((val) => window.__oqTestHooks.startSession(val, 5, 10, 'memorized'), castleVal);
     assert(err === null, `startSession should succeed, got error: ${err}`);
     const oq = await appAA.page.evaluate(() => window.__oqTestHooks.getOQ());
     assert(oq.castleName === 'Alpha', `expected OQ.castleName 'Alpha', got ${JSON.stringify(oq.castleName)}`);
@@ -20869,7 +20869,7 @@ try {
 
   // the actual question. A quiz session scoped to the whole system, memorized-only.
   try {
-    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, true));
+    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, 'memorized'));
     assert(!err, `setup: startSession refused: ${err}`);
 
     const atAnchor = await appEN.page.evaluate((sq) => window.__oqTestHooks.roomMemorized(sq), seqs.r0);
@@ -21129,6 +21129,69 @@ try {
     assert(rec.due < Date.now(), 'expected the due date NOT pushed out by an uncertain answer');
     ok('Quiz unsure: never delays a review, only brings one forward');
   } catch(e){ bad('Quiz unsure: never delays', e); }
+
+  /* --- Q2: "only rooms due for review" as a quiz scope --- */
+
+  // 409. The due list is exactly the rooms that need attention, worst first
+  //      -- so a session cut short before its question count runs out has
+  //      still covered the ones you're most behind on.
+  try {
+    const now = Date.now();
+    await appEN.page.evaluate(async ({ k, r }) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      m[k] = r; await window.__reviewTestHooks.setReviews(m);
+    }, { k: r0Key, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 3, lapses: 0, lastGrade: 'A' } });
+    const due = await appEN.page.evaluate(() => window.__oqTestHooks.dueRooms('L1'));
+    assert(Array.isArray(due) && due.length === 1,
+      `expected the one overdue room listed, got ${JSON.stringify(due)}`);
+    assert(JSON.stringify(due[0]) === JSON.stringify(seqs.r0),
+      `expected the corridor's own (anchor) seq, got ${JSON.stringify(due[0])}`);
+
+    // a room comfortably in the future isn't due and must not be listed
+    await appEN.page.evaluate(async ({ k, r }) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      m[k] = r; await window.__reviewTestHooks.setReviews(m);
+    }, { k: r0Key, r: { last: now, due: now + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' } });
+    const none = await appEN.page.evaluate(() => window.__oqTestHooks.dueRooms('L1'));
+    assert(none.length === 0, `expected nothing due, got ${JSON.stringify(none)}`);
+    ok('Quiz due scope: lists exactly the rooms that are due, worst first');
+  } catch(e){ bad('Quiz due scope: the due list', e); }
+
+  // 410. Nothing due is good news, and the session says so rather than
+  //      starting an empty run that finishes immediately.
+  try {
+    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, 'due'));
+    assert(typeof err === 'string' && /due/i.test(err),
+      `expected a clear "nothing is due" refusal, got ${JSON.stringify(err)}`);
+    ok('Quiz due scope: refuses to start with nothing due, and says why');
+  } catch(e){ bad('Quiz due scope: nothing due', e); }
+
+  // 411. With something due, a question STARTS in the due room rather than
+  //      walking from the opening and hoping to reach it -- and starts at
+  //      one of its own doors, since a question is posed at a seq ending in
+  //      the OPPONENT's move.
+  try {
+    const now = Date.now();
+    await appEN.page.evaluate(async ({ k, r }) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      m[k] = r; await window.__reviewTestHooks.setReviews(m);
+    }, { k: r0Key, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 3, lapses: 0, lastGrade: 'A' } });
+    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, 'due'));
+    assert(!err, `expected the session to start, got ${JSON.stringify(err)}`);
+    const oq = await appEN.page.evaluate(() => window.__oqTestHooks.getOQ());
+    assert(oq.questionsTotal === 1,
+      `expected the question count capped at the number of due rooms, got ${oq.questionsTotal}`);
+    assert(oq.onlyMemorized === true,
+      'expected due mode to walk memorized-gated too -- a review has no business wandering into unlearned rooms');
+
+    await appEN.page.evaluate(() => window.__oqTestHooks.prepareDueQuestion());
+    const start = await appEN.page.evaluate(() => window.__oqTestHooks.getOQ().startSeq);
+    assert(start.length === seqs.r0.length + 1,
+      `expected the question posed one ply past the due room, got ${JSON.stringify(start)}`);
+    assert(JSON.stringify(start.slice(0, seqs.r0.length)) === JSON.stringify(seqs.r0),
+      `expected the question to start INSIDE the due room, got ${JSON.stringify(start)}`);
+    ok('Quiz due scope: each question starts at a door of a due room');
+  } catch(e){ bad('Quiz due scope: question placement', e); }
 
   // 408. An unnamed room still gets reported -- most rooms are unnamed while
   //      a castle is being built out, and "moved up for review: (nothing)"

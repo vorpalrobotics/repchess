@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-381';
+const BUILD_TAG = '-382';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -197,6 +197,10 @@ const LS_AQ_THREADS='aq_lastThreads';
 const LS_COMPARE_DEPTH='compare_lastDepth';
 const COMPARE_DEFAULT_DEPTH=20;
 const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_OQ_COVERAGE='oq_lastCoverage', LS_OQ_ONLYMEM='oq_onlyMemorized';
+// three-way successor to the old memorized-only checkbox; LS_OQ_ONLYMEM is
+// still read once, to carry an existing setting over rather than silently
+// resetting it (see restoreOqSetupFields).
+const LS_OQ_ROOMFILTER='oq_roomFilter';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
 $('userIdLichess').value  = localStorage.getItem(LS_ID)  || '';
@@ -9780,6 +9784,11 @@ function oqFinish(){
    (session mode only) skips zeroing hits/misses -- used when advancing to
    the next question of a session, whose score keeps accumulating. */
 function oqRun(replaySame, keepScore){
+  // due mode picks a fresh start per question -- except on a same-choices
+  // replay, which must re-ask exactly what it asked before.
+  if(OQ.mode === 'session' && OQ.roomFilter === 'due' && !replaySame){
+    if(!oqPrepareDueQuestion()){ oqFinish(); return; }
+  }
   OQ.seq = OQ.startSeq.slice();
   if(!keepScore){ OQ.hits = 0; OQ.misses = 0; }
   OQ.replay = !!replaySame;
@@ -9852,7 +9861,10 @@ function restoreOqSetupFields(){
   if(savedN) $('oqNumQuestions').value = savedN;
   const savedDepth = localStorage.getItem(LS_OQ_MAXDEPTH);
   if(savedDepth) $('oqMaxDepth').value = savedDepth;
-  $('oqOnlyMemorized').checked = localStorage.getItem(LS_OQ_ONLYMEM) === '1';
+  const savedFilter = localStorage.getItem(LS_OQ_ROOMFILTER)
+    // migrate the checkbox this replaced, so an existing preference survives
+    || (localStorage.getItem(LS_OQ_ONLYMEM) === '1' ? 'memorized' : 'all');
+  if([...$('oqRoomFilter').options].some(o => o.value === savedFilter)) $('oqRoomFilter').value = savedFilter;
   const savedCoverage = localStorage.getItem(LS_OQ_COVERAGE);
   if(!savedCoverage) return;
   let saved;
@@ -9890,7 +9902,38 @@ function oqCoverageIdentity(){
 
    Split out from the START button's handler so __oqTestHooks can drive it
    without a live board. */
-async function oqStartSession(coverageVal, n, depth, onlyMemorized){
+/* Every room in scope that is due (or overdue) for review, worst first.
+
+   This is the piece that turns the board quiz into a review session: rather
+   than walking from the start and hoping to reach something that needs
+   attention, each question STARTS in a room that does. The machinery for
+   starting mid-line already exists -- it's what "Quiz this Variation" uses
+   -- so a due room becomes a startSeq like any other.
+
+   Worst first, because a session is usually cut short before its question
+   count runs out, and the rooms you're most behind on are the ones that
+   should survive that. */
+async function oqDueRooms(lines, sel){
+  const [built, reviews, memorizedRaw] = await Promise.all([
+    gatherBuiltCastles(lines), getRoomReviews(), getMeta('threeMemorizedRooms'),
+  ]);
+  let memorized = {};
+  try { memorized = JSON.parse(memorizedRaw || '{}'); } catch { memorized = {}; }
+  const out = [];
+  for(const c of built){
+    if(c.lineId !== sel.line.id) continue;
+    if(sel.isCastle && c.castleName !== sel.castleName) continue;
+    for(const gr of c.genRooms){
+      if(!gr.seq || !gr.seq.length) continue;
+      const rec = effectiveRoomReview(reviews, memorized, castleRoomKey(c.instanceId, gr.posKey));
+      const state = roomReviewState(rec);
+      if(state === 'due' || state === 'overdue') out.push({ seq: gr.seq.slice(), due: rec.due });
+    }
+  }
+  return out.sort((a, b) => a.due - b.due);
+}
+
+async function oqStartSession(coverageVal, n, depth, roomFilter){
   if(!Number.isFinite(n) || n < 1) return 'Enter a question count of 1 or more.';
   if(!Number.isFinite(depth) || depth < 1) return 'Enter a max depth of 1 or more.';
   if(!coverageVal) return 'Choose an opening system.';
@@ -9912,35 +9955,70 @@ async function oqStartSession(coverageVal, n, depth, onlyMemorized){
     // path); null for whole-system coverage, where oqRoomMemorized resolves
     // each candidate's owning castle individually via inheritedCastle.
     castleName: sel.isCastle ? sel.castleName : null,
-    onlyMemorized: !!onlyMemorized,
-    memorizedRooms: onlyMemorized ? JSON.parse(await getMeta('threeMemorizedRooms') || '{}') : {},
+    roomFilter: roomFilter || 'all',
+    // 'due' walks memorized-gated too: a due room is memorized by definition,
+    // and carrying a review session on into rooms you haven't learned would
+    // be testing the wrong thing. So this keeps its exact original meaning
+    // and 'due' only adds where each question STARTS.
+    onlyMemorized: roomFilter === 'memorized' || roomFilter === 'due',
+    memorizedRooms: roomFilter === 'all' ? {} : JSON.parse(await getMeta('threeMemorizedRooms') || '{}'),
     // Built once per session and held on OQ, because oqRoomMemorized is
     // called from synchronous filter code mid-walk and this needs the
     // generated castles to exist. Only when it's actually consulted:
     // gatherBuiltCastles is cached, but a cold build is slow enough
     // (a large repertoire takes tens of seconds) that a quiz which never
     // asks about memorized rooms shouldn't pay for it.
-    ...(onlyMemorized ? await oqRoomIndexes(lines) : { roomAnchors: null, roomNames: null }),
+    ...(roomFilter === 'all' ? { roomAnchors: null, roomNames: null } : await oqRoomIndexes(lines)),
     // roomKey -> {from, to} for every room a miss has already shortened this
     // session; see oqDemoteMissedRoom for why it's once per room.
     demoted: {},
   };
+  if(OQ.roomFilter === 'due'){
+    OQ.dueQueue = await oqDueRooms(lines, sel);
+    if(!OQ.dueQueue.length){
+      PREFS = savedPrefs;   // nothing to run; don't strand the tree view on this line's prefs
+      OQ = null;
+      return 'Nothing is due for review in that scope — try "Only memorized rooms", or come back later.';
+    }
+    // one question per due room rather than looping: asking the same room
+    // twice in a sitting isn't a second review of it, and running out of due
+    // rooms is the session being FINISHED, not cut short.
+    OQ.questionsTotal = Math.min(n, OQ.dueQueue.length);
+  }
   return null;
+}
+
+/* Due mode: start this question inside the next due room, at one of its own
+   doors. A room's own seq ends with OUR move, but a question has to be
+   posed at a seq ending with the OPPONENT's -- that's what oqLoadStep looks
+   a reply up against -- so one of the room's opponent replies is picked here
+   and the walk carries on normally from there. A room with no reply to ask
+   about is skipped rather than burning a question on an immediate finish. */
+function oqPrepareDueQuestion(){
+  while(OQ.dueQueue.length){
+    const roomSeq = OQ.dueQueue[(OQ.questionIndex - 1) % OQ.dueQueue.length].seq;
+    const opps = oqCoverageEligible(roomSeq, oqVisibleOpps(roomSeq));
+    if(opps.length){ OQ.startSeq = [...roomSeq, oqPickChoice(opps)]; return true; }
+    OQ.dueQueue.splice((OQ.questionIndex - 1) % OQ.dueQueue.length, 1);
+    OQ.questionsTotal = Math.min(OQ.questionsTotal, OQ.dueQueue.length);
+    if(OQ.questionIndex > OQ.questionsTotal) return false;
+  }
+  return false;
 }
 $('oqStartBtn').onclick = async ()=>{
   const n = parseInt($('oqNumQuestions').value, 10);
   const depth = parseInt($('oqMaxDepth').value, 10);
   const coverageVal = $('oqCoverageSelect').value;
-  const onlyMemorized = $('oqOnlyMemorized').checked;
+  const roomFilter = $('oqRoomFilter').value;
   const coverageIdentity = oqCoverageIdentity();
-  const err = await oqStartSession(coverageVal, n, depth, onlyMemorized);
+  const err = await oqStartSession(coverageVal, n, depth, roomFilter);
   if(err){ $('oqSetupError').textContent = err; return; }
   $('oqSetupError').textContent = '';
   // remember these settings for next time -- only once they're known-valid
   // (oqStartSession succeeded), so a bad/incomplete attempt is never saved.
   localStorage.setItem(LS_OQ_QUESTIONS, String(n));
   localStorage.setItem(LS_OQ_MAXDEPTH, String(depth));
-  localStorage.setItem(LS_OQ_ONLYMEM, onlyMemorized ? '1' : '0');
+  localStorage.setItem(LS_OQ_ROOMFILTER, roomFilter);
   if(coverageIdentity) localStorage.setItem(LS_OQ_COVERAGE, JSON.stringify(coverageIdentity));
   oqRun(false);
 };
@@ -9996,6 +10074,12 @@ if(localStorage.getItem('threeTestDebug')){
     toggleUnsure: () => oqToggleUnsure(),
     unsureBtn: () => { const b = $('oqUnsureBtn'); return b ? { disabled: b.disabled, armed: b.classList.contains('armed'), text: b.textContent } : null; },
     softenUnsureRoom: (roomSeq) => oqSoftenUnsureRoom(roomSeq),
+    dueRooms: async (coverageVal) => {
+      const lines = await getLines(LOCAL_USER);
+      const sel = await resolveCoverageSelection(coverageVal, lines);
+      return sel ? (await oqDueRooms(lines, sel)).map(r => r.seq) : null;
+    },
+    prepareDueQuestion: () => oqPrepareDueQuestion(),
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
     startSession: (coverageVal, n, depth, onlyMemorized) => oqStartSession(coverageVal, n, depth, onlyMemorized),
     restorePrefs: () => oqRestorePrefsIfSwapped(),
