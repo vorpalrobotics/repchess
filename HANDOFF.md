@@ -205,10 +205,11 @@ a stale copy there still needs a query string on the URL (`index.html?x=368`).
   spec of what shipped. `marking-memorized.html` (the whole review system),
   `digraph-view.html` (the graph's view modes and size guard),
   `transpositions.html` (Find Transpositions and redirects),
-  `mnemonics-customizing.html` (the coverage scope). **Several features still
-  have no topic at all** — Analysis Queue, Perfect Opening, VR Assets, VR
-  Object Lists, and full backup/restore. Worth writing if you're asked for a
-  documentation pass.
+  `mnemonics-customizing.html` (the coverage scope), `analysis-queue.html`,
+  `vr-assets.html`, `object-lists.html`, `backup-and-reset.html`.
+  **Perfect Opening deliberately has no topic** — the user considers it an
+  experiment and isn't sure it stays in the app, so don't document it without
+  asking. Everything else in the hamburger menu is covered.
 - `git log --oneline` / the PR list on GitHub — the authoritative history of
   what's been done and why (commit messages are written to explain the
   "why," not just the "what").

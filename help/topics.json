@@ -3,6 +3,7 @@
   { "id": "building-repertoire", "title": "Building Your Repertoire", "file": "building-repertoire.html" },
   { "id": "importing-games", "title": "Importing Your Games", "file": "importing-games.html" },
   { "id": "exploring-games", "title": "Exploring Your Games", "file": "exploring-games.html" },
+  { "id": "analysis-queue", "title": "Background Analysis", "file": "analysis-queue.html" },
   { "id": "digraph-view", "title": "The Digraph View", "file": "digraph-view.html" },
   { "id": "transpositions", "title": "Transpositions Between Castles", "file": "transpositions.html" },
   { "id": "mnemonics-default", "title": "Move Mnemonics: The Default System", "file": "mnemonics-default.html" },
@@ -10,6 +11,9 @@
   { "id": "mnemonics-testing", "title": "Move Mnemonics: Testing Yourself", "file": "mnemonics-testing.html" },
   { "id": "castle-example", "title": "Building a Castle: Example", "file": "castle-example.html" },
   { "id": "decorating-castle", "title": "Decorating Your Castle", "file": "decorating-castle.html" },
+  { "id": "vr-assets", "title": "VR Assets", "file": "vr-assets.html" },
+  { "id": "object-lists", "title": "Object Lists", "file": "object-lists.html" },
   { "id": "marking-memorized", "title": "Marking Rooms as Memorized", "file": "marking-memorized.html" },
-  { "id": "board-testing", "title": "Board Play Testing", "file": "board-testing.html" }
+  { "id": "board-testing", "title": "Board Play Testing", "file": "board-testing.html" },
+  { "id": "backup-and-reset", "title": "Backup, Restore, and Starting Over", "file": "backup-and-reset.html" }
 ]

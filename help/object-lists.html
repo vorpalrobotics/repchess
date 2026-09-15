@@ -1,0 +1,58 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Object Lists</h2>
+
+<p>A room in the memory palace holds several move-objects in a definite
+order, and the classical technique is to hang them on a sequence you already
+know cold -- the fixtures of your own kitchen, the planets, the notes of the
+scale. Those sequences are <strong>object lists</strong>, and Menu &rarr;
+<strong>VR Object Lists</strong> is where you keep them.</p>
+
+<p>The point is that the <em>list</em> carries the order so you don't have to.
+If you know there are eight things in your kitchen and what order you walk
+past them, then a room skinned with that list has eight anchors whose sequence
+you can't lose -- and recalling the fourth move means recalling what was on
+the fourth fixture.</p>
+
+<h3>What a list holds</h3>
+<ul>
+<li>A <strong>name</strong>, and a <strong>room</strong> and
+<strong>category</strong> it belongs to (Kitchen, in Home) -- the manager
+browses by category once you have more than one, and the search box matches
+across all of them.</li>
+<li>Its <strong>items</strong>, in order. Each item can be bound to an image
+from your VR assets; one that isn't simply shows its name as text in the room,
+which is a perfectly good placeholder while you're building out.</li>
+<li>Its <strong>ordering rule</strong> -- why the items are in this order
+("Food lifecycle: retrieve &rarr; prep &rarr; cook &rarr; clean"). Writing
+this down matters more than it looks: an order you can reconstruct from a
+principle survives, where an arbitrary one has to be memorized separately.</li>
+<li>An optional <strong>mnemonic phrase</strong> for the list itself, and what
+kind it is -- an existing phrase or acronym you already know beats one newly
+invented for the purpose, and the manager asks you to say which, because the
+difference predicts how well it will hold.</li>
+</ul>
+
+<h3>Building a collection</h3>
+<p><strong>New List</strong> creates one by hand. <strong>Import JSON</strong>
+takes a whole room database at once -- a set of lists someone has already
+worked out -- and deliberately preserves any image bindings you'd already
+made, matched by item name, so re-importing an updated database doesn't
+discard your artwork.</p>
+<p>Each card shows how many of its items have images bound yet, so you can see
+at a glance which lists are finished and which are still text.</p>
+
+<h3>Applying one to a room</h3>
+<p>Inside a room in VR, edit mode's <strong>Wall Object Lists</strong> dialog
+assigns a list to a wall. Its items then fill that wall's move-object slots in
+order, so one assignment decorates the whole wall instead of a slot at a time.
+A two-track room has a left and a right wall to assign separately.</p>
+<p>The dialog flags which lists are the right length for the wall you're
+filling, and shows a preview of how the items will land -- including any slot
+where you've placed something manually, since a manual object wins over the
+list and that's otherwise puzzling to discover.</p>
+
+<h3>Testing yourself</h3>
+<p>Menu &rarr; Test &rarr; <strong>Object Lists</strong> quizzes you on the
+lists themselves, and can combine every list assigned anywhere in one castle
+into a single session -- a way to check the scaffolding is solid before you
+rely on it to hold a whole wing of moves.</p>
