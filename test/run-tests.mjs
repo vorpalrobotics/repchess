@@ -21024,6 +21024,65 @@ try {
     ok("Quiz miss: a miss inside a corridor blames the whole corridor, by name, not a room that doesn't exist");
   } catch(e){ bad('Quiz miss: corridor member attribution', e); }
 
+  // 408b. Give up on a move: reveals it, scores it once, shortens the room,
+  //       and carries on down the line rather than abandoning the question.
+  //       Without it the quiz is a trap -- a wrong answer snaps back and asks
+  //       again, with no way past a move you simply don't know.
+  try {
+    const last = Date.now() - 2 * DAY;
+    await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.installFakeBoard());
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({
+      seq: sq, expected: 'Nc3', busy: false, finished: false,
+      missedThisStep: false, misses: 0, hits: 0, demoted: {},
+    }), [...seqs.r0, 'e6']);
+
+    await appEN.page.evaluate(() => window.__oqTestHooks.giveUp());
+    const after = await appEN.page.evaluate(() => ({
+      oq: window.__oqTestHooks.getOQ(),
+      status: document.getElementById('oqStatus').textContent,
+      demoted: window.__oqTestHooks.demotedRooms(),
+    }));
+    assert(after.oq.misses === 1, `expected giving up to score exactly one miss, got ${after.oq.misses}`);
+    assert(/Nc3/.test(after.status), `expected the answer revealed in the status, got ${JSON.stringify(after.status)}`);
+    // the demotion is fired async through the write chain -- give it a beat
+    await appEN.page.waitForFunction(
+      () => Object.keys(window.__oqTestHooks.demotedRooms()).length > 0, { timeout: 5000 });
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 2, `expected giving up to shorten the room like any other miss, got step ${rec.step}`);
+    ok('Quiz give-up: reveals the move, scores one miss, and shortens the room');
+  } catch(e){ bad('Quiz give-up: reveal and score', e); }
+
+  // 408c. Giving up AFTER a wrong guess doesn't score a second miss for the
+  //       same move -- the wrong attempt was already counted, and it's one
+  //       failure, not two.
+  try {
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({
+      seq: sq, expected: 'Nc3', busy: false, finished: false,
+      missedThisStep: true, misses: 1, hits: 0, demoted: {},
+    }), [...seqs.r0, 'e6']);
+    await appEN.page.evaluate(() => window.__oqTestHooks.giveUp());
+    const misses = await appEN.page.evaluate(() => window.__oqTestHooks.getOQ().misses);
+    assert(misses === 1, `expected no second miss for a move already missed, got ${misses}`);
+    ok('Quiz give-up: a move already guessed wrong is not scored twice');
+  } catch(e){ bad('Quiz give-up: no double miss', e); }
+
+  // 408d. The button is live only while there's actually a move to give up
+  //       on -- not mid-animation, and not on the summary screen.
+  try {
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({
+      seq: sq, expected: 'Nc3', busy: true, finished: false,
+    }), [...seqs.r0, 'e6']);
+    await appEN.page.evaluate(() => window.__oqTestHooks.giveUp());   // no-op, but refreshes the button
+    assert(await appEN.page.evaluate(() => window.__oqTestHooks.giveUpDisabled()) === true,
+      'expected the give-up button disabled while the board is animating');
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ busy: false, finished: true }));
+    await appEN.page.evaluate(() => window.__oqTestHooks.callFinish());
+    assert(await appEN.page.evaluate(() => window.__oqTestHooks.giveUpDisabled()) === true,
+      'expected the give-up button disabled once the session is over');
+    ok('Quiz give-up: the button is live only while a move is actually being asked');
+  } catch(e){ bad('Quiz give-up: button availability', e); }
+
   // 408. An unnamed room still gets reported -- most rooms are unnamed while
   //      a castle is being built out, and "moved up for review: (nothing)"
   //      would be useless. The fallback names the moves that reach it.

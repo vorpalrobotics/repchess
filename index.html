@@ -771,6 +771,12 @@
   #oqStatus{min-height:1.4em;font-size:1rem;margin-top:.7rem;font-weight:600}
   #oqStatus.oq-miss{color:#c62828}
   #oqStatus.oq-hit{color:#2e7d32}
+  /* per-QUESTION give-up, deliberately understated and placed under the
+     board rather than up by Close/Exit -- it abandons one move, not the
+     session, and those two must not look like each other. */
+  #oqPlayActions{margin-top:.5rem}
+  #oqGiveUpBtn{font-size:.85rem;padding:.25rem .7rem;color:#555}
+  #oqGiveUpBtn:disabled{opacity:.4;cursor:default}
   #oqScoreDetail{color:#555;margin-bottom:.5rem}
   .oq-summary-actions{flex-direction:column;gap:.5rem;align-items:stretch}
   .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 2px}
@@ -1677,6 +1683,10 @@
       </div>
       <div id="oqBoardWrap"><div id="oqBoard"></div></div>
       <div id="oqStatus"></div>
+      <div id="oqPlayActions">
+        <button type="button" id="oqGiveUpBtn"
+          title="Reveal the move, score it as a miss, and carry on down the line">Give up on this move</button>
+      </div>
     </div>
     <div id="oqSummary">
       <div class="quiz-score" id="oqScorePct"></div>
@@ -1793,6 +1803,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-379"></script>
+<script type="module" src="js/app.js?v=20260804-380"></script>
 </body>
 </html>

@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-379';
+const BUILD_TAG = '-380';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9530,17 +9530,56 @@ function oqLoadStep(){
     if(!triggers.length){ oqFinish(); return; }
     OQ.expected = oqPickChoice(triggers);
     OQ.busy = false;
+    OQ.missedThisStep = false;
     oqClearHighlights();
     oqBoard.setPosition(fenForSeq([]), true);
     oqSetStatus('Your move');
+    oqUpdateGiveUp();
     return;
   }
   const expected = PREFS[prefKey(OQ.line.id, OQ.seq)]?.reply;
   if(!expected){ oqFinish(); return; }
   OQ.expected = expected;
   OQ.busy = false;
+  OQ.missedThisStep = false;
   oqBoard.setPosition(fenForSeq(OQ.seq), true);
   oqSetStatus('Your move');
+  oqUpdateGiveUp();
+}
+
+/* ---------- giving up on one move ----------
+   Without this the quiz is a trap: a wrong answer snaps the board back and
+   asks again, with no way past a move you simply don't know. Reveals it,
+   scores it, and carries on DOWN THE LINE rather than abandoning the
+   question -- the moves after this one are often ones you do know, and
+   they're worth testing.
+
+   Scores a miss only if this move hasn't already been missed. Wrong
+   attempts are each already counted, so a give-up after two guesses is the
+   same single failure, not a third. The room demotion needs no such guard:
+   it's once per room per session already. */
+function oqUpdateGiveUp(){
+  const btn = $('oqGiveUpBtn');
+  if(btn) btn.disabled = !(OQ && !OQ.busy && !OQ.finished && OQ.expected);
+}
+function oqGiveUp(){
+  if(!OQ || OQ.busy || OQ.finished || !OQ.expected) return;
+  if(!OQ.missedThisStep){
+    OQ.misses++; oqUpdateScore();
+    OQ.missedThisStep = true;
+    oqNoteMissedRoom();
+  }
+  OQ.busy = true;
+  oqUpdateGiveUp();
+  const answer = OQ.expected;
+  const sq = oqMoveSquares([...OQ.seq, answer]);
+  oqClearHighlights();
+  if(sq){ oqHighlight(sq.from, 'from'); oqHighlight(sq.to, 'to'); }
+  oqBoard.setPosition(fenForSeq([...OQ.seq, answer]), true);
+  oqSetStatus(`The move was ${answer}`, 'oq-miss');
+  // a longer pause than a correct answer gets: this is the one moment in the
+  // session where you're being shown something instead of recalling it.
+  setTimeout(oqAfterCorrect, 1100);
 }
 
 /* session mode only: a Black-color line's board always starts at the true
@@ -9593,6 +9632,7 @@ function oqInputHandler(event){
   if(norm(mv.san) === norm(OQ.expected)){
     OQ.hits++; oqUpdateScore();
     OQ.busy = true;
+    oqUpdateGiveUp();
     oqHighlight(event.squareTo, 'to');   // mark our TO square olive (FROM already marked)
     oqSetStatus('Correct', 'oq-hit');
     setTimeout(oqAfterCorrect, 200);   // run after this validate handler returns & the move settles
@@ -9600,6 +9640,7 @@ function oqInputHandler(event){
   }
   // legal but wrong: score a miss and snap back; keep the FROM mark for the retry
   OQ.misses++; oqUpdateScore();
+  OQ.missedThisStep = true;   // so giving up afterwards doesn't score a second miss for the same move
   oqNoteMissedRoom();   // ...and shorten this ROOM's review interval
   oqSetStatus(`${mv.san} is not the move — try again`, 'oq-miss');
   return false;
@@ -9644,6 +9685,7 @@ function oqFinish(){
   }
   OQ.finished = true;
   if(oqBoard) oqBoard.disableMoveInput();
+  oqUpdateGiveUp();
   oqClearHighlights();
   const total = OQ.hits + OQ.misses;
   const pct = total ? Math.round(OQ.hits / total * 100) : 0;
@@ -9852,6 +9894,7 @@ $('oqExitBtn').onclick = ()=>{
   oqRestorePrefsIfSwapped();
   $('openingQuizOverlay').style.display='none';
 };
+$('oqGiveUpBtn').onclick = ()=> oqGiveUp();
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
 $('oqAgainNewBtn').onclick  = ()=>{
   if(OQ && OQ.mode === 'session') OQ.questionIndex = 1;
@@ -9879,6 +9922,8 @@ if(localStorage.getItem('threeTestDebug')){
     demoteMissedRoom: (roomSeq) => oqDemoteMissedRoom(roomSeq),
     demotedRooms: () => JSON.parse(JSON.stringify((OQ && OQ.demoted) || {})),
     roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),
+    giveUp: () => oqGiveUp(),
+    giveUpDisabled: () => { const b = $('oqGiveUpBtn'); return b ? b.disabled : null; },
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
     startSession: (coverageVal, n, depth, onlyMemorized) => oqStartSession(coverageVal, n, depth, onlyMemorized),
     restorePrefs: () => oqRestorePrefsIfSwapped(),
