@@ -6950,8 +6950,22 @@ try {
       // Nc3 exists in VR -- but nothing is built past it, making it a genuine
       // forward dead-end (a locked door leads into it).
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      // THREE branches off the root, deliberately. This phase is about a
+      // dead-end room OF ITS OWN, and a root with one continuation merges the
+      // whole castle into a single corridor (the dead end then isn't a room
+      // at all, it's a member of the entry room -- Phase EN covers that
+      // case). A root with exactly two would instead pair them into one
+      // two-track room (analyzeCastleStructure needs outDeg === 2), merging
+      // it again. Three is the smallest branch count that leaves each reply
+      // standing as its own room.
+      { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      { seq: ['d4','Nf6','c4','d5'], reply: 'cxd5' },
     ]}],
-    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
   }, { defaultPlayerColor: 'white' });
   await appAS.page.click('.line-row');
   await appAS.page.waitForSelector('.data-row', { timeout: 40000 });
@@ -6985,6 +6999,11 @@ try {
       roomKey: window.__graphTestHooks.roomKeyOf(fen),
     }), fens.deadEnd);
     assert(info.roomKey, `test setup issue: expected the dead-end room to have a roomKey, got ${JSON.stringify(info.roomKey)}`);
+    // and it really is a room of its OWN, not one merged into the entry --
+    // that distinction is the whole reason this fixture branches three ways
+    const rootKey = await appAS.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.root);
+    assert(info.roomKey !== rootKey,
+      `test setup issue: the dead end merged into the entry room (${info.roomKey}) -- it needs to be its own room for this test to mean anything`);
     assert(info.display === 'none', `expected Jump hidden for a locked-door dead-end room, got display=${JSON.stringify(info.display)}`);
     ok('room-info modal: Jump to VR is hidden for a locked-door dead-end room');
   } catch(e){ bad('room-info modal: Jump hidden for locked-door dead-end', e); }
@@ -20776,6 +20795,224 @@ try {
   await appEM.close();
 }
 } catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+/* --- Phase EN: a position inside a merged room belongs to that room.
+   A linear run of positions becomes ONE VR room anchored at the first; the
+   rest are members with no room of their own to stand in, decorate or
+   memorize. Keying off a position's own FEN (what every call site used to
+   do) produces a key for a room that doesn't exist, and everything stored
+   per-room then reads as absent for it.
+
+   The bug this pins, measured before the fix: a memorized ten-move corridor
+   read as memorized at its first position and unmemorized at the other
+   nine, so "only test memorized rooms" dead-ended one move into every
+   corridor -- long forcing lines were largely unreachable by memorized-only
+   quizzing, and it presented as sessions being oddly shallow rather than as
+   a bug. Don't "fix" a failure here by weakening the assertions. --- */
+if(shouldRunPhase(['quiz','digraph'])){
+try {
+const appEN = await launchApp();
+try {
+  const seqs = {
+    r0: ['d4','Nf6','c4'],
+    r1: ['d4','Nf6','c4','e6','Nc3'],
+    r2: ['d4','Nf6','c4','e6','Nc3','Bb4','e3'],
+  };
+  const keyFor = (page, seq) => page.evaluate((mv) => {
+    const c = new Chess(); for(const m of mv) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, seq);
+  const posKeyFor = (page, seq) => page.evaluate((mv) => {
+    const c = new Chess(); for(const m of mv) c.move(m, { sloppy: true });
+    return window.__positionKey(c.fen());
+  }, seq);
+
+  const r0Key = await keyFor(appEN.page, seqs.r0);
+  const r0Pos = await posKeyFor(appEN.page, seqs.r0);
+  const r1Pos = await posKeyFor(appEN.page, seqs.r1);
+
+  // a purely LINEAR castle: one continuation at every step, so the whole
+  // thing merges into a single corridor room. Only the anchor is marked
+  // memorized -- which is the only thing the user CAN mark, since the
+  // members have no room of their own to stand in.
+  await seedBackup(appEN.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' }],
+    memorizedRooms: JSON.stringify({ [r0Key]: Date.now() }),
+  }, { defaultPlayerColor: 'white' });
+  await appEN.page.click('.line-row');
+  await appEN.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  // setup sanity: the castle really is one corridor, anchored at r0, with r1
+  // folded into it as a member rather than being a room of its own.
+  try {
+    const built = await appEN.page.evaluate(() => window.__redirectTestHooks.gatherBuiltCastles());
+    const alpha = built.find(c => c.castleName === 'Alpha');
+    assert(alpha, `setup: expected an Alpha castle, got ${JSON.stringify(built.map(b => b.castleName))}`);
+    const anchors = alpha.genRooms.map(g => g.posKey);
+    assert(anchors.includes(r0Pos), `setup: expected r0 to be a room anchor, anchors were ${JSON.stringify(anchors)}`);
+    assert(!anchors.includes(r1Pos),
+      `setup: expected r1 to be FOLDED INTO a corridor, but it is its own room -- this fixture is not linear enough to test the bug. anchors: ${JSON.stringify(anchors)}`);
+    const corridor = alpha.genRooms.find(g => g.posKey === r0Pos);
+    const members = (corridor.shape && corridor.shape.members) || [];
+    assert(members.includes(r1Pos),
+      `setup: expected r1 among the corridor's members, got ${JSON.stringify(members)}`);
+    ok(`Corridor rooms: a linear castle merges into one room (${alpha.genRooms.length} room(s), ${members.length} members)`);
+  } catch(e){ bad('Corridor rooms: linear castle merges into a corridor', e); }
+
+  // the actual question. A quiz session scoped to the whole system, memorized-only.
+  try {
+    const err = await appEN.page.evaluate(() => window.__oqTestHooks.startSession('L1', 5, 20, true));
+    assert(!err, `setup: startSession refused: ${err}`);
+
+    const atAnchor = await appEN.page.evaluate((sq) => window.__oqTestHooks.roomMemorized(sq), seqs.r0);
+    assert(atAnchor === true, `expected the corridor's ANCHOR to read memorized, got ${atAnchor}`);
+
+    // THE CLAIM: r1 is part of the same memorized room, so it must read
+    // memorized too. The user's own framing: a move deep inside the MASTER
+    // BEDROOM's object list belongs to the MASTER BEDROOM.
+    const atMember = await appEN.page.evaluate((sq) => window.__oqTestHooks.roomMemorized(sq), seqs.r1);
+    assert(atMember === true,
+      `expected a corridor MEMBER position to read memorized (it is part of the same room as the anchor), got ${atMember}`);
+    ok('memorized filter: a corridor member position reads as memorized, like its anchor');
+  } catch(e){ bad('memorized filter: corridor member reads memorized', e); }
+
+  // ...and the consequence: the walk dead-ends on entering the corridor.
+  try {
+    const fromAnchor = await appEN.page.evaluate((sq) => window.__oqTestHooks.memorizedFilter(sq, ['e6']), seqs.r0);
+    assert(Array.isArray(fromAnchor) && fromAnchor.length === 1,
+      `expected the anchor's own branch to be offered, got ${JSON.stringify(fromAnchor)}`);
+    const fromMember = await appEN.page.evaluate((sq) => window.__oqTestHooks.memorizedFilter(sq, ['Bb4']), seqs.r1);
+    assert(Array.isArray(fromMember) && fromMember.length === 1,
+      `expected the quiz to keep walking THROUGH a memorized corridor, but it offered ${JSON.stringify(fromMember)} -- the line dead-ends one move in`);
+    ok('memorized filter: a memorized corridor is walked through, not dead-ended at its first member');
+  } catch(e){ bad('memorized filter: corridor is walked through', e); }
+  // the same blindness in the opening graph: a node is a POSITION, so most
+  // nodes in a castle are members of a merged room rather than rooms of
+  // their own. Keying off each node's own FEN badged only the anchor -- and
+  // gave every other node a roomKey matching no real room, so "Jump to VR"
+  // from one silently landed you on Main Street.
+  try {
+    await appEN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+    const nodes = await appEN.page.evaluate(() => Object.fromEntries(
+      window.__graphTestHooks.cy().nodes()
+        .filter(n => !!n.data('seq'))
+        .map(n => [(n.data('seq') || []).join(','), { roomKey: n.data('roomKey'), label: n.data('label') }])));
+    const anchor = nodes[seqs.r0.join(',')];
+    const member = nodes[seqs.r1.join(',')];
+    assert(anchor && member, `setup: expected both positions as graph nodes, got ${JSON.stringify(Object.keys(nodes))}`);
+    assert(anchor.roomKey === r0Key,
+      `expected the anchor node to carry the corridor's room key, got ${anchor.roomKey}`);
+    assert(member.roomKey === anchor.roomKey,
+      `expected a member node to resolve to the SAME room as its anchor, got ${member.roomKey} vs ${anchor.roomKey}`);
+    // and so the memorized glyph follows: the whole corridor is memorized,
+    // not just the node that happens to anchor it
+    assert(/\u{1F9E0}/u.test(anchor.label) && /\u{1F9E0}/u.test(member.label),
+      `expected the memorized glyph on every node of a memorized corridor, got anchor=${JSON.stringify(anchor.label)} member=${JSON.stringify(member.label)}`);
+    ok('Corridor rooms: graph nodes inside a merged room resolve to that room, glyphs and all');
+  } catch(e){ bad('Corridor rooms: graph node mapping', e); }
+
+  /* --- Q1: a missed move shortens its room's review interval --- */
+  const reviewOf = (key) => appEN.page.evaluate(async (k) =>
+    (await window.__reviewTestHooks.getReviews())[k] || null, key);
+  const seedReview = (key, rec) => appEN.page.evaluate(async ({ k, r }) => {
+    const m = await window.__reviewTestHooks.getReviews();
+    m[k] = r; await window.__reviewTestHooks.setReviews(m);
+  }, { k: key, r: rec });
+  const DAY = 86400000;
+
+  // 403. The room a miss blames is the one you're STANDING IN -- the move
+  //      sits on one of its doors -- not the room that door leads into.
+  //      SOLARIUM, not STUDY.
+  try {
+    // OQ.seq at answer time ends with the OPPONENT's move
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }),
+      [...seqs.r0, 'e6']);
+    const blamed = await appEN.page.evaluate(() => window.__oqTestHooks.missedRoomSeq());
+    assert(JSON.stringify(blamed) === JSON.stringify(seqs.r0),
+      `expected the miss blamed on the room holding the door (${seqs.r0.join(' ')}), got ${JSON.stringify(blamed)}`);
+
+    // and at the very first move of a white line there is no room yet
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ seq: [] }));
+    assert((await appEN.page.evaluate(() => window.__oqTestHooks.missedRoomSeq())) === null,
+      'expected no room blamed before any room has been reached');
+    ok('Quiz miss: blames the room holding the door, not the room beyond it');
+  } catch(e){ bad('Quiz miss: room attribution', e); }
+
+  // 404. It demotes ONE step and re-dates from the LAST REVIEW -- the point
+  //      is to pull the room forward, and dating from today would push a
+  //      room that just gave you trouble further out.
+  try {
+    const last = Date.now() - 5 * DAY;
+    await seedReview(r0Key, { last, due: last + 60 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(res && res.from === 4 && res.to === 3, `expected a single step down from 4, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 3, `expected the stored record at step 3, got ${JSON.stringify(rec)}`);
+    assert(rec.due <= last + 21 * DAY && rec.due > last + 20 * DAY,
+      `expected the due date re-measured ~21d from the last review, got ${(rec.due - last) / DAY}d after it`);
+    assert(rec.lastGrade === 'A', 'expected the demotion to leave the grade history alone -- it is not a grade');
+    ok('Quiz miss: demotes one step and re-dates from the last review');
+  } catch(e){ bad('Quiz miss: one-step demotion', e); }
+
+  // 405. Once per room per session. A wrong answer can be retried until
+  //      it's right, a path can re-enter a room through a transposition, and
+  //      "Again, same questions" replays a set you were just shown the
+  //      answers to -- none of that is fresh evidence.
+  try {
+    const again = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(again === null, `expected a second miss in the same room to change nothing, got ${JSON.stringify(again)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 3, `expected the record untouched by the repeat, got step ${rec.step}`);
+    const ledger = await appEN.page.evaluate(() => window.__oqTestHooks.demotedRooms());
+    assert(Object.keys(ledger).length === 1, `expected one room in the session ledger, got ${JSON.stringify(ledger)}`);
+    ok('Quiz miss: a room is shortened once per session, however many times it is missed');
+  } catch(e){ bad('Quiz miss: once per session', e); }
+
+  // 406. A room with no stored record is left alone -- never memorized means
+  //      no schedule to shorten, and memorized-but-never-graded is already at
+  //      the bottom of the ladder. Inventing one from a miss isn't the
+  //      quiz's call. (Same rule R5's structural demotion uses.)
+  try {
+    await appEN.page.evaluate(async (k) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      delete m[k]; await window.__reviewTestHooks.setReviews(m);
+    }, r0Key);
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(res === null, `expected no demotion for a room with no schedule, got ${JSON.stringify(res)}`);
+    assert((await reviewOf(r0Key)) === null, 'expected no record invented by the miss');
+    ok('Quiz miss: a room with no schedule is left alone, not given one');
+  } catch(e){ bad('Quiz miss: no record, no demotion', e); }
+
+  // 407. A miss deep inside a corridor blames the whole corridor -- the
+  //      user's MASTER BEDROOM case. This is what Q0's mapping bought: the
+  //      member position has no room of its own, so without it the miss
+  //      would compute a key nothing is stored under and silently do
+  //      nothing at all.
+  try {
+    const last = Date.now() - 2 * DAY;
+    await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r1);
+    assert(res && res.to === 2,
+      `expected a miss at a MEMBER position to demote the room it belongs to, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 2, `expected the corridor's own record demoted, got ${JSON.stringify(rec)}`);
+    ok("Quiz miss: a miss inside a corridor blames the whole corridor, not a room that doesn't exist");
+  } catch(e){ bad('Quiz miss: corridor member attribution', e); }
+} finally {
+  await appEN.close();
+}
+} catch(e){ bad('Phase EN: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 console.log(`\n${failed ? '✗' : '✓'} ${passed} passed, ${failed} failed`);

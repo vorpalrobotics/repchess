@@ -929,6 +929,30 @@ function bootstrapRoomReview(memorizedAt){
   return { last: null, due: startOfLocalDay(memorizedAt + DAY_MS), step: 0, lapses: 0, lastGrade: null };
 }
 
+/* One step back down the ladder, re-dated from the LAST ACTUAL REVIEW.
+
+   This is the operation that means "something other than your own judgement
+   says look at this sooner": the room changed shape under you (threeVR.js's
+   applyStructuralDemotions), or you missed one of its moves in the board
+   quiz. Deliberately not a grade. Grading is self-assessment and a C resets
+   to the bottom of the ladder, which is too large a claim to make from one
+   piece of external evidence -- a step says "sooner" and lets a genuinely
+   rotten room be demoted again next time.
+
+   Dated from `last`, not from now: the point is to pull the room forward,
+   and dating it from today would push a room FURTHER out for having just
+   given you trouble. Returns null for a room with no record -- nothing to
+   demote, and inventing a schedule from a miss isn't this function's call. */
+function demoteRoomReview(record, now = Date.now()){
+  if(!record) return null;
+  const step = Math.max(0, (record.step || 0) - 1);
+  return {
+    ...record,
+    step,
+    due: startOfLocalDay((record.last || now) + ROOM_REVIEW_LADDER[step] * DAY_MS),
+  };
+}
+
 /* The record a room is EFFECTIVELY on -- the stored one, or a bootstrapped
    one for a room marked memorized but never graded. Both callers want exactly
    this (threeVR.js to grade and tint the brain, app.js to colour the opening

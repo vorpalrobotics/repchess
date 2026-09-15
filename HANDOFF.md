@@ -144,6 +144,38 @@ reports after R1–R5 shipped, and are the shape of feedback to expect more of:
   explicitly deferred the refactor. Read it before proposing anything in that
   direction; don't start building from it without being asked.
 
+## Standing trap: a position is not a room
+
+A linear run of positions merges into ONE VR room, anchored at the first;
+the rest are **members** of it, with no room of their own to stand in,
+decorate, or memorize. Two sibling runs off a head become a single
+two-track room the same way (`analyzeCastleStructure` pairs them when the
+head has exactly two out-edges).
+
+So `castleRoomKey(instanceId, positionKey(fen))` is correct only for an
+ANCHOR. Called on a member it yields a key for a room that does not exist,
+and everything stored per-room — memorized, decorated, review schedule,
+layout — silently reads as absent. No error, just wrong answers.
+
+**Fixed in `-377`** by `buildRoomAnchorIndex` / `roomKeyForPosKey` (next to
+`castleRoomKey` in `js/app.js`). Resolve through those, not through
+`castleRoomKey` directly, for any position that might not be an anchor. Two
+call sites were wrong and are now fixed:
+
+- `oqRoomMemorized` — "only test memorized rooms" dead-ended one move into
+  every memorized corridor, so long forcing lines were largely unreachable
+  by memorized-only quizzing. It presented as sessions being oddly shallow.
+- `roomKeyForRoom` in the graph render — the 🧠/🎨 glyphs and the Review and
+  Completeness lenses lit only each corridor's anchor, and "Jump to VR" from
+  any other node landed you on Main Street, since its key matched no room.
+
+Covered by **Phase EN**. Note `Phase AS`'s fixture had to grow from one
+branch to three: with one, the "dead-end room" it claimed to test was
+actually a member of the entry corridor, and with two the head and both
+branches pair into one two-track room. Three is the smallest branch count
+that leaves a reply standing as its own room — worth knowing when writing
+any fixture that needs a specific room shape.
+
 ## Open decisions the user has not settled
 
 - **The ladder values** (`1/3/7/21/60/180`) and whether 180 days is the top
