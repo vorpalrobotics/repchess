@@ -763,6 +763,7 @@
   #oqScoreBar{display:flex;justify-content:center;gap:1.5rem;font-weight:700;margin-bottom:.6rem}
   #oqScoreBar #oqHits{color:#2e7d32}
   #oqScoreBar #oqMisses{color:#c62828}
+  #oqScoreBar #oqUnsure{color:#b8860b}
   #oqBoardWrap{width:min(80vw,22em);margin:0 auto;position:relative}
   #oqBoard{width:100%;height:auto;aspect-ratio:1/1}
   .oq-hl{position:absolute;width:12.5%;height:12.5%;box-sizing:border-box;pointer-events:none;z-index:5;border-radius:2px}
@@ -774,7 +775,12 @@
   /* per-QUESTION give-up, deliberately understated and placed under the
      board rather than up by Close/Exit -- it abandons one move, not the
      session, and those two must not look like each other. */
-  #oqPlayActions{margin-top:.5rem}
+  #oqPlayActions{margin-top:.5rem;display:flex;gap:.6rem;justify-content:center}
+  /* armed state has to be unmistakable -- it applies to a move you have not
+     made yet, so "did I press it?" must be answerable at a glance */
+  #oqUnsureBtn{font-size:.85rem;padding:.25rem .7rem;color:#555}
+  #oqUnsureBtn.armed{background:#b8860b;border-color:#b8860b;color:#fff;font-weight:700}
+  #oqUnsureBtn:disabled{opacity:.4;cursor:default}
   #oqGiveUpBtn{font-size:.85rem;padding:.25rem .7rem;color:#555}
   #oqGiveUpBtn:disabled{opacity:.4;cursor:default}
   #oqScoreDetail{color:#555;margin-bottom:.5rem}
@@ -1680,10 +1686,13 @@
       <div id="oqScoreBar">
         <span id="oqHits">Hits 0</span>
         <span id="oqMisses">Misses 0</span>
+        <span id="oqUnsure">Unsure 0</span>
       </div>
       <div id="oqBoardWrap"><div id="oqBoard"></div></div>
       <div id="oqStatus"></div>
       <div id="oqPlayActions">
+        <button type="button" id="oqUnsureBtn"
+          title="Press BEFORE you move, when you're about to guess. It still counts as a hit if you're right, but the room's next review is brought forward.">Uncertain about next move</button>
         <button type="button" id="oqGiveUpBtn"
           title="Reveal the move, score it as a miss, and carry on down the line">Give up on this move</button>
       </div>
@@ -1786,7 +1795,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-60"></script>
+<script src="js/db.js?v=20260804-61"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1803,6 +1812,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-380"></script>
+<script type="module" src="js/app.js?v=20260804-381"></script>
 </body>
 </html>

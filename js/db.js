@@ -953,6 +953,27 @@ function demoteRoomReview(record, now = Date.now()){
   };
 }
 
+/* "I got it, but I was guessing." Pulls the next review FORWARD to halfway
+   through the current interval, leaving the ladder step alone.
+
+   The step is demonstrated mastery and you did demonstrate it -- you
+   produced the move -- so you keep it. What you've reported is that the
+   interval is currently too long for this room, which is a statement about
+   WHEN, not about how well you know it. That's the gradation against a
+   miss: a miss costs you a rung, being unsure just brings the next review
+   forward.
+
+   Never pushes a review OUT. An uncertain recall is not evidence that a
+   room is safe for longer, and a rule that could delay a review would let a
+   shaky room drift -- so a room already due (or nearly) is returned
+   unchanged, with nothing to write. */
+function softenRoomReview(record, now = Date.now()){
+  if(!record || !record.due) return record || null;
+  const interval = ROOM_REVIEW_LADDER[record.step || 0] * DAY_MS;
+  const pulled = startOfLocalDay(now + interval / 2);
+  return pulled < record.due ? { ...record, due: pulled } : record;
+}
+
 /* The record a room is EFFECTIVELY on -- the stored one, or a bootstrapped
    one for a room marked memorized but never graded. Both callers want exactly
    this (threeVR.js to grade and tint the brain, app.js to colour the opening

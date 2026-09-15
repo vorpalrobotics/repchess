@@ -21083,6 +21083,53 @@ try {
     ok('Quiz give-up: the button is live only while a move is actually being asked');
   } catch(e){ bad('Quiz give-up: button availability', e); }
 
+  // 408e. "Uncertain about next move": armed BEFORE the move, undoable, and
+  //       cleared when the next question is armed so it can't leak forward.
+  try {
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({
+      seq: sq, expected: 'Nc3', busy: false, finished: false, unsureThisStep: false,
+    }), [...seqs.r0, 'e6']);
+    await appEN.page.evaluate(() => window.__oqTestHooks.toggleUnsure());
+    let btn = await appEN.page.evaluate(() => window.__oqTestHooks.unsureBtn());
+    assert(btn.armed, 'expected the button to show an armed state -- it applies to a move not yet made');
+    assert(/cancel/i.test(btn.text), `expected the armed label to offer a way out, got ${JSON.stringify(btn.text)}`);
+    await appEN.page.evaluate(() => window.__oqTestHooks.toggleUnsure());
+    btn = await appEN.page.evaluate(() => window.__oqTestHooks.unsureBtn());
+    assert(!btn.armed, 'expected a second press to cancel it -- a mis-press must be undoable');
+    ok('Quiz unsure: a toggle armed before the move, and undoable');
+  } catch(e){ bad('Quiz unsure: toggle behaviour', e); }
+
+  // 408f. Being unsure but right pulls the next review FORWARD without
+  //       touching the ladder step: you produced the move, so you keep the
+  //       step; what you reported is that the interval is too long.
+  try {
+    const last = Date.now() - 1 * DAY;
+    await seedReview(r0Key, { last, due: last + 60 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.softenUnsureRoom(sq), seqs.r0);
+    assert(res && res.reason === 'softened', `expected the room softened, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.step === 4, `expected the ladder step KEPT -- the move was produced, got ${rec.step}`);
+    assert(rec.due < last + 60 * DAY, 'expected the next review pulled forward');
+    assert(rec.due > Date.now() + 25 * DAY && rec.due < Date.now() + 35 * DAY,
+      `expected roughly half the 60-day interval from now, got ${((rec.due - Date.now()) / DAY).toFixed(1)}d`);
+    ok('Quiz unsure: pulls the next review forward, keeps the ladder step');
+  } catch(e){ bad('Quiz unsure: softening', e); }
+
+  // 408g. It can only ever bring a review CLOSER. A room already due must
+  //       not be pushed out by admitting you were unsure about it -- that
+  //       would let a shaky room drift, which is backwards.
+  try {
+    const last = Date.now() - 90 * DAY;
+    await seedReview(r0Key, { last, due: Date.now() - 2 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    const res = await appEN.page.evaluate((sq) => window.__oqTestHooks.softenUnsureRoom(sq), seqs.r0);
+    assert(res && res.reason === 'already-due', `expected an already-due room left alone, got ${JSON.stringify(res)}`);
+    const rec = await reviewOf(r0Key);
+    assert(rec.due < Date.now(), 'expected the due date NOT pushed out by an uncertain answer');
+    ok('Quiz unsure: never delays a review, only brings one forward');
+  } catch(e){ bad('Quiz unsure: never delays', e); }
+
   // 408. An unnamed room still gets reported -- most rooms are unnamed while
   //      a castle is being built out, and "moved up for review: (nothing)"
   //      would be useless. The fallback names the moves that reach it.

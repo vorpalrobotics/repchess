@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-380';
+const BUILD_TAG = '-381';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9348,13 +9348,14 @@ function oqRoomLabel(roomKey, roomSeq){
    make those look identical. */
 function oqReportMissedRoom(res, statusAtMiss){
   if(!res) return;
-  const moved = res.demoted
-    ? `review moved up (step ${res.demoted.from} → ${res.demoted.to})`
+  const moved = res.reason === 'demoted' ? `review moved up (step ${res.demoted.from} → ${res.demoted.to})`
+    : res.reason === 'softened' ? 'next review brought forward (step kept)'
     : { already: 'already moved up earlier this session',
+        'already-due': 'already due, so nothing to bring forward',
         'no-record': 'not on the review schedule, so nothing changed' }[res.reason] || 'nothing changed';
-  console.log(`[quiz] miss in "${res.name}" (${res.key}) — ${moved}`);
+  console.log(`[quiz] ${res.reason === 'softened' ? 'unsure' : 'miss'} in "${res.name}" (${res.key}) — ${moved}`);
   const el = $('oqStatus');
-  // only if the player is still looking at the message for this miss
+  // only if the player is still looking at the message for this answer
   if(el && statusAtMiss && el.textContent === statusAtMiss){
     el.textContent = `${statusAtMiss} · that move lives in ${res.name}`;
   }
@@ -9499,6 +9500,9 @@ function oqMarkOpponentMove(seq){
 function oqUpdateScore(){
   $('oqHits').textContent = `Hits ${OQ.hits}`;
   $('oqMisses').textContent = `Misses ${OQ.misses}`;
+  // still a hit -- you produced the move -- but counted separately, because
+  // "8 hits, 5 of them guesses" is a different report from "8 hits".
+  $('oqUnsure').textContent = `Unsure ${OQ.unsure || 0}`;
 }
 function oqSetStatus(text, cls){
   const el = $('oqStatus');
@@ -9531,10 +9535,11 @@ function oqLoadStep(){
     OQ.expected = oqPickChoice(triggers);
     OQ.busy = false;
     OQ.missedThisStep = false;
+    OQ.unsureThisStep = false;
     oqClearHighlights();
     oqBoard.setPosition(fenForSeq([]), true);
     oqSetStatus('Your move');
-    oqUpdateGiveUp();
+    oqUpdateGiveUp(); oqUpdateUnsure();
     return;
   }
   const expected = PREFS[prefKey(OQ.line.id, OQ.seq)]?.reply;
@@ -9542,9 +9547,10 @@ function oqLoadStep(){
   OQ.expected = expected;
   OQ.busy = false;
   OQ.missedThisStep = false;
+  OQ.unsureThisStep = false;
   oqBoard.setPosition(fenForSeq(OQ.seq), true);
   oqSetStatus('Your move');
-  oqUpdateGiveUp();
+  oqUpdateGiveUp(); oqUpdateUnsure();
 }
 
 /* ---------- giving up on one move ----------
@@ -9558,6 +9564,64 @@ function oqLoadStep(){
    attempts are each already counted, so a give-up after two guesses is the
    same single failure, not a third. The room demotion needs no such guard:
    it's once per room per session already. */
+/* ---------- "I'm about to guess" ----------
+   Pressed BEFORE the move, not after. After a correct answer the board
+   advances within a couple of hundred milliseconds, so a button meaning
+   "that one was a guess" would be racing the animation; and the moment you
+   actually know you're unsure is before you commit, not after. Hence the
+   label naming the NEXT move: the one ambiguity worth spending words on is
+   which move it applies to.
+
+   A toggle, not a one-shot, because it arms something about a move you
+   haven't made yet and a mis-press has to be undoable. Cleared whenever a
+   step is armed, so it never leaks into the following question. */
+function oqUpdateUnsure(){
+  const btn = $('oqUnsureBtn');
+  if(!btn) return;
+  btn.disabled = !(OQ && !OQ.busy && !OQ.finished && OQ.expected);
+  btn.classList.toggle('armed', !!(OQ && OQ.unsureThisStep));
+  btn.textContent = (OQ && OQ.unsureThisStep) ? 'Unsure — press again to cancel' : 'Uncertain about next move';
+}
+function oqToggleUnsure(){
+  if(!OQ || OQ.busy || OQ.finished || !OQ.expected) return;
+  OQ.unsureThisStep = !OQ.unsureThisStep;
+  oqUpdateUnsure();
+}
+/* Correct, but flagged as a guess: pull the room's next review forward
+   without touching its ladder step (db.js's softenRoomReview explains why
+   those are different things). Shares the miss path's room resolution and
+   its once-per-room-per-session ledger -- a room a miss has already moved
+   needs nothing further, and the miss is the stronger signal of the two. */
+function oqNoteUnsureRoom(){
+  const roomSeq = oqMissedRoomSeq();
+  if(!roomSeq) return;
+  const statusAtAnswer = $('oqStatus') ? $('oqStatus').textContent : null;
+  oqReviewWrites = oqReviewWrites
+    .then(() => oqSoftenUnsureRoom(roomSeq))
+    .then(res => oqReportMissedRoom(res, statusAtAnswer))
+    .catch(err => console.error('[quiz] could not record an uncertain room', err));
+}
+async function oqSoftenUnsureRoom(roomSeq){
+  const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
+  if(!castle) return null;
+  if(!OQ.roomAnchors || !OQ.roomNames) Object.assign(OQ, await oqRoomIndexes());
+  const key = roomKeyForPosKey(OQ.roomAnchors, castleInstanceId(OQ.line.id, castle),
+                               positionKey(fenForSeq(roomSeq)));
+  const name = oqRoomLabel(key, roomSeq);
+  if(!OQ.demoted) OQ.demoted = {};
+  if(OQ.demoted[key]) return { key, name, demoted: null, reason: 'already' };
+  const reviews = await getRoomReviews();
+  const rec = reviews[key];
+  if(!rec) return { key, name, demoted: null, reason: 'no-record' };
+  const next = softenRoomReview(rec);
+  // unchanged when the room is already due or nearly so -- nothing to pull in
+  if(next === rec || next.due === rec.due) return { key, name, demoted: null, reason: 'already-due' };
+  reviews[key] = next;
+  await setRoomReviews(reviews);
+  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name, kind: 'unsure' };
+  return { key, name, demoted: OQ.demoted[key], reason: 'softened' };
+}
+
 function oqUpdateGiveUp(){
   const btn = $('oqGiveUpBtn');
   if(btn) btn.disabled = !(OQ && !OQ.busy && !OQ.finished && OQ.expected);
@@ -9570,7 +9634,8 @@ function oqGiveUp(){
     oqNoteMissedRoom();
   }
   OQ.busy = true;
-  oqUpdateGiveUp();
+  OQ.unsureThisStep = false;   // a miss is the stronger signal; nothing to add
+  oqUpdateGiveUp(); oqUpdateUnsure();
   const answer = OQ.expected;
   const sq = oqMoveSquares([...OQ.seq, answer]);
   oqClearHighlights();
@@ -9630,11 +9695,14 @@ function oqInputHandler(event){
 
   const norm = s => s.replace(/[+#]/g,'');
   if(norm(mv.san) === norm(OQ.expected)){
-    OQ.hits++; oqUpdateScore();
+    OQ.hits++;
+    const guessed = !!OQ.unsureThisStep;
+    if(guessed){ OQ.unsure = (OQ.unsure || 0) + 1; oqNoteUnsureRoom(); }
+    oqUpdateScore();
     OQ.busy = true;
-    oqUpdateGiveUp();
+    oqUpdateGiveUp(); oqUpdateUnsure();
     oqHighlight(event.squareTo, 'to');   // mark our TO square olive (FROM already marked)
-    oqSetStatus('Correct', 'oq-hit');
+    oqSetStatus(guessed ? 'Correct — but you were guessing' : 'Correct', guessed ? '' : 'oq-hit');
     setTimeout(oqAfterCorrect, 200);   // run after this validate handler returns & the move settles
     return true;            // let the board show our move
   }
@@ -9685,7 +9753,7 @@ function oqFinish(){
   }
   OQ.finished = true;
   if(oqBoard) oqBoard.disableMoveInput();
-  oqUpdateGiveUp();
+  oqUpdateGiveUp(); oqUpdateUnsure();
   oqClearHighlights();
   const total = OQ.hits + OQ.misses;
   const pct = total ? Math.round(OQ.hits / total * 100) : 0;
@@ -9837,7 +9905,7 @@ async function oqStartSession(coverageVal, n, depth, onlyMemorized){
     mode: 'session', line: sel.line, color: sel.line.color, startSeq: [],
     coverageRootSeq: sel.isCastle ? sel.rootSeq : null,
     maxDepth: depth, questionsTotal: n, questionIndex: 1,
-    oppChoices: [], hits: 0, misses: 0, savedPrefs,
+    oppChoices: [], hits: 0, misses: 0, unsure: 0, savedPrefs,
     // "only test memorized rooms": castleName is fixed for a castle-scoped
     // session (no per-node ancestor walk needed -- every question stays
     // inside that one castle's subtree, per oqCoverageEligible's own forced
@@ -9894,6 +9962,7 @@ $('oqExitBtn').onclick = ()=>{
   oqRestorePrefsIfSwapped();
   $('openingQuizOverlay').style.display='none';
 };
+$('oqUnsureBtn').onclick = ()=> oqToggleUnsure();
 $('oqGiveUpBtn').onclick = ()=> oqGiveUp();
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
 $('oqAgainNewBtn').onclick  = ()=>{
@@ -9924,6 +9993,9 @@ if(localStorage.getItem('threeTestDebug')){
     roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),
     giveUp: () => oqGiveUp(),
     giveUpDisabled: () => { const b = $('oqGiveUpBtn'); return b ? b.disabled : null; },
+    toggleUnsure: () => oqToggleUnsure(),
+    unsureBtn: () => { const b = $('oqUnsureBtn'); return b ? { disabled: b.disabled, armed: b.classList.contains('armed'), text: b.textContent } : null; },
+    softenUnsureRoom: (roomSeq) => oqSoftenUnsureRoom(roomSeq),
     nextMoveNumber: (playedPlies) => oqNextMoveNumber(playedPlies),
     startSession: (coverageVal, n, depth, onlyMemorized) => oqStartSession(coverageVal, n, depth, onlyMemorized),
     restorePrefs: () => oqRestorePrefsIfSwapped(),
