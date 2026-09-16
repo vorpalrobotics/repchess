@@ -206,3 +206,26 @@ export async function openVR(page){
   await page.waitForFunction(() => !!window.__threeTestEdit, { timeout: 20000 });
   await page.waitForFunction(() => !!window.__threeTestState, { timeout: 20000 });
 }
+
+/* Close the VR overlay and wait for it to actually go away.
+
+   The toolbar renders a beat after the overlay does, so this WAITS for the
+   Close button before clicking it. The hand-rolled copies of this in the
+   VR-cache phases did `btn && btn.click()` instead: when the button wasn't
+   there yet they clicked nothing, silently, and the display:none wait that
+   followed -- which had no explicit timeout -- then burned the full default
+   30s and failed. That is the "VR cache: invalidated by ..." flake, and it
+   moved between sub-tests from run to run because every one of them closes
+   VR. It also left the overlay OPEN, so the next test's clicks landed on
+   the three.js canvas instead of the modal underneath, turning one flake
+   into two failures. */
+export async function closeVR(page){
+  await page.waitForFunction(
+    () => !![...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close'),
+    { timeout: 20000 });
+  await page.evaluate(() => [...document.querySelectorAll('#threeTestCanvasWrap button')]
+    .find(b => b.title === 'Close').click());
+  await page.waitForFunction(
+    () => document.getElementById('threeTestOverlay').style.display === 'none',
+    { timeout: 20000 });
+}

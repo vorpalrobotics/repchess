@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR, mockLichessGames, mockChessComGames } from './harness.mjs';
+import { launchApp, seedBackup, openVR, closeVR as closeVRHelper, mockLichessGames, mockChessComGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7135,13 +7135,7 @@ try {
     ]}],
   }, { defaultPlayerColor: 'white' });
   const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
-  const closeVR = async () => {
-    await appAU.page.evaluate(() => {
-      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
-      btn && btn.click();
-    });
-    await appAU.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
-  };
+  const closeVR = () => closeVRHelper(appAU.page);
 
   // 148. Nothing cached before the first "Run VR"; cached immediately after.
   try {
@@ -7306,13 +7300,7 @@ try {
   await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
-  const closeVR = async () => {
-    await appAV.page.evaluate(() => {
-      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
-      btn && btn.click();
-    });
-    await appAV.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
-  };
+  const closeVR = () => closeVRHelper(appAV.page);
   const primeCache = async () => {
     await openVR(appAV.page);
     // openVR's own readiness check (window.__threeTestEdit/__threeTestState)
@@ -7423,13 +7411,7 @@ try {
   await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAW.page.evaluate(() => window.__vrCacheTestHooks.isCached());
-  const closeVR = async () => {
-    await appAW.page.evaluate(() => {
-      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
-      btn && btn.click();
-    });
-    await appAW.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
-  };
+  const closeVR = () => closeVRHelper(appAW.page);
   const primeCache = async () => {
     await openVR(appAW.page);
     await appAW.page.waitForFunction(() => window.__vrCacheTestHooks.isCached(), { timeout: 5000 });
@@ -7467,6 +7449,14 @@ try {
   //      leaving it stuck on whatever applied before the checkbox was
   //      touched.
   try {
+    // A VR-cache test above that fails mid-flight can leave the VR overlay
+    // open, and its three.js canvas then swallows every click in here --
+    // which is how one flake up there used to show up as two failures. This
+    // test doesn't care about VR at all, so it just makes sure it's shut.
+    await appAW.page.evaluate(() => {
+      const ov = document.getElementById('threeTestOverlay');
+      if(ov && ov.style.display !== 'none') ov.style.display = 'none';
+    });
     await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="attributes"]').click());
     await appAW.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
@@ -7963,13 +7953,7 @@ try {
     isPersisted: await window.__vrCacheTestHooks.isPersisted(),
     buildCount: window.__vrCacheTestHooks.buildCount(),
   }));
-  const closeVR = async () => {
-    await appBA.page.evaluate(() => {
-      const btn = [...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close');
-      btn && btn.click();
-    });
-    await appBA.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
-  };
+  const closeVR = () => closeVRHelper(appBA.page);
 
   // 169. First open: cache miss, one real build, persisted to IndexedDB.
   try {
