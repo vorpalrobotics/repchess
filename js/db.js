@@ -1003,6 +1003,37 @@ function roomReviewState(record, now = Date.now()){
   return 'notdue';
 }
 
+/* "tomorrow" / "in 7 days" -- measured from the START of today, since due
+   dates are midnight-snapped (see startOfLocalDay above); a raw now-to-due
+   subtraction would report a 1-day interval as 0 days from any afternoon.
+   Here rather than in threeVR.js (its original home) because app.js needs
+   the same phrasing for the quiz's end-of-session change list, and the two
+   modules can't import each other -- same reason demoteRoomReview lives
+   here. */
+function dueInDays(rec, now = Date.now()){
+  return Math.max(0, Math.round((rec.due - startOfLocalDay(now)) / DAY_MS));
+}
+function duePhrase(rec, now = Date.now()){
+  const d = dueInDays(rec, now);
+  if(d <= 0) return 'today';
+  if(d === 1) return 'tomorrow';
+  return `in ${d} days`;
+}
+
+/* Has anything touched this room's schedule since we wrote `written`?
+
+   Only asked by the quiz's undo, which restores a record it replaced -- and
+   must not clobber a VR grade made in another tab in the meantime. Compares
+   the fields any operation actually moves rather than deep-equalling the
+   object: a grade changes all of these, and both demotion and softening
+   change `due`, so nothing that matters slips past. */
+function roomReviewMatches(current, written){
+  if(!current || !written) return current === written;
+  return current.due === written.due && (current.step || 0) === (written.step || 0)
+      && (current.last || null) === (written.last || null)
+      && (current.lastGrade || null) === (written.lastGrade || null);
+}
+
 async function getRoomReviews(){
   const raw = await getMeta(ROOM_REVIEWS_KEY);
   try { return raw ? JSON.parse(raw) : {}; }

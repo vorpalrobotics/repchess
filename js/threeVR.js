@@ -1560,18 +1560,9 @@ const GRADE_KEY   = { '1': 'A', '2': 'B', '3': 'C' };
    per-visit -- come back tomorrow and you're grading afresh. */
 let preGradeRecord = null;      // { roomKey, record } | null
 
-// "in 7 days" / "tomorrow" -- measured from the START of today, since due
-// dates are midnight-snapped (see db.js startOfLocalDay); a raw now-to-due
-// subtraction would report a 1-day interval as 0 days from any afternoon.
-function dueInDays(rec, now = Date.now()){
-  return Math.max(0, Math.round((rec.due - startOfLocalDay(now)) / DAY_MS));
-}
-function duePhrase(rec, now = Date.now()){
-  const d = dueInDays(rec, now);
-  if(d <= 0) return 'today';
-  if(d === 1) return 'tomorrow';
-  return `in ${d} days`;
-}
+// dueInDays / duePhrase ("tomorrow", "in 7 days") moved to db.js, where
+// app.js can reach them too -- they're globals from the classic script.
+
 // how the room's schedule stands right now, for the menu header
 function reviewSummary(roomKey, now = Date.now()){
   const rec = reviewFor(roomKey);
