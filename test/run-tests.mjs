@@ -21193,6 +21193,103 @@ try {
     ok('Quiz due scope: each question starts at a door of a due room');
   } catch(e){ bad('Quiz due scope: question placement', e); }
 
+  /* --- Q4: the end-of-session change list, and taking it back --- */
+
+  // 412. The summary names every room the session moved and says where it
+  //      now sits. The schedule is the one thing a quiz changes that
+  //      outlives the quiz, so it must not move silently -- and a bare count
+  //      ("2 rooms moved up") leaves you to go and find out which.
+  try {
+    const now = Date.now();
+    await seedReview(r0Key, { last: now - 5 * DAY, due: now + 55 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    await appEN.page.evaluate(() => window.__oqTestHooks.renderChanges());
+    let rows = await appEN.page.evaluate(() => window.__oqTestHooks.changeRows());
+    assert(rows.length === 1, `expected one changed room listed, got ${JSON.stringify(rows)}`);
+    assert(/Solarium/.test(rows[0].text), `expected the room named, got ${JSON.stringify(rows[0].text)}`);
+    assert(/step 4 → 3/.test(rows[0].text), `expected the rung it moved, got ${JSON.stringify(rows[0].text)}`);
+    assert(/now due/.test(rows[0].text),
+      `expected where it now sits -- the consequence, not just the mechanism -- got ${JSON.stringify(rows[0].text)}`);
+    assert(await appEN.page.evaluate(() => window.__oqTestHooks.changesVisible()) === true,
+      'expected the change list shown when something changed');
+
+    // an uncertain-but-right answer reads differently: nothing moved down a
+    // rung, the next review just came closer. Conflating the two would make
+    // "I was guessing" look like a failure.
+    await seedReview(r0Key, { last: now - 1 * DAY, due: now + 55 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.softenUnsureRoom(sq), seqs.r0);
+    await appEN.page.evaluate(() => window.__oqTestHooks.renderChanges());
+    rows = await appEN.page.evaluate(() => window.__oqTestHooks.changeRows());
+    assert(rows.length === 1 && /pulled in/.test(rows[0].text) && !/step/.test(rows[0].text),
+      `expected an uncertain answer reported as a pulled-in review with no rung change, got ${JSON.stringify(rows)}`);
+    ok('Quiz summary: names each room the session moved, and where it now sits');
+  } catch(e){ bad('Quiz summary: the change list', e); }
+
+  // 413. Undo puts the records back EXACTLY as they stood -- due date,
+  //      lapses and grade history included. Rebuilding a record from its
+  //      step number would quietly invent the rest, which is why the ledger
+  //      keeps the whole thing.
+  try {
+    const now = Date.now();
+    const before = { last: now - 5 * DAY, due: now + 55 * DAY, step: 4, lapses: 2, lastGrade: 'A', dirtySeen: ['x'] };
+    await seedReview(r0Key, before);
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert((await reviewOf(r0Key)).step === 3, 'setup: expected the miss to have demoted the room');
+
+    await appEN.page.evaluate(() => window.__oqTestHooks.undoChanges());
+    const restored = await reviewOf(r0Key);
+    assert(JSON.stringify(restored) === JSON.stringify(before),
+      `expected the record restored verbatim, got ${JSON.stringify(restored)} vs ${JSON.stringify(before)}`);
+    const rows = await appEN.page.evaluate(() => window.__oqTestHooks.changeRows());
+    assert(rows.length === 1 && rows[0].undone && /undone/.test(rows[0].text),
+      `expected the row kept but struck through -- the session's history, not a blank slate -- got ${JSON.stringify(rows)}`);
+    const btn = await appEN.page.evaluate(() => window.__oqTestHooks.undoBtn());
+    assert(btn.disabled && /undone/i.test(btn.text),
+      `expected the undo button spent, got ${JSON.stringify(btn)}`);
+
+    // ...and an undone room is still spent for the session. Undoing the
+    // schedule change doesn't make a room you already missed into fresh
+    // evidence, so a second miss must still not demote it.
+    const again = await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+    assert(again && again.reason === 'already',
+      `expected an undone room still spent for the session, got ${JSON.stringify(again)}`);
+    assert((await reviewOf(r0Key)).step === 4, 'expected the restored record left alone by the repeat miss');
+    ok('Quiz summary: undo restores the exact records, and does not re-arm the room');
+  } catch(e){ bad('Quiz summary: undo restores', e); }
+
+  // 414. Undo must not clobber something NEWER. A VR grade made between the
+  //      quiz and the undo is better information than the thing being
+  //      reverted, so that room is left alone -- and said so, not swallowed.
+  try {
+    const now = Date.now();
+    await seedReview(r0Key, { last: now - 5 * DAY, due: now + 55 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appEN.page.evaluate(() => window.__oqTestHooks.setOQ({ demoted: {} }));
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.demoteMissedRoom(sq), seqs.r0);
+
+    // stand in for a grade given in the VR walk (another tab) since the miss
+    const graded = { last: now, due: now + 21 * DAY, step: 3, lapses: 0, lastGrade: 'B' };
+    await seedReview(r0Key, graded);
+
+    await appEN.page.evaluate(() => window.__oqTestHooks.undoChanges());
+    const after = await reviewOf(r0Key);
+    assert(JSON.stringify(after) === JSON.stringify(graded),
+      `expected the newer grade left standing, got ${JSON.stringify(after)}`);
+    const note = await appEN.page.evaluate(() => window.__oqTestHooks.undoNote());
+    assert(/changed elsewhere/i.test(note),
+      `expected the skip reported rather than swallowed, got ${JSON.stringify(note)}`);
+    const rows = await appEN.page.evaluate(() => window.__oqTestHooks.changeRows());
+    assert(rows.length === 1 && !rows[0].undone && /changed elsewhere/i.test(rows[0].text),
+      `expected the row marked out of reach rather than undone, got ${JSON.stringify(rows)}`);
+    // ...and the button settles rather than staying armed for a press that
+    // could only skip the same room again
+    const btn = await appEN.page.evaluate(() => window.__oqTestHooks.undoBtn());
+    assert(btn.disabled, `expected the undo button to settle with nothing left it can undo, got ${JSON.stringify(btn)}`);
+    ok('Quiz summary: undo leaves alone a room something else has changed since');
+  } catch(e){ bad('Quiz summary: undo respects newer changes', e); }
+
   // 408. An unnamed room still gets reported -- most rooms are unnamed while
   //      a castle is being built out, and "moved up for review: (nothing)"
   //      would be useless. The fallback names the moves that reach it.

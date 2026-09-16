@@ -784,6 +784,17 @@
   #oqGiveUpBtn{font-size:.85rem;padding:.25rem .7rem;color:#555}
   #oqGiveUpBtn:disabled{opacity:.4;cursor:default}
   #oqScoreDetail{color:#555;margin-bottom:.5rem}
+  /* what the session did to the review schedule. Left-aligned inside a
+     centered modal on purpose -- it's a list to read down, not a headline. */
+  #oqChanges{display:none;text-align:left;margin:.6rem auto .2rem;max-width:30em;
+             border:1px solid #e0d7c0;background:#fcfaf4;border-radius:4px;padding:.5rem .7rem}
+  #oqChangesTitle{font-weight:700;font-size:.85rem;color:#8a6d1f;margin-bottom:.3rem}
+  #oqChangeList{margin:0 0 .5rem;padding-left:1.1rem;font-size:.85rem;color:#444}
+  #oqChangeList li{margin:.15rem 0}
+  #oqChangeList li.oq-change-undone{text-decoration:line-through;color:#999}
+  #oqUndoBtn{font-size:.85rem;padding:.25rem .7rem}
+  #oqUndoBtn:disabled{opacity:.5;cursor:default}
+  #oqUndoNote{font-size:.8rem;color:#8a6d1f;margin-top:.3rem;min-height:1em}
   .oq-summary-actions{flex-direction:column;gap:.5rem;align-items:stretch}
   .mnem-square{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;cursor:pointer;font-size:.7rem;line-height:1.15;text-align:left;overflow:hidden;padding:2px 2px 2px 2px}
   .mnem-square.light{background:#f0d9b5}
@@ -1704,6 +1715,13 @@
     <div id="oqSummary">
       <div class="quiz-score" id="oqScorePct"></div>
       <div id="oqScoreDetail"></div>
+      <div id="oqChanges">
+        <div id="oqChangesTitle">Review schedule changed</div>
+        <ul id="oqChangeList"></ul>
+        <button type="button" id="oqUndoBtn"
+          title="Put every room listed above back on the schedule it had before this session">Undo these changes</button>
+        <div id="oqUndoNote"></div>
+      </div>
       <div class="modal-actions oq-summary-actions">
         <button id="oqAgainSameBtn">Test again (same choices)</button>
         <button id="oqAgainNewBtn">Test with new choices</button>
@@ -1799,7 +1817,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-61"></script>
+<script src="js/db.js?v=20260804-62"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1816,6 +1834,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-382"></script>
+<script type="module" src="js/app.js?v=20260804-383"></script>
 </body>
 </html>

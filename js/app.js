@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-282';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-283';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-382';
+const BUILD_TAG = '-383';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9396,7 +9396,10 @@ async function oqDemoteMissedRoom(roomSeq){
   const next = demoteRoomReview(rec);
   reviews[key] = next;
   await setRoomReviews(reviews);
-  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name };
+  // `prev` and `next` verbatim, not just the two step numbers: undo has to
+  // put the record back exactly as it stood (due date, lapses, dirtySeen and
+  // all), and rebuilding it from a step would quietly invent the rest.
+  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name, prev: rec, next };
   return { key, name, demoted: OQ.demoted[key], reason: 'demoted' };
 }
 
@@ -9622,8 +9625,108 @@ async function oqSoftenUnsureRoom(roomSeq){
   if(next === rec || next.due === rec.due) return { key, name, demoted: null, reason: 'already-due' };
   reviews[key] = next;
   await setRoomReviews(reviews);
-  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name, kind: 'unsure' };
+  OQ.demoted[key] = { from: rec.step || 0, to: next.step, name, kind: 'unsure', prev: rec, next };
   return { key, name, demoted: OQ.demoted[key], reason: 'softened' };
+}
+
+/* ---------- end-of-session: what this quiz did to the review schedule,
+   and a way to take it back.
+
+   The schedule is the one thing a quiz changes that outlives the quiz, so
+   the summary screen says exactly which rooms moved and where they now sit
+   -- and offers a single undo, because the whole point of a safety net is
+   that you don't have to be sure at the moment you press a button. The
+   undo covers the session as a unit rather than offering a control per
+   room: the misjudgements this is here for ("that whole run was nonsense,
+   I was reading email") are about the sitting, not about one room. */
+
+// every ledger entry IS a real change -- the demote/soften paths return
+// before recording when there was nothing to write -- so this needs no
+// filtering beyond dropping anything malformed.
+function oqScheduleChanges(){
+  return Object.entries((OQ && OQ.demoted) || {})
+    .map(([key, d]) => ({ key, ...d }))
+    .filter(c => c.name && c.next);
+}
+
+/* Puts back every record this session replaced, unless something else has
+   touched it since -- a VR grade in another tab is newer information than
+   the thing we're undoing, and silently reverting it would be the worse
+   surprise. Skipped rooms are counted and reported rather than swallowed.
+
+   Entries stay in the ledger, marked `undone`, instead of being deleted:
+   the ledger is also what stops a room being demoted twice in a session,
+   and an undo doesn't make a room you already missed into fresh evidence
+   again. */
+async function oqUndoScheduleChanges(){
+  const pending = oqScheduleChanges().filter(c => !c.undone);
+  if(!pending.length) return { restored: 0, skipped: 0 };
+  const reviews = await getRoomReviews();
+  let restored = 0, skipped = 0;
+  for(const c of pending){
+    if(!roomReviewMatches(reviews[c.key], c.next)){
+      // marked so the button doesn't stay armed for a press that can only
+      // skip again -- it isn't undone, it's out of reach
+      OQ.demoted[c.key].conflict = true;
+      skipped++; continue;
+    }
+    if(c.prev) reviews[c.key] = c.prev; else delete reviews[c.key];
+    OQ.demoted[c.key].undone = true;
+    restored++;
+  }
+  if(restored) await setRoomReviews(reviews);
+  console.log(`[quiz] undo: ${restored} room(s) restored, ${skipped} left alone (changed since)`);
+  return { restored, skipped };
+}
+
+// What one room's row says. The due date is the actionable half -- "step
+// 3 → 2" is the mechanism, "now due in 4 days" is the consequence -- so
+// both are shown, mechanism in parentheses.
+function oqChangeRowText(c){
+  const when = `now due ${duePhrase(c.next)}`;
+  return c.kind === 'unsure'
+    ? `${c.name} — review pulled in, ${when}`
+    : `${c.name} — moved up a rung (step ${c.from} → ${c.to}), ${when}`;
+}
+function oqRenderChanges(){
+  const box = $('oqChanges');
+  if(!box) return;
+  const changes = oqScheduleChanges();
+  box.style.display = changes.length ? 'block' : 'none';
+  const list = $('oqChangeList');
+  list.innerHTML = '';
+  for(const c of changes){
+    const li = document.createElement('li');
+    li.textContent = oqChangeRowText(c)
+      + (c.undone ? ' (undone)' : c.conflict ? ' (changed elsewhere since — left as it stands)' : '');
+    if(c.undone) li.className = 'oq-change-undone';
+    list.appendChild(li);
+  }
+  const live = changes.filter(c => !c.undone && !c.conflict).length;
+  $('oqUndoBtn').disabled = !live;
+  $('oqUndoBtn').textContent = live
+    ? `Undo ${live === changes.length ? 'these' : 'the remaining'} change${live===1?'':'s'}`
+    : 'Changes undone';
+}
+/* Runs on the same serialized chain as the demotions themselves, so an undo
+   pressed while a last write is still settling can't read a stale map and
+   restore over it. */
+function oqUndoChanges(){
+  $('oqUndoBtn').disabled = true;
+  oqReviewWrites = oqReviewWrites
+    .then(() => oqUndoScheduleChanges())
+    .then(res => {
+      oqRenderChanges();
+      $('oqUndoNote').textContent = res.skipped
+        ? `${res.restored} restored · ${res.skipped} left alone (changed elsewhere since)`
+        : '';
+    })
+    .catch(err => {
+      console.error('[quiz] could not undo the schedule changes', err);
+      $('oqUndoNote').textContent = 'Could not undo those changes — see the console.';
+      oqRenderChanges();
+    });
+  return oqReviewWrites;
 }
 
 function oqUpdateGiveUp(){
@@ -9762,16 +9865,16 @@ function oqFinish(){
   const total = OQ.hits + OQ.misses;
   const pct = total ? Math.round(OQ.hits / total * 100) : 0;
   $('oqScorePct').textContent = total ? `${pct}%` : 'No moves to test';
-  // a schedule that moved silently is what erodes trust in the schedule --
-  // same reasoning as the VR walk's own "N changed rooms moved up" toast.
-  // named, not just counted: "2 rooms moved up" leaves you to go and find
-  // out which, and the names are the actionable part.
-  const movedNames = Object.values(OQ.demoted || {}).map(d => d.name).filter(Boolean);
   $('oqScoreDetail').textContent = total
     ? `${OQ.hits} hit${OQ.hits===1?'':'s'}, ${OQ.misses} miss${OQ.misses===1?'':'es'}` +
-      (OQ.mode === 'session' ? ` across ${OQ.questionsTotal} question${OQ.questionsTotal===1?'':'s'}` : '') +
-      (movedNames.length ? ` · moved up for review: ${movedNames.join(', ')}` : '')
+      (OQ.mode === 'session' ? ` across ${OQ.questionsTotal} question${OQ.questionsTotal===1?'':'s'}` : '')
     : '';
+  // a schedule that moved silently is what erodes trust in the schedule --
+  // same reasoning as the VR walk's own "N changed rooms moved up" toast.
+  // Named and dated, not just counted: "2 rooms moved up" leaves you to go
+  // and find out which, and where they landed is the actionable part.
+  $('oqUndoNote').textContent = '';
+  oqRenderChanges();
   // "same choices" replay isn't tracked across a whole multi-question session
   // (only within one question) -- only offer it after a single row-quiz run.
   $('oqAgainSameBtn').style.display = OQ.mode === 'session' ? 'none' : '';
@@ -10042,6 +10145,7 @@ $('oqExitBtn').onclick = ()=>{
 };
 $('oqUnsureBtn').onclick = ()=> oqToggleUnsure();
 $('oqGiveUpBtn').onclick = ()=> oqGiveUp();
+$('oqUndoBtn').onclick = ()=> oqUndoChanges();
 $('oqAgainSameBtn').onclick = ()=> oqRun(true);
 $('oqAgainNewBtn').onclick  = ()=>{
   if(OQ && OQ.mode === 'session') OQ.questionIndex = 1;
@@ -10074,6 +10178,14 @@ if(localStorage.getItem('threeTestDebug')){
     toggleUnsure: () => oqToggleUnsure(),
     unsureBtn: () => { const b = $('oqUnsureBtn'); return b ? { disabled: b.disabled, armed: b.classList.contains('armed'), text: b.textContent } : null; },
     softenUnsureRoom: (roomSeq) => oqSoftenUnsureRoom(roomSeq),
+    // Q4: the end-of-session change list and its undo.
+    renderChanges: () => { oqRenderChanges(); },
+    changeRows: () => Array.from(document.querySelectorAll('#oqChangeList li'))
+      .map(li => ({ text: li.textContent, undone: li.classList.contains('oq-change-undone') })),
+    undoBtn: () => { const b = $('oqUndoBtn'); return b ? { disabled: b.disabled, text: b.textContent } : null; },
+    undoChanges: () => oqUndoChanges(),
+    undoNote: () => { const n = $('oqUndoNote'); return n ? n.textContent : null; },
+    changesVisible: () => { const b = $('oqChanges'); return b ? b.style.display !== 'none' : null; },
     dueRooms: async (coverageVal) => {
       const lines = await getLines(LOCAL_USER);
       const sel = await resolveCoverageSelection(coverageVal, lines);
