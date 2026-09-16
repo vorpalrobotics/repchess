@@ -5195,6 +5195,51 @@ try {
     assert(hit.insideVR, `expected the VR canvas to be the top-stacked element under the digraph, got ${JSON.stringify(hit)}`);
     ok('VR overlay stacks above a still-open digraph overlay (clicks reach the canvas, not the graph backdrop)');
   } catch(e){ bad('VR overlay z-index stacks above the digraph overlay left open underneath', e); }
+
+  // 94. The round trip the whole jump feature exists for: jump from the
+  //     Review lens into a room that needs reviewing, review it, come back.
+  //     The graph is left open underneath the whole time (tests 92-93), so
+  //     it is still showing what it computed BEFORE the grade -- and until
+  //     this was wired up, the room you had just reviewed came back still
+  //     reading overdue, which is exactly the state the lens exists to
+  //     highlight. Drives the real VR Close button, so it covers the
+  //     wiring and not just the restyle.
+  try {
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    const graphStateOf = (k) => appAF.page.evaluate((key) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === key);
+      if(!n.nonempty()) return null;
+      return { rev: n.classes().find(c => c.startsWith('rev-')) || null, label: n.data('label') };
+    }, roomKey);
+
+    const before = await graphStateOf(roomKey);
+    assert(before && before.rev === 'rev-none' && !/🧠/u.test(before.label),
+      `setup: expected the room to start unmemorized in the open graph: ${JSON.stringify(before)}`);
+
+    await appAF.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appAF.page.waitForTimeout(150);
+    await appAF.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    await appAF.page.waitForFunction(() => !!window.__threeTestEdit.memorized(), { timeout: 5000 });
+    await appAF.page.evaluate(() => window.__threeTestEdit.gradeCurrentRoom('A'));
+    await appAF.page.waitForFunction(() => {
+      const r = window.__threeTestEdit.reviewFor();
+      return !!(r && r.lastGrade === 'A');
+    }, { timeout: 5000 });
+
+    await closeVRHelper(appAF.page);
+    // the close handler's refresh is async; the glyph is the visible result
+    await appAF.page.waitForFunction((key) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === key);
+      return n.nonempty() && /🧠/u.test(n.data('label'));
+    }, roomKey, { timeout: 5000 });
+
+    const after = await graphStateOf(roomKey);
+    assert(after.rev && after.rev !== 'rev-none',
+      `expected the graph to pick up the room's new schedule on VR close, got ${JSON.stringify(after)}`);
+    assert(after.rev === 'rev-notdue' || after.rev === 'rev-soon',
+      `a room just graded 'A' should not read due or overdue, got ${JSON.stringify(after)}`);
+    ok('Jump round trip: grading a room in VR updates the graph left open behind it');
+  } catch(e){ bad('Jump round trip: graph refresh on VR close', e); }
 } finally {
   await appAF.close();
 }
@@ -20320,6 +20365,75 @@ try {
       'expected a long-past record to read overdue');
     ok('Graph review: each room is coloured by its own stored due date');
   } catch(e){ bad('Graph review: due-state scoring', e); }
+
+  // 379b. A room graded elsewhere reaches an ALREADY-OPEN graph, in place.
+  //       You can jump into VR from the Review lens, grade the overdue room
+  //       you went to look at, and come back -- and the graph was showing
+  //       what it computed before you left, so the room you had just
+  //       reviewed still read as overdue. VR close runs this same restyle.
+  //
+  //       It must be a RESTYLE, not a rebuild: a rebuild costs a spinner and
+  //       seconds on a real repertoire, and throws away pan/zoom and any
+  //       manual arrangement -- so this pins the cytoscape instance and the
+  //       node's position as unchanged, which is the whole point of the
+  //       design and the thing a "just call showTranspositionGraph()" fix
+  //       would quietly lose.
+  try {
+    const DAY = 86400000, now = Date.now();
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 0, lapses: 2, lastGrade: 'C' } });
+    await reopenGraph();
+    assert(await revClassOf(rootKey) === 'rev-overdue', 'setup: expected the room to start overdue');
+
+    const before = await appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return { cy: (window.__graphTestHooks.cy().nodes().length), pos: { ...n.position() } };
+    }, rootKey);
+
+    // stands in for the grade made in VR, with the graph left open behind it
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now, due: now + 30 * DAY, step: 4, lapses: 2, lastGrade: 'A' } });
+    assert(await revClassOf(rootKey) === 'rev-overdue',
+      'setup: the open graph should still be stale until the refresh runs');
+
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    assert(await revClassOf(rootKey) === 'rev-notdue',
+      'expected a room graded while the graph was open to stop reading overdue once VR closes');
+
+    const after = await appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return { cy: (window.__graphTestHooks.cy().nodes().length), pos: { ...n.position() } };
+    }, rootKey);
+    assert(after.cy === before.cy && after.pos.x === before.pos.x && after.pos.y === before.pos.y,
+      `expected an in-place restyle, not a rebuild: ${JSON.stringify({ before, after })}`);
+    ok('Graph review: a grade made while the graph is open restyles it in place, without a rebuild');
+  } catch(e){ bad('Graph review: in-place refresh after a grade', e); }
+
+  // 379c. The same refresh carries the memorized 🧠 glyph, and doesn't
+  //       duplicate it when run twice -- the label is rebuilt from the part
+  //       that isn't state, so a second pass has to be a no-op.
+  try {
+    const key = rootKey;
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, false), key);
+    await reopenGraph();
+    const labelOfKey = () => appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return n.nonempty() ? n.data('label') : null;
+    }, key);
+    const bare = await labelOfKey();
+    assert(!/🧠/u.test(bare), `setup: expected no brain glyph to start: ${JSON.stringify(bare)}`);
+
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), key);
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    const marked = await labelOfKey();
+    assert(/🧠/u.test(marked), `expected the brain glyph after the refresh: ${JSON.stringify(marked)}`);
+
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    const twice = await labelOfKey();
+    assert(twice === marked, `expected a second refresh to change nothing, got ${JSON.stringify(twice)} vs ${JSON.stringify(marked)}`);
+    assert((twice.match(/🧠/gu) || []).length === 1, `expected exactly one brain glyph, got ${JSON.stringify(twice)}`);
+    ok('Graph review: the refresh updates the memorized glyph, and is idempotent');
+  } catch(e){ bad('Graph review: refresh glyph handling', e); }
 
   // 380. The three lenses are mutually exclusive -- one fill per node, so
   //      switching must swap both the class and the legend, never stack them.
