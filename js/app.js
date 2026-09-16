@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-385';
+const BUILD_TAG = '-386';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2495,8 +2495,11 @@ async function refreshGraphRoomState(){
       // Decoration is the only completeness input VR can change, and it only
       // decides between these two -- the atom score is a mnemonics-vocabulary
       // question that can't move from in there. So a node scored on its atoms
-      // (cmp-noword / cmp-noimg) is left exactly as it is.
-      if(n.hasClass('cmp-ok') || n.hasClass('cmp-undecorated')){
+      // (cmp-noword / cmp-noimg) is left exactly as it is, and so is one with
+      // no decoration work to judge (roomIsDecorable), which the render
+      // already settled as cmp-ok and must not be flipped back here.
+      if(roomIsDecorable(roomKey, n.data('lockedDeadEnd'))
+         && (n.hasClass('cmp-ok') || n.hasClass('cmp-undecorated'))){
         n.toggleClass('cmp-undecorated', !decorated);
         n.toggleClass('cmp-ok', decorated);
       }
@@ -2593,6 +2596,22 @@ let GRAPH_VIEW_MODE = 'normal';
 // `cy` itself is local to showTranspositionGraph (one per render); this just
 // holds the current one, and is cleared when the overlay closes.
 let GRAPH_CY = null;
+/* Is there any decoration work to judge this node on?
+
+   Two cases where there isn't. A node with no roomKey isn't a castle room at
+   all. And a LOCKED DEAD END is a room you cannot walk into -- all you can
+   give it is its name, on the sign over the locked door -- so scoring it "not
+   decorated yet" asks for work that cannot be done, and leaves a node that
+   can never go green no matter what you do.
+
+   Its atom score still applies either way: the move mnemonic lives on the
+   door LEADING to the room, which you can see and use perfectly well, so a
+   locked room still reports needing a word or an image.
+
+   One function because the full render and the in-place refresh both have to
+   agree about this, and they sit hundreds of lines apart. */
+function roomIsDecorable(roomKey, lockedDeadEnd){ return !!roomKey && !lockedDeadEnd; }
+
 function pairCompleteness(seq, mnem){
   const atoms = [lastMoveInfo(seq), lastMoveInfo((seq || []).slice(0, -1))].filter(Boolean);
   if(!atoms.length) return 'none';
@@ -2938,11 +2957,12 @@ async function showTranspositionGraph(){
         // once 'cmode' joins it -- see updateGraphViewMode.
         // atoms first (a room with no word yet can't be judged on decoration
         // -- there's nothing to put on the wall). Only once its vocabulary is
-        // complete does "is this room actually built out" become the question.
-        // A node with no roomKey isn't a castle room at all, so there's no
-        // decoration state to judge and it stays at its atom score.
+        // complete does "is this room actually built out" become the question,
+        // and only for a room there's anything to build out -- see
+        // roomIsDecorable for the two cases where there isn't.
         const atomState = pairCompleteness(r.seq, mnemForGraph);
-        const cmp = 'cmp-' + (atomState === 'ok' && roomKey && !decorated ? 'undecorated' : atomState);
+        const cmp = 'cmp-' + (atomState === 'ok' && roomIsDecorable(roomKey, data.lockedDeadEnd) && !decorated
+          ? 'undecorated' : atomState);
         // review lens, same ride-along treatment. A memorized room with no
         // graded record yet still has a schedule (bootstrapped from when it
         // was memorized -- see db.js effectiveRoomReview), so an existing
