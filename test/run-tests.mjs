@@ -19624,6 +19624,10 @@ try {
   //   d4,Nf6,c4        c4 pawn  word+image  -> atoms ok (decoration decides)
   //   …,c4,e6,Nc3      c3 knight word only  -> noimg
   //   …,c4,g6,g3       g3 pawn   unseeded   -> noword
+  //   …,c4,d6,Nf3      f3 knight word+image -> atoms ok, but a LOCKED
+  //                    DEAD END, so no decoration to judge (test 352c)
+  // Three branches, not two: two sibling runs off a head pair into a single
+  // two-track room, and the dead end has to be a room of its own.
   // The pre-castle d4 room has no roomKey at all, covering the "not a castle
   // room, so stays at its atom score" path.
   await seedBackup(appEC.page, {
@@ -19632,10 +19636,12 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      { seq: ['d4','Nf6','c4','d6'], reply: 'Nf3' },
     ]}],
     games: [
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 d6 Nf3', white: 'a', black: 'b', result: '*' },
     ],
     mnemonics: [
       // opponent-move atoms, complete throughout, so they never decide a score
@@ -19645,6 +19651,10 @@ try {
       { square: 'd4', pawn: 'door', pawnImg: 'data:image/png;base64,AAA' },
       { square: 'c4', pawn: 'cart', pawnImg: 'data:image/png;base64,AAA' },
       { square: 'c3', knight: 'cane' },   // word, no image
+      // the locked-dead-end case: atoms COMPLETE, so only decoration could
+      // drag it down -- and there is no decoration to judge (test 352c)
+      { square: 'd6', pawn: 'dice', pawnImg: 'data:image/png;base64,AAA' },
+      { square: 'f3', knight: 'fence', knightImg: 'data:image/png;base64,AAA' },
       // g3 deliberately absent entirely -> noword
     ],
   }, { defaultPlayerColor: 'white' });
@@ -19697,6 +19707,154 @@ try {
     assert(/\bcmp-ok\b/.test(after), `expected a decorated room with complete atoms to score ok, got "${after}"`);
     ok('Graph completeness: complete atoms still score "not decorated" until the room itself is built out');
   } catch(e){ bad('Graph completeness: decoration folded into the score', e); }
+
+  // 352c. A LOCKED DEAD END is not "incomplete". You cannot walk into it, so
+  //       there is nothing to decorate -- all you can give such a room is its
+  //       name, on the sign over the locked door. Scoring it "not decorated
+  //       yet" asked for work that cannot be done and left a node that could
+  //       never go green however much you did.
+  //
+  //       Its ATOM score still applies: the move mnemonic lives on the door
+  //       LEADING to the room, which you can see and use perfectly well. So
+  //       this must not become a blanket exemption -- the two dead ends with
+  //       incomplete atoms (Nc3, g3) still report exactly what they're
+  //       missing, and that's re-asserted here rather than assumed.
+  try {
+    const node = await appEC.page.evaluate(() => {
+      const n = window.__graphTestHooks.cy().nodes()
+        .filter(x => (x.data('seq') || []).join(',') === 'd4,Nf6,c4,d6,Nf3');
+      return n.nonempty()
+        ? { classes: n.classes().join(' '), roomKey: n.data('roomKey'), locked: n.data('lockedDeadEnd') }
+        : null;
+    });
+    assert(node, 'setup: expected the Nf3 dead-end node in the graph');
+    assert(node.locked === true,
+      `setup: expected Nf3 to be a locked dead end, got ${JSON.stringify(node)}`);
+    assert(node.roomKey,
+      `setup: expected it to be a room of its OWN (three branches), got ${JSON.stringify(node)}`);
+    assert(/\bcmp-ok\b/.test(node.classes),
+      `a locked room you cannot enter has no decoration to judge -- expected cmp-ok, got "${node.classes}"`);
+    assert(!/\bcmp-undecorated\b/.test(node.classes),
+      `expected no "not decorated yet" score on a room that can never be decorated: "${node.classes}"`);
+
+    // ...and the exemption is about DECORATION only, not about atoms
+    const bySeq = Object.fromEntries((await classesBySeq()).map(n => [n.seq, n.classes]));
+    assert(/\bcmp-noimg\b/.test(bySeq['d4,Nf6,c4,e6,Nc3'] || ''),
+      `a locked dead end still reports a missing image, got "${bySeq['d4,Nf6,c4,e6,Nc3']}"`);
+    assert(/\bcmp-noword\b/.test(bySeq['d4,Nf6,c4,g6,g3'] || ''),
+      `a locked dead end still reports a missing word, got "${bySeq['d4,Nf6,c4,g6,g3']}"`);
+    ok('Graph completeness: a locked dead end is not scored "undecorated", but still reports its atoms');
+  } catch(e){ bad('Graph completeness: locked dead end exemption', e); }
+
+  // 352d. The in-place refresh (VR close) must agree with the full render
+  //       about that exemption. It re-derives the ok/undecorated pair from
+  //       the decorated flag, so without the same check it would flip a
+  //       locked room straight back to "not decorated" the first time you
+  //       came out of VR -- the original bug, reappearing a few seconds later.
+  try {
+    await appEC.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    const classes = await appEC.page.evaluate(() =>
+      window.__graphTestHooks.cy().nodes()
+        .filter(x => (x.data('seq') || []).join(',') === 'd4,Nf6,c4,d6,Nf3').classes().join(' '));
+    assert(/\bcmp-ok\b/.test(classes) && !/\bcmp-undecorated\b/.test(classes),
+      `expected the refresh to leave a locked room alone, got "${classes}"`);
+    ok('Graph completeness: the in-place refresh honours the locked-room exemption too');
+  } catch(e){ bad('Graph completeness: refresh honours the exemption', e); }
+
+  // 352e. The exemption is per generated ROOM, not per node. The last
+  //       position of a merged corridor has no forward move either, but the
+  //       corridor is walked into normally and is perfectly decorable --
+  //       keying this off a node's own out-degree would have quietly exempted
+  //       the tail of every corridor, and a corridor's nodes would then
+  //       disagree with each other about a room they all share.
+  try {
+    const corridor = await appEC.page.evaluate(() => {
+      // every node grouped by the room it resolves to, for rooms holding more
+      // than one position (i.e. a merged corridor / two-track room)
+      const byRoom = {};
+      for(const n of window.__graphTestHooks.cy().nodes()){
+        const k = n.data('roomKey');
+        if(!k) continue;
+        (byRoom[k] ||= []).push({ seq: (n.data('seq') || []).join(','), classes: n.classes().join(' ') });
+      }
+      const multi = Object.entries(byRoom).find(([, ns]) => ns.length > 1);
+      return multi ? { key: multi[0], nodes: multi[1] } : null;
+    });
+    if(corridor){
+      const scores = corridor.nodes.map(n => (n.classes.match(/\bcmp-[a-z]+\b/) || [''])[0]);
+      assert(new Set(scores).size === 1,
+        `every position of one room must agree about that room's decoration state, got ${JSON.stringify(corridor.nodes.map((n,i)=>({seq:n.seq,cmp:scores[i]})))}`);
+      ok(`Graph completeness: a merged room's positions agree (${corridor.nodes.length} nodes, all ${scores[0]})`);
+    } else {
+      ok('Graph completeness: no merged room in this fixture to check node agreement on (skipped)');
+    }
+  } catch(e){ bad('Graph completeness: merged-room node agreement', e); }
+
+  // 352f. Review lens: a locked room reports its OWNER's schedule.
+  //       Same problem as the completeness one and the user's own framing of
+  //       it: you can't walk in, so you can't mark it memorized, and grey
+  //       "not memorized yet" claims work that cannot be done. What you
+  //       actually memorize is the room whose DOOR leads to it -- the same
+  //       attribution the board quiz uses for a missed move. So it should
+  //       light up with that room, not sit grey beside it.
+  try {
+    const locked = await appEC.page.evaluate(() => {
+      const n = window.__graphTestHooks.cy().nodes()
+        .filter(x => (x.data('seq') || []).join(',') === 'd4,Nf6,c4,d6,Nf3');
+      return { roomKey: n.data('roomKey'), reviewKey: n.data('reviewRoomKey') };
+    });
+    assert(locked.reviewKey && locked.reviewKey !== locked.roomKey,
+      `expected the locked room to be reviewed against its owner, got ${JSON.stringify(locked)}`);
+
+    const revOf = (seq) => appEC.page.evaluate((s) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => (x.data('seq') || []).join(',') === s);
+      return n.nonempty() ? (n.classes().find(c => c.startsWith('rev-')) || null) : null;
+    }, seq);
+    assert(await revOf('d4,Nf6,c4,d6,Nf3') === 'rev-none', 'setup: nothing memorized yet');
+
+    // memorize + overdue the OWNER, and the locked room must follow it
+    const DAY = 86400000, now = Date.now();
+    await appEC.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), locked.reviewKey);
+    await appEC.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: locked.reviewKey, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 0, lapses: 1, lastGrade: 'C' } });
+    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
+
+    assert(await revOf('d4,Nf6,c4,d6,Nf3') === 'rev-overdue',
+      'expected the locked room to report its owner\'s overdue schedule, not sit grey beside it');
+
+    // and the in-place refresh has to agree, same as for completeness
+    await appEC.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: locked.reviewKey, r: { last: now, due: now + 30 * DAY, step: 4, lapses: 1, lastGrade: 'A' } });
+    await appEC.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    assert(await revOf('d4,Nf6,c4,d6,Nf3') === 'rev-notdue',
+      'expected the refresh to follow the owner too');
+    ok("Graph review: a locked room reports the schedule of the room whose door leads to it");
+  } catch(e){ bad('Graph review: locked room inherits its owner', e); }
+
+  // 352g. The coverage bars use the same rule. Counting rooms you can never
+  //       walk into in the denominator means the bars can never fill however
+  //       much work you actually do -- a progress bar with an unreachable end
+  //       is worse than no bar. This fixture has 4 generated rooms, 2 of them
+  //       locked dead ends, so the denominator must read 2.
+  try {
+    const bars = await appEC.page.evaluate(() =>
+      [...document.querySelectorAll('#graphCoverage .graph-coverage-row')].map(r => ({
+        label: r.querySelector('.graph-coverage-label').textContent,
+        value: r.querySelector('.graph-coverage-value').textContent,
+      })));
+    const rooms = bars.filter(b => /Rooms (memorized|decorated)/.test(b.label));
+    assert(rooms.length === 2, `setup: expected both room bars, got ${JSON.stringify(bars)}`);
+    const total = await appEC.page.evaluate(() =>
+      (document.getElementById('graphStatus').textContent.match(/(\d+) castle room/) || [])[1]);
+    for(const b of rooms){
+      const denom = Number((b.value.match(/\/(\d+)/) || [])[1]);
+      assert(denom > 0 && denom < Number(total),
+        `expected ${b.label} measured against enterable rooms only (fewer than the ${total} generated), got "${b.value}"`);
+    }
+    ok(`Graph coverage: room bars are measured against rooms you can actually walk into (${rooms[0].value} of ${total} generated)`);
+  } catch(e){ bad('Graph coverage: locked rooms out of the denominator', e); }
 
   // 353. The mode itself: Normal by default, and switching lens only adds/
   //      removes the 'cmode' class -- no re-render, so node identity (and the
@@ -20300,9 +20458,13 @@ try {
       { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Test Castle', castleStreetNumber: 1 },
       { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','g6'], reply: 'g3' },
+      // gives the e6 branch a continuation, so Nc3+e3 merge into a CORRIDOR:
+      // a second room that can actually be walked into and memorized. Without
+      // it every room but the castle root is a locked dead end.
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
     ]}],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 g3', white: 'a', black: 'b', result: '*' },
     ],
   }, { defaultPlayerColor: 'white' });
@@ -20329,7 +20491,15 @@ try {
   const allKeys = [...new Set(Object.values(roomKeys))];
   if(allKeys.length < 2) throw new Error(`setup: expected at least two castle rooms with roomKeys, got ${JSON.stringify(roomKeys)}`);
   const rootKey = roomKeys['d4,Nf6,c4'] || allKeys[0];
-  const branchKey = allKeys.find(k => k !== rootKey);
+  // an ENTERABLE second room. The two obvious candidates (Nc3, g3) are
+  // locked -- no exits at all, so there is no way to walk in and no way to
+  // mark them memorized -- and they now report their owner's schedule rather
+  // than their own, so seeding a record on one would test nothing.
+  const enterableKeys = await appEH.page.evaluate(() => [...new Set(
+    window.__graphTestHooks.cy().nodes()
+      .filter(n => !!n.data('roomKey') && n.data('reviewRoomKey') === n.data('roomKey'))
+      .map(n => n.data('roomKey')))]);
+  const branchKey = enterableKeys.find(k => k !== rootKey);
 
   // 378. A room that was never memorized has no schedule at all, and must
   //      read differently from one that's memorized and simply not due --
