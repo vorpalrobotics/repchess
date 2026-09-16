@@ -1659,26 +1659,29 @@ async function renderPicker(ov){
       };
       grid.appendChild(card);
     }
-    // "Tint…" recolors whatever real asset is already assigned, in place, as a
-    // per-placement override -- distinct from "Color…" above, which replaces
-    // the surface with a flat color outright. Only offered once a real asset
-    // (not a flat color, not empty) is actually assigned to recolor.
-    if(pickerOpts.allowTint && curId && curId[0] !== '#'){
-      const curTint = pickerOpts.currentTint || null;
+    // "Adjust…" recolors and/or re-exposes whatever real asset is already
+    // assigned, in place, as a per-placement override -- distinct from
+    // "Color…" above, which replaces the surface with a flat color outright.
+    // Only offered once a real asset (not a flat color, not empty) is
+    // actually assigned to adjust.
+    if(pickerOpts.allowAdjust && curId && curId[0] !== '#'){
+      const cur = pickerOpts.currentAdjust || { tint: null, brightness: 1, contrast: 1 };
+      const on = !!(cur.tint || isSurfaceAdjusted(cur));
       const card = document.createElement('div');
-      card.className = 'asset-card asset-card-tint' + (curTint ? ' asset-card-current' : '');
+      card.className = 'asset-card asset-card-tint' + (on ? ' asset-card-current' : '');
       card.innerHTML = `
-        <div class="asset-thumb color-tile-thumb">${curTint ? `<div class="color-tile-current" style="background:${esc(curTint)}"></div>` : '<i class="fa-solid fa-fill-drip"></i>'}</div>
-        <div class="asset-id">Tint…${curTint ? ` ${esc(curTint)} ✓` : ''}</div>
-        <div class="asset-type">Recolor this asset</div>
+        <div class="asset-thumb color-tile-thumb">${cur.tint ? `<div class="color-tile-current" style="background:${esc(cur.tint)}"></div>` : '<i class="fa-solid fa-fill-drip"></i>'}</div>
+        <div class="asset-id">Adjust…${on ? ' ✓' : ''}</div>
+        <div class="asset-type">${on ? esc(adjustSummary(cur)) : 'Tint &amp; brightness'}</div>
       `;
       card.onclick = () => {
-        const { onTintPick, onTintRemove } = pickerOpts;
+        const { onAdjustApply, currentImage } = pickerOpts;
         closePicker();
-        openColorSwatchPicker({
-          current: curTint,
-          onPick: hex => { if(onTintPick) onTintPick(hex); },
-          onRemove: curTint ? () => { if(onTintRemove) onTintRemove(); } : null,
+        openSurfaceAdjustDialog({
+          current: cur,
+          image: currentImage,
+          onApply: adj => { if(onAdjustApply) onAdjustApply(adj); },
+          onRemove: on ? () => { if(onAdjustApply) onAdjustApply(null); } : null,
         });
       };
       grid.appendChild(card);
@@ -1760,6 +1763,158 @@ async function addRecentColor(hex){
 }
 
 /* opts = { current: '#hex'|null, onPick: fn(hex), onRemove: fn()|null } */
+/* ---------- per-placement surface adjustment ----------
+   Tint + brightness + contrast for one placement of one asset, with a live
+   preview. See db.js surfaceAdjustFilter for why brightness/contrast are a
+   texture pass while the tint stays on the material.
+
+   ORDER MATTERS and is the same here as in the world: brightness/contrast
+   first (a texture pass), then the tint (a multiply). Contrast does not
+   commute with a multiply, so drawing them the other way round would make the
+   preview disagree with the wall.
+
+   The tint is previewed with a 'multiply' composite, which is an sRGB-space
+   multiply where the shader's is linear-space -- but a pure multiply is very
+   nearly gamma-invariant ((t^g * k^g)^(1/g) == t*k), so the two agree
+   everywhere except the deepest shadows. Brightness and contrast are NOT
+   gamma-invariant, which is exactly why they run through the identical
+   ctx.filter call on both sides instead of being approximated here. */
+function adjustSummary(adj){
+  const bits = [];
+  if(adj.tint) bits.push(adj.tint);
+  if(Number(adj.brightness) !== 1) bits.push(`bright ${Number(adj.brightness).toFixed(2)}`);
+  if(Number(adj.contrast) !== 1) bits.push(`contrast ${Number(adj.contrast).toFixed(2)}`);
+  return bits.join(' · ') || 'Tint & brightness';
+}
+function paintAdjustPreview(canvas, img, adj){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.filter = 'none';
+  ctx.clearRect(0, 0, w, h);
+  if(!img){
+    ctx.fillStyle = '#eee'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#888'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('no preview available', w / 2, h / 2);
+    return;
+  }
+  ctx.filter = surfaceAdjustFilter(adj.brightness, adj.contrast) || 'none';
+  // tiled, not one stretched copy -- a surface asset repeats across a wall,
+  // and a single blown-up copy hides both the repeat and the seams
+  const tile = Math.max(8, Math.round(w / 3));
+  for(let y = 0; y < h; y += tile) for(let x = 0; x < w; x += tile) ctx.drawImage(img, x, y, tile, tile);
+  ctx.filter = 'none';
+  if(adj.tint){
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = adj.tint;
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+async function openSurfaceAdjustDialog(opts){
+  let ov = document.getElementById('surfaceAdjustOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'surfaceAdjustOverlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '65';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  const adj = {
+    tint: (opts.current && opts.current.tint) || null,
+    brightness: clampSurfaceAdjust(opts.current && opts.current.brightness),
+    contrast: clampSurfaceAdjust(opts.current && opts.current.contrast),
+  };
+  const recent = await getRecentColors();
+  const swatchRow = (colors) => colors.map(hex => `
+    <div class="color-swatch" style="background:${esc(hex)}" data-hex="${esc(hex)}" title="${esc(hex)}"></div>
+  `).join('');
+  const slider = (id, label, value) => `
+    <div class="sa-slider-row">
+      <label for="${id}">${label}</label>
+      <input type="range" id="${id}" min="${SURFACE_ADJUST_MIN}" max="${SURFACE_ADJUST_MAX}"
+             step="${SURFACE_ADJUST_STEP}" value="${value}">
+      <span class="sa-slider-val" id="${id}Val">${Number(value).toFixed(2)}</span>
+    </div>
+  `;
+  ov.innerHTML = `
+    <div class="modal" style="width:min(34em,92vw);max-height:88vh;display:flex;flex-direction:column;overflow:auto">
+      <div class="cp-header">
+        <h2>Adjust Surface</h2>
+        <button id="saCancelBtn">Cancel</button>
+      </div>
+      <canvas id="saPreview" class="sa-preview" width="384" height="192"></canvas>
+      <p class="sa-note">Preview is unlit — the room's own lighting will read darker.</p>
+      ${slider('saBrightness', 'Brightness', adj.brightness)}
+      ${slider('saContrast', 'Contrast', adj.contrast)}
+      <p class="color-swatch-label">Tint (optional)</p>
+      ${recent.length ? `<div class="color-swatch-grid">${swatchRow(recent)}</div>` : ''}
+      <div class="color-swatch-grid">${swatchRow(PRESET_SURFACE_COLORS)}</div>
+      <div class="side-color-row" style="margin-top:.5rem">
+        <div class="side-color-swatch" id="saTintSwatch"></div>
+        <input type="text" id="saTintHex" placeholder="#rrggbb (none)" value="${esc(adj.tint || '')}">
+        <input type="color" id="saTintNative" value="${esc(adj.tint || '#cccccc')}">
+        <button id="saClearTintBtn">Clear tint</button>
+      </div>
+      <div class="assets-editor-actions" style="margin-top:.8rem">
+        <div class="left"><button id="saResetBtn">Reset</button></div>
+        ${opts.onRemove ? `<button id="saRemoveBtn" style="background:#c62828;color:#fff">Remove all</button>` : ''}
+        <button id="saApplyBtn">Apply</button>
+      </div>
+    </div>
+  `;
+  const canvas = ov.querySelector('#saPreview');
+  const tintSwatch = ov.querySelector('#saTintSwatch');
+  const tintHex = ov.querySelector('#saTintHex');
+  const tintNative = ov.querySelector('#saTintNative');
+  let img = null;
+  const repaint = () => {
+    tintSwatch.style.background = adj.tint || 'transparent';
+    ov.querySelector('#saBrightnessVal').textContent = adj.brightness.toFixed(2);
+    ov.querySelector('#saContrastVal').textContent = adj.contrast.toFixed(2);
+    paintAdjustPreview(canvas, img, adj);
+  };
+  repaint();
+  if(opts.image){
+    img = new Image();
+    img.onload = repaint;                   // repaint once the texture is decoded
+    img.onerror = () => { img = null; repaint(); };
+    img.src = opts.image;
+  }
+  ov.querySelector('#saBrightness').oninput = e => { adj.brightness = clampSurfaceAdjust(e.target.value); repaint(); };
+  ov.querySelector('#saContrast').oninput = e => { adj.contrast = clampSurfaceAdjust(e.target.value); repaint(); };
+  const setTint = (hex) => {
+    adj.tint = hex;
+    tintHex.value = hex || '';
+    if(hex) tintNative.value = hex;
+    repaint();
+  };
+  ov.querySelectorAll('.color-swatch').forEach(el => { el.onclick = () => setTint(el.dataset.hex); });
+  tintHex.oninput = () => {
+    const v = tintHex.value.trim();
+    adj.tint = HEX_RE.test(v) ? v : null;
+    if(adj.tint) tintNative.value = adj.tint;
+    repaint();
+  };
+  tintNative.oninput = () => setTint(tintNative.value);
+  ov.querySelector('#saClearTintBtn').onclick = () => setTint(null);
+  ov.querySelector('#saResetBtn').onclick = () => {
+    adj.brightness = 1; adj.contrast = 1;
+    ov.querySelector('#saBrightness').value = '1';
+    ov.querySelector('#saContrast').value = '1';
+    setTint(null);
+  };
+  const close = () => { ov.style.display = 'none'; };
+  ov.querySelector('#saCancelBtn').onclick = close;
+  ov.querySelector('#saApplyBtn').onclick = () => {
+    if(adj.tint) addRecentColor(adj.tint);
+    close();
+    opts.onApply({ tint: adj.tint, brightness: adj.brightness, contrast: adj.contrast });
+  };
+  if(opts.onRemove) ov.querySelector('#saRemoveBtn').onclick = () => { close(); opts.onRemove(); };
+}
+
 async function openColorSwatchPicker(opts){
   let ov = document.getElementById('colorSwatchPickerOverlay');
   if(!ov){

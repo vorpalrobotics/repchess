@@ -653,6 +653,21 @@
   #cswHexInput{flex:1 1 auto;width:auto;padding:.3rem .4rem;font-size:.9rem}
   #cswNativeInput{flex:0 0 auto;width:2.4rem;height:1.95rem;padding:0;border:1px solid #bbb;border-radius:4px;cursor:pointer}
 
+  /* per-placement surface adjustment (tint + brightness/contrast) */
+  #surfaceAdjustOverlay{z-index:165;background:rgba(0,0,0,.7)}
+  .sa-preview{display:block;width:100%;height:auto;aspect-ratio:2/1;border:1px solid #bbb;border-radius:4px;
+              /* a mid grey behind it, not white -- a white card makes every
+                 texture read darker than it is, which is the exact illusion
+                 this dialog exists to dispel */
+              background:#8a8a8a}
+  .sa-note{margin:.35rem 0 .6rem;font-size:.75rem;color:#777;text-align:center}
+  .sa-slider-row{display:flex;align-items:center;gap:.6rem;margin:.3rem 0}
+  .sa-slider-row label{flex:0 0 5.5rem;font-size:.85rem;color:#555}
+  .sa-slider-row input[type=range]{flex:1 1 auto;min-width:0}
+  .sa-slider-val{flex:0 0 2.6rem;text-align:right;font-size:.85rem;color:#333;font-variant-numeric:tabular-nums}
+  #saTintHex{flex:1 1 auto;width:auto;padding:.3rem .4rem;font-size:.9rem}
+  #saTintNative{flex:0 0 auto;width:2.4rem;height:1.95rem;padding:0;border:1px solid #bbb;border-radius:4px;cursor:pointer}
+
   /* crop modal */
   #cropOverlay{z-index:170;background:rgba(0,0,0,.7)}
   #cropOverlay .modal{width:96vw;height:94vh;max-width:none;display:flex;flex-direction:column;padding:.8rem}
@@ -1817,7 +1832,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-62"></script>
+<script src="js/db.js?v=20260804-63"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -1834,6 +1849,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-383"></script>
+<script type="module" src="js/app.js?v=20260804-384"></script>
 </body>
 </html>

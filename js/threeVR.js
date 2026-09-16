@@ -5,7 +5,7 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-79';
+import { openAssetPicker } from './assets.js?v=20260804-80';
 import { openNewObjectListModal } from './objectLists.js?v=20260804-55';
 
 let THREE = null;
@@ -895,9 +895,11 @@ function roomAxes(room){
 // a surface slot (LAYOUT[roomKey].floor/ceiling/stairSurface/walls[w], and the
 // same fields inside a building default/preset) holds one of three shapes:
 // a real asset id, a flat "#rrggbb" color (colors can't collide with an asset
-// id -- ID_RE forbids '#'), or { id, tint } -- a real asset with a per-
-// placement tint layered on top of (or replacing) its own baked-in tint,
-// without touching the shared asset definition or any other placement of it.
+// id -- ID_RE forbids '#'), or { id, tint?, brightness?, contrast? } -- a real
+// asset with per-placement adjustments layered on top of (or replacing) its
+// own baked-in ones, without touching the shared asset definition or any
+// other placement of it. tint and brightness/contrast are independent: a
+// texture that is simply too dark can be lifted with no recolor at all.
 // This resolves any of the three into the same "asset record" shape the
 // renderer expects, so callers never need to know which one they got.
 function isColorId(id){ return typeof id === 'string' && id[0] === '#'; }
@@ -905,10 +907,28 @@ function assetOrColorFor(id){
   if(!id) return null;
   if(typeof id === 'object'){
     const base = ASSET_BY_ID[id.id];
-    return base ? (id.tint ? Object.assign({}, base, { tint: id.tint }) : base) : null;
+    if(!base) return null;
+    const adjusted = isSurfaceAdjusted(id);
+    // returns the shared record untouched when there's nothing layered on,
+    // exactly as before -- only an actual override pays for a copy
+    if(!id.tint && !adjusted) return base;
+    const out = Object.assign({}, base);
+    if(id.tint) out.tint = id.tint;
+    if(adjusted){ out.brightness = id.brightness; out.contrast = id.contrast; }
+    return out;
   }
   if(isColorId(id)) return { id, color: id, isColor: true };
   return ASSET_BY_ID[id] || null;
+}
+// the per-placement adjustment currently stored on a surface, in the shape the
+// picker dialog wants. Defaults (no tint, 1/1) for anything unadjusted.
+function surfaceAdjustOf(rawId){
+  const o = (rawId && typeof rawId === 'object') ? rawId : null;
+  return {
+    tint: (o && o.tint) || null,
+    brightness: clampSurfaceAdjust(o && o.brightness),
+    contrast: clampSurfaceAdjust(o && o.contrast),
+  };
 }
 // the raw stored/inherited value for a surface slot (room override -> the
 // building default), untouched -- a plain id, a "#hex" color, or {id,tint} --
@@ -942,16 +962,31 @@ function slotAssetFor(roomKey, slotId){
 }
 function ceilingAssetFor(roomKey){ return assetOrColorFor(rawSurfaceId(roomKey, 'ceiling')); }
 function stairAssetFor(roomKey){ return assetOrColorFor(rawSurfaceId(roomKey, 'stairSurface')); }
-// layers (or clears) a per-placement tint on top of whatever real asset is
-// currently assigned to a surface -- the base asset id is preserved either
-// way; only the stored value's shape changes (plain id <-> {id,tint}). A
-// no-op if the surface currently holds a flat color (allowTint's own picker
-// gating already keeps this unreachable then; this is just a safety net).
-function setSurfaceTint(roomKey, kind, wall, tint){
+// layers (or clears) per-placement adjustments on top of whatever real asset
+// is currently assigned to a surface -- the base asset id is preserved either
+// way; only the stored value's shape changes (plain id <-> {id, ...}). Pass
+// null to clear everything. A no-op if the surface currently holds a flat
+// color (the picker's own gating already keeps this unreachable then; this is
+// just a safety net).
+//
+// Collapses back to the bare id string when nothing is overridden, so a
+// surface nobody has adjusted keeps exactly the shape -- and the bytes -- it
+// had before this feature existed. Default values are never written.
+function setSurfaceAdjust(roomKey, kind, wall, adjust){
   const rawId = kind === 'wall' ? rawWallId(roomKey, wall) : rawSurfaceId(roomKey, kind === 'stair' ? 'stairSurface' : kind);
   const baseId = (rawId && typeof rawId === 'object') ? rawId.id : rawId;
   if(!baseId || isColorId(baseId)) return;
-  const value = tint ? { id: baseId, tint } : baseId;
+  const tint = (adjust && adjust.tint) || null;
+  const adjusted = isSurfaceAdjusted(adjust);
+  let value = baseId;
+  if(tint || adjusted){
+    value = { id: baseId };
+    if(tint) value.tint = tint;
+    if(adjusted){
+      value.brightness = clampSurfaceAdjust(adjust.brightness);
+      value.contrast = clampSurfaceAdjust(adjust.contrast);
+    }
+  }
   if(kind === 'floor') setFloorOverride(roomKey, value);
   else if(kind === 'ceiling') setCeilingOverride(roomKey, value);
   else if(kind === 'stair') setStairOverride(roomKey, value);
@@ -1388,6 +1423,9 @@ function slotById(room, roomKey, slotId){
 async function refreshAssetMap(){
   ASSET_BY_ID = {};
   for(const a of await getAllAssets()) ASSET_BY_ID[a.id] = a;
+  // an asset's image may have just been re-authored, and every brightness/
+  // contrast copy of it was drawn from the OLD one
+  _adjustedTexCache.clear();
 }
 
 // Phase 2: cache of every object list (id -> record from the 'objectLists'
@@ -2425,17 +2463,53 @@ function assetSurfaceMaterial(asset, repeatX, repeatY){
     roughness: asset.roughness ?? 0.85,
     metalness: asset.metalness ?? 0
   });
+  // null for anything unadjusted, which is the overwhelming majority -- those
+  // take the original path below untouched, so nothing already built changes
+  // and nobody pays for a feature they aren't using.
+  const filter = surfaceAdjustFilter(asset.brightness, asset.contrast);
   const myGen = buildGeneration;
-  textureLoader.load(asset.image, (tex) => {
+  textureLoader.load(asset.image, (loaded) => {
     if(buildGeneration !== myGen) return;
+    const tex = filter ? adjustedSurfaceTexture(asset, loaded.image, filter).clone() : loaded;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.repeat.set(Math.max(0.01, repeatX), Math.max(0.01, repeatY));
     if(asset.rotation){ tex.center.set(0.5, 0.5); tex.rotation = asset.rotation * Math.PI/180; }
+    if(filter) tex.needsUpdate = true;   // a fresh clone still has to upload
     mat.map = tex;
     mat.needsUpdate = true;
   });
   return mat;
+}
+
+/* The brightness/contrast pass. `ctx.filter` is native and accelerated, so
+   this costs far less than a per-pixel loop -- and, more importantly, it is
+   the SAME call the picker's preview makes with the SAME filter string (see
+   db.js surfaceAdjustFilter), which is what makes the preview trustworthy.
+
+   Cached and handed out SHARED, like makeBrickTexture: THREE.Cache dedupes
+   the decoded source image across placements, and without a cache here every
+   wall sharing an asset would redraw and re-upload an identical canvas.
+   Callers must .clone() before setting wrapS/repeat/rotation, or those would
+   leak into every other surface sharing the same adjustment. Cleared
+   alongside the asset map, since editing an asset's image invalidates every
+   adjusted copy of it. */
+const _adjustedTexCache = new Map();
+function adjustedSurfaceTexture(asset, img, filter){
+  const key = `${asset.id}|${filter}`;
+  let tex = _adjustedTexCache.get(key);
+  if(tex) return tex;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width || 1;
+  canvas.height = img.height || 1;
+  const ctx = canvas.getContext('2d');
+  ctx.filter = filter;
+  ctx.drawImage(img, 0, 0);
+  tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  _adjustedTexCache.set(key, tex);
+  return tex;
 }
 
 // a cylindrical billboard: a flat plane, rotated to face the camera's
@@ -5614,7 +5688,11 @@ function doorSpawn(size, wall, offset, origin, inside){
    instead puts the answer on the walls around you and the sign behind your
    head, which spoils the recall before it starts. So a jump to a room
    arrives at a door INTO it. */
-const DOOR_VIEW_DIST = 2.6;      // back far enough to take in the sign above the lintel
+// back far enough to take in the WHOLE sign above the lintel, not just the
+// door. Was 2.6, which framed the door but cropped the top of the sign in
+// real use -- and the sign (the room's name) is the thing you are standing
+// out here to recall in the first place.
+const DOOR_VIEW_DIST = 3.1;
 
 // The mirror of doorSpawn's "inside" spawn: the same side of the wall, but
 // stepped further back and turned around to FACE the doorway.
@@ -7650,32 +7728,28 @@ function handleEditTarget(ud){
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
       onPick: id => setFloorOverride(roomKey, id),
       onRemove: () => setFloorOverride(roomKey, null),
-      onTintPick: hex => setSurfaceTint(roomKey, 'floor', null, hex),
-      onTintRemove: () => setSurfaceTint(roomKey, 'floor', null, null)
+      onAdjustApply: adj => setSurfaceAdjust(roomKey, 'floor', null, adj)
     });
   } else if(ud.kind === 'wall'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
       onPick: id => setWallOverride(roomKey, ud.wall, id),
       onRemove: () => setWallOverride(roomKey, ud.wall, null),
-      onTintPick: hex => setSurfaceTint(roomKey, 'wall', ud.wall, hex),
-      onTintRemove: () => setSurfaceTint(roomKey, 'wall', ud.wall, null)
+      onAdjustApply: adj => setSurfaceAdjust(roomKey, 'wall', ud.wall, adj)
     });
   } else if(ud.kind === 'ceiling-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
       onPick: id => setCeilingOverride(roomKey, id),
       onRemove: () => setCeilingOverride(roomKey, null),
-      onTintPick: hex => setSurfaceTint(roomKey, 'ceiling', null, hex),
-      onTintRemove: () => setSurfaceTint(roomKey, 'ceiling', null, null)
+      onAdjustApply: adj => setSurfaceAdjust(roomKey, 'ceiling', null, adj)
     });
   } else if(ud.kind === 'stair-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
       onPick: id => setStairOverride(roomKey, id),
       onRemove: () => setStairOverride(roomKey, null),
-      onTintPick: hex => setSurfaceTint(roomKey, 'stair', null, hex),
-      onTintRemove: () => setSurfaceTint(roomKey, 'stair', null, null)
+      onAdjustApply: adj => setSurfaceAdjust(roomKey, 'stair', null, adj)
     });
   } else if(ud.kind === 'slot'){
     openAssetPicker({
@@ -7761,8 +7835,12 @@ function surfacePickerExtras(roomKey, kind, wall, effAsset){
     currentId: (effAsset && effAsset.id) || null,
     currentSource: override ? 'room' : (effAsset ? 'default' : null),
     defaultExists: !!def,
-    allowTint: true,
-    currentTint: (effAsset && effAsset.tint) || null
+    allowAdjust: true,
+    currentAdjust: surfaceAdjustOf(
+      kind === 'wall' ? rawWallId(roomKey, wall)
+                      : rawSurfaceId(roomKey, kind === 'stair' ? 'stairSurface' : kind)),
+    // the base asset's own image, for the dialog's preview swatch
+    currentImage: (effAsset && effAsset.image) || null,
   };
 }
 
@@ -9707,7 +9785,7 @@ export async function openThreeTest(containerEl, opts){
         const ex = room && (room.exits || []).find(e => e.target === targetRoomKey);
         return ex ? continuationListItem(roomKey, room, ex) : null;
       },
-      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
+      meshes: () => { const out=[]; scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.parameters){ const wp=new THREE.Vector3(); o.getWorldPosition(wp); out.push({ type:o.geometry.type, params:o.geometry.parameters, x:wp.x, y:wp.y, z:wp.z, ry:o.rotation.y, kind:o.userData&&o.userData.kind, slotId:o.userData&&o.userData.slotId, wall:o.userData&&o.userData.wall, color:(o.material&&o.material.color)?('#'+o.material.color.getHexString()):null, hasMap:!!(o.material&&o.material.map), mapIsCanvas:!!(o.material&&o.material.map&&o.material.map.isCanvasTexture), transparent:!!(o.material&&o.material.transparent) }); } }); return out; },
       entry: () => entryPoint,
       teleport: (x, z, yawVal) => { pos.x = x; pos.z = z; if(yawVal != null) yaw = yawVal; },
       pos: () => ({ x: pos.x, z: pos.z, yaw }),
@@ -9796,6 +9874,14 @@ export async function openThreeTest(containerEl, opts){
       // that the center/anchor slot is excluded from both (it's the
       // arrival-move pair, not a step of this room's own walk sequence).
       wallBucketSlotCount: (roomKeyArg, bucket) => bucketSlotCount(roomKeyArg || currentRoomKey, bucket),
+      // the RAW stored value for a surface slot -- a bare id string, a "#hex",
+      // or the {id, tint?, brightness?, contrast?} object. For testing that an
+      // unadjusted surface still stores the bare string it always did.
+      rawSurface: (roomKeyArg, kind, wall) => {
+        const k = roomKeyArg || currentRoomKey;
+        return kind === 'wall' ? rawWallId(k, wall)
+                               : rawSurfaceId(k, kind === 'stair' ? 'stairSurface' : kind);
+      },
       slotListWord: (roomKeyArg, slotId) => {
         const rk = roomKeyArg || currentRoomKey;
         const slot = moveObjectSlots(rk).find(s => s.id === slotId);

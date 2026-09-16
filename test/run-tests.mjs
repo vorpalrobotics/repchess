@@ -1897,7 +1897,7 @@ try {
     await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
     await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     const tintTileBefore = await app13.page.evaluate(() => !!document.querySelector('#pickerGrid .asset-card-tint'));
-    assert(!tintTileBefore, 'Tint… tile should not show before any real asset is assigned');
+    assert(!tintTileBefore, 'Adjust… tile should not show before any real asset is assigned');
 
     await app13.page.evaluate(() => {
       const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
@@ -1911,7 +1911,7 @@ try {
       window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
     assert(afterAssign.length && afterAssign.every(m => m.hasMap && m.color === '#ffffff'),
       `wall should show the real (untinted) texture after assigning the asset: ${JSON.stringify(afterAssign)}`);
-    ok('assigning a real asset shows its texture untinted, with no Tint… option yet');
+    ok('assigning a real asset shows its texture untinted, with no Adjust… option yet');
   } catch(e){ bad('tint: assign real asset baseline', e); }
 
   // 32. Reopening now offers "Tint…"; picking a color recolors the wall
@@ -1922,10 +1922,11 @@ try {
     await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
     await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await app13.page.click('#pickerGrid .asset-card-tint');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
-    tintHex = await app13.page.evaluate(() => document.querySelector('#colorSwatchPickerOverlay .color-swatch').dataset.hex);
-    await app13.page.click('#colorSwatchPickerOverlay .color-swatch');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    tintHex = await app13.page.evaluate(() => document.querySelector('#surfaceAdjustOverlay .color-swatch').dataset.hex);
+    await app13.page.click('#surfaceAdjustOverlay .color-swatch');
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(150);
 
     const tinted = await app13.page.evaluate(() =>
@@ -1948,9 +1949,9 @@ try {
   //     surface itself, which would drop back to the procedural default.
   try {
     await app13.page.evaluate(() => document.querySelector('#pickerGrid .asset-card-tint').click());
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
-    await app13.page.click('#cswRemoveBtn');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#saRemoveBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(150);
 
     const untinted = await app13.page.evaluate(() =>
@@ -1959,6 +1960,95 @@ try {
       `removing the tint should keep the real texture but drop the recolor: ${JSON.stringify(untinted)}`);
     ok('removing the tint reverts to the untinted asset while keeping it assigned');
   } catch(e){ bad('tint: remove tint keeps the asset', e); }
+
+  /* --- brightness/contrast: the other half of a tint ---
+     `material.color` MULTIPLIES the texture, so every tint except white
+     darkens and none can brighten. These run as a texture pass instead. --- */
+
+  // 33b. The filter formula is one shared string (db.js), which is what stops
+  //      the picker's preview and the actual wall from drifting apart. It
+  //      must return null at the defaults so an unadjusted surface skips the
+  //      canvas pass entirely and renders exactly as it always did.
+  try {
+    const f = await app13.page.evaluate(() => ({
+      none: surfaceAdjustFilter(1, 1),
+      missing: surfaceAdjustFilter(undefined, undefined),
+      both: surfaceAdjustFilter(1.4, 1.2),
+      clampedHigh: surfaceAdjustFilter(99, 1),
+      clampedLow: surfaceAdjustFilter(-5, 1),
+      junk: surfaceAdjustFilter('abc', 1),
+      // Number(null) is 0, not NaN -- an absent value must read as "no
+      // adjustment", not as the clamp floor. Getting this wrong made every
+      // unadjusted surface open the dialog at minimum brightness.
+      nulls: surfaceAdjustFilter(null, null),
+      clampNull: clampSurfaceAdjust(null),
+    }));
+    assert(f.nulls === null && f.clampNull === 1,
+      `expected null/absent to mean "unadjusted", not the clamp floor: ${JSON.stringify(f)}`);
+    assert(f.none === null && f.missing === null,
+      `expected no filter at the defaults -- an unadjusted surface must not take the canvas path: ${JSON.stringify(f)}`);
+    assert(f.both === 'brightness(1.4) contrast(1.2)', `unexpected filter string: ${JSON.stringify(f.both)}`);
+    assert(f.clampedHigh === 'brightness(2.5) contrast(1)' && f.clampedLow === 'brightness(0.25) contrast(1)',
+      `expected out-of-range values clamped, got ${JSON.stringify(f)}`);
+    assert(f.junk === null, `expected non-numeric input to fall back to the default, got ${JSON.stringify(f.junk)}`);
+    ok('surface adjust: one shared filter formula, null at the defaults, clamped at the edges');
+  } catch(e){ bad('surface adjust: filter formula', e); }
+
+  // 33c. Brightness with NO tint. The whole point: a texture that is simply
+  //      too dark can be lifted without being recolored. material.color must
+  //      stay white -- brightness is a texture pass, and if it ever leaked
+  //      into the tint it would darken the very thing it is meant to fix.
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#pickerGrid .asset-card-tint');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.evaluate(() => {
+      const b = document.getElementById('saBrightness');
+      b.value = '1.5'; b.dispatchEvent(new Event('input'));
+    });
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(250);
+
+    const raw = await app13.page.evaluate(() => window.__threeTestEdit.rawSurface(null, 'wall', 'north'));
+    assert(raw && typeof raw === 'object' && raw.id === 'wallpaper-1' && !raw.tint && raw.brightness === 1.5,
+      `expected brightness stored with no tint, over the same base asset: ${JSON.stringify(raw)}`);
+    assert(raw.contrast === 1 || raw.contrast === undefined,
+      `expected contrast left at its default: ${JSON.stringify(raw)}`);
+
+    const walls = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(walls.length && walls.every(m => m.color === '#ffffff'),
+      `brightness must not touch material.color -- that multiply is what darkens: ${JSON.stringify(walls)}`);
+    assert(walls.every(m => m.hasMap && m.mapIsCanvas),
+      `expected the adjusted texture to go through the canvas pass: ${JSON.stringify(walls)}`);
+    ok('surface adjust: brightness works with no tint, and never touches material.color');
+  } catch(e){ bad('surface adjust: brightness without a tint', e); }
+
+  // 33d. Back at the defaults the stored value collapses to the bare id
+  //      string it was before this feature existed -- so an untouched surface
+  //      is byte-identical in the layout blob, and nothing pays for a feature
+  //      it isn't using.
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#pickerGrid .asset-card-tint');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#saResetBtn');
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(250);
+
+    const raw = await app13.page.evaluate(() => window.__threeTestEdit.rawSurface(null, 'wall', 'north'));
+    assert(raw === 'wallpaper-1',
+      `expected the defaults to collapse back to the bare asset id, got ${JSON.stringify(raw)}`);
+    const walls = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(walls.length && walls.every(m => m.hasMap && !m.mapIsCanvas && m.color === '#ffffff'),
+      `expected the original texture path back, with no canvas pass: ${JSON.stringify(walls)}`);
+    ok('surface adjust: default values collapse back to the plain stored id');
+  } catch(e){ bad('surface adjust: defaults collapse', e); }
 } finally {
   await app13.close();
 }

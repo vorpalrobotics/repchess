@@ -850,6 +850,51 @@ async function clearSafetyBackup(){
    a way an opaque ease of 2.36 is not. The stored shape leaves room to add
    an ease later without discarding history.
 */
+/* ---------- surface tint adjustment ----------
+
+   A tint is applied as `material.color`, which three.js MULTIPLIES the
+   texture by -- so every tint except pure white darkens, and the more
+   saturated the hue you want the darker you are forced to go. There is no
+   tint value that brightens. Brightness/contrast are the other half of that
+   operation, applied to the texture itself before it ever reaches the
+   material.
+
+   The formula lives here, as a single string, precisely so the 2D preview in
+   the picker and the 3D surface in the world cannot drift apart: both hand
+   this exact string to `ctx.filter`. A preview that computes its own version
+   of "the same" adjustment is a preview that eventually lies.
+
+   Deliberately NOT applied to the tint itself. `material.color` multiplies in
+   LINEAR space inside the shader, while a canvas filter works on sRGB bytes,
+   so folding the tint into the canvas would silently change the look of every
+   surface already tinted -- no error, nothing in the diff to suggest it. The
+   tint stays exactly where it was; only brightness/contrast are new. */
+const SURFACE_ADJUST_MIN = 0.25;
+const SURFACE_ADJUST_MAX = 2.5;
+const SURFACE_ADJUST_STEP = 0.05;
+
+function clampSurfaceAdjust(v){
+  // Number(null) is 0, NOT NaN -- so an absent value has to be caught before
+  // the isFinite check, or a surface nobody has adjusted clamps to the floor
+  // and reads as fully dark. That is the opposite of this feature's purpose,
+  // and it is silent: 0.25 is a perfectly valid value.
+  const n = (v === null || v === undefined || v === '') ? NaN : Number(v);
+  if(!isFinite(n)) return 1;
+  return Math.min(SURFACE_ADJUST_MAX, Math.max(SURFACE_ADJUST_MIN, n));
+}
+/* The ctx.filter string, or null when there is nothing to do. Callers use the
+   null to skip the canvas pass entirely, so a surface nobody has adjusted
+   renders through exactly the path it always did. */
+function surfaceAdjustFilter(brightness, contrast){
+  const b = clampSurfaceAdjust(brightness ?? 1);
+  const c = clampSurfaceAdjust(contrast ?? 1);
+  if(b === 1 && c === 1) return null;
+  return `brightness(${b}) contrast(${c})`;
+}
+function isSurfaceAdjusted(adjust){
+  return !!(adjust && surfaceAdjustFilter(adjust.brightness, adjust.contrast));
+}
+
 const ROOM_REVIEWS_KEY = 'threeRoomReviews';
 const ROOM_REVIEW_LADDER = [1, 3, 7, 21, 60, 180];   // days until the next review, by step
 // ±15%, so a wing memorized in one sitting doesn't come due all on the same
