@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-386';
+const BUILD_TAG = '-387';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2498,12 +2498,13 @@ async function refreshGraphRoomState(){
       // (cmp-noword / cmp-noimg) is left exactly as it is, and so is one with
       // no decoration work to judge (roomIsDecorable), which the render
       // already settled as cmp-ok and must not be flipped back here.
-      if(roomIsDecorable(roomKey, n.data('lockedDeadEnd'))
+      if(roomIsDecorable(roomKey)
          && (n.hasClass('cmp-ok') || n.hasClass('cmp-undecorated'))){
         n.toggleClass('cmp-undecorated', !decorated);
         n.toggleClass('cmp-ok', decorated);
       }
-      const rev = 'rev-' + roomReviewState(effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, roomKey));
+      const rev = 'rev-' + roomReviewState(
+        effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, n.data('reviewRoomKey') || roomKey));
       for(const c of ['rev-none', 'rev-notdue', 'rev-soon', 'rev-due', 'rev-overdue']) n.removeClass(c);
       n.addClass(rev);
     }
@@ -2599,18 +2600,25 @@ let GRAPH_CY = null;
 /* Is there any decoration work to judge this node on?
 
    Two cases where there isn't. A node with no roomKey isn't a castle room at
-   all. And a LOCKED DEAD END is a room you cannot walk into -- all you can
-   give it is its name, on the sign over the locked door -- so scoring it "not
-   decorated yet" asks for work that cannot be done, and leaves a node that
-   can never go green no matter what you do.
+   all. And a LOCKED room -- one with no way out, so its only doorway is a
+   locked door you can never walk through -- is a room you cannot stand in.
+   All you can give it is its name, on the sign over that door. Scoring it
+   "not decorated yet" asks for work that cannot be done, and leaves a node
+   that can never go green no matter what you do.
 
    Its atom score still applies either way: the move mnemonic lives on the
    door LEADING to the room, which you can see and use perfectly well, so a
    locked room still reports needing a word or an image.
 
-   One function because the full render and the in-place refresh both have to
-   agree about this, and they sit hundreds of lines apart. */
-function roomIsDecorable(roomKey, lockedDeadEnd){ return !!roomKey && !lockedDeadEnd; }
+   Judged per generated ROOM, not per node, which matters: the last position
+   of a merged corridor has no forward move either, but the corridor itself is
+   walked into normally and is perfectly decorable. Keying this off a node's
+   own out-degree would have quietly exempted the tail of every corridor.
+
+   One function because the full render, the coverage bars and the in-place
+   refresh all have to agree, and they sit hundreds of lines apart. */
+let GRAPH_UNDECORABLE_ROOMS = new Set();
+function roomIsDecorable(roomKey){ return !!roomKey && !GRAPH_UNDECORABLE_ROOMS.has(roomKey); }
 
 function pairCompleteness(seq, mnem){
   const atoms = [lastMoveInfo(seq), lastMoveInfo((seq || []).slice(0, -1))].filter(Boolean);
@@ -2652,7 +2660,22 @@ function updateGraphReviewSummary(){
   const el = $('graphReviewSummary');
   if(!el) return;
   if(!GRAPH_CY){ el.textContent = ''; return; }
-  const n = cls => GRAPH_CY.nodes('.rev-' + cls).length;
+  /* Counted per ROOM, not per node, because that's what the words say and
+     what you'd act on. A merged corridor is several positions but one thing
+     you memorize and one thing you review, and a locked room reports its
+     OWNER's schedule -- so counting nodes reported a corridor once per
+     position and counted an owner again for every locked room hanging off
+     it. Keyed on reviewRoomKey, which is exactly "the room this node's
+     colour belongs to". */
+  const stateByRoom = new Map();
+  for(const node of GRAPH_CY.nodes()){
+    const k = node.data('reviewRoomKey');
+    if(!k || stateByRoom.has(k)) continue;
+    const cls = node.classes().find(c => c.startsWith('rev-'));
+    if(cls) stateByRoom.set(k, cls.slice(4));
+  }
+  const states = [...stateByRoom.values()];
+  const n = cls => states.filter(s => s === cls).length;
   const memorized = n('notdue') + n('soon') + n('due') + n('overdue');
   if(!memorized){ el.textContent = 'nothing memorized in this view yet'; return; }
   const parts = [`${memorized} memorized`];
@@ -2743,6 +2766,12 @@ async function showTranspositionGraph(){
     const castleNames = focusedName ? [focusedName] : definedCastles();
     let totalCastleRooms = 0, totalCastleMoves = 0;
     let memorizedRoomCount = 0, decoratedRoomCount = 0, memorizedMoveCount = 0;
+    // rooms there is no point counting as "not decorated" or "not memorized":
+    // you can't walk into them, so neither is work you could ever do.
+    // Gathered from the GENERATED rooms, the level the question lives at --
+    // see GRAPH_UNDECORABLE_ROOMS.
+    let enterableRoomCount = 0;
+    const undecorableRoomKeys = GRAPH_UNDECORABLE_ROOMS = new Set();
     // roomKey -> this regen's live shape, gathered while we're already
     // iterating every generated room below -- reused by isRoomDirty in the
     // node-labeling loop further down instead of a second buildGeneratedCastle
@@ -2758,6 +2787,7 @@ async function showTranspositionGraph(){
       const { genRooms } = buildGeneratedCastle(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), castleRootSeq, name);
       totalCastleRooms += genRooms.length;
       const instanceId = castleInstanceId(CURRENT_LINE.id, name);
+      const entryPosKey = positionKey(fenForSeq(castleRootSeq));
       for(const gr of genRooms){
         totalCastleMoves += gr.moveCount;
         const roomKey = castleRoomKey(instanceId, gr.posKey);
@@ -2765,6 +2795,23 @@ async function showTranspositionGraph(){
         // buildRoomAnchorIndex for why the node loop can't do without this
         for(const k of genRoomPosKeys(gr)) roomAnchorIndex[`${instanceId}|${k}`] = gr.posKey;
         liveShapeByRoomKey.set(roomKey, gr.shape);
+        // A room with NO exits at all is one you reach only through a locked
+        // door, so you can never stand in it. This deliberately matches
+        // threeVR.js's own isRoomEmpty, which is the authority on whether you
+        // can walk in: a room whose continuations exist but aren't built out
+        // yet still HAS doors (locked ones), and VR lets you in to see them.
+        // Testing for "no forward continuation" instead would lock every room
+        // whose replies you simply haven't filled in yet.
+        //
+        // The castle's own entry room is exempt either way: you reach it from
+        // the street, and it's legitimately empty until the castle is built.
+        // The non-center pairs are the second half of isRoomEmpty and matter
+        // for merged rooms: a corridor whose forward moves are all INTERNAL
+        // has no exits of its own, but you walk into it normally and its
+        // members' move-pairs are on its walls.
+        const roomIsLocked = !gr.exits.length && !(gr.pairs || []).some(p => p.side !== 'center');
+        if(gr.posKey !== entryPosKey && roomIsLocked) undecorableRoomKeys.add(roomKey);
+        else enterableRoomCount++;
         if(MEMORIZED_ROOMS[roomKey]){ memorizedRoomCount++; memorizedMoveCount += gr.moveCount; }
         if(DECORATED_ROOMS[roomKey]) decoratedRoomCount++;
       }
@@ -2790,9 +2837,11 @@ async function showTranspositionGraph(){
         <span class="graph-coverage-bar"><span class="graph-coverage-fill" style="width:${pct(n,d)}%;background:${color}"></span></span>
       </div>`;
     $('graphCoverage').innerHTML = !totalCastleRooms ? '' :
-      coverageBar('Rooms memorized', '#1565c0', memorizedRoomCount, totalCastleRooms) +
+      // both room denominators exclude rooms you can never walk into --
+      // counting them means the bar can never fill, however much you do
+      coverageBar('Rooms memorized', '#1565c0', memorizedRoomCount, enterableRoomCount) +
       coverageBar('Moves memorized', '#2e7d32', memorizedMoveCount, totalCastleMoves) +
-      coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, totalCastleRooms);
+      coverageBar('Rooms decorated', '#4527a0', decoratedRoomCount, enterableRoomCount);
     $('graphCoverageToggle').style.display = totalCastleRooms ? '' : 'none';
     updateGraphCoverageVisibility();
     updateGraphViewMode();   // keeps the dropdown/legends in step with a mode left on across re-renders
@@ -2896,6 +2945,28 @@ async function showTranspositionGraph(){
     // -- carried on the room's own node data so a later right-click ("Arrange")
     // can recompute a clean layout for just that box purely from its current
     // children, with no need to keep `boxes`/`boxOf` alive past this render.
+    /* A locked room's review state is its OWNER's.
+
+       You can't walk into a room whose only doorway is locked, so you can't
+       mark it memorized -- and painting it grey "not memorized yet" claims
+       work that cannot be done, the same false reading the completeness lens
+       had. What you actually memorize is the room whose DOOR leads to it: the
+       move sits on that door, and standing in that room is where you recall
+       it. (Exactly the attribution rule the board quiz uses for a missed
+       move -- SOLARIUM, not STUDY.)
+
+       So such a node reports its owner's schedule, and lights up amber or red
+       along with the room you'd really go and review. Only rooms that are
+       their OWN genRoom need this: a locked dead end swallowed into a corridor
+       already resolves to that corridor's key. */
+    const roomById = new Map(rooms.map(r => [r.id, r]));
+    const predOf = new Map();
+    for(const e of edges) if(!predOf.has(e.target)) predOf.set(e.target, e.source);
+    const reviewRoomKeyFor = (r, roomKey) => {
+      if(!roomKey || !GRAPH_UNDECORABLE_ROOMS.has(roomKey)) return roomKey;
+      const owner = roomById.get(predOf.get(r.id));
+      return (owner && roomKeyForRoom(owner)) || roomKey;
+    };
     const boxById = new Map(boxes.map(b => [b.id, b]));
     const boxMemberInfo = r => {
       const boxId = boxOf.get(r.id);
@@ -2961,13 +3032,16 @@ async function showTranspositionGraph(){
         // and only for a room there's anything to build out -- see
         // roomIsDecorable for the two cases where there isn't.
         const atomState = pairCompleteness(r.seq, mnemForGraph);
-        const cmp = 'cmp-' + (atomState === 'ok' && roomIsDecorable(roomKey, data.lockedDeadEnd) && !decorated
+        const cmp = 'cmp-' + (atomState === 'ok' && roomIsDecorable(roomKey) && !decorated
           ? 'undecorated' : atomState);
         // review lens, same ride-along treatment. A memorized room with no
         // graded record yet still has a schedule (bootstrapped from when it
         // was memorized -- see db.js effectiveRoomReview), so an existing
         // repertoire shows real due states rather than a wall of grey.
-        const rev = 'rev-' + roomReviewState(effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, roomKey));
+        // ...against the room that's actually memorizable -- its own, or its
+        // owner's when it's a locked room nobody can walk into.
+        data.reviewRoomKey = reviewRoomKeyFor(r, roomKey);
+        const rev = 'rev-' + roomReviewState(effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, data.reviewRoomKey));
         return {
           data,
           classes: [baseClass, (memorized && decorated) ? 'all-done' : '', cmp, rev,
