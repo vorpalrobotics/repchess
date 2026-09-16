@@ -23,6 +23,31 @@ it instead selects it for moving: arrow keys nudge its position, +/- resize
 it, and the gear icon that appears (or the Enter key) reopens the picker to
 change the image/label or remove it.</p>
 
+<h3>Recoloring a surface</h3>
+<p>Clicking a floor, wall, ceiling or staircase opens the same picker, with
+two extra options. <strong>Color…</strong> replaces the surface with a flat
+color outright. <strong>Adjust…</strong> keeps the texture and changes how it
+looks: a tint, plus brightness and contrast sliders, with a live preview.</p>
+
+<p>The sliders exist because a tint alone can only ever darken. It's applied
+as a multiply against the texture, so any tint that isn't pure white takes
+light out -- and the more saturated the color you're after, the darker the
+result. Brightness puts that light back, and contrast recovers the detail a
+heavy tint flattens. They work with no tint at all too, which is what you
+want for a texture that's simply too dark on its own.</p>
+
+<p>Adjustments belong to <em>that one surface</em>, not to the asset -- the
+same wallpaper can be warm in one room and cold in the next, and the shared
+asset is never touched. They travel with the surface into a building default
+or a saved preset. "Remove all" puts the surface back to the asset's own
+look while leaving it assigned, which is different from removing the surface,
+which drops it back to the procedural default.</p>
+
+<p>One thing to know about the preview: it's unlit. The room's own lighting
+will always read a little darker than the swatch, so if a wall still looks
+dim after you've matched the preview, nudge brightness up a bit further than
+looked right.</p>
+
 <h3>Fitting the room</h3>
 <p>Room Geometry lets you resize a room to fit what you've placed in it;
 the crop editor (brush and bucket erase, undo/redo) helps clean up an

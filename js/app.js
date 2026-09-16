@@ -1,8 +1,8 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-283';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-79';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-284';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-80';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
 cytoscape.use(cytoscapeDagre);
 
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-383';
+const BUILD_TAG = '-385';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2438,6 +2438,9 @@ async function loadMemorizedRooms(){
 async function refreshMemorizedRoomsAndTree(){
   await loadMemorizedRooms();
   if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
+  // the graph may well be open behind VR -- you can jump into a room from it,
+  // grade the room, and come straight back to it. A no-op when it isn't.
+  await refreshGraphRoomState();
 }
 // "fully decorated" room progress (see js/threeVR.js's own DECORATED, which
 // this mirrors) -- same independent-read pattern as MEMORIZED_ROOMS above.
@@ -2451,6 +2454,59 @@ async function loadDecoratedRooms(){
 // themselves are db.js's, shared by both modules rather than duplicated.
 let ROOM_REVIEWS = {};
 async function loadRoomReviews(){ ROOM_REVIEWS = await getRoomReviews(); }
+// roomKey -> live shape, stashed by the graph render (see its own comment) so
+// a restyle can recompute the dirty badge without regenerating every castle.
+let GRAPH_LIVE_SHAPES = new Map();
+
+/* Re-read the per-room state the graph paints from and restyle the nodes that
+   use it, WITHOUT rebuilding the graph.
+
+   You can leave the graph open, jump into VR from it, grade a room, and come
+   back -- and until this existed the graph was still showing what it computed
+   before you left, so a room you had just reviewed still read as overdue. The
+   Review lens is the one most likely to be watched across such a round trip,
+   since jumping to a due room is exactly what it's for.
+
+   A full rebuild would also be correct, but it costs a spinner and seconds on
+   a large repertoire and throws away pan/zoom and any manual arrangement --
+   a bad trade for a change that only ever moves a few nodes' classes and
+   glyphs. So this recomputes exactly those, in place. */
+async function refreshGraphRoomState(){
+  const cy = GRAPH_CY;
+  if(!cy || $('graphOverlay').style.display === 'none') return;
+  await Promise.all([loadMemorizedRooms(), loadDecoratedRooms(), loadRoomReviews(), loadMemorizedShapes()]);
+  cy.batch(() => {
+    for(const n of cy.nodes()){
+      const roomKey = n.data('roomKey');
+      if(!roomKey) continue;
+      const memorized = !!MEMORIZED_ROOMS[roomKey];
+      const decorated = !!DECORATED_ROOMS[roomKey];
+      const dirty = memorized && isRoomDirty(roomKey, GRAPH_LIVE_SHAPES.get(roomKey));
+      // the glyphs live in the label, so it's rebuilt from the part that
+      // ISN'T state -- everything up to the first glyph, plus the room name
+      // on its own line. Splitting rather than re-deriving keeps this from
+      // having to know how plyLabel/moveQuality compose.
+      const [moveLine, ...rest] = String(n.data('label')).split('\n');
+      const bare = moveLine.replace(/( 🧠| 🎨| ⚠️)+$/u, '');
+      const moveLabel = bare + (memorized ? ' 🧠' : '') + (decorated ? ' 🎨' : '') + (dirty ? ' ⚠️' : '');
+      n.data('label', [moveLabel, ...rest].join('\n'));
+      n.data('dirty', dirty);
+      n.toggleClass('all-done', memorized && decorated);
+      // Decoration is the only completeness input VR can change, and it only
+      // decides between these two -- the atom score is a mnemonics-vocabulary
+      // question that can't move from in there. So a node scored on its atoms
+      // (cmp-noword / cmp-noimg) is left exactly as it is.
+      if(n.hasClass('cmp-ok') || n.hasClass('cmp-undecorated')){
+        n.toggleClass('cmp-undecorated', !decorated);
+        n.toggleClass('cmp-ok', decorated);
+      }
+      const rev = 'rev-' + roomReviewState(effectiveRoomReview(ROOM_REVIEWS, MEMORIZED_ROOMS, roomKey));
+      for(const c of ['rev-none', 'rev-notdue', 'rev-soon', 'rev-due', 'rev-overdue']) n.removeClass(c);
+      n.addClass(rev);
+    }
+  });
+  updateGraphReviewSummary();
+}
 // frozen shape snapshots for memorized rooms (see js/threeVR.js's own
 // MEMORIZED_SHAPES, which this mirrors) -- same independent-read pattern.
 // Used by isRoomDirty below to badge a memorized room whose live shape has
@@ -2672,7 +2728,11 @@ async function showTranspositionGraph(){
     // iterating every generated room below -- reused by isRoomDirty in the
     // node-labeling loop further down instead of a second buildGeneratedCastle
     // pass per castle.
-    const liveShapeByRoomKey = new Map();
+    // ...and kept on module state afterwards, so refreshGraphRoomState() can
+    // restyle after a VR grade without a second full castle regeneration. A
+    // room's SHAPE is a function of the repertoire, which nothing you can do
+    // inside VR changes -- an actual repertoire edit rebuilds the graph.
+    const liveShapeByRoomKey = GRAPH_LIVE_SHAPES = new Map();
     for(const name of castleNames){
       const castleRootSeq = castleRootRoomSeq(name);
       if(!castleRootSeq) continue;
@@ -3083,6 +3143,10 @@ async function showTranspositionGraph(){
           await setRoomReviews(map);
         },
         viewMode: () => GRAPH_VIEW_MODE,
+        // the in-place restyle VR close runs (see refreshGraphRoomState) --
+        // for testing that a grade made in VR reaches an already-open graph
+        // WITHOUT a rebuild.
+        refreshRoomState: () => refreshGraphRoomState(),
         // a node's rendered label (carries the moveQuality glyph and, once
         // decorated, the 🎨 glyph appended in showTranspositionGraph).
         labelOf: (fen) => {

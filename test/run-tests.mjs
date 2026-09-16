@@ -1897,7 +1897,7 @@ try {
     await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
     await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     const tintTileBefore = await app13.page.evaluate(() => !!document.querySelector('#pickerGrid .asset-card-tint'));
-    assert(!tintTileBefore, 'Tint… tile should not show before any real asset is assigned');
+    assert(!tintTileBefore, 'Adjust… tile should not show before any real asset is assigned');
 
     await app13.page.evaluate(() => {
       const card = [...document.querySelectorAll('#pickerGrid .asset-card')]
@@ -1911,7 +1911,7 @@ try {
       window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
     assert(afterAssign.length && afterAssign.every(m => m.hasMap && m.color === '#ffffff'),
       `wall should show the real (untinted) texture after assigning the asset: ${JSON.stringify(afterAssign)}`);
-    ok('assigning a real asset shows its texture untinted, with no Tint… option yet');
+    ok('assigning a real asset shows its texture untinted, with no Adjust… option yet');
   } catch(e){ bad('tint: assign real asset baseline', e); }
 
   // 32. Reopening now offers "Tint…"; picking a color recolors the wall
@@ -1922,10 +1922,11 @@ try {
     await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
     await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await app13.page.click('#pickerGrid .asset-card-tint');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
-    tintHex = await app13.page.evaluate(() => document.querySelector('#colorSwatchPickerOverlay .color-swatch').dataset.hex);
-    await app13.page.click('#colorSwatchPickerOverlay .color-swatch');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    tintHex = await app13.page.evaluate(() => document.querySelector('#surfaceAdjustOverlay .color-swatch').dataset.hex);
+    await app13.page.click('#surfaceAdjustOverlay .color-swatch');
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(150);
 
     const tinted = await app13.page.evaluate(() =>
@@ -1948,9 +1949,9 @@ try {
   //     surface itself, which would drop back to the procedural default.
   try {
     await app13.page.evaluate(() => document.querySelector('#pickerGrid .asset-card-tint').click());
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
-    await app13.page.click('#cswRemoveBtn');
-    await app13.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#saRemoveBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(150);
 
     const untinted = await app13.page.evaluate(() =>
@@ -1959,6 +1960,95 @@ try {
       `removing the tint should keep the real texture but drop the recolor: ${JSON.stringify(untinted)}`);
     ok('removing the tint reverts to the untinted asset while keeping it assigned');
   } catch(e){ bad('tint: remove tint keeps the asset', e); }
+
+  /* --- brightness/contrast: the other half of a tint ---
+     `material.color` MULTIPLIES the texture, so every tint except white
+     darkens and none can brighten. These run as a texture pass instead. --- */
+
+  // 33b. The filter formula is one shared string (db.js), which is what stops
+  //      the picker's preview and the actual wall from drifting apart. It
+  //      must return null at the defaults so an unadjusted surface skips the
+  //      canvas pass entirely and renders exactly as it always did.
+  try {
+    const f = await app13.page.evaluate(() => ({
+      none: surfaceAdjustFilter(1, 1),
+      missing: surfaceAdjustFilter(undefined, undefined),
+      both: surfaceAdjustFilter(1.4, 1.2),
+      clampedHigh: surfaceAdjustFilter(99, 1),
+      clampedLow: surfaceAdjustFilter(-5, 1),
+      junk: surfaceAdjustFilter('abc', 1),
+      // Number(null) is 0, not NaN -- an absent value must read as "no
+      // adjustment", not as the clamp floor. Getting this wrong made every
+      // unadjusted surface open the dialog at minimum brightness.
+      nulls: surfaceAdjustFilter(null, null),
+      clampNull: clampSurfaceAdjust(null),
+    }));
+    assert(f.nulls === null && f.clampNull === 1,
+      `expected null/absent to mean "unadjusted", not the clamp floor: ${JSON.stringify(f)}`);
+    assert(f.none === null && f.missing === null,
+      `expected no filter at the defaults -- an unadjusted surface must not take the canvas path: ${JSON.stringify(f)}`);
+    assert(f.both === 'brightness(1.4) contrast(1.2)', `unexpected filter string: ${JSON.stringify(f.both)}`);
+    assert(f.clampedHigh === 'brightness(2.5) contrast(1)' && f.clampedLow === 'brightness(0.25) contrast(1)',
+      `expected out-of-range values clamped, got ${JSON.stringify(f)}`);
+    assert(f.junk === null, `expected non-numeric input to fall back to the default, got ${JSON.stringify(f.junk)}`);
+    ok('surface adjust: one shared filter formula, null at the defaults, clamped at the edges');
+  } catch(e){ bad('surface adjust: filter formula', e); }
+
+  // 33c. Brightness with NO tint. The whole point: a texture that is simply
+  //      too dark can be lifted without being recolored. material.color must
+  //      stay white -- brightness is a texture pass, and if it ever leaked
+  //      into the tint it would darken the very thing it is meant to fix.
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#pickerGrid .asset-card-tint');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.evaluate(() => {
+      const b = document.getElementById('saBrightness');
+      b.value = '1.5'; b.dispatchEvent(new Event('input'));
+    });
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(250);
+
+    const raw = await app13.page.evaluate(() => window.__threeTestEdit.rawSurface(null, 'wall', 'north'));
+    assert(raw && typeof raw === 'object' && raw.id === 'wallpaper-1' && !raw.tint && raw.brightness === 1.5,
+      `expected brightness stored with no tint, over the same base asset: ${JSON.stringify(raw)}`);
+    assert(raw.contrast === 1 || raw.contrast === undefined,
+      `expected contrast left at its default: ${JSON.stringify(raw)}`);
+
+    const walls = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(walls.length && walls.every(m => m.color === '#ffffff'),
+      `brightness must not touch material.color -- that multiply is what darkens: ${JSON.stringify(walls)}`);
+    assert(walls.every(m => m.hasMap && m.mapIsCanvas),
+      `expected the adjusted texture to go through the canvas pass: ${JSON.stringify(walls)}`);
+    ok('surface adjust: brightness works with no tint, and never touches material.color');
+  } catch(e){ bad('surface adjust: brightness without a tint', e); }
+
+  // 33d. Back at the defaults the stored value collapses to the bare id
+  //      string it was before this feature existed -- so an untouched surface
+  //      is byte-identical in the layout blob, and nothing pays for a feature
+  //      it isn't using.
+  try {
+    await app13.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#pickerGrid .asset-card-tint');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+    await app13.page.click('#saResetBtn');
+    await app13.page.click('#saApplyBtn');
+    await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
+    await app13.page.waitForTimeout(250);
+
+    const raw = await app13.page.evaluate(() => window.__threeTestEdit.rawSurface(null, 'wall', 'north'));
+    assert(raw === 'wallpaper-1',
+      `expected the defaults to collapse back to the bare asset id, got ${JSON.stringify(raw)}`);
+    const walls = await app13.page.evaluate(() =>
+      window.__threeTestEdit.meshes().filter(m => m.kind === 'wall' && m.wall === 'north'));
+    assert(walls.length && walls.every(m => m.hasMap && !m.mapIsCanvas && m.color === '#ffffff'),
+      `expected the original texture path back, with no canvas pass: ${JSON.stringify(walls)}`);
+    ok('surface adjust: default values collapse back to the plain stored id');
+  } catch(e){ bad('surface adjust: defaults collapse', e); }
 } finally {
   await app13.close();
 }
@@ -5105,6 +5195,51 @@ try {
     assert(hit.insideVR, `expected the VR canvas to be the top-stacked element under the digraph, got ${JSON.stringify(hit)}`);
     ok('VR overlay stacks above a still-open digraph overlay (clicks reach the canvas, not the graph backdrop)');
   } catch(e){ bad('VR overlay z-index stacks above the digraph overlay left open underneath', e); }
+
+  // 94. The round trip the whole jump feature exists for: jump from the
+  //     Review lens into a room that needs reviewing, review it, come back.
+  //     The graph is left open underneath the whole time (tests 92-93), so
+  //     it is still showing what it computed BEFORE the grade -- and until
+  //     this was wired up, the room you had just reviewed came back still
+  //     reading overdue, which is exactly the state the lens exists to
+  //     highlight. Drives the real VR Close button, so it covers the
+  //     wiring and not just the restyle.
+  try {
+    const roomKey = await appAF.page.evaluate((fen) => window.__graphTestHooks.roomKeyOf(fen), fens.room);
+    const graphStateOf = (k) => appAF.page.evaluate((key) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === key);
+      if(!n.nonempty()) return null;
+      return { rev: n.classes().find(c => c.startsWith('rev-')) || null, label: n.data('label') };
+    }, roomKey);
+
+    const before = await graphStateOf(roomKey);
+    assert(before && before.rev === 'rev-none' && !/🧠/u.test(before.label),
+      `setup: expected the room to start unmemorized in the open graph: ${JSON.stringify(before)}`);
+
+    await appAF.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appAF.page.waitForTimeout(150);
+    await appAF.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    await appAF.page.waitForFunction(() => !!window.__threeTestEdit.memorized(), { timeout: 5000 });
+    await appAF.page.evaluate(() => window.__threeTestEdit.gradeCurrentRoom('A'));
+    await appAF.page.waitForFunction(() => {
+      const r = window.__threeTestEdit.reviewFor();
+      return !!(r && r.lastGrade === 'A');
+    }, { timeout: 5000 });
+
+    await closeVRHelper(appAF.page);
+    // the close handler's refresh is async; the glyph is the visible result
+    await appAF.page.waitForFunction((key) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === key);
+      return n.nonempty() && /🧠/u.test(n.data('label'));
+    }, roomKey, { timeout: 5000 });
+
+    const after = await graphStateOf(roomKey);
+    assert(after.rev && after.rev !== 'rev-none',
+      `expected the graph to pick up the room's new schedule on VR close, got ${JSON.stringify(after)}`);
+    assert(after.rev === 'rev-notdue' || after.rev === 'rev-soon',
+      `a room just graded 'A' should not read due or overdue, got ${JSON.stringify(after)}`);
+    ok('Jump round trip: grading a room in VR updates the graph left open behind it');
+  } catch(e){ bad('Jump round trip: graph refresh on VR close', e); }
 } finally {
   await appAF.close();
 }
@@ -20230,6 +20365,75 @@ try {
       'expected a long-past record to read overdue');
     ok('Graph review: each room is coloured by its own stored due date');
   } catch(e){ bad('Graph review: due-state scoring', e); }
+
+  // 379b. A room graded elsewhere reaches an ALREADY-OPEN graph, in place.
+  //       You can jump into VR from the Review lens, grade the overdue room
+  //       you went to look at, and come back -- and the graph was showing
+  //       what it computed before you left, so the room you had just
+  //       reviewed still read as overdue. VR close runs this same restyle.
+  //
+  //       It must be a RESTYLE, not a rebuild: a rebuild costs a spinner and
+  //       seconds on a real repertoire, and throws away pan/zoom and any
+  //       manual arrangement -- so this pins the cytoscape instance and the
+  //       node's position as unchanged, which is the whole point of the
+  //       design and the thing a "just call showTranspositionGraph()" fix
+  //       would quietly lose.
+  try {
+    const DAY = 86400000, now = Date.now();
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 0, lapses: 2, lastGrade: 'C' } });
+    await reopenGraph();
+    assert(await revClassOf(rootKey) === 'rev-overdue', 'setup: expected the room to start overdue');
+
+    const before = await appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return { cy: (window.__graphTestHooks.cy().nodes().length), pos: { ...n.position() } };
+    }, rootKey);
+
+    // stands in for the grade made in VR, with the graph left open behind it
+    await appEH.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
+      { k: rootKey, r: { last: now, due: now + 30 * DAY, step: 4, lapses: 2, lastGrade: 'A' } });
+    assert(await revClassOf(rootKey) === 'rev-overdue',
+      'setup: the open graph should still be stale until the refresh runs');
+
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    assert(await revClassOf(rootKey) === 'rev-notdue',
+      'expected a room graded while the graph was open to stop reading overdue once VR closes');
+
+    const after = await appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return { cy: (window.__graphTestHooks.cy().nodes().length), pos: { ...n.position() } };
+    }, rootKey);
+    assert(after.cy === before.cy && after.pos.x === before.pos.x && after.pos.y === before.pos.y,
+      `expected an in-place restyle, not a rebuild: ${JSON.stringify({ before, after })}`);
+    ok('Graph review: a grade made while the graph is open restyles it in place, without a rebuild');
+  } catch(e){ bad('Graph review: in-place refresh after a grade', e); }
+
+  // 379c. The same refresh carries the memorized 🧠 glyph, and doesn't
+  //       duplicate it when run twice -- the label is rebuilt from the part
+  //       that isn't state, so a second pass has to be a no-op.
+  try {
+    const key = rootKey;
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, false), key);
+    await reopenGraph();
+    const labelOfKey = () => appEH.page.evaluate((k) => {
+      const n = window.__graphTestHooks.cy().nodes().filter(x => x.data('roomKey') === k);
+      return n.nonempty() ? n.data('label') : null;
+    }, key);
+    const bare = await labelOfKey();
+    assert(!/🧠/u.test(bare), `setup: expected no brain glyph to start: ${JSON.stringify(bare)}`);
+
+    await appEH.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), key);
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    const marked = await labelOfKey();
+    assert(/🧠/u.test(marked), `expected the brain glyph after the refresh: ${JSON.stringify(marked)}`);
+
+    await appEH.page.evaluate(() => window.__graphTestHooks.refreshRoomState());
+    const twice = await labelOfKey();
+    assert(twice === marked, `expected a second refresh to change nothing, got ${JSON.stringify(twice)} vs ${JSON.stringify(marked)}`);
+    assert((twice.match(/🧠/gu) || []).length === 1, `expected exactly one brain glyph, got ${JSON.stringify(twice)}`);
+    ok('Graph review: the refresh updates the memorized glyph, and is idempotent');
+  } catch(e){ bad('Graph review: refresh glyph handling', e); }
 
   // 380. The three lenses are mutually exclusive -- one fill per node, so
   //      switching must swap both the class and the legend, never stack them.
