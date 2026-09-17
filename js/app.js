@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-286';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-287';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-81';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-57';
 cytoscape.use(cytoscapeDagre);
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-389';
+const BUILD_TAG = '-390';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3317,13 +3317,25 @@ $('graphCoverageToggle').onclick = () => {
 /* "Show Castle:" dropdown — fast-focus the graph on a defined castle's subtree
    without hunting through the tree. Hidden entirely when no castles are defined.
    Its value mirrors GRAPH_FOCUS_SEQ so right-click focus/clear keeps it in sync. */
+/* One label for every castle-scope menu, so the digraph's and the move
+   table's can't drift apart.
+
+   A collapsed native <select> shows only the OPTION's own text, never its
+   <optgroup> label -- so a room option reading "Kitchen", or a whole-castle
+   one reading "(whole castle)", told you nothing about which castle you were
+   scoped to the moment the menu closed. The castle name has to be in the
+   option text itself. */
+function castleScopeLabel(castleName, roomName){
+  return `${castleName}: ${roomName || 'ALL'}`;
+}
+
 function populateGraphCastleSelect(){
   const wrap = $('graphCastleWrap'), sel = $('graphCastleSelect');
   const castles = definedCastles();
   if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
   wrap.style.display = '';
   sel.innerHTML = '<option value="">All</option>' +
-    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(castleScopeLabel(c))}</option>`).join('');
   sel.value = focusedCastleName() || '';
 }
 $('graphCastleSelect').onchange = () => {
@@ -4367,7 +4379,7 @@ $('unfocusBtn').onclick = clearFocus;
    workflow is a single select instead of hunting through the tree for the
    right row's three-dot menu. Hidden entirely when no castles are defined.
    Each castle is an <optgroup>, indenting (for free, native <select>
-   behavior) its own NAMED rooms underneath a "(whole castle)" entry --
+   behavior) its own NAMED rooms underneath a "<castle>: ALL" entry --
    unnamed rooms are the vast majority in a typical castle and would just be
    noise here with no better label than a bare move pair, so they're left
    out; a named room is deliberate enough to be worth a menu entry. A room
@@ -4393,7 +4405,7 @@ function populateTableCastleSelect(){
   // than the tree re-renders. Named rooms are filled in lazily, only once
   // this dropdown is actually about to be opened -- see loadTableCastleRooms.
   sel.innerHTML = '<option value="">All</option>' + castles.map(name =>
-    `<optgroup label="${escapeHtml(name)}"><option value="castle:${escapeHtml(name)}">(whole castle)</option></optgroup>`
+    `<optgroup label="${escapeHtml(name)}"><option value="castle:${escapeHtml(name)}">${escapeHtml(castleScopeLabel(name))}</option></optgroup>`
   ).join('');
   syncTableCastleSelect();
 }
@@ -4419,11 +4431,11 @@ function loadTableCastleRooms(){
         .filter(r => r.name && r.name.trim() && r.seq)
         .map(r => {
           const idx = TABLE_ROOM_OPTIONS.push({ name: r.name.trim(), seq: r.seq }) - 1;
-          return `<option value="room:${idx}">${escapeHtml(r.name.trim())}</option>`;
+          return `<option value="room:${idx}">${escapeHtml(castleScopeLabel(name, r.name.trim()))}</option>`;
         }).join('');
     }
     return `<optgroup label="${escapeHtml(name)}">` +
-      `<option value="castle:${escapeHtml(name)}">(whole castle)</option>` + roomOptions +
+      `<option value="castle:${escapeHtml(name)}">${escapeHtml(castleScopeLabel(name))}</option>` + roomOptions +
       `</optgroup>`;
   }).join('');
   syncTableCastleSelect();

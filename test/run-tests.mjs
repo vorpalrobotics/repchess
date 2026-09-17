@@ -541,6 +541,41 @@ try {
       `blocked on the staircase — room did not change (before/after ${r.roomBefore} / ${r.roomAfter})`);
     ok('walk UP a wall-sharing staircase reaches the room above');
   } catch(e){ bad('walk up shared-wall staircase', e); }
+
+  // 9b. "Jump to VR" at a staircase must land you OUTSIDE it, not partway up.
+  //     A staircase's teleport trigger sits at the far end of its protruding
+  //     corridor -- a whole corridor-depth outside the room's wall -- so
+  //     stepping back the usual viewing distance from it put you halfway up
+  //     the stairs, facing a step. What you want to stand back from is the
+  //     staircase's MOUTH, which is the wall plane, and which is also exactly
+  //     where the room's name sign hangs. So a stair exit carries a separate
+  //     viewBox for that, and only a stair exit needs one.
+  try {
+    // test 9 left us at the TOP of the stairs; the staircase exit belongs to
+    // the room at the bottom, so go back down to it first
+    await app4.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.alpha);
+    await app4.page.waitForTimeout(250);
+    const info = await app4.page.evaluate(() => ({ exits: window.__threeTestEdit.exitInfo() }));
+    const stair = info.exits.find(e => e.viewBox);
+    assert(stair, `expected the staircase exit to carry a viewBox, got ${JSON.stringify(info.exits.map(e => ({ t: e.target, v: !!e.viewBox })))}`);
+
+    // the viewBox is nearer the room centre than the trigger box: the trigger
+    // is out at the top/bottom of the corridor, the mouth is at the wall
+    const dist = b => Math.hypot((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2);
+    assert(dist(stair.viewBox) < dist(stair.box) - 0.5,
+      `expected the viewBox at the staircase's mouth, well inside its trigger box at the corridor's far end: ${JSON.stringify(stair)}`);
+
+    // ...and an ORDINARY door gets none -- its trigger already straddles the
+    // wall plane, so the generic step-back was always right for it. Checked
+    // from the room ABOVE, whose way back down is an ordinary door.
+    await app4.page.evaluate((k) => window.__threeTestEdit.enter(k), keys.r2);
+    await app4.page.waitForTimeout(250);
+    const upstairs = await app4.page.evaluate(() => window.__threeTestEdit.exitInfo());
+    assert(upstairs.length, 'setup: expected the upstairs room to have at least one exit');
+    assert(upstairs.every(e => !e.viewBox),
+      `expected ordinary doors to carry no viewBox -- only stairs need one, got ${JSON.stringify(upstairs.map(e => ({ t: e.target, v: !!e.viewBox })))}`);
+    ok('jump-to-door: a staircase carries a separate mouth-of-the-stairs viewing box, ordinary doors do not');
+  } catch(e){ bad('jump-to-door: staircase viewing position', e); }
 } finally {
   await app4.close();
 }
@@ -2738,8 +2773,14 @@ try {
 
   // 56b. The dropdown appears once castles are defined: each castle is its
   //      own <optgroup> (so its rooms render indented, for free, under a
-  //      bold, non-selectable header), with a "(whole castle)" entry plus
-  //      any of its NAMED rooms -- Alpha has none, Beta has "Vault".
+  //      bold, non-selectable header), with a "<castle>: ALL" entry plus any
+  //      of its NAMED rooms -- Alpha has none, Beta has "Vault".
+  //
+  //      Every option NAMES ITS CASTLE, because a collapsed <select> shows
+  //      only the option's own text and never its optgroup label -- so a room
+  //      reading just "Vault" told you nothing about which castle you were
+  //      scoped to the moment the menu closed. The optgroup still groups them
+  //      while the menu is open; the text is what survives it closing.
   try {
     const info = await appS2.page.evaluate(() => {
       const sel = document.getElementById('tableCastleSelect');
@@ -2749,6 +2790,9 @@ try {
         groupLabels: [...sel.querySelectorAll('optgroup')].map(g => g.label),
         vaultText: sel.querySelector('option[value="room:0"]')?.textContent,
         vaultGroup: sel.querySelector('option[value="room:0"]')?.closest('optgroup')?.label,
+        alphaAllText: sel.querySelector('option[value="castle:Alpha"]')?.textContent,
+        // the digraph's menu shares castleScopeLabel, so it must match
+        graphTexts: [...(document.getElementById('graphCastleSelect')?.options || [])].map(o => o.textContent),
       };
     });
     assert(info.visible, 'expected the "Show Castle" dropdown to be visible once castles are defined');
@@ -2756,8 +2800,17 @@ try {
       `expected All, Alpha's (whole castle), Beta's (whole castle), then Beta's "Vault" room, got ${JSON.stringify(info.values)}`);
     assert(JSON.stringify(info.groupLabels) === JSON.stringify(['Alpha', 'Beta']),
       `expected one optgroup per castle, got ${JSON.stringify(info.groupLabels)}`);
-    assert(info.vaultText === 'Vault', `expected the named room's option text to be "Vault", got ${JSON.stringify(info.vaultText)}`);
+    assert(info.vaultText === 'Beta: Vault',
+      `expected the room option to name its castle so it still reads once the menu closes, got ${JSON.stringify(info.vaultText)}`);
     assert(info.vaultGroup === 'Beta', `expected "Vault" nested under Beta's own optgroup, got ${JSON.stringify(info.vaultGroup)}`);
+    assert(info.alphaAllText === 'Alpha: ALL',
+      `expected the whole-castle option to name its castle, got ${JSON.stringify(info.alphaAllText)}`);
+    // only populated once the graph has been built at least once; when it
+    // has, it must agree with the table's, since both go through castleScopeLabel
+    if(info.graphTexts.length){
+      assert(info.graphTexts.join('|') === 'All|Alpha: ALL|Beta: ALL',
+        `expected the digraph's own castle menu to use the same labels, got ${JSON.stringify(info.graphTexts)}`);
+    }
     ok('move table: "Show Castle" dropdown groups each castle in an optgroup, with its named rooms indented underneath');
   } catch(e){ bad('move table: "Show Castle" dropdown presence/options', e); }
 
