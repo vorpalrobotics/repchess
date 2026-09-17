@@ -17499,11 +17499,20 @@ try {
     await appDC.page.click('#resetFactoryWarnContinueBtn');
     await appDC.page.waitForSelector('#resetFactoryConfirmOverlay', { state: 'visible', timeout: 5000 });
     await appDC.page.fill('#resetFactoryConfirmInput', 'TOTAL DELETE');
-    await appDC.page.click('#resetFactoryConfirmDeleteBtn');
 
-    // the click triggers a real page navigation (location.reload()) --
-    // wait for the reloaded app to finish booting the same way launchApp()
-    // itself does, rather than assuming any particular timing.
+    /* The click triggers a real page navigation (location.reload()), and
+       waiting for #buildStamp alone does NOT wait for it: buildStamp is
+       already populated on the page we are standing on, so the predicate is
+       satisfied on its first poll, before the navigation has even started.
+       Every assertion below then raced the reload, and read the OLD document
+       whenever it won -- reporting the pre-reset line list as if the wipe had
+       silently failed.
+       A marker on the current document is what actually distinguishes the two:
+       a fresh document cannot have it. */
+    await appDC.page.evaluate(() => { window.__preResetMarker = true; });
+    await appDC.page.click('#resetFactoryConfirmDeleteBtn');
+    await appDC.page.waitForFunction(() => !window.__preResetMarker, { timeout: 15000 });
+    // ...and only then the app's own boot signal, as launchApp() does
     await appDC.page.waitForFunction(() => {
       const el = document.getElementById('buildStamp');
       return el && el.textContent && el.textContent.trim().length > 0;
