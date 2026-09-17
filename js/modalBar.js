@@ -56,6 +56,8 @@ export function modalBarHtml({ title, save = false, destructive = null, prefix =
      onSave        () => void|Promise
      onDestructive () => void
      watch         element whose input/change events mean "something changed"
+     validate      optional () => message|null; a message holds Save back and
+                   becomes its tooltip
      thing         name for the discard prompt ("this list")
 
    Returns a controller: refresh() after any programmatic mutation the watch
@@ -71,10 +73,20 @@ export function wireModalBar(barEl, opts){
   let baseline = opts.snapshot ? snap(opts.snapshot) : null;
   let invalid = null;
   let busy = false;
+  // has the user touched anything in here yet? Only used to make a LATE
+  // re-baseline safe -- a modal with an asynchronously-populated field wants
+  // to re-take its baseline once that field lands, but must not do so over
+  // an edit the user already made in the meantime.
+  let touched = false;
 
   const isDirty = () => !!opts.snapshot && !busy && snap(opts.snapshot) !== baseline;
 
   function paint(){
+    // Re-checked on every repaint, so Save is never live when it would fail:
+    // the spec's "Invalid" state. Runs on each keystroke, so a validate() must
+    // be cheap -- an expensive check belongs at save time with its error in
+    // the body instead.
+    if(opts.validate) invalid = opts.validate() || null;
     const dirty = isDirty();
     leaveBtn.textContent = dirty ? 'Cancel' : 'Done';
     leaveBtn.disabled = busy;
@@ -129,7 +141,7 @@ export function wireModalBar(barEl, opts){
       w.removeEventListener('input', w._modalBarOnEdit);
       w.removeEventListener('change', w._modalBarOnEdit);
     }
-    w._modalBarOnEdit = () => paint();
+    w._modalBarOnEdit = () => { touched = true; paint(); };
     w.addEventListener('input', w._modalBarOnEdit);
     w.addEventListener('change', w._modalBarOnEdit);
   }
@@ -154,8 +166,11 @@ export function wireModalBar(barEl, opts){
     refresh: paint,
     leave,
     isDirty,
-    // re-baseline to the CURRENT state -- for a save that stays on the view
-    markClean(){ baseline = opts.snapshot ? snap(opts.snapshot) : null; paint(); },
+    // re-baseline to the CURRENT state -- for a save that stays on the view,
+    // or for a modal whose async field has only just finished populating
+    markClean(){ baseline = opts.snapshot ? snap(opts.snapshot) : null; touched = false; paint(); },
+    // false until the user has actually typed/picked something. See `touched`.
+    touched: () => touched,
     /* re-baseline to a state captured elsewhere. Needed by any editor that
        re-renders (and so re-mounts its bar) while editing: without it, every
        re-render would take the current, already-dirty state as the new

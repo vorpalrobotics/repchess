@@ -5193,15 +5193,38 @@ try {
     assert(state.room === 'mainStreet',
       `expected to land OUTSIDE the entry room, on the street by its building door, got ${state.room}`);
     assert(state.overlay === 'none', 'expected the room-info modal to close after jumping');
-    // ...and facing it: the whole point is that one step forward walks in
+
+    // A castle's entry room is reviewed from the STREET, where what you read
+    // is not a door sign but the street-entry billboard -- a full move pair
+    // plus the stat strip carrying its DUE marking, sitting ~1.8m out from
+    // the facade and a couple of metres to one side. A door's-worth of
+    // step-back left that half out of frame, so a street entry stands you
+    // materially further out than any in-castle door would.
+    const back = await appAF.page.evaluate(() => {
+      const p = window.__threeTestEdit.pos();
+      const ex = window.__threeTestEdit.exitInfo().find(e => e.street);
+      if(!ex) return null;
+      const cx = (ex.box.minX + ex.box.maxX) / 2, cz = (ex.box.minZ + ex.box.maxZ) / 2;
+      return Math.hypot(p.x - cx, p.z - cz);
+    });
+    assert(back !== null, 'setup: expected a street-entry exit to measure against');
+    assert(back > 6,
+      `expected a street entry to stand you well back so its move images and DUE strip are in frame, got ${back?.toFixed(1)}m`);
+
+    // ...and still facing it: the whole point is that walking forward goes in
     const arrived = await appAF.page.evaluate(async (target) => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
-      await new Promise(res => setTimeout(res, 2500));
+      // polled rather than a fixed hold -- the walk is now ~8m, and headless
+      // frame timing varies enough that any single fixed delay is a coin flip
+      const deadline = Date.now() + 8000;
+      while(Date.now() < deadline && window.__threeTestEdit.room() !== target){
+        await new Promise(r => setTimeout(r, 120));
+      }
       window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }));
       return window.__threeTestEdit.room() === target;
     }, roomKey);
     assert(arrived, 'expected to be facing the door -- walking forward should enter the target room');
-    ok('room-info modal: "Jump to VR" with VR closed lands at the door into the target room, facing it');
+    ok(`room-info modal: "Jump to VR" lands ${back.toFixed(1)}m back from a castle's street entry, facing it`);
   } catch(e){ bad('room-info modal: Jump to VR with VR closed', e); }
 
   // 92. With VR already open (fast path via jumpToRoom, no rebuild), jumping
@@ -7641,7 +7664,7 @@ try {
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="attributes"]').click());
     await appAV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appAV.page.fill('#attrRoomName', 'Foyer');
-    await appAV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
     assert((await isCached()) === false, 'expected renaming a room (Attributes modal) to invalidate the cache');
     ok('VR cache: renaming a room via the Attributes modal invalidates the cache');
@@ -7754,7 +7777,7 @@ try {
     const liveLabel = await appAW.page.$eval('#attrCastleOwner option[value=""]', o => o.textContent);
     assert(liveLabel.includes('Beta'), `expected Auto label to live-update to the just-typed name Beta, got "${liveLabel}"`);
 
-    await appAW.page.evaluate(() => document.getElementById('attributesCancelBtn').click());
+    await appAW.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
     ok('Attributes modal: "Auto" castle-owner label live-updates as you check "starts new castle" and type a name');
   } catch(e){ bad('Attributes modal: live Auto label update', e); }
 
@@ -8580,7 +8603,7 @@ try {
     await appBD.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,h6,e4,a6"] [data-act="attributes"]').click());
     await appBD.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appBD.page.fill('#attrRoomName', 'Transpose');
-    await appBD.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appBD.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
     await appBD.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const names = await appBD.page.evaluate(() => {
@@ -12587,7 +12610,7 @@ try {
     await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
     await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appBV.page.fill('#attrNote', 'watch the e6 setup');
-    await appBV.page.evaluate(() => document.getElementById('attributesSaveBtn').click());
+    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
     await appBV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
     await appBV.page.waitForSelector(`${rowSel} + tr.meta-row .meta-note`, { timeout: 5000 });
     const noteText = (await appBV.page.textContent(`${rowSel} + tr.meta-row .meta-note`)).trim();
@@ -12602,7 +12625,7 @@ try {
     await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     const prefilled = await appBV.page.inputValue('#attrNote');
     assert(prefilled === 'watch the e6 setup', `expected attrNote pre-filled with the saved note, got "${prefilled}"`);
-    await appBV.page.evaluate(() => document.getElementById('attributesCancelBtn').click());
+    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
     ok('Notes folded into Set Attributes: clicking the meta-row badge reopens Attributes with the note pre-filled');
   } catch(e){ bad('Notes folded into Set Attributes: badge reopens pre-filled', e); }
 
@@ -17652,7 +17675,7 @@ try {
     await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     const display = await appDE.page.evaluate(() => document.getElementById('attrRedirectField').style.display);
     assert(display === 'none', `expected no redirect field on a castle root, got display="${display}"`);
-    await appDE.page.click('#attributesCancelBtn');
+    await appDE.page.click('#attributesOverlay .modal-bar .mb-leave');
     ok('Attributes modal: a castle root never offers "Redirect to castle"');
   } catch(e){ bad('Attributes modal: castle root excluded from redirect', e); }
 
@@ -17668,8 +17691,70 @@ try {
     const opts = await appDE.page.$$eval('#attrRedirectTo option', os => os.map(o => o.textContent));
     assert(opts.length === 2 && opts[0] === '(none)' && opts[1].includes('Queens Pawn Palace') && opts[1].includes('Reversed Approach'),
       `expected exactly a "(none)" option plus the one transposing castle, got ${JSON.stringify(opts)}`);
-    await appDE.page.click('#attributesCancelBtn');
     ok('Attributes modal: "Redirect to castle" offers the transposing castle as its only candidate');
+
+    /* --- the shared button bar, third modal converted
+       (Documents/modal-buttons.md). Attributes is the first with NO
+       destructive action, the first whose body had to be split out of a
+       .modal that was scrolling itself, and the first to use the bar's live
+       `validate`. --- */
+
+    // 298b. Opening a node you only LOOK at must read clean. This modal's
+    //       redirect field populates asynchronously, so its baseline was
+    //       being taken while that field was still empty and disabled -- and
+    //       the moment the saved target landed in it, the modal claimed
+    //       unsaved changes nobody made, and offered a discard confirm on the
+    //       way out. That is exactly the false positive that teaches you to
+    //       click through the confirm that matters.
+    let ab = await modalBarState(appDE.page, 'attributesOverlay');
+    assert(ab, 'expected the Attributes modal to use the shared bar');
+    assert(ab.title === 'Set Attributes', `unexpected bar title: ${JSON.stringify(ab.title)}`);
+    assert(ab.destructive === null, 'expected no destructive action on Attributes');
+    assert(ab.leave.text === 'Done' && ab.state === '' && ab.save.disabled,
+      `expected a node you merely opened -- async redirect field and all -- to read clean, got ${JSON.stringify(ab)}`);
+    assert(ab.barIsFirst && ab.strayIds.length === 0 && ab.visibleWhenScrolled === true,
+      `expected the bar first, pinned, nothing stray: ${JSON.stringify(ab)}`);
+
+    await appDE.page.fill('#attrRoomName', 'Some Room');
+    ab = await modalBarState(appDE.page, 'attributesOverlay');
+    assert(ab.leave.text === 'Cancel' && !ab.save.disabled && ab.save.primary,
+      `expected an edit to arm Save and flip Done to Cancel, got ${JSON.stringify(ab)}`);
+    await appDE.page.fill('#attrRoomName', '');
+    ab = await modalBarState(appDE.page, 'attributesOverlay');
+    assert(ab.leave.text === 'Done' && ab.save.disabled,
+      `expected undoing it by hand to return to clean, got ${JSON.stringify(ab)}`);
+    ok('modal bar: Attributes reads clean on open despite its async field, and tracks real edits');
+
+    // 298c. The bar's INVALID state, which this modal is the first to use.
+    //       Its street-number rules used to be checked only when you PRESSED
+    //       Save -- so a bad value let you press a live-looking button and
+    //       get an error back. They now run on every keystroke and hold Save
+    //       back instead, with the reason in its tooltip and still in the
+    //       body. Save being live has to mean Save will work.
+    await appDE.page.evaluate(() => { document.getElementById('attrIsCastleRoot').checked = true; });
+    await appDE.page.evaluate(() => document.getElementById('attrIsCastleRoot').dispatchEvent(new Event('change', { bubbles: true })));
+    await appDE.page.fill('#attrCastleName', 'A Brand New Castle');
+    await appDE.page.fill('#attrStreetNumber', '0');    // must be >= 1
+    ab = await modalBarState(appDE.page, 'attributesOverlay');
+    assert(ab.leave.text === 'Cancel', `setup: expected these edits to read as unsaved, got ${JSON.stringify(ab)}`);
+    assert(ab.save.disabled && !ab.save.primary,
+      `expected an invalid street number to hold Save back rather than letting it look live, got ${JSON.stringify(ab.save)}`);
+    const why = await appDE.page.evaluate(() => ({
+      tip: document.querySelector('#attributesOverlay .mb-save').title,
+      body: document.getElementById('attrError').textContent,
+    }));
+    assert(/positive whole number/i.test(why.tip), `expected Save to say why it is dead, got ${JSON.stringify(why.tip)}`);
+    assert(/positive whole number/i.test(why.body), `expected the reason in the body too -- a tooltip alone is easy to miss, got ${JSON.stringify(why.body)}`);
+
+    await appDE.page.fill('#attrStreetNumber', '7');
+    ab = await modalBarState(appDE.page, 'attributesOverlay');
+    assert(!ab.save.disabled && ab.save.primary,
+      `expected a valid number to hand Save back, got ${JSON.stringify(ab.save)}`);
+    const cleared = await appDE.page.evaluate(() => document.getElementById('attrError').textContent);
+    assert(cleared === '', `expected the error cleared once valid, got ${JSON.stringify(cleared)}`);
+    ok('modal bar: an invalid field holds Save back and says why, instead of failing when pressed');
+
+    await appDE.page.click('#attributesOverlay .modal-bar .mb-leave');
   } catch(e){ bad('Attributes modal: redirect candidate list', e); }
 
   // 299. Selecting it and saving badges the row, hides "Add Opponent Move" on
@@ -17680,7 +17765,7 @@ try {
     await appDE.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDE.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     await appDE.page.selectOption('#attrRedirectTo', { index: 1 });
-    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const info = await appDE.page.evaluate(() => {
@@ -17713,7 +17798,7 @@ try {
     assert(preselected.includes('Queens Pawn Palace'), `expected the saved redirect target pre-selected on reopen, got "${preselected}"`);
 
     await appDE.page.selectOption('#attrRedirectTo', { index: 0 });   // "(none)"
-    await appDE.page.click('#attributesSaveBtn');
+    await appDE.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDE.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const info = await appDE.page.evaluate(() => {
@@ -18347,7 +18432,7 @@ try {
     await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDL.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     await appDL.page.selectOption('#attrRedirectTo', { index: 1 });
-    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDL.page.waitForFunction(() => /ported 1 response/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
 
     const l2Prefs = await appDL.page.evaluate(() => window.__redirectTestHooks.getAllPrefs('L2'));
@@ -18365,7 +18450,7 @@ try {
     await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDL.page.fill('#attrNote', 'just a note, not a redirect change');
     await appDL.page.evaluate(() => { document.getElementById('progress').textContent = ''; });   // clear -- a stray re-port would show up here
-    await appDL.page.click('#attributesSaveBtn');
+    await appDL.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
     const progressText = await appDL.page.evaluate(() => document.getElementById('progress').textContent);
     assert(progressText === '', `expected no port-related message from an unrelated save, got "${progressText}"`);
@@ -18467,7 +18552,7 @@ try {
     await appDM.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDM.page.waitForFunction(() => !document.getElementById('attrRedirectTo').disabled, { timeout: 5000 });
     await appDM.page.selectOption('#attrRedirectTo', { index: 1 });
-    await appDM.page.click('#attributesSaveBtn');
+    await appDM.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDM.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     const title = await appDM.page.evaluate(() =>
@@ -18645,7 +18730,7 @@ try {
     await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
     await appDO.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appDO.page.fill('#attrNote', 'an unrelated note, not a redirect or new reply');
-    await appDO.page.click('#attributesSaveBtn');
+    await appDO.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDO.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
     await appDO.page.evaluate(() => window.__redirectTestHooks.forceNewTranspositionsScan());

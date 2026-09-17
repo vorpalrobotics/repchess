@@ -1,9 +1,10 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-288';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-82';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-58';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-289';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-83';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-3';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-59';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -104,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-391';
+const BUILD_TAG = '-393';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3860,7 +3861,63 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   refreshAttrFieldVisibility();
   refreshRedirectField(saved, attrModalRoomSeq);
   attributesModalSave = onSave;
+  mountAttributesBar();
   $('attributesOverlay').style.display='flex';
+}
+
+/* The Attributes modal's own button bar (Documents/modal-buttons.md).
+
+   Mounted per OPEN rather than once at startup, because the baseline it
+   measures "unsaved" against has to be the fields as they stand the moment
+   this particular node's attributes are loaded into them.
+
+   This is the first modal to use the bar's live `validate`, and it can
+   because its rule is cheap -- one PREFS scan. The pay-off is that Save is
+   never live when it would fail: the street-number rules that used to show
+   an error only AFTER you pressed it now just hold Save back and say why in
+   its tooltip, with the error text still in the body where it belongs. */
+function attrSnapshot(){
+  return {
+    roomName: $('attrRoomName').value.trim(),
+    isCastleRoot: $('attrIsCastleRoot').checked,
+    castleName: $('attrCastleName').value.trim(),
+    castleOwner: $('attrCastleOwner').value,
+    streetNumber: $('attrStreetNumber').value.trim(),
+    note: $('attrNote').value.trim(),
+    redirect: $('attrRedirectTo').value,
+  };
+}
+function attrValidate(){
+  if(!$('attrIsCastleRoot').checked) return null;
+  const raw = $('attrStreetNumber').value.trim();
+  if(raw === '') return null;                     // optional; Generate Castle fills it in
+  const num = parseInt(raw, 10);
+  if(!Number.isFinite(num) || num < 1) return 'Street number must be a positive whole number.';
+  const clash = streetNumberConflict(num, $('attrCastleName').value.trim());
+  if(clash) return `Street number ${num} is already used by "${clash}" in this opening system.`;
+  return null;
+}
+let attrBarCtl = null;
+function mountAttributesBar(){
+  const host = $('attributesBar');
+  host.innerHTML = modalBarHtml({ title: 'Set Attributes', save: true });
+  attrBarCtl = wireModalBar(host.querySelector('.modal-bar'), {
+    snapshot: attrSnapshot,
+    watch: $('attributesOverlay'),
+    validate: () => {
+      const msg = attrValidate();
+      // the reason belongs in the body too -- a tooltip alone is easy to miss
+      $('attrError').textContent = msg || '';
+      return msg;
+    },
+    thing: 'these attributes',
+    onLeave: closeAttributesModal,
+    onSave: commitAttributes,
+  });
+}
+function closeAttributesModal(){
+  $('attributesOverlay').style.display='none';
+  attributesModalSave = null;
 }
 function refreshAttrFieldVisibility(){
   const isRoot = $('attrIsCastleRoot').checked;
@@ -4152,6 +4209,15 @@ async function refreshRedirectField(saved, roomSeq){
   hint.textContent = candidates.length
     ? 'Doors that would open into this room instead route to the target castle\'s own room there.'
     : (saved.redirectToCastle ? '' : 'No other castle currently shares this exact position.');
+  /* This field populates ASYNCHRONOUSLY (the candidate lookup above), so the
+     button bar's "unsaved" baseline was taken while the select was still
+     empty and disabled. The moment the saved target landed in it, the modal
+     read as dirty for a change nobody made -- offering a discard confirm on
+     the way out of a node you only looked at, which is exactly the false
+     positive that would teach you to click through the confirm that matters.
+     The true opening state is HERE, once the field is actually filled in. */
+  // ...but never over an edit the user already made while it was loading
+  if(attrBarCtl && !attrBarCtl.touched()) attrBarCtl.markClean();
 }
 
 /* true if `seq` is `prefix` itself or a genuine continuation of it -- element-
@@ -4269,31 +4335,18 @@ function redirectChanged(before, after){
 
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
 $('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
-$('attributesCancelBtn').onclick = () => {
-  $('attributesOverlay').style.display='none';
-  attributesModalSave = null;
-};
-$('attributesSaveBtn').onclick = () => {
+/* Writes what the modal is staging. The street-number rules that used to be
+   checked in here now live in attrValidate, which runs on every keystroke and
+   holds Save back -- so by the time this runs they have already passed, and a
+   failure that only surfaced on press is gone. */
+function commitAttributes(){
   const isRoot = $('attrIsCastleRoot').checked;
   const castleName = $('attrCastleName').value.trim();
-  // street number: optional here (Generate Castle fills it in if left blank),
-  // but when given it must be a positive integer unique among this system's
-  // other castles — same rule Generate Castle enforces.
-  let streetNumber = '';
+  // optional (Generate Castle fills it in if left blank); when given,
+  // attrValidate has already confirmed it's a positive integer unique among
+  // this system's other castles -- the same rule Generate Castle enforces.
   const rawNum = $('attrStreetNumber').value.trim();
-  if(isRoot && rawNum !== ''){
-    const num = parseInt(rawNum, 10);
-    if(!Number.isFinite(num) || num < 1){
-      $('attrError').textContent = 'Street number must be a positive whole number.';
-      return;
-    }
-    const clash = streetNumberConflict(num, castleName);
-    if(clash){
-      $('attrError').textContent = `Street number ${num} is already used by "${clash}" in this opening system.`;
-      return;
-    }
-    streetNumber = num;
-  }
+  const streetNumber = (isRoot && rawNum !== '') ? parseInt(rawNum, 10) : '';
   const redirVal = $('attrRedirectTo').value;
   let redirectToCastle = '', redirectTargetLineId = '', redirectTargetSeq = null, redirectTargetRoomName = '';
   if(redirVal === '__stale__'){
@@ -4316,10 +4369,10 @@ $('attributesSaveBtn').onclick = () => {
     note: $('attrNote').value.trim(),
     redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
-  $('attributesOverlay').style.display='none';
-  if(attributesModalSave) attributesModalSave(v);
-  attributesModalSave = null;
-};
+  const cb = attributesModalSave;
+  closeAttributesModal();
+  if(cb) cb(v);
+}
 
 /* ---------- focus on a single line, hiding sibling branches above it ----------
    Walks from the clicked row up through each ancestor table, hiding every
