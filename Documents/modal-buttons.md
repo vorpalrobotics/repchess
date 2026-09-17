@@ -46,7 +46,6 @@ Two further gaps found while surveying:
     <div class="modal-bar-buttons">
       <button class="mb-destructive">Delete…</button>
       <button class="mb-leave">Done</button>
-      <button class="mb-apply">Apply</button>
       <button class="mb-save">Save</button>
     </div>
   </div>
@@ -73,14 +72,25 @@ patch, whereas the flex version is structurally correct.
 
 ## Button vocabulary
 
-Four roles. A modal uses the subset it needs, and **never invents a fifth**.
+Three roles. A modal uses the subset it needs, and **never invents a fourth**.
 
 | Role | Label | Does | Present when |
 |---|---|---|---|
 | **Leave** | `Done` / `Cancel` | Closes the modal | Always |
-| **Apply** | `Apply` | Commits changes, **stays open** | Editor modals with a meaningful "keep going" |
 | **Save** | `Save` | Commits changes **and closes** | Editor modals |
 | **Destructive** | `Delete…`, `Reset…` | Removes the thing the modal is editing | Where it applies |
+
+**There is deliberately no `Apply`** (commit and stay open). Only a handful of
+modals had a meaningful "keep working after committing", and at phone width
+every button competes with the title for a bar that must not wrap. If a
+specific modal turns out to need it, add it back there rather than to the
+vocabulary — a button that is disabled forever in twenty modals to serve one
+is worse than the trip through Save and reopen.
+
+The consequence to keep in mind while converting: **Save is the only thing
+that commits.** A long editing session in one modal is all-or-nothing, so
+validation has to be good enough that Save rarely fails, and the discard
+confirm below has to be reliable.
 
 The **Leave** button is one button whose label depends on state, not two
 buttons:
@@ -98,12 +108,12 @@ which it always should.
 
 ## States
 
-| | Leave | Apply | Save |
-|---|---|---|---|
-| **Clean** | `Done`, enabled, neutral | disabled | disabled |
-| **Dirty** | `Cancel`, enabled, neutral | enabled, neutral | enabled, **primary** |
-| **Committing** | disabled | disabled | disabled, label `Saving…` |
-| **Invalid** (dirty but fails validation) | `Cancel`, enabled | disabled | disabled, `title` explains why |
+| | Leave | Save |
+|---|---|---|
+| **Clean** | `Done`, enabled, neutral | disabled |
+| **Dirty** | `Cancel`, enabled, neutral | enabled, **primary** |
+| **Committing** | disabled | disabled, label `Saving…` |
+| **Invalid** (dirty but fails validation) | `Cancel`, enabled | disabled, `title` explains why |
 
 **Invalid** matters: a modal with a validation error must not present an
 enabled Save that will fail. Disable it and put the reason in the `title`, and
@@ -117,7 +127,7 @@ the neutral style.
 
 | Class | Background | Border | Text | Notes |
 |---|---|---|---|---|
-| neutral (default) | `#f5f5f5` | `#888` | inherit | Done, Cancel, Apply |
+| neutral (default) | `#f5f5f5` | `#888` | inherit | Done, Cancel |
 | `.mb-save.is-dirty` | `#1565c0` | `#1565c0` | `#fff` | the primary action |
 | `.mb-destructive` | `#c62828` | `#c62828` | `#fff` | already the app's red |
 | `:disabled` (any) | `#f0f0f0` | `#ccc` | `#aaa` | `opacity:.55; cursor:default` |
@@ -131,26 +141,29 @@ app's selection/action accent.
 `style="background:#c62828;color:#fff"` inlines and the one-off
 `#assetsDeleteBtn` rule.
 
-**The clean→dirty transition must be unmissable**, since it is the signal that
-something is now at stake. Three things change at once: Save fills in solid
-blue from flat grey, Apply enables, and the Leave button's label changes from
-`Done` to `Cancel`. Plus the state text below.
+**The clean→dirty transition must be unmissable**, since it is the signal
+that something is now at stake — and with `Apply` gone there are only two
+buttons carrying it. Both change at once: Save goes from flat grey and
+disabled to solid blue and live, and the Leave button's label changes from
+`Done` to `Cancel`. Together with the state text below, those three signals
+are the whole warning system, so none of them is optional.
 
 ## Ordering
 
 Left to right within `.modal-bar-buttons`:
 
 ```
-[ Destructive ]   ←gap→   [ Leave ]  [ Apply ]  [ Save ]
+[ Destructive ]   ←1.5rem→   [ Leave ]  ←1rem→  [ Save ]
 ```
 
 - **Save is rightmost.** It is the primary action and the one most often
   wanted.
 - **Destructive is leftmost, separated by a `1.5rem` gap** from the rest, so
   it can never be hit by a misjudged click aimed at Leave.
-- **Leave sits away from Save**, separated by Apply when Apply is present.
-  When it is absent, a `.6rem` gap applies between all three anyway; if a
-  modal has only Leave and Save, put a `1rem` gap between them.
+- **`1rem` between Leave and Save**, wider than the usual `.6rem`. With
+  `Apply` gone they are adjacent, and they are the two whose consequences
+  differ most: one discards the session's work, the other keeps it. That gap
+  is doing real work — don't tighten it to line up with other button rows.
 
 ## Unsaved-change behaviour
 
@@ -168,7 +181,9 @@ does not.
 3. **The bar shows `Unsaved changes` in `.modal-bar-state`** while dirty
    (`#8a6d1f`, `.8rem`). Cheap, and it removes all doubt about which state
    you are in.
-4. **`Apply` clears dirtiness** without closing. `Save` commits and closes.
+4. **Only `Save` clears dirtiness**, and it closes as it does so. There is no
+   way to bank progress without leaving, which is the cost of dropping
+   `Apply` — see the note under *Button vocabulary*.
 
 ## Keyboard
 
@@ -202,12 +217,13 @@ bar as the Leave button, or make it not close.
 
 ## Modal categories
 
-Not every modal is an editor, and forcing Apply/Save onto a modal that has no
-staged state would be worse than what we have now.
+Not every modal is an editor, and forcing a Save onto a modal that has no
+staged state would be worse than what we have now — a Save that is disabled
+forever teaches you to ignore the disabled state everywhere else.
 
 | Category | Bar contains | Dirty concept |
 |---|---|---|
-| **Editor** — stages changes, commits on Save | Leave + Apply + Save (+ Destructive) | Yes |
+| **Editor** — stages changes, commits on Save | Leave + Save (+ Destructive) | Yes |
 | **Immediate** — every action takes effect at once | Leave only (`Done`) | No, never dirty |
 | **Confirm** — a single yes/no decision | Leave (`Cancel`) + the action verb as primary | No |
 | **Informational** — nothing to change | Leave only (`Done`) | No |
@@ -235,8 +251,10 @@ Order, worst first:
       currently `overflow:auto` on the modal itself.
 - [ ] **Manage Mnemonics** (`#mnemonicsOverlay`) + the square editor
       (`#mnemonicsEditorOverlay`) — Immediate + Editor.
-- [ ] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor; already has
-      Apply/Reset/Remove semantics close to this spec.
+- [ ] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor. Its existing
+      `Apply` already means commit-and-close, so it becomes `Save` outright;
+      `Reset` and `Remove all` stay in the body (they edit the value, they
+      don't destroy a record).
 - [ ] **Room Geometry** (`#roomGeomOverlay`) — Editor + Destructive
       (`Reset Room…`).
 - [ ] **Colour picker / swatch picker / crop editor** — Editor.
@@ -262,9 +280,11 @@ given overlay id, so each conversion is one call plus its own specifics:
   that closes or commits;
 - with the body scrolled to the bottom, the bar is still within the modal's
   visible box;
-- for editors: Save and Apply start disabled; a representative edit enables
-  them and flips the Leave label to `Cancel`; `Apply` returns it to `Done`;
-  Cancel-while-dirty raises the confirm.
+- for editors: Save starts disabled and the Leave button reads `Done`; a
+  representative edit enables Save and flips the label to `Cancel`; reverting
+  that edit by hand returns both to clean (which is what pins dirtiness to a
+  real comparison rather than a keystroke flag); Cancel-while-dirty raises the
+  confirm, and confirming it actually discards.
 
 Phase M and the object-list / asset phases already drive these modals by
 button id, so **converting a modal will break its existing tests** — that is
@@ -273,11 +293,13 @@ worked around.
 
 ## Open questions
 
-- **Does `Apply` earn its place?** Only a few modals have a meaningful
-  "commit and keep working" (the object-list editor does; the field editor
-  does not). The spec allows it to be omitted per modal — but if it turns out
-  almost nothing wants it, drop it from the vocabulary entirely rather than
-  leaving a button that is disabled forever.
-- **Mobile width.** Four buttons plus a title will not fit a phone. Likely
-  answer: the title truncates first, then the bar wraps to its own line below
-  the title. Not specified until someone checks it on a real phone.
+- **Mobile width.** Two buttons plus a title should fit, and three with a
+  destructive one probably does too — but `Delete…` plus a long title
+  (`Edit Object List`) is the case to check. Likely answer: the title
+  truncates with an ellipsis and the buttons never shrink or wrap, since the
+  bar not wrapping is the reason `Apply` was dropped. Confirm on a real phone
+  during the first conversion rather than guessing now.
+- **Does anything actually miss `Apply`?** Dropped on the judgement that
+  little would use it. If a long editor (the object-list editor is the
+  candidate) turns out to want progress banked mid-session, add it back to
+  that one modal only — not to the vocabulary.
