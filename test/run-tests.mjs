@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR, closeVR as closeVRHelper, mockLichessGames, mockChessComGames } from './harness.mjs';
+import { launchApp, seedBackup, openVR, closeVR as closeVRHelper, modalBarState, mockLichessGames, mockChessComGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11150,7 +11150,16 @@ try {
     await openCard('Broken List');
     const roomVal = await appAY3.page.evaluate(() => document.getElementById('ol_room').value);
     assert(roomVal === '', `expected an empty Room Name field for a null roomName, got ${JSON.stringify(roomVal)}`);
-    await appAY3.page.evaluate(() => document.getElementById('ol_save').click());
+    // The editor opens CLEAN even though normalization just turned three
+    // nulls into empty strings: dirtiness is measured from the normalized
+    // state, so a record you merely looked at never claims unsaved changes.
+    // (Documents/modal-buttons.md -- the alternative, baselining against the
+    // raw record, would show "Unsaved changes" on open for work you never did.)
+    assert(await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-save').disabled) === true,
+      'expected Save disabled on an untouched editor, even one that normalized nulls away');
+    await appAY3.page.fill('#ol_room', 'Kitchen');
+    await appAY3.page.waitForFunction(() => !document.querySelector('.modal-bar .mb-save').disabled, { timeout: 5000 });
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     ok('object lists: a record with null roomName/category/orderingRule opens and saves without crashing');
   } catch(e){ bad('object lists: defensive handling of a malformed (raw-restored) record', e); }
@@ -11180,7 +11189,7 @@ try {
       [...document.querySelectorAll('#ol_items tr')].find(tr => /oven/i.test(tr.textContent))
         ?.querySelector('.objlist-asset-id')?.textContent);
     assert(boundId === 'ovenAsset', `expected the case-differing re-import to keep the "ovenAsset" binding, got ${JSON.stringify(boundId)}`);
-    await appAY3.page.evaluate(() => document.getElementById('ol_cancel').click());
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
     ok('object lists: re-import preserves an asset binding across an item-name case change');
   } catch(e){ bad('object lists: case-insensitive asset-binding preservation on re-import', e); }
 
@@ -11222,10 +11231,14 @@ try {
   //      and reports the skip (not just added/updated), both in the
   //      returned counts and the alert shown to the user.
   try {
+    // leave the (dirty) editor FIRST: that now raises a discard confirm, and
+    // registering the alert listener before it would capture that instead of
+    // the import-complete alert this test is actually about
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     let alertMsg = null;
     const onDialog = d => { alertMsg = d.message(); };   // read-only -- harness's own listener still accepts it
     appAY3.page.once('dialog', onDialog);
-    await appAY3.page.evaluate(() => document.getElementById('ol_cancel')?.click());
     await appAY3.page.setInputFiles('#objlistImportFile', {
       name: 'bare.json', mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify([
@@ -11248,7 +11261,7 @@ try {
   //      picker, with the item's row showing the new thumbnail immediately
   //      (not stale until the manager is reopened).
   try {
-    await appAY3.page.evaluate(() => document.getElementById('ol_cancel')?.click());
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
     await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
     await openCard('Valid List');
@@ -11304,7 +11317,7 @@ try {
     // doesn't intercept clicks meant for the grid/editor below.
     await appAY3.page.evaluate(() => {
       document.getElementById('objlistPickCancel')?.click();
-      document.getElementById('ol_cancel')?.click();
+      document.querySelector('.modal-bar .mb-leave')?.click();
     });
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
@@ -11357,7 +11370,7 @@ try {
     assert(after.indicatorGone, 'expected the drop-indicator bar to be removed after releasing');
     assert(after.noneDimmed, 'expected no row to still be dimmed after releasing');
 
-    await appAY3.page.click('#ol_save');
+    await appAY3.page.click('.modal-bar .mb-save');
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     const saved = await appAY3.page.evaluate(async () => {
       const lists = await getAllObjectLists();
@@ -11367,6 +11380,89 @@ try {
       `expected the dragged order to survive Save (persisted to IDB), got ${JSON.stringify(saved)}`);
     ok('object lists: drag-to-reorder shows the drop-indicator bar, commits on release, and persists on Save');
   } catch(e){ bad('object lists: drag-to-reorder end to end', e); }
+
+  /* --- the shared modal button bar (Documents/modal-buttons.md), first
+     modal converted. The bug being fixed: `Close` in the header and `SAVE`
+     at the bottom of a scrolling body, so on a long list the only button you
+     could see was the one that threw your edits away. --- */
+
+  // 168. The index view is IMMEDIATE -- creating and deleting lists write
+  //      straight through -- so it gets a bare Done, not a Save that would be
+  //      disabled forever. And nothing outside the bar closes or commits.
+  try {
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    const bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar, 'expected a shared modal bar on the object-list manager');
+    assert(bar.title === 'Manage Object Lists', `unexpected bar title: ${JSON.stringify(bar.title)}`);
+    assert(bar.leave && bar.leave.text === 'Done' && !bar.leave.disabled,
+      `expected an enabled Done on the index, got ${JSON.stringify(bar.leave)}`);
+    assert(bar.save === null && bar.destructive === null,
+      `expected no Save/Delete on an immediate view, got ${JSON.stringify(bar)}`);
+    assert(bar.barIsFirst, 'expected the bar to be the first thing in the modal');
+    assert(bar.strayIds.length === 0,
+      `expected no Save/Cancel/Close/Done button outside the bar, found ${JSON.stringify(bar.strayIds)}`);
+    ok('modal bar: the object-list index shows a bare Done, with nothing stray outside the bar');
+  } catch(e){ bad('modal bar: index view', e); }
+
+  // 169. THE BUG. With a long list scrolled to the bottom, the bar -- and so
+  //      Save -- is still on screen. Under the old layout this is exactly
+  //      where SAVE had gone and Close had not.
+  try {
+    await openCard('Drag Test');
+    const bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.visibleWhenScrolled === true,
+      'expected the button bar to stay visible with the body scrolled to the bottom -- this is the whole point of the conversion');
+    assert(bar.strayIds.length === 0,
+      `expected no Save/Cancel button left at the bottom of the body, found ${JSON.stringify(bar.strayIds)}`);
+    ok('modal bar: the bar stays on screen with the editor body scrolled to the bottom');
+  } catch(e){ bad('modal bar: bar stays visible when scrolled', e); }
+
+  // 170. Clean vs dirty. Save is dead until something is actually unsaved,
+  //      then fills in; Done becomes Cancel; the state text appears. Those
+  //      three together are the whole warning system.
+  try {
+    let bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.save && bar.save.disabled && !bar.save.primary,
+      `expected Save disabled and unfilled on open, got ${JSON.stringify(bar.save)}`);
+    assert(bar.leave.text === 'Done' && bar.state === '',
+      `expected a clean editor to read Done with no state text, got ${JSON.stringify(bar)}`);
+    assert(bar.destructive && bar.destructive.text === 'Delete…',
+      `expected a Delete… on an existing list, got ${JSON.stringify(bar.destructive)}`);
+
+    await appAY3.page.fill('#ol_room', 'Somewhere Else');
+    bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.save && !bar.save.disabled && bar.save.primary,
+      `expected Save live and filled once dirty, got ${JSON.stringify(bar.save)}`);
+    assert(bar.leave.text === 'Cancel', `expected Done to become Cancel, got ${JSON.stringify(bar.leave)}`);
+    assert(/unsaved/i.test(bar.state), `expected the unsaved-changes note, got ${JSON.stringify(bar.state)}`);
+
+    // ...and dirtiness is a COMPARISON, not a keystroke flag: putting the
+    // value back by hand returns to clean. That is what makes the discard
+    // confirm trustworthy rather than something you learn to click through.
+    await appAY3.page.fill('#ol_room', '');
+    bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.leave.text === 'Done' && bar.save.disabled && bar.state === '',
+      `expected undoing the edit by hand to return to clean, got ${JSON.stringify(bar)}`);
+    ok('modal bar: Save/Cancel/state track real dirtiness, and undoing an edit returns to clean');
+  } catch(e){ bad('modal bar: dirty-state signalling', e); }
+
+  // 171. A new list has no Delete… (there is nothing to delete yet), and the
+  //      bar says which view you are in.
+  try {
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    await appAY3.page.evaluate(() => document.getElementById('objlistNewBtn').click());
+    await appAY3.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+    const bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.title === 'New Object List', `expected the bar to name the view, got ${JSON.stringify(bar.title)}`);
+    assert(bar.destructive === null, 'expected no Delete… on a list that does not exist yet');
+    assert(bar.save && bar.save.disabled, 'expected Save disabled on a brand-new empty editor');
+    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    ok('modal bar: a new list gets no Delete…, and the bar names the view');
+  } catch(e){ bad('modal bar: new-list view', e); }
 } finally {
   await appAY3.close();
 }
@@ -11716,7 +11812,7 @@ try {
     assert(usedInText.includes('Beta') && usedInText.includes('Line B'),
       `expected the "Used in" section to also name Beta (Line B), got ${JSON.stringify(usedInText)}`);
     ok('object list editor: "Used in" section lists every using castle with its own line name');
-    await appLU.page.evaluate(() => document.getElementById('ol_cancel').click());
+    await appLU.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
   } catch(e){ bad('object list editor: "Used in" section', e); }
 
   // 179. A brand-new (unsaved) list has no "Used in" section at all -- there's
@@ -11729,7 +11825,7 @@ try {
       [...document.querySelectorAll('#objlistEditor h3')].some(h => h.textContent.trim() === 'Used in'));
     assert(!hasUsedInSection, 'expected a brand-new unsaved list to have no "Used in" section');
     ok('object list editor: a brand-new unsaved list has no "Used in" section');
-    await appLU.page.evaluate(() => document.getElementById('ol_cancel').click());
+    await appLU.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
   } catch(e){ bad('object list editor: no "Used in" section for a new list', e); }
 } finally {
   await appLU.close();
@@ -13210,7 +13306,7 @@ try {
     await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
     await appCB2b.page.fill('#ol_id', 'test_list_1');
     await appCB2b.page.fill('#ol_name', 'Test List One');
-    await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
+    await appCB2b.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
     await appCB2b.page.waitForSelector('#wallListsOverlay .wl-bucket', { timeout: 5000 });
     const optionsHtml = await appCB2b.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-select').innerHTML);
@@ -13229,7 +13325,7 @@ try {
     await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
     await appCB2b.page.fill('#ol_id', 'test_list_2');
     await appCB2b.page.fill('#ol_name', 'Test List Two');
-    await appCB2b.page.evaluate(() => document.getElementById('ol_save').click());
+    await appCB2b.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
     // the bucket's <select> is repopulated asynchronously after the new list
     // is created -- poll for the real value instead of a fixed sleep, which

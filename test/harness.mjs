@@ -219,6 +219,53 @@ export async function openVR(page){
    VR. It also left the overlay OPEN, so the next test's clicks landed on
    the three.js canvas instead of the modal underneath, turning one flake
    into two failures. */
+/* The shared modal-button-bar contract (Documents/modal-buttons.md), for any
+   overlay converted to it. Returns what the bar currently shows, so a test can
+   assert the contract in one call and then get on with its own specifics.
+
+   `scrolled` is the part worth having: it scrolls the body to the bottom and
+   reports whether the bar is STILL inside the modal's visible box. That is the
+   whole point of the conversion -- the bug it replaces was a SAVE button at
+   the bottom of a scrolling body with a CLOSE button pinned above it, so on a
+   long list the only button you could see was the one that discarded. */
+export async function modalBarState(page, overlayId){
+  return page.evaluate(async (id) => {
+    const ov = document.getElementById(id);
+    const bar = ov && ov.querySelector('.modal-bar');
+    if(!bar) return null;
+    const modal = bar.closest('.modal');
+    const body = modal.querySelector('.modal-body');
+    const btn = sel => bar.querySelector(sel);
+    const read = el => el ? { text: el.textContent.trim(), disabled: el.disabled,
+                              primary: el.classList.contains('is-dirty') } : null;
+    let scrolled = null;
+    if(body){
+      body.scrollTop = body.scrollHeight;
+      await new Promise(r => requestAnimationFrame(r));
+      const b = bar.getBoundingClientRect(), m = modal.getBoundingClientRect();
+      scrolled = b.top >= m.top - 1 && b.bottom <= m.bottom + 1 && b.height > 0;
+    }
+    return {
+      title: (bar.querySelector('.modal-bar-title') || {}).textContent?.trim() ?? null,
+      state: (bar.querySelector('.modal-bar-state') || {}).textContent?.trim() ?? '',
+      leave: read(btn('.mb-leave')),
+      save: read(btn('.mb-save')),
+      destructive: read(btn('.mb-destructive')),
+      // Nothing outside the bar may close or commit THIS modal. Buttons
+      // inside a nested overlay (the item picker, say) don't count -- they
+      // belong to that sub-surface and close it, not this one. The test is
+      // "its nearest enclosing overlay is this modal's own".
+      strayIds: [...modal.querySelectorAll('button')]
+        .filter(b => !bar.contains(b)
+                  && b.closest('.overlay, .objlist-pick-overlay') === ov
+                  && /^(save|cancel|close|done)$/i.test(b.textContent.trim()))
+        .map(b => b.id || b.textContent.trim()),
+      barIsFirst: modal.firstElementChild === bar || modal.firstElementChild.contains(bar),
+      visibleWhenScrolled: scrolled,
+    };
+  }, overlayId);
+}
+
 export async function closeVR(page){
   await page.waitForFunction(
     () => !![...document.querySelectorAll('#threeTestCanvasWrap button')].find(b => b.title === 'Close'),
