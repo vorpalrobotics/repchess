@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-80';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-56';
+import { openAssetPicker } from './assets.js?v=20260804-81';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-57';
 
 let THREE = null;
 
@@ -5780,7 +5780,9 @@ function enterAtDoorTo(roomKey){
   // exitMeta/elevatorMeta are now live for the room just built
   let box = null, thru = null;
   const ex = exitMeta.find(m => !m.back && m.target === roomKey);
-  if(ex){ box = ex.box; thru = ex.thru; }
+  // viewBox when the exit has one -- a staircase's own trigger box is at the
+  // far end of its corridor, which is not where you'd stand to read its sign
+  if(ex){ box = ex.viewBox || ex.box; thru = ex.thru; }
   else {
     // an elevator floor: stand in front of the car's door, which is where
     // its panel (that floor's whole door hint) is read from.
@@ -6491,7 +6493,17 @@ function buildRoom(roomKey){
           // an ordinary doorway solid right up to the wall plane (the trigger is
           // what normally lets you cross it before you'd hit that boundary), so
           // simply not registering one is enough to make it impassable.
-          if(!locked) exitMeta.push({ box, thru: WALL_OUT_NORMAL[wall], target: navTarget, back: !!ex.back, spawn });
+          // A STAIRCASE's trigger box sits at the FAR END of its protruding
+          // corridor, a whole corridor-depth outside this room's wall -- so
+          // stepping back DOOR_VIEW_DIST from it (enterAtDoorTo) lands you
+          // halfway up or down the stairs rather than outside them. What you
+          // actually want to stand back from is the staircase's MOUTH, which
+          // is the wall plane, and which is also exactly where its name sign
+          // hangs (buildDoorSign places signs at wallSpan().fixed). So carry
+          // a separate box for "where to view this exit from"; ordinary doors
+          // already straddle the wall plane and need none.
+          const viewBox = isStair ? doorTriggerBox(room.size, wall, ex.offset) : null;
+          if(!locked) exitMeta.push({ box, viewBox, thru: WALL_OUT_NORMAL[wall], target: navTarget, back: !!ex.back, spawn });
           if(ex.back) scene.add(buildExitSign(room.size, wall, ex.offset));
           if(doorAsset && !isStair) scene.add(buildDoorPanel(room.size, wall, ex.offset, doorAsset));
           // unskinned locked door: a floating lock icon in the open gap so it
@@ -9616,7 +9628,7 @@ export async function openThreeTest(containerEl, opts){
       // through a specific door deterministically (teleport to the box
       // center, face along `thru`) instead of guessing which wall a door
       // landed on.
-      exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, thru: m.thru })),
+      exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, viewBox: m.viewBox || null, thru: m.thru })),
       // the wall-lists <select>'s option/optgroup HTML for a bucket, exactly
       // as the real Wall Object Lists dialog builds it -- for testing the
       // category grouping without needing to open edit mode, click the

@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and the first modal is
+**Status: the mechanism is built (`js/modalBar.js`) and two modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -247,8 +247,13 @@ Order, worst first:
       index, Editor sub-view. The reported bug. Also converted the standalone
       **New List** modal (`openNewObjectListModal`), which had the same shape.
       It surfaced something the spec hadn't considered — see *Sub-views*.
-- [ ] **Manage VR Assets** (`#assetsOverlay` + asset editor) — same shape:
+- [x] **Manage VR Assets** (`#assetsOverlay` + asset editor) — same shape:
       header Close, `assets-editor-actions` at the bottom with SAVE/Delete.
+      Also the standalone **New Asset** modal. Its editor is the first whose
+      staged state is SPLIT across module vars (the down-converted image, the
+      resolution tier) and live form fields, so `editorSnapshot()` reads both
+      and reuses `readTypeFields()` — a field that matters to Save is then
+      automatically a field that counts as a change.
 - [ ] **Attributes** (`#attributesOverlay`, `.attr-modal`) — Editor, and
       currently `overflow:auto` on the modal itself.
 - [ ] **Manage Mnemonics** (`#mnemonicsOverlay`) + the square editor
@@ -327,6 +332,15 @@ Cancel-while-dirty raises the confirm.
 Phase M and the object-list / asset phases drive these modals by button id, so
 **converting a modal breaks its existing tests** — expected, and those
 assertions should move to the bar rather than be worked around.
+
+**Scope every bar selector to its overlay.** `page.click('.modal-bar .mb-save')`
+matches the FIRST bar in DOM order, which is not necessarily the modal on top
+— and once two modals are converted, stacked ones are normal (the New Asset
+modal opens over the object-list item picker, which is over the manager).
+A bare selector then clicks the bar UNDERNEATH, leaving the top modal open to
+swallow everything after it. Always
+`page.click('#thatOverlay .modal-bar .mb-save')`. This cost two debugging
+rounds on the second conversion; it will cost more as the stack deepens.
 
 Two things the first conversion hit, both likely to recur:
 
