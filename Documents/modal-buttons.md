@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and three modals are
+**Status: the mechanism is built (`js/modalBar.js`) and five modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -259,8 +259,11 @@ Order, worst first:
       `.modal` that was scrolling itself, and first to use `validate` (its
       street-number rules are one PREFS scan, cheap enough to run live). Also
       the first with an ASYNCHRONOUSLY-populated field — see below.
-- [ ] **Manage Mnemonics** (`#mnemonicsOverlay`) + the square editor
-      (`#mnemonicsEditorOverlay`) — Immediate + Editor.
+- [x] **Manage Mnemonics** (`#mnemonicsOverlay`) + the square editor
+      (`#mnemonicsEditorOverlay`) — Immediate + Editor, but in two SEPARATE
+      overlays rather than two views of one, so each simply gets its own bar.
+      The manager is immediate on its own terms (notes autosave, the grid
+      writes through), so a bare `Done` and Export/Import left in the body.
 - [ ] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor. Its existing
       `Apply` already means commit-and-close, so it becomes `Save` outright;
       `Reset` and `Remove all` stay in the body (they edit the value, they

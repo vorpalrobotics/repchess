@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-393';
+const BUILD_TAG = '-394';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8894,6 +8894,11 @@ const MNEM_IMG_MAX_DIM = 512;       // stored image is downscaled to fit within 
 const MNEM_IMG_MAX_FILE_BYTES = 8 * 1024 * 1024; // reject absurdly large source files outright
 
 function renderMnemImgDrop(p){
+  // every staged-image change lands here -- a drop, a file pick, a crop, a
+  // clear -- and none of them fires an input/change event the button bar's
+  // watcher would see. Same choke-point trick as the asset editor's
+  // updateImgInfo() and the object-list editor's renderItems().
+  if(mnemEditorBarCtl) mnemEditorBarCtl.refresh();
   const drop = mnemImgDrop(p);
   const preview = mnemImgPreview(p);
   const dataUrl = MNEM_EDIT_IMAGES[p];
@@ -9069,10 +9074,37 @@ function mnemPieceIconEl(p){
   return $(`mnem${p[0].toUpperCase()}${p.slice(1)}Icon`);
 }
 
+/* The square editor's staged state: six words, six descriptions and six
+   staged images, none of which is committed until Save. The images are the
+   reason this reads the module map rather than the DOM for them -- a drop or
+   a crop writes MNEM_EDIT_IMAGES and re-renders the preview, firing no input
+   event the bar's watcher would see (renderMnemImgDrop is the choke point
+   that tells it). */
+function mnemEditorSnapshot(){
+  const out = { square: MNEM_EDIT_SQUARE };
+  for(const p of MNEM_PIECES){
+    out[p] = mnemWordInput(p).value.trim();
+    out[p+'Desc'] = mnemDescInput(p).value.trim();
+    out[p+'Img'] = MNEM_EDIT_IMAGES[p] || '';
+  }
+  return out;
+}
+let mnemEditorBarCtl = null;
+function mountMnemonicsEditorBar(sq){
+  const host = $('mnemonicsEditorBar');
+  host.innerHTML = modalBarHtml({ title: `Edit Square ${sq}`, save: true });
+  mnemEditorBarCtl = wireModalBar(host.querySelector('.modal-bar'), {
+    snapshot: mnemEditorSnapshot,
+    watch: $('mnemonicsEditorOverlay'),
+    thing: `square ${sq}`,
+    onLeave: () => { $('mnemonicsEditorOverlay').style.display='none'; },
+    onSave: commitMnemonicsEditor,
+  });
+}
+
 function openMnemonicsEditor(sq){
   MNEM_EDIT_SQUARE = sq;
   const entry = MNEMONICS[sq] || {};
-  $('mnemonicsEditorTitle').textContent = `Edit Square ${sq}`;
   for(const p of MNEM_PIECES){
     mnemWordInput(p).value = entry[p] || '';
     mnemDescInput(p).value = entry[p+'Desc'] || '';
@@ -9088,6 +9120,8 @@ function openMnemonicsEditor(sq){
     icon.classList.toggle('mnem-icon-needed-ok', needed && present);
     icon.classList.toggle('mnem-icon-needed-missing', needed && !present);
   }
+  // after the fields are filled: this editor's baseline is read off them
+  mountMnemonicsEditorBar(sq);
   $('mnemonicsEditorOverlay').style.display='flex';
 }
 
@@ -9108,12 +9142,24 @@ $('menuMnemonics').onclick = async ()=>{
     await renderMnemonicsGrid();
     $('mnemonicsNotes').value = await getMeta(MNEM_NOTES_KEY);
     renderDisambigPreview(await getMeta(MNEM_DISAMBIG_KEY));
+    mountMnemonicsBar();
     $('mnemonicsOverlay').style.display='flex';
   } finally {
     hideSpinner(spinner);
   }
 };
-$('mnemonicsCloseBtn').onclick = ()=>{ $('mnemonicsOverlay').style.display='none'; };
+/* The manager is IMMEDIATE: the notes field autosaves (see saveMnemonicsNotes),
+   the grid writes through the square editor, and Export/Import act at once. So
+   it is never dirty and gets a bare Done rather than a Save disabled forever
+   -- see Documents/modal-buttons.md's "Modal categories". */
+function mountMnemonicsBar(){
+  const host = $('mnemonicsBar');
+  host.innerHTML = modalBarHtml({ title: 'Manage Mnemonics' });
+  wireModalBar(host.querySelector('.modal-bar'), {
+    snapshot: null,
+    onLeave: () => { $('mnemonicsOverlay').style.display='none'; },
+  });
+}
 // view-mode toolbar: ABC (words) or a piece icon (that piece's images per square)
 document.querySelectorAll('#mnemModeBar .mnem-mode-btn').forEach(btn=>{
   btn.onclick = ()=>{
@@ -9203,8 +9249,7 @@ $('mnemDisambigCrop').addEventListener('click', async e=>{
   renderDisambigPreview(scaled);
 });
 
-$('mnemonicsEditorCancelBtn').onclick = ()=>{ $('mnemonicsEditorOverlay').style.display='none'; };
-$('mnemonicsEditorSaveBtn').onclick = async ()=>{
+async function commitMnemonicsEditor(){
   const patch = {};
   for(const p of MNEM_PIECES){
     patch[p] = mnemWordInput(p).value.trim();
@@ -9214,7 +9259,7 @@ $('mnemonicsEditorSaveBtn').onclick = async ()=>{
   await setMnemonicSquare(MNEM_EDIT_SQUARE, patch);
   $('mnemonicsEditorOverlay').style.display='none';
   await renderMnemonicsGrid();
-};
+}
 
 /* ---------- quiz mnemonics ---------- */
 const QUIZ_DEFAULT_TRIALS = 10;
