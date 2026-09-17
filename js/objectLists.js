@@ -21,8 +21,8 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal } from './assets.js?v=20260804-81';
-import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-1';
+import { openNewAssetModal } from './assets.js?v=20260804-82';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-2';
 
 const ORDERING_TYPES = {
   'canonical_sequence': 'Canonical sequence (culturally fixed — planets, scale, HOMES)',

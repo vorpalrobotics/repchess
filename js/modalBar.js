@@ -107,10 +107,31 @@ export function wireModalBar(barEl, opts){
   };
   if(destroyBtn) destroyBtn.onclick = () => { if(!busy) opts.onDestructive && opts.onDestructive(); };
 
+  /* One live edit-watcher per watched element, ever.
+
+     Both the elements bars get watched are PERSISTENT: a manager's body wrap
+     is built once and reused for every open, and the standalone New Asset /
+     New List overlays are singletons (`getElementById(id) || createElement`).
+     Bars, meanwhile, are re-mounted constantly -- an editor re-renders on
+     every item added or reordered, and the standalone modals deliberately
+     wire a second controller over the one openEditor just mounted, to
+     re-point Leave/Save at their promise.
+
+     Without removing the previous handler first, every one of those stacked
+     another pair of listeners on an element that outlives them all, each
+     closing over a dead controller that goes on painting a bar detached from
+     the document. Nothing visibly broke, which is exactly why it would have
+     sat there growing. Same store-and-remove shape objectLists.js already
+     uses for wireBackdropClose, and for the same reason. */
   if(opts.watch){
-    const onEdit = () => paint();
-    opts.watch.addEventListener('input', onEdit);
-    opts.watch.addEventListener('change', onEdit);
+    const w = opts.watch;
+    if(w._modalBarOnEdit){
+      w.removeEventListener('input', w._modalBarOnEdit);
+      w.removeEventListener('change', w._modalBarOnEdit);
+    }
+    w._modalBarOnEdit = () => paint();
+    w.addEventListener('input', w._modalBarOnEdit);
+    w.addEventListener('change', w._modalBarOnEdit);
   }
 
   /* Escape is the Leave button, including its confirm. Bound to the bar's own

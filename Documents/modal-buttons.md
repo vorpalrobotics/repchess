@@ -308,6 +308,16 @@ Two mechanical notes for the next such conversion:
 - Programmatic mutations fire no `input`/`change` event, so the bar's watcher
   never sees them. Call `refresh()` at whatever choke point they all funnel
   through (`renderItems()` there) rather than at each call site.
+- **The watched element outlives the bar.** A manager's body wrap is built
+  once and reused for every open; the standalone New Asset / New List
+  overlays are singletons. Bars are re-mounted constantly against them -- an
+  editor re-mounts on every item added, and a standalone modal deliberately
+  wires a second controller over the one `openEditor` just mounted. So
+  `wireModalBar` stores its edit handler on the watched element and removes
+  the previous one first. Without that, a long editing session stacked a pair
+  of listeners per re-mount, each closing over a dead controller still
+  painting a detached bar -- nothing visibly broken, which is exactly why it
+  would have sat there growing.
 
 ## Testing
 

@@ -6180,6 +6180,35 @@ try {
     const initialType = await appAL.page.evaluate(() => document.getElementById('assetTypeInput').value);
     assert(initialType === 'surface', `expected the New Asset modal to default to the picker's own type (surface), got ${initialType}`);
     ok('picker "New Asset…" opens the full editor, pre-typed, stacked above the still-open picker');
+
+    // 125b. ...and it carries the shared button bar like any other converted
+    //       modal (Documents/modal-buttons.md). This one is a standalone
+    //       overlay whose bar is wired TWICE -- once by openEditor's own
+    //       renderBar, then again here to re-point Leave/Save at the promise
+    //       it resolves -- so it is the case most likely to end up with two
+    //       controllers fighting over one bar.
+    let nb = await modalBarState(appAL.page, 'assetNewOverlay');
+    assert(nb, 'expected the standalone New Asset modal to use the shared bar');
+    assert(nb.title === 'New Asset' && nb.leave.text === 'Done',
+      `unexpected New Asset bar: ${JSON.stringify(nb)}`);
+    assert(nb.save && nb.save.disabled && !nb.save.primary,
+      `expected Save dead on an untouched New Asset editor, got ${JSON.stringify(nb.save)}`);
+    assert(nb.destructive === null, 'expected no Delete… on an asset that does not exist yet');
+    assert(nb.barIsFirst && nb.strayIds.length === 0 && nb.visibleWhenScrolled === true,
+      `expected the bar first, pinned, and nothing stray: ${JSON.stringify(nb)}`);
+
+    // one live controller, not two: typing must flip it dirty exactly once
+    // and undoing must put it back
+    await appAL.page.fill('#assetIdInput', 'test-bar-dirty-1');
+    nb = await modalBarState(appAL.page, 'assetNewOverlay');
+    assert(nb.leave.text === 'Cancel' && /unsaved/i.test(nb.state),
+      `expected typing an id to mark it unsaved, got ${JSON.stringify(nb)}`);
+    await appAL.page.fill('#assetIdInput', '');
+    nb = await modalBarState(appAL.page, 'assetNewOverlay');
+    assert(nb.leave.text === 'Done' && nb.state === '',
+      `expected clearing it again to return to clean, got ${JSON.stringify(nb)}`);
+    ok('modal bar: the standalone New Asset modal carries the bar, with one live controller');
+
     await appAL.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: opens above the picker, pre-typed', e); }
@@ -11565,6 +11594,43 @@ try {
       `expected undoing the edit by hand to return to clean, got ${JSON.stringify(bar)}`);
     ok('modal bar: Save/Cancel/state track real dirtiness, and undoing an edit returns to clean');
   } catch(e){ bad('modal bar: dirty-state signalling', e); }
+
+  // 170b. A bar that is re-mounted many times keeps exactly ONE live edit
+  //       watcher. This editor re-renders (and so re-mounts its bar) on every
+  //       single item added, while the element being watched -- the manager's
+  //       body wrap -- is built once and reused for the life of the page. So
+  //       without removing the old listener each time, a long editing session
+  //       stacked dozens of handlers on it, each closing over a dead
+  //       controller still painting a detached bar. Nothing visibly broke,
+  //       which is exactly why it would have sat there growing.
+  try {
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click());
+    await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    await appAY3.page.click('#objlistNewBtn');
+    await appAY3.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+    for(let i = 0; i < 8; i++){
+      await appAY3.page.fill('#ol_newitem', `Item ${i}`);
+      await appAY3.page.evaluate(() => document.getElementById('ol_additembtn').click());
+    }
+    const handlers = await appAY3.page.evaluate(() => {
+      const w = document.getElementById('objectListsBodyWrap');
+      return { stored: typeof w._modalBarOnEdit, rows: document.querySelectorAll('#ol_items tr').length };
+    });
+    assert(handlers.rows === 8, `setup: expected 8 item rows, got ${handlers.rows}`);
+    assert(handlers.stored === 'function',
+      'expected exactly one stored edit handler on the watched element, so the previous one can be removed');
+
+    // and after all that re-mounting the bar still tracks correctly
+    let bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.leave.text === 'Cancel' && !bar.save.disabled,
+      `expected 8 added items to read as unsaved, got ${JSON.stringify(bar)}`);
+    await appAY3.page.fill('#ol_name', 'x');
+    await appAY3.page.fill('#ol_name', '');
+    bar = await modalBarState(appAY3.page, 'objectListsOverlay');
+    assert(bar.leave.text === 'Cancel',
+      `expected it to stay unsaved -- the items are still added -- got ${JSON.stringify(bar)}`);
+    ok('modal bar: a bar re-mounted on every item added keeps one live edit watcher and stays accurate');
+  } catch(e){ bad('modal bar: repeated re-mounts', e); }
 
   // 171. A new list has no Delete… (there is nothing to delete yet), and the
   //      bar says which view you are in.
