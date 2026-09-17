@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-80';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-56';
+import { openAssetPicker } from './assets.js?v=20260804-81';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-57';
 
 let THREE = null;
 

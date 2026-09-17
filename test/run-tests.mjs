@@ -6127,7 +6127,7 @@ try {
     const initialType = await appAL.page.evaluate(() => document.getElementById('assetTypeInput').value);
     assert(initialType === 'surface', `expected the New Asset modal to default to the picker's own type (surface), got ${initialType}`);
     ok('picker "New Asset…" opens the full editor, pre-typed, stacked above the still-open picker');
-    await appAL.page.click('#assetNewCloseBtn');
+    await appAL.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: opens above the picker, pre-typed', e); }
 
@@ -6157,7 +6157,7 @@ try {
     await appAL.page.waitForSelector('#cropOverlay', { state: 'hidden', timeout: 5000 });
     ok('Generate…/Crop launched from the New Asset modal stack above it');
 
-    await appAL.page.click('#assetNewCloseBtn');
+    await appAL.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: Generate/Crop stack above the New Asset modal', e); }
 
@@ -6172,7 +6172,7 @@ try {
     await appAL.page.fill('#assetIdInput', 'test-wall-skin-1');
     await appAL.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
     await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
-    await appAL.page.click('#assetsSaveBtn');
+    await appAL.page.click('#assetNewOverlay .modal-bar .mb-save');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     const cardIds = await appAL.page.evaluate(() =>
@@ -6186,7 +6186,7 @@ try {
     await appAL.page.fill('#assetIdInput', 'test-wall-skin-2');
     await appAL.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
     await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
-    await appAL.page.click('#assetsCancelBtn');
+    await appAL.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     const cardIdsAfterCancel = await appAL.page.evaluate(() =>
       [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
@@ -6506,7 +6506,7 @@ try {
     const after = await appAO.page.evaluate(() => window.__threeTestEdit.pos().yaw);
     assert(Math.abs(after - before) < 0.001, `expected the camera not to turn while the New Asset modal has focus (inputLocked), yaw went ${before} -> ${after}`);
     ok('turning (yaw) respects inputLocked, same as walking already did');
-    await appAO.page.click('#assetNewCloseBtn');
+    await appAO.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAO.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     await appAO.page.click('#pickerCloseBtn');
     await appAO.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
@@ -6524,7 +6524,7 @@ try {
     const options = await appAO.page.evaluate(() => [...document.getElementById('assetTypeInput').options].map(o => o.value));
     assert(JSON.stringify(options) === JSON.stringify(['surface']), `expected only "surface" offered for a wall's picker, got ${JSON.stringify(options)}`);
     ok('New Asset Type dropdown is restricted to the types the opening picker actually accepts');
-    await appAO.page.click('#assetNewCloseBtn');
+    await appAO.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAO.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     await appAO.page.click('#pickerCloseBtn');
     await appAO.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
@@ -6798,7 +6798,7 @@ try {
     assert(roomAfterBlurType === roomKey,
       `expected "r" typed with focus outside every overlay to NOT eject the player back to the start room, got room=${roomAfterBlurType} (wanted ${roomKey})`);
     ok('New Asset modal: keystrokes with no field focused still don\'t leak to VR\'s window-level hotkeys');
-    await appAR.page.click('#assetNewCloseBtn');
+    await appAR.page.click('#assetNewOverlay .modal-bar .mb-leave');
     await appAR.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     await appAR.page.click('#pickerCloseBtn');
     await appAR.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
@@ -6957,7 +6957,7 @@ try {
     assert(!optionValues.includes('billboard-sprite'),
       `expected "billboard-sprite" to no longer be offered as a choosable type, got ${JSON.stringify(optionValues)}`);
     ok('New Asset: defaults to billboard-cylindrical, and billboard-sprite is no longer offered');
-    await appAR3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+    await appAR3.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('New Asset: cylindrical default, sprite type removed', e); }
 
   // 93. An asset already saved under the removed 'billboard-sprite' type
@@ -6979,7 +6979,7 @@ try {
     const openedType = await appAR3.page.evaluate(() => document.getElementById('assetTypeInput').value);
     assert(openedType === 'billboard-cylindrical', `expected the legacy asset to open as billboard-cylindrical, got ${JSON.stringify(openedType)}`);
     ok('legacy billboard-sprite asset: shows and opens as billboard-cylindrical in the manager UI');
-    await appAR3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+    await appAR3.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('legacy billboard-sprite asset: normalized in the manager UI', e); }
 
   // 94. getAllAssets() itself normalizes the type on every read -- the single
@@ -6993,6 +6993,71 @@ try {
     assert(type === 'billboard-cylindrical', `expected getAllAssets to normalize the type, got ${JSON.stringify(type)}`);
     ok('getAllAssets: normalizes a legacy billboard-sprite asset to billboard-cylindrical on every read');
   } catch(e){ bad('getAllAssets: normalizes legacy billboard-sprite type', e); }
+
+  /* --- the shared modal button bar, second modal converted
+     (Documents/modal-buttons.md). Same bug shape as Manage Object Lists:
+     `Close` in the header, `SAVE` at the bottom of a scrolling body. --- */
+
+  // 94b. The grid view is IMMEDIATE, so a bare Done; and once the editor is
+  //      open the bar carries everything, with nothing stray left behind.
+  try {
+    let bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar, 'expected a shared modal bar on the asset manager');
+    assert(bar.title === 'Manage VR Assets' && bar.leave.text === 'Done',
+      `unexpected grid bar: ${JSON.stringify(bar)}`);
+    assert(bar.save === null && bar.destructive === null,
+      `expected no Save/Delete on the grid, got ${JSON.stringify(bar)}`);
+    assert(bar.barIsFirst && bar.strayIds.length === 0,
+      `expected the bar first and nothing stray, got ${JSON.stringify(bar)}`);
+
+    await appAR3.page.evaluate(() => {
+      const card = [...document.querySelectorAll('#assetsGrid .asset-card')].find(c => c.textContent.includes('legacy-sprite'));
+      card.click();
+    });
+    await appAR3.page.waitForSelector('#assetTypeInput', { timeout: 5000 });
+    bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar.title === 'Edit Asset', `expected the bar to name the view, got ${JSON.stringify(bar.title)}`);
+    assert(bar.destructive && bar.destructive.text === 'Delete…',
+      `expected Delete… on an existing asset, got ${JSON.stringify(bar.destructive)}`);
+    assert(bar.save && bar.save.disabled && !bar.save.primary,
+      `expected Save disabled on an untouched editor, got ${JSON.stringify(bar.save)}`);
+    assert(bar.visibleWhenScrolled === true,
+      'expected the bar to stay visible with the editor scrolled to the bottom -- the bug this replaces');
+    assert(bar.strayIds.length === 0,
+      `expected no Save/Cancel left at the bottom of the editor, found ${JSON.stringify(bar.strayIds)}`);
+    ok('modal bar: the asset manager bar is contextual, stays on screen, and leaves nothing stray');
+  } catch(e){ bad('modal bar: asset manager views', e); }
+
+  // 94c. Dirtiness here is worth its own test because this editor's staged
+  //      state is SPLIT -- half in module vars (the down-converted image, the
+  //      resolution tier), half in live form fields -- so the snapshot has to
+  //      read both. A keywords edit is the form half.
+  try {
+    await appAR3.page.fill('#assetKeywords', 'banner sign');
+    let bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar.save && !bar.save.disabled && bar.save.primary,
+      `expected Save live and filled once dirty, got ${JSON.stringify(bar.save)}`);
+    assert(bar.leave.text === 'Cancel' && /unsaved/i.test(bar.state),
+      `expected Cancel + the unsaved note, got ${JSON.stringify(bar)}`);
+
+    // undoing by hand returns to clean -- dirtiness is a comparison, not a flag
+    await appAR3.page.fill('#assetKeywords', '');
+    bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar.leave.text === 'Done' && bar.save.disabled && bar.state === '',
+      `expected undoing the edit to return to clean, got ${JSON.stringify(bar)}`);
+
+    // ...and the OTHER half: changing the resolution tier restages the image
+    // through a path that fires no input event the bar could see on its own
+    await appAR3.page.selectOption('#assetResolution', 'low');
+    await appAR3.page.waitForFunction(
+      () => !document.querySelector('#assetsOverlay .modal-bar .mb-save').disabled, { timeout: 5000 });
+    bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar.leave.text === 'Cancel',
+      `expected a resolution change to count as unsaved, got ${JSON.stringify(bar)}`);
+    await appAR3.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave').click());
+    await appAR3.page.waitForSelector('#assetsGrid', { state: 'visible', timeout: 5000 });
+    ok('modal bar: the asset editor tracks both halves of its staged state (form fields and image/resolution)');
+  } catch(e){ bad('modal bar: asset editor dirty tracking', e); }
 } finally {
   await appAR3.close();
 }
@@ -11155,11 +11220,11 @@ try {
     // state, so a record you merely looked at never claims unsaved changes.
     // (Documents/modal-buttons.md -- the alternative, baselining against the
     // raw record, would show "Unsaved changes" on open for work you never did.)
-    assert(await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-save').disabled) === true,
+    assert(await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').disabled) === true,
       'expected Save disabled on an untouched editor, even one that normalized nulls away');
     await appAY3.page.fill('#ol_room', 'Kitchen');
-    await appAY3.page.waitForFunction(() => !document.querySelector('.modal-bar .mb-save').disabled, { timeout: 5000 });
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
+    await appAY3.page.waitForFunction(() => !document.querySelector('#objectListsOverlay .modal-bar .mb-save').disabled, { timeout: 5000 });
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     ok('object lists: a record with null roomName/category/orderingRule opens and saves without crashing');
   } catch(e){ bad('object lists: defensive handling of a malformed (raw-restored) record', e); }
@@ -11189,7 +11254,7 @@ try {
       [...document.querySelectorAll('#ol_items tr')].find(tr => /oven/i.test(tr.textContent))
         ?.querySelector('.objlist-asset-id')?.textContent);
     assert(boundId === 'ovenAsset', `expected the case-differing re-import to keep the "ovenAsset" binding, got ${JSON.stringify(boundId)}`);
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
     ok('object lists: re-import preserves an asset binding across an item-name case change');
   } catch(e){ bad('object lists: case-insensitive asset-binding preservation on re-import', e); }
 
@@ -11234,7 +11299,7 @@ try {
     // leave the (dirty) editor FIRST: that now raises a discard confirm, and
     // registering the alert listener before it would capture that instead of
     // the import-complete alert this test is actually about
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     let alertMsg = null;
     const onDialog = d => { alertMsg = d.message(); };   // read-only -- harness's own listener still accepts it
@@ -11261,7 +11326,7 @@ try {
   //      picker, with the item's row showing the new thumbnail immediately
   //      (not stale until the manager is reopened).
   try {
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click());
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
     await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
     await openCard('Valid List');
@@ -11272,7 +11337,7 @@ try {
     await appAY3.page.fill('#assetIdInput', 'test-objlist-newasset-1');
     await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
     await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
-    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.click('#assetNewOverlay .modal-bar .mb-save');
     await appAY3.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
     await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'hidden', timeout: 5000 });
     const boundId = await appAY3.page.evaluate(() =>
@@ -11296,13 +11361,13 @@ try {
     await appAY3.page.fill('#assetIdInput', 'dup-check-asset');   // already exists (seeded at phase setup)
     await appAY3.page.setInputFiles('#assetImgFile', FIXTURE_PNG_PATH);
     await appAY3.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
-    await appAY3.page.click('#assetsSaveBtn');
+    await appAY3.page.click('#assetNewOverlay .modal-bar .mb-save');
     await appAY3.page.waitForSelector('#assetsError:has-text("already exists")', { timeout: 5000 });
     const stillOpen = await appAY3.page.evaluate(() => document.getElementById('assetNewOverlay').style.display !== 'none');
     assert(stillOpen, 'expected the New Asset modal to stay open on a duplicate id, not silently save');
     const dupImage = await appAY3.page.evaluate(async () => (await getAllAssets()).find(a => a.id === 'dup-check-asset')?.image);
     assert(dupImage === 'data:image/png;base64,iVBORw0KGgo=', `expected the original dup-check-asset image untouched, got ${JSON.stringify(dupImage)}`);
-    await appAY3.page.evaluate(() => document.getElementById('assetsCancelBtn').click());
+    await appAY3.page.evaluate(() => document.querySelector('#assetNewOverlay .modal-bar .mb-leave').click());
     ok('object lists: New Asset\'s duplicate-id check works even when Manage VR Assets was never opened this session');
   } catch(e){ bad('object lists: duplicate-id guard reaches a fresh ASSETS cache from this path', e); }
 
@@ -11317,7 +11382,7 @@ try {
     // doesn't intercept clicks meant for the grid/editor below.
     await appAY3.page.evaluate(() => {
       document.getElementById('objlistPickCancel')?.click();
-      document.querySelector('.modal-bar .mb-leave')?.click();
+      document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click();
     });
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
@@ -11370,7 +11435,7 @@ try {
     assert(after.indicatorGone, 'expected the drop-indicator bar to be removed after releasing');
     assert(after.noneDimmed, 'expected no row to still be dimmed after releasing');
 
-    await appAY3.page.click('.modal-bar .mb-save');
+    await appAY3.page.click('#objectListsOverlay .modal-bar .mb-save');
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     const saved = await appAY3.page.evaluate(async () => {
       const lists = await getAllObjectLists();
@@ -11390,7 +11455,7 @@ try {
   //      straight through -- so it gets a bare Done, not a Save that would be
   //      disabled forever. And nothing outside the bar closes or commits.
   try {
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click());
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
     await appAY3.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
     const bar = await modalBarState(appAY3.page, 'objectListsOverlay');
@@ -11451,7 +11516,7 @@ try {
   // 171. A new list has no Delete… (there is nothing to delete yet), and the
   //      bar says which view you are in.
   try {
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave')?.click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     await appAY3.page.evaluate(() => document.getElementById('objlistNewBtn').click());
     await appAY3.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
@@ -11459,7 +11524,7 @@ try {
     assert(bar.title === 'New Object List', `expected the bar to name the view, got ${JSON.stringify(bar.title)}`);
     assert(bar.destructive === null, 'expected no Delete… on a list that does not exist yet');
     assert(bar.save && bar.save.disabled, 'expected Save disabled on a brand-new empty editor');
-    await appAY3.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
+    await appAY3.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
     await appAY3.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     ok('modal bar: a new list gets no Delete…, and the bar names the view');
   } catch(e){ bad('modal bar: new-list view', e); }
@@ -11812,7 +11877,7 @@ try {
     assert(usedInText.includes('Beta') && usedInText.includes('Line B'),
       `expected the "Used in" section to also name Beta (Line B), got ${JSON.stringify(usedInText)}`);
     ok('object list editor: "Used in" section lists every using castle with its own line name');
-    await appLU.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
+    await appLU.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('object list editor: "Used in" section', e); }
 
   // 179. A brand-new (unsaved) list has no "Used in" section at all -- there's
@@ -11825,7 +11890,7 @@ try {
       [...document.querySelectorAll('#objlistEditor h3')].some(h => h.textContent.trim() === 'Used in'));
     assert(!hasUsedInSection, 'expected a brand-new unsaved list to have no "Used in" section');
     ok('object list editor: a brand-new unsaved list has no "Used in" section');
-    await appLU.page.evaluate(() => document.querySelector('.modal-bar .mb-leave').click());
+    await appLU.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('object list editor: no "Used in" section for a new list', e); }
 } finally {
   await appLU.close();
@@ -13306,7 +13371,7 @@ try {
     await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
     await appCB2b.page.fill('#ol_id', 'test_list_1');
     await appCB2b.page.fill('#ol_name', 'Test List One');
-    await appCB2b.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
+    await appCB2b.page.evaluate(() => document.querySelector('#objlistNewOverlay .modal-bar .mb-save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
     await appCB2b.page.waitForSelector('#wallListsOverlay .wl-bucket', { timeout: 5000 });
     const optionsHtml = await appCB2b.page.evaluate(() => document.querySelector('#wallListsOverlay .wl-select').innerHTML);
@@ -13325,7 +13390,7 @@ try {
     await appCB2b.page.waitForSelector('#objlistNewOverlay .modal', { state: 'visible', timeout: 5000 });
     await appCB2b.page.fill('#ol_id', 'test_list_2');
     await appCB2b.page.fill('#ol_name', 'Test List Two');
-    await appCB2b.page.evaluate(() => document.querySelector('.modal-bar .mb-save').click());
+    await appCB2b.page.evaluate(() => document.querySelector('#objlistNewOverlay .modal-bar .mb-save').click());
     await appCB2b.page.waitForSelector('#objlistNewOverlay', { state: 'hidden', timeout: 5000 });
     // the bucket's <select> is repopulated asynchronously after the new list
     // is created -- poll for the real value instead of a fixed sleep, which

@@ -1,9 +1,9 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-285';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-80';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-56';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-286';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-81';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-57';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-388';
+const BUILD_TAG = '-389';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7479,7 +7479,7 @@ function openThreeTestAssets(){
   assetsOpenedFromThreeTest = true;
   setForeignModalOpen(true);
   $('assetsOverlay').style.display='flex';
-  openAssetManager($('assetsBodyWrap'));
+  openAssetManager($('assetsBodyWrap'), assetManagerOpts());
 }
 /* every BUILT castle across all opening systems (a castle is built once its
    root move has a configured reply — an entry room exists). Returns
@@ -8373,14 +8373,12 @@ $('menuThreeTest').addEventListener('contextmenu', async (e)=>{
   await openMainVRWorld(undefined, true);
 });
 
-/* ---------- asset manager ---------- */
-$('menuAssets').onclick = ()=>{
-  $('menuList').style.display='none';
-  assetsOpenedFromThreeTest = false;
-  $('assetsOverlay').style.display='flex';
-  openAssetManager($('assetsBodyWrap'));
-};
-$('assetsCloseBtn').onclick = ()=>{
+/* ---------- asset manager ----------
+   On the shared button bar (Documents/modal-buttons.md). The bar lives in
+   index.html but its contents are contextual (grid / editor), so assets.js
+   renders it and takes the "close the whole manager" action from here --
+   only app.js knows about the VR round trip below. */
+function closeAssets(){
   $('assetsOverlay').style.display='none';
   closeAssetManager();
   if(assetsOpenedFromThreeTest){
@@ -8388,6 +8386,13 @@ $('assetsCloseBtn').onclick = ()=>{
     setForeignModalOpen(false);
     refreshAssetsLive();
   }
+}
+const assetManagerOpts = () => ({ bar: $('assetsBar'), onClose: closeAssets });
+$('menuAssets').onclick = ()=>{
+  $('menuList').style.display='none';
+  assetsOpenedFromThreeTest = false;
+  $('assetsOverlay').style.display='flex';
+  openAssetManager($('assetsBodyWrap'), assetManagerOpts());
 };
 
 /* ---------- object list manager ----------

@@ -139,7 +139,16 @@ const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
    genuine soft edges keep their crop bounds essentially unchanged. */
 const AUTO_CROP_ALPHA = 24;
 
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-1';
+
 let containerEl = null;
+// shared modal button bar (Documents/modal-buttons.md). Two views in this one
+// overlay -- the asset grid and the asset editor -- and each has its own idea
+// of what "leave" means, same as the object-list manager.
+let BAR_HOST = null;
+let BAR_CTL = null;
+let BAR_ON_CLOSE = null;
+let EDIT_BASELINE = null;
 let ASSETS = [];          // cached array of all asset records
 let EDIT_ID = null;       // id of the asset currently open in the editor, or null = creating new
 let EDIT_IMAGE = '';      // staged (down-converted) data-URL for the editor — this is what gets saved
@@ -163,18 +172,90 @@ let FILTER_TEXT = '';
 function $(id){ return containerEl ? containerEl.querySelector(`#${id}`) : null; }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-export async function openAssetManager(container){
+export async function openAssetManager(container, opts = {}){
   containerEl = container;
+  BAR_HOST = opts.bar || null;
+  BAR_ON_CLOSE = opts.onClose || null;
   if(!containerEl.dataset.built){
     buildShell();
     containerEl.dataset.built = '1';
   }
+  EDIT_ID = null;
   showList();
   await refreshGrid();
 }
 
 export function closeAssetManager(){
+  BAR_CTL = null;
   // no running loop / listeners outside containerEl to tear down
+}
+
+/* ---------- the button bar ----------
+
+   grid    Done         closes the manager
+   editor  Done/Cancel  back to the grid (confirming if dirty)
+           Save         writes the asset and returns to the grid
+           Delete…      removes it
+
+   As with the object-list manager: while the editor is open there is NO
+   one-click way to close the whole manager. You leave the editor first, and
+   that asks before discarding -- which is the failure this replaces. */
+function renderBar(){
+  if(!BAR_HOST) return;
+  const editing = $('assetsEditor') && $('assetsEditor').style.display !== 'none';
+  if(editing) renderEditorBar(); else renderGridBar();
+}
+
+function mountBar(html, opts){
+  BAR_HOST.innerHTML = html;
+  BAR_CTL = wireModalBar(BAR_HOST.querySelector('.modal-bar'), opts);
+  return BAR_CTL;
+}
+
+// The grid is IMMEDIATE -- nothing is staged there -- so a bare Done.
+function renderGridBar(){
+  mountBar(modalBarHtml({ title: 'Manage VR Assets' }), {
+    snapshot: null,
+    onLeave: () => { if(BAR_ON_CLOSE) BAR_ON_CLOSE(); },
+  });
+}
+
+function renderEditorBar(){
+  mountBar(modalBarHtml({
+    title: EDIT_ID ? 'Edit Asset' : 'New Asset',
+    save: true,
+    destructive: EDIT_ID ? 'Delete…' : null,
+  }), {
+    snapshot: editorSnapshot,
+    watch: containerEl,
+    thing: EDIT_ID ? `"${EDIT_ID}"` : 'this new asset',
+    onLeave: () => { showList(); renderBar(); },
+    onSave: async () => { await saveEditor(); },
+    onDestructive: () => { if(EDIT_ID) deleteEditor(EDIT_ID); },
+  });
+  if(EDIT_BASELINE !== null) BAR_CTL.rebase(EDIT_BASELINE);
+}
+
+/* What "unsaved" is measured against. Unlike the object-list editor, whose
+   staged state is one plain object, this editor keeps half its state in module
+   vars (the down-converted image, the resolution tier) and half in live form
+   fields -- so the snapshot has to read both. readTypeFields() is reused
+   rather than reimplemented, so a field that matters to Save is automatically
+   a field that counts as a change.
+
+   Returns null before the editor's DOM exists, which wireModalBar treats as
+   "nothing to compare" rather than throwing. */
+function editorSnapshot(){
+  if(!containerEl || !$('assetTypeInput')) return null;
+  const type = $('assetTypeInput').value;
+  return {
+    id: EDIT_ID || (($('assetIdInput') || {}).value || '').trim().toLowerCase(),
+    type,
+    keywords: (($('assetKeywords') || {}).value || '').trim(),
+    resolution: EDIT_RESOLUTION,
+    image: EDIT_IMAGE,
+    fields: readTypeFields(type),
+  };
 }
 
 /* ---------- shell ---------- */
@@ -248,10 +329,15 @@ function openEditor(id, initialType, allowTypes){
   EDIT_IMAGE_ORIG = '';                 // no original until a fresh upload this session
   EDIT_RESOLUTION = (a && a.resolution) || RESOLUTION_DEFAULT;
   EDIT_IMG_W = EDIT_IMG_H = 0;
+  EDIT_BASELINE = null;
   renderEditor(a, initialType, allowTypes);
   const grid = $('assetsGrid');
   if(grid) grid.style.display = 'none';
   $('assetsEditor').style.display = '';
+  // AFTER renderEditor: this editor's snapshot reads live form fields, so
+  // there is nothing to baseline against until they exist
+  EDIT_BASELINE = JSON.stringify(editorSnapshot());
+  renderBar();
   updateImgInfo();   // measure the staged image → fills the dims note (no size snap on open)
 }
 
@@ -307,13 +393,8 @@ function renderEditor(a, initialType, allowTypes){
     </div>
     <div id="assetTypeFields"></div>
     <div class="assets-error" id="assetsError"></div>
-    <div class="assets-editor-actions">
-      <div class="left">
-        <button id="assetsSaveBtn">SAVE</button>
-        <button id="assetsCancelBtn">Cancel</button>
-      </div>
-      ${a ? '<button id="assetsDeleteBtn">Delete</button>' : ''}
-    </div>
+    <!-- Save / Cancel / Delete live in the pinned bar at the top of the
+         modal now (see renderEditorBar); Documents/modal-buttons.md. -->
   `;
   renderTypeFields(type, a);
   updateResHint();
@@ -342,9 +423,6 @@ function renderEditor(a, initialType, allowTypes){
 
   $('assetGenBtn').onclick = openGenerateModal;
   $('assetCropBtn').onclick = openCropModal;
-  $('assetsSaveBtn').onclick = saveEditor;
-  $('assetsCancelBtn').onclick = () => { showList(); };
-  if(a) $('assetsDeleteBtn').onclick = () => deleteEditor(a.id);
 }
 
 // captures whatever's CURRENTLY typed into the size fields (before the Type
@@ -600,6 +678,11 @@ function renderImgNote(){
   el.textContent = `(width: ${EDIT_IMG_W}  height: ${EDIT_IMG_H}  aspect: ${aspect})`;
 }
 async function updateImgInfo(){
+  // every staged-image change funnels through here (upload, Generate…, crop,
+  // a resolution re-derive) and none of them fires an input/change event, so
+  // this is where the bar finds out -- same choke-point trick as the object
+  // list editor's renderItems().
+  if(BAR_CTL) BAR_CTL.refresh();
   const { w, h } = await measureDataUrl(EDIT_IMAGE);
   EDIT_IMG_W = w; EDIT_IMG_H = h;
   renderImgNote();
@@ -1400,6 +1483,7 @@ async function saveEditor(){
   await setAsset(id, patch);
   await refreshGrid();
   showList();
+  renderBar();
   return id;   // lets a standalone caller (e.g. openNewAssetModal) know the save succeeded
 }
 
@@ -1408,6 +1492,7 @@ async function deleteEditor(id){
   await deleteAsset(id);
   await refreshGrid();
   showList();
+  renderBar();
 }
 
 /* Standalone "New Asset" modal: the same id/type/keywords/resolution/image
@@ -1431,6 +1516,7 @@ export async function openNewAssetModal(initialType, allowTypes){
   await refreshGrid();
   return new Promise((resolve) => {
     const prevContainer = containerEl;
+    const prevBarHost = BAR_HOST;
     let ov = document.getElementById('assetNewOverlay');
     if(!ov){
       ov = document.createElement('div');
@@ -1446,12 +1532,9 @@ export async function openNewAssetModal(initialType, allowTypes){
       document.body.appendChild(ov);
     }
     ov.innerHTML = `
-      <div class="modal" style="width:min(38em,92vw);max-height:90vh;overflow:auto">
-        <div class="assets-header">
-          <h2>New Asset</h2>
-          <button id="assetNewCloseBtn">Cancel</button>
-        </div>
-        <div id="assetsEditor" class="assets-editor"></div>
+      <div class="modal" style="width:min(38em,92vw);max-height:90vh;display:flex;flex-direction:column">
+        <div id="assetNewBar" class="modal-bar-host"></div>
+        <div class="modal-body"><div id="assetsEditor" class="assets-editor"></div></div>
       </div>`;
     ov.style.display = 'flex';
     containerEl = ov;
@@ -1463,20 +1546,28 @@ export async function openNewAssetModal(initialType, allowTypes){
       ov.style.display = 'none';
       ov.innerHTML = '';
       containerEl = prevContainer;
+      BAR_HOST = prevBarHost;
+      BAR_CTL = null;
       resolve(id || null);
     };
 
+    // same shape as the bug being fixed -- `Cancel` in the header AND
+    // Save/Cancel at the bottom of a scrolling body -- so it gets the bar too
+    BAR_HOST = ov.querySelector('#assetNewBar');
     openEditor(null, initialType, allowTypes);
-    // renderEditor (inside openEditor) already wired Save/Cancel to
-    // saveEditor()/showList() for the full-manager flow -- rewire both here
-    // so this standalone modal resolves instead of just sitting there.
-    ov.querySelector('#assetsSaveBtn').onclick = async () => {
-      const id = await saveEditor();
-      if(id) finish(id);
-    };
-    ov.querySelector('#assetsCancelBtn').onclick = () => finish(null);
-    ov.querySelector('#assetNewCloseBtn').onclick = () => finish(null);
-    wireBackdropClose(ov, () => finish(null));
+    // openEditor -> renderBar has just mounted the FULL-MANAGER bar, whose
+    // Leave/Save return to a grid this modal doesn't have. Re-point both at
+    // this promise instead, keeping the baseline openEditor just captured.
+    BAR_CTL = wireModalBar(BAR_HOST.querySelector('.modal-bar'), {
+      snapshot: editorSnapshot,
+      watch: ov,
+      thing: 'this new asset',
+      onLeave: () => finish(null),
+      onSave: async () => { const id = await saveEditor(); if(id) finish(id); },
+    });
+    BAR_CTL.rebase(EDIT_BASELINE);
+    // the backdrop is a way out too, so it goes through the same confirm
+    wireBackdropClose(ov, () => BAR_CTL.leave());
   });
 }
 
