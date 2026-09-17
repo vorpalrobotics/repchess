@@ -1,9 +1,9 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-284';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-285';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-80';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-55';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-56';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -104,7 +104,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-387';
+const BUILD_TAG = '-388';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7439,7 +7439,7 @@ $('backupImport').addEventListener('change', async e=>{
       log(`imported object lists: ${res.added} added, ${res.updated} updated` +
         (res.skipped ? `, ${res.skipped} skipped (no id)` : '') + ` (image bindings preserved)`);
       // if the Manage Object Lists modal is open, refresh it in place
-      if($('objectListsOverlay').style.display === 'flex') openObjectListManager($('objectListsBodyWrap'));
+      if($('objectListsOverlay').style.display === 'flex') openObjectListManager($('objectListsBodyWrap'), objectListManagerOpts());
     }catch(err){
       console.error('[import] object list import failed',err);
       log('object list import failed: '+err.message,true);
@@ -8390,15 +8390,20 @@ $('assetsCloseBtn').onclick = ()=>{
   }
 };
 
-/* ---------- object list manager ---------- */
+/* ---------- object list manager ----------
+   First modal on the shared button bar (Documents/modal-buttons.md). The bar
+   lives in index.html but its CONTENTS are contextual -- index / editor /
+   quiz -- so objectLists.js renders it, and takes the "close the whole
+   manager" action from here since only app.js owns the overlay. */
+function closeObjectLists(){
+  $('objectListsOverlay').style.display='none';
+  closeObjectListManager();
+}
+const objectListManagerOpts = () => ({ bar: $('objectListsBar'), onClose: closeObjectLists });
 $('menuObjectLists').onclick = ()=>{
   $('menuList').style.display='none';
   $('objectListsOverlay').style.display='flex';
-  openObjectListManager($('objectListsBodyWrap'));
-};
-$('objectListsCloseBtn').onclick = ()=>{
-  $('objectListsOverlay').style.display='none';
-  closeObjectListManager();
+  openObjectListManager($('objectListsBodyWrap'), objectListManagerOpts());
 };
 
 // "Quiz a Castle's Lists" and each list card/editor's "used in these
@@ -9329,7 +9334,7 @@ $('menuTestChessboard').onclick = ()=>{
 $('menuTestObjectLists').onclick = async ()=>{
   $('menuList').style.display='none';
   $('objectListsOverlay').style.display='flex';
-  await openObjectListManager($('objectListsBodyWrap'));
+  await openObjectListManager($('objectListsBodyWrap'), objectListManagerOpts());
   await openCastleQuizPicker();
 };
 $('quizScopeSelect').onchange = ()=>{

@@ -1,8 +1,8 @@
 # Modal Button Bar — specification
 
-**Status: proposed. Nothing below is implemented yet.** This is the contract
-to build against, then to convert existing modals to one at a time. Update the
-rollout checklist at the end as each one lands.
+**Status: the mechanism is built (`js/modalBar.js`) and the first modal is
+converted.** Everything below is the contract; the rollout checklist at the
+end tracks which modals actually follow it yet. Update it as each one lands.
 
 ## The problem this solves
 
@@ -243,8 +243,10 @@ discard confirm work.
 
 Order, worst first:
 
-- [ ] **Manage Object Lists** (`#objectListsOverlay` + its editor) — Immediate
-      index, Editor sub-view. The reported bug.
+- [x] **Manage Object Lists** (`#objectListsOverlay` + its editor) — Immediate
+      index, Editor sub-view. The reported bug. Also converted the standalone
+      **New List** modal (`openNewObjectListModal`), which had the same shape.
+      It surfaced something the spec hadn't considered — see *Sub-views*.
 - [ ] **Manage VR Assets** (`#assetsOverlay` + asset editor) — same shape:
       header Close, `assets-editor-actions` at the bottom with SAVE/Delete.
 - [ ] **Attributes** (`#attributesOverlay`, `.attr-modal`) — Editor, and
@@ -271,25 +273,70 @@ Order, worst first:
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.
 
+## Sub-views
+
+Learned converting the first modal, and it generalises: **one overlay can hold
+several views, and the bar belongs to the view, not the overlay.** Manage
+Object Lists holds three — the list index, a list editor, and a running quiz.
+
+Each view's Leave button means "leave THIS view":
+
+| View | Leave | Save | Destructive |
+|---|---|---|---|
+| index | closes the manager | — | — |
+| editor | back to the index (confirms if dirty) | writes, back to the index | `Delete…` |
+| quiz | ends the quiz, back where it started | — | — |
+
+The consequence is the good part: **while you are editing there is no
+one-click way to close the whole overlay.** You leave the editor first, and
+that asks. A single button that can close everything from inside an editor is
+exactly the shape of the original bug, so a converted multi-view modal must
+not have one.
+
+Two mechanical notes for the next such conversion:
+
+- An editor that **re-renders while editing** (adding a row, reordering)
+  re-mounts its bar, and a freshly mounted bar takes the current state as its
+  baseline — silently resetting "unsaved" back to clean. Capture the baseline
+  when the editor OPENS and hand it back with `rebase()`. `js/objectLists.js`
+  does this via `EDIT_BASELINE`.
+- Programmatic mutations fire no `input`/`change` event, so the bar's watcher
+  never sees them. Call `refresh()` at whatever choke point they all funnel
+  through (`renderItems()` there) rather than at each call site.
+
 ## Testing
 
-Add one shared helper to `test/harness.mjs` that asserts the contract for a
-given overlay id, so each conversion is one call plus its own specifics:
+`modalBarState(page, overlayId)` in `test/harness.mjs` asserts the contract for
+any converted overlay, so each conversion is one call plus its own specifics.
+It reports the title, each button's label / disabled / primary state, the
+unsaved-changes text, whether the bar is the first thing in the modal, and:
 
-- the bar exists, is the first child of `.modal`, and contains every button
-  that closes or commits;
-- with the body scrolled to the bottom, the bar is still within the modal's
-  visible box;
-- for editors: Save starts disabled and the Leave button reads `Done`; a
-  representative edit enables Save and flips the label to `Cancel`; reverting
-  that edit by hand returns both to clean (which is what pins dirtiness to a
-  real comparison rather than a keystroke flag); Cancel-while-dirty raises the
-  confirm, and confirming it actually discards.
+- **`visibleWhenScrolled`** — scrolls the body to the bottom and checks the
+  bar is still inside the modal's visible box. This is the one that pins the
+  actual bug.
+- **`strayIds`** — any Save/Cancel/Close/Done button outside the bar. Buttons
+  inside a NESTED overlay (an item picker, say) don't count; they close that
+  sub-surface, not this modal.
 
-Phase M and the object-list / asset phases already drive these modals by
-button id, so **converting a modal will break its existing tests** — that is
-expected, and those assertions should be updated to the new ids rather than
-worked around.
+Per-modal, an editor should also cover: Save starts disabled and Leave reads
+`Done`; an edit enables Save, fills it in, and flips Leave to `Cancel`;
+**undoing that edit by hand returns both to clean** (which is what pins
+dirtiness to a real comparison rather than a keystroke flag); and
+Cancel-while-dirty raises the confirm.
+
+Phase M and the object-list / asset phases drive these modals by button id, so
+**converting a modal breaks its existing tests** — expected, and those
+assertions should move to the bar rather than be worked around.
+
+Two things the first conversion hit, both likely to recur:
+
+- The harness **auto-accepts `confirm()`**, so a test that leaves a dirty
+  editor silently discards. A test reading a *different* dialog's message must
+  leave the editor BEFORE registering its listener, or it captures the discard
+  prompt instead.
+- A test that opens an editor and immediately clicks Save now does nothing,
+  because Save is correctly disabled on a clean editor. Such a test has to
+  make a real edit first — which is a better test anyway.
 
 ## Open questions
 

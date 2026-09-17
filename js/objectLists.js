@@ -22,6 +22,7 @@
    New Asset modal needs an actual import.
 */
 import { openNewAssetModal } from './assets.js?v=20260804-80';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-1';
 
 const ORDERING_TYPES = {
   'canonical_sequence': 'Canonical sequence (culturally fixed — planets, scale, HOMES)',
@@ -40,6 +41,14 @@ const MNEMONIC_TYPES = {
 };
 
 let containerEl = null;
+// the shared modal button bar (Documents/modal-buttons.md). BAR_HOST is the
+// element the bar is rendered into; BAR_CTL is the live controller. Contextual
+// here, because this one overlay holds three views -- the index, the editor,
+// and a running quiz -- and each has a different idea of what "leave" means.
+let BAR_HOST = null;
+let BAR_CTL = null;
+let BAR_ON_CLOSE = null;   // close the whole manager (owned by the caller)
+let EDIT_BASELINE = null;  // JSON of EDIT as it stood when the editor opened
 let LISTS = [];        // cached array of all objectLists records
 let ASSETS = [];       // cached array of all asset records (for the picker + thumbnails)
 let EDIT = null;       // working copy of the list being edited, or null when showing the index
@@ -87,8 +96,10 @@ function wireBackdropClose(ov, onClose){
   ov.addEventListener('click', ov._backdropClick);
 }
 
-export async function openObjectListManager(container){
+export async function openObjectListManager(container, opts = {}){
   containerEl = container;
+  BAR_HOST = opts.bar || null;
+  BAR_ON_CLOSE = opts.onClose || null;
   if(!containerEl.dataset.built){
     buildShell();
     containerEl.dataset.built = '1';
@@ -99,7 +110,78 @@ export async function openObjectListManager(container){
 }
 
 export function closeObjectListManager(){
-  // nothing running outside containerEl to tear down
+  BAR_CTL = null;
+  // nothing else running outside containerEl to tear down
+}
+
+/* ---------- the button bar ----------
+
+   One overlay, three views, three different meanings of "leave":
+
+     index   Done    closes the whole manager
+     editor  Done/Cancel  returns to the index (confirming if dirty)
+             Save         writes the list and returns to the index
+             Delete…      removes the list
+     quiz    Done    ends the quiz, back to wherever it was started from
+
+   The important consequence: while you are editing a list there is NO
+   one-click way to close the manager. You leave the editor first, and that
+   asks before discarding. That is the whole point of the conversion -- the
+   old layout had `Close` in the header and `SAVE` at the bottom of a
+   scrolling body, so on a long list the only visible button was the one that
+   threw the edits away. */
+function renderBar(){
+  if(!BAR_HOST) return;
+  if(QUIZ) renderQuizBar();
+  else if(EDIT) renderEditorBar();
+  else renderIndexBar();
+}
+
+function mountBar(html, opts){
+  BAR_HOST.innerHTML = html;
+  BAR_CTL = wireModalBar(BAR_HOST.querySelector('.modal-bar'), opts);
+  return BAR_CTL;
+}
+
+// The index is IMMEDIATE -- creating and deleting lists write straight
+// through -- so it is never dirty and gets a bare Done, not a Save that
+// would be disabled forever.
+function renderIndexBar(){
+  mountBar(modalBarHtml({ title: 'Manage Object Lists' }), {
+    snapshot: null,
+    onLeave: () => { if(BAR_ON_CLOSE) BAR_ON_CLOSE(); },
+  });
+}
+
+function renderEditorBar(){
+  const label = EDIT_IS_NEW ? 'New Object List' : 'Edit Object List';
+  mountBar(modalBarHtml({
+    title: label,
+    save: true,
+    destructive: EDIT_IS_NEW ? null : 'Delete…',
+  }), {
+    // the staged working copy, against its state when the editor opened
+    snapshot: () => EDIT,
+    watch: containerEl,
+    thing: EDIT && EDIT.name ? `"${EDIT.name}"` : 'this list',
+    onLeave: () => { EDIT = null; showIndex(); },
+    onSave: async () => { await saveEditor(); },
+    onDestructive: deleteEditor,
+  });
+  // re-baseline against the editor's opening state rather than whatever the
+  // controller captured at mount time -- renderEditor() re-mounts the bar on
+  // every re-render (adding an item, reordering), and without this every one
+  // of those would silently reset "unsaved" back to clean.
+  if(EDIT_BASELINE !== null) BAR_CTL.rebase(EDIT_BASELINE);
+}
+
+// A running quiz is a FLOW: its own step buttons stay in the body, and the
+// bar just offers the way out.
+function renderQuizBar(){
+  mountBar(modalBarHtml({ title: (QUIZ && QUIZ.title) || 'Quiz' }), {
+    snapshot: null,
+    onLeave: closeQuiz,
+  });
 }
 
 /* ---------- shell ---------- */
@@ -211,6 +293,7 @@ function showIndex(){
   grid.style.display = '';
   $('objlistEditor').style.display = 'none';
   renderGrid();
+  renderBar();
 }
 
 /* ---------- index ----------
@@ -369,6 +452,10 @@ function openEditor(id){
   // text "undefined"/"null" in the field here, and throws an uncaught
   // TypeError from .trim() the moment Save is clicked.
   for(const f of ['id','name','roomName','category','orderingRule']) EDIT[f] = EDIT[f] || '';
+  // the baseline dirtiness is measured against: EDIT as it stands right now,
+  // AFTER the normalization above, so that opening an editor on a record with
+  // missing fields doesn't read as an unsaved change you never made
+  EDIT_BASELINE = JSON.stringify(EDIT);
   const grid = $('objlistGrid');
   if(grid) grid.style.display = 'none';
   $('objlistEditor').style.display = '';
@@ -442,14 +529,13 @@ function renderEditor(){
     <p class="objlist-hint">${usedInHtml(l.id)}</p>`}
 
     <div class="assets-error" id="ol_error"></div>
-    <div class="assets-editor-actions">
-      <div class="left">
-        <button id="ol_save">SAVE</button>
-        <button id="ol_cancel">Cancel</button>
-        ${l.items.length ? '<button id="ol_quiz"><i class="fa-solid fa-graduation-cap"></i> Quiz this list</button>' : ''}
-      </div>
-      ${EDIT_IS_NEW ? '' : '<button id="ol_delete">Delete</button>'}
-    </div>
+    <!-- Save / Cancel / Delete moved to the pinned bar at the top of the
+         modal (see renderEditorBar). "Quiz this list" stays here: per
+         Documents/modal-buttons.md the bar is modal LIFECYCLE only, and
+         quizzing is a body action on the thing being edited. -->
+    ${l.items.length ? `<div class="assets-editor-actions">
+      <div class="left"><button id="ol_quiz"><i class="fa-solid fa-graduation-cap"></i> Quiz this list</button></div>
+    </div>` : ''}
   `;
   renderItems();
 
@@ -467,13 +553,18 @@ function renderEditor(){
 
   $('ol_additembtn').onclick = addItem;
   $('ol_newitem').onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); addItem(); } };
-  $('ol_save').onclick = saveEditor;
-  $('ol_cancel').onclick = () => { EDIT = null; showIndex(); };
-  if(!EDIT_IS_NEW) $('ol_delete').onclick = deleteEditor;
   if(l.items.length) $('ol_quiz').onclick = () => openListQuiz(l);
+  // re-mounted on every editor render, because the bar's Delete… depends on
+  // EDIT_IS_NEW and its title on the list's name
+  renderBar();
 }
 
 function renderItems(){
+  // every programmatic mutation of EDIT.items -- add, remove, reorder, bind or
+  // clear an asset -- funnels through here, and none of them fires an
+  // input/change event the bar's own watcher would see. One refresh at the
+  // choke point beats sprinkling them through six call sites.
+  if(BAR_CTL) BAR_CTL.refresh();
   const tb = $('ol_items');
   const items = EDIT.items;
   if(!items.length){
@@ -542,6 +633,7 @@ function startQuiz(title, entries, shuffled, returnTo){
   $('objlistEditor').style.display = 'none';
   $('objlistQuiz').style.display = '';
   renderQuizStep();
+  renderBar();
 }
 
 // "Quiz this list": quizzes EDIT's own (possibly unsaved) working copy,
@@ -561,6 +653,7 @@ function closeQuiz(){
   QUIZ = null;
   $('objlistQuiz').style.display = 'none';
   if(returnTo) returnTo(); else showIndex();
+  renderBar();
 }
 
 function renderQuizStep(){
@@ -927,6 +1020,7 @@ export async function openNewObjectListModal(){
   [LISTS, ASSETS] = await Promise.all([getAllObjectLists(), getAllAssets()]);
   return new Promise((resolve) => {
     const prevContainer = containerEl;
+    const prevBarHost = BAR_HOST;
     let ov = document.getElementById('objlistNewOverlay');
     if(!ov){
       ov = document.createElement('div');
@@ -938,12 +1032,9 @@ export async function openNewObjectListModal(){
       document.body.appendChild(ov);
     }
     ov.innerHTML = `
-      <div class="modal" style="width:min(42em,92vw);max-height:90vh;overflow:auto">
-        <div class="assets-header">
-          <h2>New Object List</h2>
-          <button id="objlistNewCloseBtn">Cancel</button>
-        </div>
-        <div id="objlistEditor" class="assets-editor"></div>
+      <div class="modal" style="width:min(42em,92vw);max-height:90vh;display:flex;flex-direction:column">
+        <div id="objlistNewBar" class="modal-bar-host"></div>
+        <div class="modal-body"><div id="objlistEditor" class="assets-editor"></div></div>
       </div>
       <div id="objlistPickOverlay" class="objlist-pick-overlay" style="display:none">
         <div class="objlist-pick-modal">
@@ -975,20 +1066,29 @@ export async function openNewObjectListModal(){
       ov.style.display = 'none';
       ov.innerHTML = '';
       containerEl = prevContainer;
+      BAR_HOST = prevBarHost;
+      BAR_CTL = null;
       resolve(id || null);
     };
 
+    // This modal had the same shape as the bug being fixed -- `Cancel` in the
+    // header AND Save/Cancel at the bottom of a scrolling body -- so it gets
+    // the same bar. Its host is its own, since it is a separate overlay.
+    BAR_HOST = ov.querySelector('#objlistNewBar');
     openEditor(null);
-    // renderEditor (inside openEditor) already wired Save/Cancel to
-    // saveEditor()/showIndex() for the full-manager flow -- rewire both here
-    // so this standalone modal resolves instead of just sitting there.
-    ov.querySelector('#ol_save').onclick = async () => {
-      const id = await saveEditor();
-      if(id) finish(id);
-    };
-    ov.querySelector('#ol_cancel').onclick = () => finish(null);
-    ov.querySelector('#objlistNewCloseBtn').onclick = () => finish(null);
-    wireBackdropClose(ov, () => finish(null));
+    // renderEditor -> renderBar has just mounted the FULL-MANAGER bar, whose
+    // Leave/Save return to an index this modal doesn't have. Re-point both at
+    // this promise instead.
+    BAR_CTL = wireModalBar(BAR_HOST.querySelector('.modal-bar'), {
+      snapshot: () => EDIT,
+      watch: ov,
+      thing: 'this new list',
+      onLeave: () => finish(null),
+      onSave: async () => { const id = await saveEditor(); if(id) finish(id); },
+    });
+    BAR_CTL.rebase(EDIT_BASELINE);
+    // the backdrop is a way out too, so it goes through the same confirm
+    wireBackdropClose(ov, () => BAR_CTL.leave());
   });
 }
 

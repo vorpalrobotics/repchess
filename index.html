@@ -279,6 +279,40 @@
   .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
   .modal h2{margin-top:0}
   .modal .modal-actions{margin-top:1rem;text-align:right}
+
+  /* ---------- shared modal button bar (Documents/modal-buttons.md) ----------
+     One bar per modal, pinned at the top so it never scrolls away. Being
+     unable to see the SAVE button while the CLOSE button stayed in view is
+     what this replaces. */
+  .modal-bar{display:flex;align-items:center;gap:.8rem;margin-bottom:.7rem;flex:0 0 auto}
+  .modal-bar-title{margin:0;font-size:1.15rem;flex:0 1 auto;
+                   /* the title yields first at narrow widths -- the buttons
+                      must never wrap or shrink, which is also why there is
+                      no APPLY button */
+                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-bar-state{flex:1 1 auto;font-size:.8rem;color:#8a6d1f;font-weight:600;white-space:nowrap}
+  .modal-bar-buttons{flex:0 0 auto;display:flex;align-items:center;gap:.6rem;margin-left:auto}
+  /* destructive sits apart so it can't be caught by a click aimed at Leave */
+  .modal-bar-buttons .mb-destructive{margin-right:.9rem}
+  /* ...and Leave/Save get a wider gap than usual: they're adjacent with
+     nothing between them and their consequences differ most. Don't tighten
+     this to line up with other button rows. */
+  .modal-bar-buttons .mb-leave{margin-right:.4rem}
+  .mb-destructive{background:#c62828;border-color:#c62828;color:#fff}
+  .mb-save.is-dirty{background:#1565c0;border-color:#1565c0;color:#fff}
+  /* The app had NO disabled button styling at all before this, so a disabled
+     button was indistinguishable from a live one -- which would have gutted
+     a design whose whole signal is Save being dead until it isn't. Modals
+     that already define their own :disabled rule (the quiz buttons) win on
+     ID specificity and are unaffected. */
+  button:disabled{background:#f0f0f0;border-color:#ccc;color:#aaa;opacity:.55;cursor:default}
+  /* the scrolling half. min-height:0 is not optional -- without it a flex
+     child refuses to shrink below its content and the modal grows past the
+     viewport instead of scrolling, taking the bar with it. */
+  .modal-body{flex:1 1 auto;overflow:auto;min-height:0}
+  /* a converted modal must be a flex column, and the bar (or the host div a
+     module renders it into) must not flex */
+  .modal-bar-host{flex:0 0 auto}
   .modal-h3{margin:.9rem 0 .2rem;font-size:1rem;color:#1f4e79}
   .modal-h3:first-of-type{margin-top:0}
   /* the download modal's rows must always stack one per line -- plain
@@ -1033,13 +1067,14 @@
 </div>
 
 <!-- object list manager modal -->
+<!-- first modal converted to the shared button bar; see
+     Documents/modal-buttons.md and js/modalBar.js. The bar's contents are
+     contextual (index / editor / quiz) and are rendered by js/objectLists.js,
+     since only it knows which view is showing. -->
 <div id="objectListsOverlay" class="overlay">
   <div class="modal">
-    <div class="assets-header">
-      <h2>Manage Object Lists</h2>
-      <button id="objectListsCloseBtn">Close</button>
-    </div>
-    <div id="objectListsBodyWrap"></div>
+    <div id="objectListsBar" class="modal-bar-host"></div>
+    <div id="objectListsBodyWrap" class="modal-body"></div>
   </div>
 </div>
 
@@ -1849,6 +1884,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-387"></script>
+<script type="module" src="js/app.js?v=20260804-388"></script>
 </body>
 </html>
