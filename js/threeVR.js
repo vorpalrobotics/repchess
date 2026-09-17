@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-82';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-58';
+import { openAssetPicker } from './assets.js?v=20260804-83';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-59';
 
 let THREE = null;
 
@@ -5693,6 +5693,14 @@ function doorSpawn(size, wall, offset, origin, inside){
 // real use -- and the sign (the room's name) is the thing you are standing
 // out here to recall in the first place.
 const DOOR_VIEW_DIST = 3.1;
+/* A castle's ENTRY room is reached through a building on the street, and what
+   you review it from out there is not a door sign but the street-entry
+   billboard -- a full move pair plus the stat strip carrying its DUE marking
+   (buildStreetEntryPair). That sits 1.8m out from the facade and a couple of
+   metres to one side, so a door's-worth of step-back leaves it half out of
+   frame and the strip beneath it further still. Needs real distance, not a
+   nudge. */
+const STREET_VIEW_DIST = 8.0;
 
 // The mirror of doorSpawn's "inside" spawn: the same side of the wall, but
 // stepped further back and turned around to FACE the doorway.
@@ -5791,14 +5799,15 @@ function enterAtDoorTo(roomKey){
   }
   if(!box || !thru){ enterRoom(roomKey, { x: 0, z: 0, yaw: 0 }); return; }
   const cx = (box.minX + box.maxX) / 2, cz = (box.minZ + box.maxZ) / 2;
+  const dist = (ex && ex.street) ? STREET_VIEW_DIST : DOOR_VIEW_DIST;
   // clamped, so a room too shallow to step that far back doesn't put you
   // through its opposite wall -- the same guard doorSpawn caps its own inset
   // with, just applied after the fact since this step-back is measured from
   // a trigger box rather than from the wall.
   const room = mergedRoom(approach.roomKey);
   const spot = room
-    ? clampToRoom(room.size, cx - thru.x * DOOR_VIEW_DIST, cz - thru.z * DOOR_VIEW_DIST)
-    : { x: cx - thru.x * DOOR_VIEW_DIST, z: cz - thru.z * DOOR_VIEW_DIST };
+    ? clampToRoom(room.size, cx - thru.x * dist, cz - thru.z * dist)
+    : { x: cx - thru.x * dist, z: cz - thru.z * dist };
   pos.x = spot.x; pos.z = spot.z;
   // face along `thru`, the direction walking through the door travels --
   // same conversion the camera's own forward vector (-sin yaw, -cos yaw) uses
@@ -6717,6 +6726,9 @@ function buildRoom(roomKey){
         box: doorTriggerBox(size, b.doorWall, b.doorOffset, b.origin),
         thru: { x: -bout.x, z: -bout.z },
         target: b.target,
+        // a street entry, not a door in a wall -- jumping here has to stand
+        // back far enough for the move images and their stat strip
+        street: true,
         spawn
       });
     }
@@ -9628,7 +9640,7 @@ export async function openThreeTest(containerEl, opts){
       // through a specific door deterministically (teleport to the box
       // center, face along `thru`) instead of guessing which wall a door
       // landed on.
-      exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, viewBox: m.viewBox || null, thru: m.thru })),
+      exitInfo: () => exitMeta.map(m => ({ target: m.target, box: m.box, viewBox: m.viewBox || null, street: !!m.street, thru: m.thru })),
       // the wall-lists <select>'s option/optgroup HTML for a bucket, exactly
       // as the real Wall Object Lists dialog builds it -- for testing the
       // category grouping without needing to open edit mode, click the

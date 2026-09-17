@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and two modals are
+**Status: the mechanism is built (`js/modalBar.js`) and three modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -254,8 +254,11 @@ Order, worst first:
       resolution tier) and live form fields, so `editorSnapshot()` reads both
       and reuses `readTypeFields()` — a field that matters to Save is then
       automatically a field that counts as a change.
-- [ ] **Attributes** (`#attributesOverlay`, `.attr-modal`) — Editor, and
-      currently `overflow:auto` on the modal itself.
+- [x] **Attributes** (`#attributesOverlay`, `.attr-modal`) — Editor. First
+      with no destructive action, first whose body had to be split out of a
+      `.modal` that was scrolling itself, and first to use `validate` (its
+      street-number rules are one PREFS scan, cheap enough to run live). Also
+      the first with an ASYNCHRONOUSLY-populated field — see below.
 - [ ] **Manage Mnemonics** (`#mnemonicsOverlay`) + the square editor
       (`#mnemonicsEditorOverlay`) — Immediate + Editor.
 - [ ] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor. Its existing
@@ -308,6 +311,14 @@ Two mechanical notes for the next such conversion:
 - Programmatic mutations fire no `input`/`change` event, so the bar's watcher
   never sees them. Call `refresh()` at whatever choke point they all funnel
   through (`renderItems()` there) rather than at each call site.
+- **An asynchronously-populated field will make a modal claim changes nobody
+  made.** Attributes' redirect select fills in from a lookup, so its baseline
+  was taken while that field was still empty — and the moment the saved value
+  landed, the modal read dirty and offered a discard confirm on the way out of
+  a node you had only looked at. That is precisely the false positive that
+  teaches you to click through the confirm that matters. Re-baseline with
+  `markClean()` once the field lands, guarded by `touched()` so it can never
+  wipe out an edit the user made while the lookup was in flight.
 - **The watched element outlives the bar.** A manager's body wrap is built
   once and reused for every open; the standalone New Asset / New List
   overlays are singletons. Bars are re-mounted constantly against them -- an

@@ -431,7 +431,10 @@
   .graph-coverage-fill{display:inline-block;height:100%;border-radius:.3rem 0 0 .3rem}
   .graph-coverage-value{flex:0 0 auto;min-width:7.5em;text-align:left;font-variant-numeric:tabular-nums}
 
-  .attr-modal{width:min(30em, 92vw);max-height:88vh;overflow:auto}
+  /* overflow moved OFF the modal and onto its .modal-body: with it here the
+     button bar scrolled away with everything else, which is the bug the bar
+     exists to fix. */
+  .attr-modal{width:min(30em, 92vw);max-height:88vh;display:flex;flex-direction:column}
   .attr-section h3{margin:0 0 .6rem;font-size:1rem;display:flex;align-items:center;gap:.4em}
   .attr-section h3 i{color:#888}
   .attr-move-label{font-weight:normal;color:#666;font-size:.85em}
@@ -1378,7 +1381,11 @@
 <!-- node attributes modal (Set Attributes on a row) -->
 <div id="attributesOverlay" class="overlay">
   <div class="modal attr-modal">
-    <h2>Set Attributes</h2>
+    <!-- shared button bar; see Documents/modal-buttons.md. Rendered and wired
+         per open by js/app.js (openAttributesModal), since its baseline has to
+         be taken from the fields as they stand at that moment. -->
+    <div id="attributesBar" class="modal-bar-host"></div>
+    <div class="modal-body">
 
     <div class="field">
       <label for="attrRoomName">Room name</label>
@@ -1412,10 +1419,7 @@
     </div>
     <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
-    <div class="modal-actions">
-      <button id="attributesCancelBtn">Cancel</button>
-      <button id="attributesSaveBtn">SAVE</button>
-    </div>
+    </div><!-- /.modal-body -- Cancel/SAVE moved to the bar above -->
   </div>
 </div>
 
@@ -1881,6 +1885,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-391"></script>
+<script type="module" src="js/app.js?v=20260804-393"></script>
 </body>
 </html>
