@@ -1,6 +1,6 @@
 // Headless tests for the VR world, run against the offline harness.
 //   cd test && npm install && npm test
-import { launchApp, seedBackup, openVR, closeVR as closeVRHelper, modalBarState, mockLichessGames, mockChessComGames } from './harness.mjs';
+import { launchApp, seedBackup, openVR, closeVR as closeVRHelper, settleVrClose, modalBarState, mockLichessGames, mockChessComGames } from './harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -2989,6 +2989,145 @@ try {
     assert(state.value === '', `expected the dropdown to stay on "All" for an unnamed, non-castle-root focus, got ${JSON.stringify(state.value)}`);
     ok('move table: focusing an unnamed, non-castle-root row leaves "Show Castle" on All');
   } catch(e){ bad('move table: non-castle, unnamed focus does not falsely select an option', e); }
+
+  const storedScope = () => appS2.page.evaluate(
+    () => JSON.parse(localStorage.getItem('repchess_showScope') || 'null'));
+  /* Deliberately NOT waitForSelector('.data-row'): once a scope is restored,
+     the first row in the tree may well be one the focus hides (focus-hidden
+     is display:none), and Playwright's default visibility wait would sit
+     there until it timed out. Both renderTreeBody and the restore that
+     follows it are synchronous, so "rows exist" already means "focus
+     applied" -- there is no in-between state to catch. */
+  const reopenLine = async () => {
+    await appS2.page.evaluate(() => document.getElementById('backBtn').click());
+    await appS2.page.waitForSelector('.line-row', { timeout: 20000 });
+    await appS2.page.click('.line-row');
+    await appS2.page.waitForFunction(
+      () => document.querySelectorAll('#tree tr.data-row').length > 0, { timeout: 40000 });
+  };
+
+  // 56h. The "Show:" scope is REMEMBERED across sessions -- you work on one
+  //      castle at a time, and coming back to the system tomorrow should land
+  //      where you left off rather than on "All".
+  //
+  //      Stored by stable identity (the focused row's own data-seq), never by
+  //      the dropdown's `room:<n>` value: TABLE_ROOM_OPTIONS is rebuilt from
+  //      scratch every time the menu is opened, so index 0 is a promise about
+  //      nothing once the repertoire changes.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+    await appS2.page.selectOption('#tableCastleSelect', 'castle:Alpha');
+    await appS2.page.waitForTimeout(50);
+    const stored = await storedScope();
+    assert(stored && stored.lineId === 'L1',
+      `expected the scope stored against the line it belongs to, got ${JSON.stringify(stored)}`);
+    assert(stored.key === 'd4,Nf6',
+      `expected the focused row's data-seq as the stored identity, got ${JSON.stringify(stored.key)}`);
+    assert(!JSON.stringify(stored).includes('room:') && !JSON.stringify(stored).includes('castle:'),
+      `expected a stable identity, not a rebuilt dropdown value: ${JSON.stringify(stored)}`);
+
+    await reopenLine();
+    const after = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      value: document.getElementById('tableCastleSelect').value,
+      betaHidden: document.querySelector('tr.data-row[data-seq="d4,d5"]').classList.contains('focus-hidden'),
+    }));
+    assert(after.unfocusShown, 'expected reopening the line to restore the remembered focus');
+    assert(after.value === 'castle:Alpha',
+      `expected the dropdown to come back on Alpha, got ${JSON.stringify(after.value)}`);
+    assert(after.betaHidden, 'expected the restored focus to be real focus, hiding Beta as a sibling branch');
+    ok('move table: the "Show:" scope survives leaving and reopening the system');
+  } catch(e){ bad('move table: "Show:" scope persists across sessions', e); }
+
+  // 56i. A named ROOM is remembered the same way -- and this is the case the
+  //      index would have got wrong, since "room:0" means whatever the next
+  //      enumeration puts first.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').focus());
+    await appS2.page.selectOption('#tableCastleSelect', 'room:0');
+    await appS2.page.waitForTimeout(50);
+    // Vault's own row, the one test 56f focuses the old-fashioned way -- a
+    // room's identity here is the row its "Focus on this Variation" lives on,
+    // one ply back from the room's own our-move seq (see focusOnSeqRow).
+    const stored = await storedScope();
+    assert(stored && stored.key === 'd4,d5,c4,e6',
+      `expected Vault's own row identity, got ${JSON.stringify(stored && stored.key)}`);
+
+    await reopenLine();
+    await appS2.page.evaluate(() => document.getElementById('tableCastleSelect').focus());
+    const after = await appS2.page.evaluate(() => ({
+      value: document.getElementById('tableCastleSelect').value,
+      c6Hidden: document.querySelector('tr.data-row[data-seq="d4,d5,c4,c6"]').classList.contains('focus-hidden'),
+    }));
+    assert(after.value === 'room:0', `expected Vault reselected after reopening, got ${JSON.stringify(after.value)}`);
+    assert(after.c6Hidden, 'expected Vault genuinely refocused, hiding its own sibling');
+    ok('move table: a named room is remembered by identity, not by its rebuilt option index');
+  } catch(e){ bad('move table: named-room scope persists by identity', e); }
+
+  // 56j. A plain RE-RENDER must not erase it. renderTreeBody clears focus and
+  //      re-applies it on every compact/visibility toggle and every import; if
+  //      those internal clears wrote through to storage, a redraw would quietly
+  //      throw away the scope the user chose. Only the paths where the user
+  //      actually picked a scope may write.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+    await appS2.page.selectOption('#tableCastleSelect', 'castle:Alpha');
+    await appS2.page.waitForTimeout(50);
+    await appS2.page.evaluate(() => document.getElementById('compactModeBtn').click());
+    await appS2.page.waitForTimeout(150);
+    const afterToggle = await storedScope();
+    assert(afterToggle && afterToggle.key === 'd4,Nf6',
+      `a compact-mode re-render must not erase the remembered scope, got ${JSON.stringify(afterToggle)}`);
+    await appS2.page.evaluate(() => document.getElementById('compactModeBtn').click());
+    await appS2.page.waitForTimeout(150);
+    ok('move table: re-rendering the tree does not erase the remembered "Show:" scope');
+  } catch(e){ bad('move table: a tree re-render leaves the remembered scope alone', e); }
+
+  // 56k. Unfocus is the user saying "show me everything again", so it forgets
+  //      the scope too -- and the next open really does come back on All.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('unfocusBtn').click());
+    await appS2.page.waitForTimeout(50);
+    assert((await storedScope()) === null, 'expected Unfocus to forget the remembered scope');
+    await reopenLine();
+    const after = await appS2.page.evaluate(() => ({
+      unfocusShown: document.getElementById('unfocusBtn').style.display !== 'none',
+      value: document.getElementById('tableCastleSelect').value,
+    }));
+    assert(!after.unfocusShown && after.value === '',
+      `expected a forgotten scope to open on All, got ${JSON.stringify(after)}`);
+    ok('move table: Unfocus forgets the remembered scope, and the next open starts on All');
+  } catch(e){ bad('move table: Unfocus clears the remembered scope', e); }
+
+  // 56l. The digraph's own "Show Castle" remembers too -- it is the same menu
+  //      to the user. It writes the durable scope WITHOUT re-focusing the move
+  //      table underneath (picking a castle to look at shouldn't hide rows
+  //      behind the overlay), which works because GRAPH_FOCUS_SEQ resets on
+  //      every fresh graph open: next time, the restored table scope is what
+  //      the graph inherits.
+  try {
+    await appS2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appS2.page.waitForSelector('#graphOverlay', { state: 'visible', timeout: 40000 });
+    await appS2.page.selectOption('#graphCastleSelect', 'Beta');
+    await appS2.page.waitForTimeout(300);
+    const stored = await storedScope();
+    assert(stored && stored.key === 'd4,d5',
+      `expected the digraph's pick remembered by identity, got ${JSON.stringify(stored)}`);
+    const tableUntouched = await appS2.page.evaluate(() =>
+      document.getElementById('unfocusBtn').style.display === 'none');
+    assert(tableUntouched, 'expected the digraph menu NOT to re-focus the move table underneath it');
+
+    await appS2.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appS2.page.waitForTimeout(100);
+    await reopenLine();
+    await appS2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
+    await appS2.page.waitForSelector('#graphOverlay', { state: 'visible', timeout: 40000 });
+    const graphValue = await appS2.page.evaluate(() => document.getElementById('graphCastleSelect').value);
+    assert(graphValue === 'Beta',
+      `expected the digraph's castle menu to come back on Beta, got ${JSON.stringify(graphValue)}`);
+    await appS2.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    ok('digraph: "Show Castle" is remembered across sessions, without re-focusing the move table');
+  } catch(e){ bad('digraph: "Show Castle" scope persists across sessions', e); }
 } finally {
   await appS2.close();
 }
@@ -4176,8 +4315,20 @@ try {
       btn && btn.click();
     });
     await appY2.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
-    const betaMemorizedNow = await appY2.page.evaluate(() =>
-      document.querySelector('tr.data-row[data-seq="d4,d5"] .branchName').classList.contains('branchName-memorized'));
+    /* The overlay hiding is not the refresh finishing: the close handler
+       fires refreshMemorizedRoomsAndTree() without awaiting it, and that now
+       yields a frame first so its spinner can actually paint before the
+       synchronous tree rebuild blocks the main thread. Reading straight after
+       the overlay hides was always a race -- it just used to win. Waits for
+       the result instead, and still fails with the same message if the
+       refresh never happens at all. */
+    let betaMemorizedNow = false;
+    try {
+      await appY2.page.waitForFunction(() =>
+        document.querySelector('tr.data-row[data-seq="d4,d5"] .branchName')
+          ?.classList.contains('branchName-memorized') === true, { timeout: 10000 });
+      betaMemorizedNow = true;
+    } catch {}
     assert(betaMemorizedNow === true, 'expected closing VR to immediately refresh the move table\'s memorized coloring');
     ok('move table: closing VR after memorizing a room refreshes its green coloring immediately');
   } catch(e){ bad('move table: VR close refreshes memorized coloring', e); }
@@ -5397,6 +5548,20 @@ try {
       return !!(r && r.lastGrade === 'A');
     }, { timeout: 5000 });
 
+    /* Record whether the spinner comes up across the close -- asserted as
+       test 94b below, which shares this round trip rather than paying for a
+       second VR cycle just to watch it. An observer, not a poll: the refresh
+       can be over before a sampled read would land, and on a small fixture
+       usually is. */
+    await appAF.page.evaluate(() => {
+      const ov = document.getElementById('spinnerOverlay');
+      window.__spinnerSeen = ov.style.display !== 'none';
+      window.__spinnerObs = new MutationObserver(() => {
+        if(ov.style.display !== 'none') window.__spinnerSeen = true;
+      });
+      window.__spinnerObs.observe(ov, { attributes: true, attributeFilter: ['style'] });
+    });
+
     await closeVRHelper(appAF.page);
     // the close handler's refresh is async; the glyph is the visible result
     await appAF.page.waitForFunction((key) => {
@@ -5411,6 +5576,22 @@ try {
       `a room just graded 'A' should not read due or overdue, got ${JSON.stringify(after)}`);
     ok('Jump round trip: grading a room in VR updates the graph left open behind it');
   } catch(e){ bad('Jump round trip: graph refresh on VR close', e); }
+
+  // 94b. ...and it says so while it works. That refresh rebuilds the whole
+  //      move table synchronously and re-reads four stores for the graph
+  //      restyle -- ten to fifteen seconds on a real castle -- during which
+  //      the graph you came back to ignores clicks. Without a spinner it
+  //      reads as hung rather than busy. Uses the observer installed above,
+  //      since on this fixture the work is far too quick to sample for.
+  try {
+    await appAF.page.evaluate(() => window.__spinnerObs && window.__spinnerObs.disconnect());
+    const seen = await appAF.page.evaluate(() => window.__spinnerSeen === true);
+    assert(seen, 'expected a spinner while the post-VR refresh rebuilds the tree and restyles the graph');
+    // and it must come back down again -- a spinner left up is worse than none
+    await appAF.page.waitForFunction(
+      () => document.getElementById('spinnerOverlay').style.display === 'none', { timeout: 10000 });
+    ok('Jump round trip: the post-VR refresh shows a spinner, and clears it when it finishes');
+  } catch(e){ bad('Jump round trip: spinner during the post-VR refresh', e); }
 } finally {
   await appAF.close();
 }
@@ -7994,6 +8175,7 @@ try {
     btn && btn.click();
   });
   await appAX.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+  await settleVrClose(appAX.page);   // the tree rebuild the close fires is not done yet
 
   // 160. "Import this variation" from the three-dot menu on the main move
   //      table invalidates the cache.
@@ -8035,6 +8217,7 @@ try {
       btn && btn.click();
     });
     await appAX.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+    await settleVrClose(appAX.page);   // the tree rebuild the close fires is not done yet
 
     ourMoveFen = await appAX.page.evaluate(() => {
       const c = new Chess();
@@ -13869,6 +14052,7 @@ try {
       btn && btn.click();
     });
     await appCC.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+    await settleVrClose(appCC.page);   // the tree rebuild the close fires is not done yet
   };
   await closeVR();
   await appCC.page.evaluate(() => document.querySelector('.line-row').click());
@@ -19762,6 +19946,7 @@ try {
       btn && btn.click();
     });
     await appDY.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none');
+    await settleVrClose(appDY.page);   // the tree rebuild the close fires is not done yet
     await appDY.page.waitForFunction(() => window.__aqTestHooks.engine._currentThreads === 8, { timeout: 5000 });
     const f = await appDY.page.evaluate(() => window.__engineFake);
     assert(f.sentCommands.includes('setoption name Threads value 8'),
