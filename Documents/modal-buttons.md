@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and five modals are
+**Status: the mechanism is built (`js/modalBar.js`) and six modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -139,7 +139,10 @@ app's selection/action accent.
 
 `.mb-destructive` replaces the four ad-hoc
 `style="background:#c62828;color:#fff"` inlines and the one-off
-`#assetsDeleteBtn` rule.
+`#assetsDeleteBtn` rule. It is the app's destructive-button styling wherever
+such a button lives — three of those four (`Remove color`, `Remove all`,
+the picker's own remove) are BODY actions that edit a value rather than
+destroying a record, so they keep the look without moving to the bar.
 
 **The clean→dirty transition must be unmissable**, since it is the signal
 that something is now at stake — and with `Apply` gone there are only two
@@ -264,10 +267,12 @@ Order, worst first:
       overlays rather than two views of one, so each simply gets its own bar.
       The manager is immediate on its own terms (notes autosave, the grid
       writes through), so a bare `Done` and Export/Import left in the body.
-- [ ] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor. Its existing
-      `Apply` already means commit-and-close, so it becomes `Save` outright;
-      `Reset` and `Remove all` stay in the body (they edit the value, they
-      don't destroy a record).
+- [x] **Surface Adjust** (`#surfaceAdjustOverlay`) — Editor. Its existing
+      `Apply` already meant commit-and-close, so it became `Save` outright;
+      `Reset` and `Remove all` stayed in the body (they edit the value, they
+      don't destroy a record). One real behaviour change: Save is dead until
+      something changes, where `Apply` was pressable on an untouched dialog
+      for a no-op write.
 - [ ] **Room Geometry** (`#roomGeomOverlay`) — Editor + Destructive
       (`Reset Room…`).
 - [ ] **Colour picker / swatch picker / crop editor** — Editor.

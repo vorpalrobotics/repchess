@@ -1960,7 +1960,7 @@ try {
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
     tintHex = await app13.page.evaluate(() => document.querySelector('#surfaceAdjustOverlay .color-swatch').dataset.hex);
     await app13.page.click('#surfaceAdjustOverlay .color-swatch');
-    await app13.page.click('#saApplyBtn');
+    await app13.page.click('#surfaceAdjustOverlay .modal-bar .mb-save');
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(150);
 
@@ -2038,11 +2038,48 @@ try {
     await app13.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await app13.page.click('#pickerGrid .asset-card-tint');
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
+
+    /* --- the shared button bar (Documents/modal-buttons.md). This dialog's
+       old "Apply" already meant commit-and-close, which IS the bar's Save, so
+       it maps straight across -- but Save is now dead until something
+       actually changes, where Apply was pressable on an untouched dialog for
+       a no-op write. --- */
+    let sb = await modalBarState(app13.page, 'surfaceAdjustOverlay');
+    assert(sb && sb.title === 'Adjust Surface', `expected the shared bar, got ${JSON.stringify(sb && sb.title)}`);
+    assert(sb.save && sb.save.disabled && sb.leave.text === 'Done',
+      `expected an untouched dialog to read clean, got ${JSON.stringify(sb)}`);
+    assert(sb.destructive === null,
+      'expected no bar destructive: Reset and Remove all edit the VALUE, not the surface record, so they stay in the body');
+    assert(sb.barIsFirst && sb.strayIds.length === 0 && sb.visibleWhenScrolled === true,
+      `expected the bar first, pinned, nothing stray: ${JSON.stringify(sb)}`);
+    const bodyBtns = await app13.page.evaluate(() =>
+      [...document.querySelectorAll('#surfaceAdjustOverlay .modal-body button')].map(b => b.id).filter(Boolean));
+    assert(bodyBtns.includes('saResetBtn'),
+      `expected Reset left in the body, got ${JSON.stringify(bodyBtns)}`);
+
     await app13.page.evaluate(() => {
       const b = document.getElementById('saBrightness');
       b.value = '1.5'; b.dispatchEvent(new Event('input'));
     });
-    await app13.page.click('#saApplyBtn');
+    sb = await modalBarState(app13.page, 'surfaceAdjustOverlay');
+    assert(!sb.save.disabled && sb.save.primary && sb.leave.text === 'Cancel',
+      `expected moving a slider to arm Save, got ${JSON.stringify(sb)}`);
+
+    // "Reset" mutates the staged values directly and fires no input event the
+    // bar could see -- repaint() is the choke point that tells it. Pressing it
+    // here puts everything back to the defaults, which IS the opening state,
+    // so the dialog must return to clean.
+    await app13.page.click('#saResetBtn');
+    sb = await modalBarState(app13.page, 'surfaceAdjustOverlay');
+    assert(sb.save.disabled && sb.leave.text === 'Done',
+      `expected Reset back to the opening values to read clean again, got ${JSON.stringify(sb)}`);
+    ok('modal bar: Adjust Surface maps Apply onto Save, and sees changes made outside its form fields');
+
+    await app13.page.evaluate(() => {
+      const b = document.getElementById('saBrightness');
+      b.value = '1.5'; b.dispatchEvent(new Event('input'));
+    });
+    await app13.page.click('#surfaceAdjustOverlay .modal-bar .mb-save');
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(250);
 
@@ -2071,7 +2108,7 @@ try {
     await app13.page.click('#pickerGrid .asset-card-tint');
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'visible', timeout: 5000 });
     await app13.page.click('#saResetBtn');
-    await app13.page.click('#saApplyBtn');
+    await app13.page.click('#surfaceAdjustOverlay .modal-bar .mb-save');
     await app13.page.waitForSelector('#surfaceAdjustOverlay', { state: 'hidden', timeout: 5000 });
     await app13.page.waitForTimeout(250);
 
