@@ -21450,6 +21450,214 @@ try {
       `expected review history to survive a full restore, got ${JSON.stringify(restored)}`);
     ok('Review scheduling: records persist and survive a Full Backup round trip');
   } catch(e){ bad('Review scheduling: persistence and backup', e); }
+
+  /* --- Review Forecast, Phase 1 (Documents/review-forecast.md). The whole
+     feature's risk is in this one function -- every later phase is a thin
+     renderer over it, so a bug here would be invisible in all of them. Driven
+     against HAND-BUILT castle fixtures through the pure `build` hook: no
+     castle generation, no real clock, so the rules are tested as rules. --- */
+
+  // DAY and LADDER are already in scope from this phase's own setup above.
+  // A fake "now" pinned to local midnight, so day arithmetic in the fixtures
+  // lines up with the midnight-snapped due dates the scheduler writes.
+  const NOW = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  // a room record due `days` from now, sitting on ladder rung `step`
+  const rec = (days, step = 0, extra = {}) =>
+    ({ last: NOW - DAY, due: NOW + days * DAY, step, lapses: 0, lastGrade: 'A', ...extra });
+  // one castle of hand-made rooms; `rooms` is [{posKey, moveCount, exits?, pairs?}]
+  const castle = (castleName, lineId, rooms) => ({
+    lineId, castleName, instanceId: `${lineId}_${castleName}`, entryPosKey: rooms[0]?.posKey,
+    genRooms: rooms.map(r => ({ exits: [{ toKey: 'x' }], pairs: [], moveCount: 0, ...r })),
+  });
+  const keyOf = (c, posKey) => `cas:${c.instanceId}:${posKey}`;
+  const run = (castles, reviews, memorized, opts = {}) => appEF.page.evaluate(
+    ({ castles, reviews, memorized, opts }) =>
+      window.__reviewForecastTestHooks.build(castles, reviews, memorized, opts),
+    { castles, reviews, memorized, opts });
+
+  // 267. Buckets are by DUE DATE, not by ladder step. The case that matters:
+  //      a room on the TOP rung (a 180-day interval) that happens to fall due
+  //      in four days belongs under "this week" -- bucketing by step would
+  //      file it under 90+ and get the forecast wrong in exactly the
+  //      situation a forecast exists for.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 1 },              // entry room
+      { posKey: 'p1', moveCount: 4 },              // top rung, due in 4 days
+      { posKey: 'p2', moveCount: 6 },              // BOTTOM rung, due in 40 days
+    ]);
+    // the inversion is the point: the top-rung room is the one due soonest,
+    // and the bottom-rung room the one due furthest out
+    const topRung = LADDER.length - 1;
+    const reviews = {
+      [keyOf(c, 'p1')]: rec(4, topRung),
+      [keyOf(c, 'p2')]: rec(40, 0),
+    };
+    const f = await run([c], reviews, {});
+    assert(f.buckets.week.rooms === 1 && f.buckets.week.moves === 4,
+      `a top-rung room due in 4 days belongs in "2-7 days", not its ladder bucket: ${JSON.stringify(f.buckets)}`);
+    assert(f.buckets.quarter.rooms === 1 && f.buckets.quarter.moves === 6,
+      `a bottom-rung room due in 40 days belongs in "31-90 days": ${JSON.stringify(f.buckets)}`);
+    // ...and the ladder view still reports them by rung, which is the whole
+    // point of it being a SEPARATE view rather than the same numbers
+    assert(f.ladder[topRung].rooms === 1 && f.ladder[0].rooms === 1,
+      `expected the ladder view to keep reporting by rung: ${JSON.stringify(f.ladder)}`);
+    ok('Review Forecast: buckets are by due date, the ladder view is by step, and they disagree on purpose');
+  } catch(e){ bad('Review Forecast: due-date bucketing vs ladder step', e); }
+
+  // 268. Locked rooms are excluded -- you can never stand in one, so it has
+  //      no schedule and nothing to forecast (same reason the digraph's
+  //      coverage bars leave them out of their denominators). What they hold
+  //      is reported separately: it should be zero, and if it ever isn't, the
+  //      forecast would be silently dropping moves from every total.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 0 },
+      { posKey: 'p1', moveCount: 5 },
+      // no exits AND no non-center pairs -- threeVR's isRoomEmpty, which is
+      // the authority on whether you can walk in
+      { posKey: 'locked', moveCount: 0, exits: [], pairs: [{ side: 'center' }] },
+    ]);
+    const f = await run([c], {}, {});
+    assert(f.totals.rooms === 2, `expected the locked room excluded from the totals, got ${f.totals.rooms}`);
+    assert(f.locked.rooms === 1, `expected the locked room counted separately, got ${JSON.stringify(f.locked)}`);
+    assert(f.locked.moves === 0,
+      `a locked room should hold no moves -- if this ever fails the forecast is dropping them: ${JSON.stringify(f.locked)}`);
+
+    // ...but a CORRIDOR with no exits of its own and internal move-pairs is
+    // walkable, and must not be mistaken for locked
+    const c2 = castle('Beta', 'L1', [
+      { posKey: 'q0', moveCount: 0 },
+      { posKey: 'corridor', moveCount: 7, exits: [], pairs: [{ side: 'left' }, { side: 'center' }] },
+    ]);
+    const f2 = await run([c2], {}, {});
+    assert(f2.locked.rooms === 0 && f2.totals.moves === 7,
+      `a corridor with internal pairs is walkable, not locked: ${JSON.stringify({ locked: f2.locked, totals: f2.totals })}`);
+    ok('Review Forecast: locked rooms are excluded and accounted for, corridors are not mistaken for them');
+  } catch(e){ bad('Review Forecast: locked-room handling', e); }
+
+  // 269. A room that was never memorized lands in its own bucket rather than
+  //      vanishing -- without it a barely-started castle and a fully-reviewed
+  //      one look identical, the same reason roomReviewState has four states.
+  //      And a memorized-but-never-graded room bootstraps a real schedule.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 0 },
+      { posKey: 'p1', moveCount: 3 },   // never memorized
+      { posKey: 'p2', moveCount: 5 },   // memorized 10 days ago, never graded
+    ]);
+    const f = await run([c], {}, { [keyOf(c, 'p2')]: NOW - 10 * DAY });
+    assert(f.buckets.none.rooms === 2 && f.buckets.none.moves === 3,
+      `expected the unmemorized rooms (entry + p1) in the "not memorized" bucket: ${JSON.stringify(f.buckets.none)}`);
+    assert(f.neverReviewed.rooms === 1 && f.neverReviewed.moves === 5,
+      `expected the memorized-but-never-graded room called out: ${JSON.stringify(f.neverReviewed)}`);
+    // memorized 10 days ago bootstraps due at +1 day, so it is long overdue
+    assert(f.buckets.overdue.rooms === 1,
+      `expected a room memorized 10 days ago and never reviewed to read overdue: ${JSON.stringify(f.buckets)}`);
+    assert(f.totals.memorizedRooms === 1 && f.totals.memorizedMoves === 5,
+      `expected memorized totals to count only the bootstrapped room: ${JSON.stringify(f.totals)}`);
+    ok('Review Forecast: unmemorized rooms get their own bucket, and a bootstrapped schedule is reported as never-reviewed');
+  } catch(e){ bad('Review Forecast: unmemorized and never-reviewed', e); }
+
+  // 270. Scope. Per castle is the unit the feature was asked for; no scope
+  //      means every castle, which is what the pacing decision is actually
+  //      made against (your load is across the whole repertoire, not one
+  //      castle). Two castles sharing a NAME across different lines must not
+  //      be conflated.
+  try {
+    const a = castle('Alpha', 'L1', [{ posKey: 'p0', moveCount: 0 }, { posKey: 'p1', moveCount: 4 }]);
+    const b = castle('Beta',  'L1', [{ posKey: 'q0', moveCount: 0 }, { posKey: 'q1', moveCount: 6 }]);
+    const a2 = castle('Alpha', 'L2', [{ posKey: 'r0', moveCount: 0 }, { posKey: 'r1', moveCount: 9 }]);
+    const all = await run([a, b, a2], {}, {});
+    assert(all.castles === 3 && all.totals.moves === 19,
+      `expected no scope to mean every castle: ${JSON.stringify({ castles: all.castles, totals: all.totals })}`);
+
+    const justBeta = await run([a, b, a2], {}, {}, { castleName: 'Beta' });
+    assert(justBeta.castles === 1 && justBeta.totals.moves === 6,
+      `expected a castle scope to select just that castle: ${JSON.stringify(justBeta.totals)}`);
+
+    const alphaBoth = await run([a, b, a2], {}, {}, { castleName: 'Alpha' });
+    assert(alphaBoth.castles === 2 && alphaBoth.totals.moves === 13,
+      `a castle name alone spans lines that share it: ${JSON.stringify(alphaBoth.totals)}`);
+    const alphaL2 = await run([a, b, a2], {}, {}, { castleName: 'Alpha', lineId: 'L2' });
+    assert(alphaL2.castles === 1 && alphaL2.totals.moves === 9,
+      `line + name must disambiguate two castles sharing a name: ${JSON.stringify(alphaL2.totals)}`);
+    ok('Review Forecast: scope selects by castle, by line, or spans everything');
+  } catch(e){ bad('Review Forecast: scoping', e); }
+
+  // 271. The per-day map the calendar (Phase 5) will render: one entry per
+  //      distinct due date, sorted, with rooms falling on the same day summed
+  //      rather than overwriting each other.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 0 },
+      { posKey: 'p1', moveCount: 4 },
+      { posKey: 'p2', moveCount: 6 },   // same day as p1
+      { posKey: 'p3', moveCount: 2 },   // a later day
+    ]);
+    const reviews = {
+      [keyOf(c, 'p1')]: rec(5, 2),
+      [keyOf(c, 'p2')]: rec(5, 2),
+      [keyOf(c, 'p3')]: rec(2, 1),
+    };
+    const f = await run([c], reviews, {});
+    assert(f.perDay.length === 2, `expected one entry per distinct due date, got ${JSON.stringify(f.perDay)}`);
+    assert(f.perDay[0].due < f.perDay[1].due, `expected perDay sorted ascending: ${JSON.stringify(f.perDay)}`);
+    assert(f.perDay[0].moves === 2 && f.perDay[0].rooms === 1, `expected the nearer day first: ${JSON.stringify(f.perDay[0])}`);
+    assert(f.perDay[1].moves === 10 && f.perDay[1].rooms === 2,
+      `expected two rooms on the same day summed, not overwritten: ${JSON.stringify(f.perDay[1])}`);
+    ok('Review Forecast: the per-day map sums same-day rooms and comes back sorted');
+  } catch(e){ bad('Review Forecast: per-day map', e); }
+
+  // 272. Every bucket is present even at zero, so a renderer can iterate the
+  //      shared bucket list without hole-checking, and an empty scope renders
+  //      as empty rather than as missing.
+  try {
+    const bucketIds = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.buckets().map(b => b.id));
+    const f = await run([], {}, {});
+    assert(bucketIds.length === 8, `expected the eight documented buckets, got ${JSON.stringify(bucketIds)}`);
+    assert(bucketIds.every(id => f.buckets[id] && f.buckets[id].moves === 0 && f.buckets[id].rooms === 0),
+      `expected every bucket present and zeroed for an empty scope: ${JSON.stringify(f.buckets)}`);
+    assert(f.ladder.length === LADDER.length && f.perDay.length === 0 && f.castles === 0,
+      `expected an empty but fully-shaped result: ${JSON.stringify({ ladder: f.ladder.length, perDay: f.perDay.length })}`);
+    ok('Review Forecast: an empty scope returns a fully-shaped, zeroed result');
+  } catch(e){ bad('Review Forecast: empty scope shape', e); }
+
+  // 273. End to end against real castle generation and real IDB, not
+  //      fixtures -- proves the wrapper wires gatherBuiltCastles, the review
+  //      map and the memorized map together correctly, which the pure tests
+  //      above deliberately cannot. Everything before this point in the phase
+  //      runs against injected data and needs no repertoire, so this is the
+  //      first place one has to exist; seeded here rather than at the top so
+  //      the cheap rule tests aren't paying for a restore they never read.
+  try {
+    await seedBackup(appEF.page, {
+      version: 7, user: 'tester',
+      lines: [{ id: 'L-RF', name: 'Forecast', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Forecastle', castleStreetNumber: 1 },
+        { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+        { seq: ['d4','Nf6','c4','g6'], reply: 'Nf3' },
+      ]}],
+      games: [
+        { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4', white: 'a', black: 'b', result: '*' },
+        { id: 'g2', moves: 'd4 Nf6 c4 g6 Nf3 Bg7', white: 'a', black: 'b', result: '*' },
+      ],
+    }, { defaultPlayerColor: 'white' });
+  } catch(e){ bad('Review Forecast: seeding the end-to-end fixture', e); }
+  try {
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+    assert(live && live.buckets && live.totals,
+      `expected a real forecast over the seeded repertoire, got ${JSON.stringify(live)}`);
+    assert(live.castles >= 1, `expected the seeded castle(s) in scope, got ${live.castles}`);
+    assert(live.totals.rooms > 0, `expected real generated rooms, got ${JSON.stringify(live.totals)}`);
+    const bucketRooms = Object.values(live.buckets).reduce((s, b) => s + b.rooms, 0);
+    assert(bucketRooms === live.totals.rooms,
+      `every counted room must land in exactly one bucket: ${bucketRooms} bucketed vs ${live.totals.rooms} total`);
+    const bucketMoves = Object.values(live.buckets).reduce((s, b) => s + b.moves, 0);
+    assert(bucketMoves === live.totals.moves,
+      `every counted move must land in exactly one bucket: ${bucketMoves} bucketed vs ${live.totals.moves} total`);
+    ok(`Review Forecast: end to end over real castles (${live.castles} castle(s), ${live.totals.rooms} room(s), ${live.totals.moves} move(s))`);
+  } catch(e){ bad('Review Forecast: end to end', e); }
 } finally {
   await appEF.close();
 }

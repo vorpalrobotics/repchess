@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-402';
+const BUILD_TAG = '-403';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8077,13 +8077,20 @@ async function gatherBuiltCastles(lines){
           // before it is what a game "chose to enter this castle" out of.
           const { counts: entryCounts, tot: entryTot } = replies(lineGames, rootSeq.slice(0, -1));
           const entryOccurrence = formatOccurrence(entryCounts[rootSeq[rootSeq.length - 1]], entryTot);
-          return { name, streetNumber, entryOccurrence, genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
+          return { name, streetNumber, entryOccurrence,
+                   // the castle's own entry room, so consumers can apply the
+                   // "a castle root is never locked" exemption (see the
+                   // coverage bars, and buildReviewForecast) without having to
+                   // guess that genRooms[0] is the root
+                   entryPosKey: positionKey(fenForSeq(rootSeq)),
+                   genRooms: buildGeneratedCastle(line, lineGames, rootSeq, name).genRooms };
         }).filter(Boolean);
       })));
       const out = [];
       lines.forEach((line, i) => {
         for(const c of perLine[i]){
           out.push({ lineId: line.id, castleName: c.name, streetNumber: c.streetNumber, entryOccurrence: c.entryOccurrence,
+                     entryPosKey: c.entryPosKey,
                      instanceId: castleInstanceId(line.id, c.name), genRooms: c.genRooms });
         }
       });
@@ -8099,6 +8106,107 @@ async function gatherBuiltCastles(lines){
     }
   })();
   return _builtCastlesBuildPromise;
+}
+
+/* ---------- Review Forecast: the aggregation core ----------
+   Phase 1 of Documents/review-forecast.md -- read that first; this is the
+   mechanism, the doc is the reasoning. Everything the feature will ever
+   render is a thin view over this one function, which is why it exists (and
+   is tested) before any of it is drawn.
+
+   PURE, over injected data: `castles` as gatherBuiltCastles() returns them,
+   plus the review and memorized maps. No IDB reads, no globals, an injectable
+   clock. reviewForecast() below is the thin async wrapper that fetches them.
+
+   The question it answers is "how much review is coming, and when" -- for
+   pacing new memorization, not for finding rooms to walk (the digraph's
+   Review lens already does that, and better, because it shows you where they
+   are).
+
+   Every figure is a MOVES and ROOMS pair, because either alone misleads:
+   moves measure repertoire, rooms measure work. You walk into a room once
+   whether it holds two moves or fourteen, so three rooms holding thirty moves
+   is one short session while twelve rooms holding fourteen is twelve walks
+   across a castle. For pacing, rooms is arguably the more actionable of the
+   two -- which is exactly why it can't be dropped. */
+function buildReviewForecast(castles, reviews, memorized, opts = {}){
+  const now = opts.now || Date.now();
+  const wantCastle = opts.castleName || null;      // null = every castle in scope
+  const wantLineId = opts.lineId || null;
+
+  const buckets = {};
+  for(const b of REVIEW_FORECAST_BUCKETS) buckets[b.id] = { moves: 0, rooms: 0 };
+  const ladder = ROOM_REVIEW_LADDER.map((days, step) => ({ step, days, moves: 0, rooms: 0 }));
+  const perDayMap = new Map();
+  const totals = { moves: 0, rooms: 0, memorizedRooms: 0, memorizedMoves: 0 };
+  const neverReviewed = { moves: 0, rooms: 0 };
+  /* Locked rooms are skipped -- you can never stand in one, so it has no
+     schedule and nothing to forecast, the same reason the digraph's coverage
+     bars leave them out of their denominators. What they HOLD is counted here
+     anyway and returned: it should always be zero (a room with no exits and
+     no non-center pairs has no outgoing moves either), and if it ever isn't,
+     this feature would be silently dropping moves from every total. A number
+     you can see beats an assumption you can't. */
+  const locked = { moves: 0, rooms: 0 };
+  let castleCount = 0;
+
+  for(const c of (castles || [])){
+    if(wantCastle && c.castleName !== wantCastle) continue;
+    if(wantLineId && c.lineId !== wantLineId) continue;
+    castleCount++;
+    for(const gr of (c.genRooms || [])){
+      const roomKey = castleRoomKey(c.instanceId, gr.posKey);
+      const moves = gr.moveCount || 0;
+      // same test, and the same entry-room exemption, as the coverage bars --
+      // deliberately matching threeVR.js's isRoomEmpty rather than "has no
+      // forward continuation", which would lock every room whose replies you
+      // simply haven't filled in yet
+      const isLocked = !gr.exits.length && !(gr.pairs || []).some(p => p.side !== 'center');
+      if(isLocked && gr.posKey !== c.entryPosKey){
+        locked.rooms++; locked.moves += moves;
+        continue;
+      }
+      totals.rooms++; totals.moves += moves;
+
+      const rec = effectiveRoomReview(reviews, memorized, roomKey);
+      const bucket = reviewForecastBucket(rec, now);
+      buckets[bucket].rooms++; buckets[bucket].moves += moves;
+      if(!rec) continue;
+
+      totals.memorizedRooms++; totals.memorizedMoves += moves;
+      const rung = ladder[Math.min(ladder.length - 1, Math.max(0, rec.step || 0))];
+      rung.rooms++; rung.moves += moves;
+      // a bootstrapped record (memorized, never graded) has last:null -- see
+      // bootstrapRoomReview. Worth calling out on its own, because a castle
+      // memorized long ago and never reviewed is legitimately ALL overdue at
+      // step 0, which looks like neglect of work that was never started.
+      if(!rec.last){ neverReviewed.rooms++; neverReviewed.moves += moves; }
+
+      const day = perDayMap.get(rec.due) || { due: rec.due, moves: 0, rooms: 0 };
+      day.rooms++; day.moves += moves;
+      perDayMap.set(rec.due, day);
+    }
+  }
+
+  return {
+    buckets, ladder, totals, neverReviewed, locked,
+    castles: castleCount,
+    perDay: [...perDayMap.values()].sort((a, b) => a.due - b.due),
+    generatedAt: now,
+  };
+}
+
+/* The async wrapper: gathers what buildReviewForecast needs and hands it over.
+   Rides gatherBuiltCastles' cache, which is the expensive part -- a cold one
+   is seconds on a large repertoire, so a caller should show a spinner. */
+async function reviewForecast(opts = {}){
+  const lines = await getLines(LOCAL_USER);
+  const [castles] = await Promise.all([
+    gatherBuiltCastles(lines),
+    loadMemorizedRooms(),
+    loadRoomReviews(),
+  ]);
+  return buildReviewForecast(castles, ROOM_REVIEWS, MEMORIZED_ROOMS, opts);
 }
 
 /* ---------- cross-castle transposition detector ----------
@@ -13050,6 +13158,18 @@ if(localStorage.getItem('threeTestDebug')){
 // through the real importBackup path (seedBackup drives the actual file-input
 // change handler), closing the loop on whether a field survives both directions.
 if(localStorage.getItem('threeTestDebug')){
+  /* Review Forecast, Phase 1. `build` is the PURE core with everything
+     injected (castles, reviews, memorized, clock) so its rules can be tested
+     against hand-built fixtures with no castle generation and no real clock;
+     `forecast` is the real end-to-end path over whatever is actually in IDB. */
+  window.__reviewForecastTestHooks = {
+    build: (castles, reviews, memorized, opts) => buildReviewForecast(castles, reviews, memorized, opts),
+    forecast: (opts) => reviewForecast(opts),
+    buckets: () => REVIEW_FORECAST_BUCKETS,
+    ladder: () => ROOM_REVIEW_LADDER,
+    bucketOf: (rec, now) => reviewForecastBucket(rec, now),
+    gatherBuiltCastles: async () => gatherBuiltCastles(await getLines(LOCAL_USER)),
+  };
   window.__backupTestHooks = {
     buildBackupData: () => buildBackupData(),
     getMeta: (key) => getMeta(key),

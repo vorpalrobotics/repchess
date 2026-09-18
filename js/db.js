@@ -1048,6 +1048,49 @@ function roomReviewState(record, now = Date.now()){
   return 'notdue';
 }
 
+/* ---------- forecast buckets (Documents/review-forecast.md) ----------
+
+   Which horizon a room falls into. Bucketed by WHEN IT FALLS DUE, never by
+   which rung of the ladder it is on: those are intervals, not dates, and a
+   room at step 5 (a 180-day interval) that happens to fall due in four days
+   belongs under "this week". Bucketing by step files it under 180 and gets
+   the forecast wrong in exactly the case a forecast is for.
+
+   The first two delegate to roomReviewState() rather than re-deriving
+   "overdue" from the due date, so this and the digraph's Review lens can
+   never disagree about the same room -- its windows are proportional to the
+   interval, which is a rule worth not reinventing.
+
+   Ordered soonest-first; a renderer can iterate this and get a sensible
+   left-to-right or top-to-bottom order for free. `none` is deliberately last
+   and deliberately present: without it a barely-started castle and a
+   fully-reviewed one look identical, which is the same reason
+   roomReviewState has four states rather than three. */
+const REVIEW_FORECAST_BUCKETS = [
+  { id: 'overdue',  label: 'Overdue',          color: '#c62828' },
+  { id: 'due',      label: 'Due now',          color: '#ef6c00' },
+  { id: 'tomorrow', label: 'Tomorrow',         color: '#f9a825' },
+  { id: 'week',     label: 'In 2-7 days',      color: '#827717' },
+  { id: 'month',    label: 'In 8-30 days',     color: '#2e7d32' },
+  { id: 'quarter',  label: 'In 31-90 days',    color: '#00695c' },
+  { id: 'later',    label: 'In 90+ days',      color: '#1565c0' },
+  { id: 'none',     label: 'Not memorized yet', color: '#9e9e9e' },
+];
+function reviewForecastBucket(record, now = Date.now()){
+  if(!record || !record.due) return 'none';
+  const state = roomReviewState(record, now);
+  if(state === 'overdue') return 'overdue';
+  if(state === 'due') return 'due';
+  // not due yet, so due dates are midnight-snapped into the future and
+  // dueInDays is >= 1 here -- no zero case to worry about
+  const d = dueInDays(record, now);
+  if(d <= 1) return 'tomorrow';
+  if(d <= 7) return 'week';
+  if(d <= 30) return 'month';
+  if(d <= 90) return 'quarter';
+  return 'later';
+}
+
 /* "tomorrow" / "in 7 days" -- measured from the START of today, since due
    dates are midnight-snapped (see startOfLocalDay above); a raw now-to-due
    subtraction would report a 1-day interval as 0 days from any afternoon.
