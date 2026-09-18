@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-397';
+const BUILD_TAG = '-398';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3324,7 +3324,29 @@ $('graphResetLayoutBtn').onclick = async () => {
   await persistGraphLayout();   // must land before showTranspositionGraph's own reload reads it back
   await showTranspositionGraph();
 };
-$('graphCloseBtn').onclick = () => {
+/* ---------- informational / immediate modal bars ----------
+
+   Seven modals that stage nothing: you read them (Help, About, Room Info,
+   Castle Preview, the graph) or every control in them takes effect the moment
+   you touch it (Browse Games' filters, the Transposition report). Per the
+   spec's Modal categories they all get the same bar -- a title and a bare
+   `Done`, never a Save that would sit disabled forever and teach you to
+   ignore the disabled state everywhere else -- so they share one mount
+   helper instead of seven copies of the same four lines.
+
+   `onLeave` is each modal's existing close handler, unchanged: several do
+   real teardown (the graph drops its cytoscape instance and resets its
+   lenses, Transpositions re-raises a toast it suppressed while open, Browse
+   Games clears its state), and none of that may be lost to the conversion.
+   Mounted once at load -- these overlays are static markup, built with the
+   page rather than rendered per open. */
+function mountInfoBar(hostId, title, onLeave, htmlOpts){
+  const host = $(hostId);
+  host.innerHTML = modalBarHtml({ title, ...(htmlOpts || {}) });
+  return wireModalBar(host.querySelector('.modal-bar'), { onLeave });
+}
+
+function closeGraphOverlay(){
   $('graphOverlay').style.display='none';
   hideGraphHoverPreview();
   hideGraphCtxMenu();
@@ -3334,7 +3356,8 @@ $('graphCloseBtn').onclick = () => {
   GRAPH_RENDER_ANYWAY = false;   // ...and with the size guard back in force
   GRAPH_CY = null;               // the instance dies with the overlay's container
   updateGraphViewMode();
-};
+}
+mountInfoBar('graphBar', 'Opening Graph', closeGraphOverlay);
 
 // reflects GRAPH_COVERAGE_OPEN onto the toggle button's icon/title and the
 // panel's own visibility -- called after every (re)render and on toggle.
@@ -3715,10 +3738,16 @@ async function showRoomInfoPanel(roomEl){
   $('roomInfoOverlay').style.display = 'flex';
   if($('hoverPreview').style.display === 'block') positionHoverPreviewBesideRoomModal();
 }
-$('roomInfoCloseBtn').onclick = () => { $('roomInfoOverlay').style.display='none'; };
+/* prefix:'roomInfo' so the bar's own title element is #roomInfoTitle -- this
+   modal's title is rich markup (a door icon, the room's mnemonic word, a
+   thumbnail) written by showRoomInfoPanel above, and reusing the id keeps
+   that untouched rather than splitting the title across two elements. */
+mountInfoBar('roomInfoBar', 'Room',
+  () => { $('roomInfoOverlay').style.display='none'; }, { prefix: 'roomInfo' });
 
 // browse games modal wiring
-$('gamesListCloseBtn').onclick = () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; };
+mountInfoBar('gamesListBar', 'Browse Games',
+  () => { $('gamesListOverlay').style.display='none'; _gamesModalState=null; });
 // Closing on a "click the dark backdrop" gesture misfires on an ordinary
 // text-selection DRAG that starts inside the moves-filter input (sweep-
 // selecting it to overtype) and ends with the mouse out over the backdrop:
@@ -3762,7 +3791,8 @@ $('roomInfoJumpBtn').onclick = async () => {
   if(jumpToRoom(roomKey)) return;
   await openMainVRWorld(roomKey);
 };
-$('castleReportCloseBtn').onclick = () => { $('castleReportOverlay').style.display='none'; };
+mountInfoBar('castleReportBar', 'Castle Preview',
+  () => { $('castleReportOverlay').style.display='none'; });
 /* G2a: walk the generated castle in VR — hand its room/exit structure to the
    three.js engine, which synthesizes navigable rooms and spawns us at the entry. */
 $('castleWalkBtn').onclick = async () => {
@@ -8199,12 +8229,12 @@ async function openTranspositionsReport(){
   await refreshTranspositionsReport();
 }
 $('menuFindTranspositions').onclick = openTranspositionsReport;
-$('transpCloseBtn').onclick = ()=>{
+mountInfoBar('transpBar', 'Transpositions Between Castles', ()=>{
   $('transpOverlay').style.display='none';
   // surface anything a background scan found (and suppressed) while the
   // report was open -- see maybeShowNewTranspositionsToast's own comment.
   maybeShowNewTranspositionsToast();
-};
+});
 
 /* ---------- new-transposition toast ----------
    Phase 1 of "new transpositions appearing" (see the phasing plan): the
@@ -8718,14 +8748,14 @@ $('menuHelp').onclick = ()=>{
   $('menuList').style.display='none';
   openHelpModal();
 };
-$('helpCloseBtn').onclick = ()=>{ $('helpOverlay').style.display='none'; };
+mountInfoBar('helpBar', 'Help', ()=>{ $('helpOverlay').style.display='none'; });
 
 /* ---------- about modal ---------- */
 $('menuAbout').onclick = ()=>{
   $('menuList').style.display='none';
   $('aboutOverlay').style.display='flex';
 };
-$('aboutCloseBtn').onclick = ()=>{ $('aboutOverlay').style.display='none'; };
+mountInfoBar('aboutBar', 'About REPchess', ()=>{ $('aboutOverlay').style.display='none'; });
 
 /* ---------- Reset to Factory ----------
    A hidden-in-plain-sight escape hatch (small link at the bottom of the
