@@ -87,6 +87,39 @@ function shouldRunPhase(tags){
   if(!REQUESTED.length) return true;
   return tags.includes('core') || tags.some(t => REQUESTED.includes(t));
 }
+
+/* The whole contract for an Informational / Immediate modal's button bar
+   (Documents/modal-buttons.md, "Modal categories"): title, a bare `Done` that
+   is never `Cancel` because nothing in these modals is ever unsaved, NO Save
+   -- a Save disabled forever is exactly what teaches you to ignore the
+   disabled state everywhere else -- and nothing left behind in the body that
+   still closes or commits the modal.
+
+   Seven modals share it, so they share one assertion rather than seven
+   near-identical copies. `visibleWhenScrolled` is only meaningful when the
+   modal has a .modal-body; several of these pin the bar by being a flex
+   column with their own designated scroller instead (the graph scrolls
+   nothing at all), and modalBarState reports null for those -- so this
+   accepts null and only rejects an actual false. */
+async function assertInfoBar(page, overlayId, expectTitle){
+  const b = await modalBarState(page, overlayId);
+  assert(b, `#${overlayId}: expected the shared button bar, found none`);
+  if(expectTitle !== undefined){
+    assert(b.title === expectTitle,
+      `#${overlayId}: expected the bar titled ${JSON.stringify(expectTitle)}, got ${JSON.stringify(b.title)}`);
+  }
+  assert(b.leave && b.leave.text === 'Done' && !b.leave.disabled,
+    `#${overlayId}: an informational modal is never dirty, so Leave must read an enabled "Done": ${JSON.stringify(b.leave)}`);
+  assert(b.save === null,
+    `#${overlayId}: nothing here is staged, so there must be no Save at all: ${JSON.stringify(b.save)}`);
+  assert(b.state === '', `#${overlayId}: expected no unsaved-changes text, got ${JSON.stringify(b.state)}`);
+  assert(b.strayIds.length === 0,
+    `#${overlayId}: found close/save buttons still outside the bar: ${JSON.stringify(b.strayIds)}`);
+  assert(b.barIsFirst, `#${overlayId}: the bar must be the modal's first child`);
+  assert(b.visibleWhenScrolled !== false,
+    `#${overlayId}: the bar scrolled out of the modal instead of staying pinned`);
+  return b;
+}
 if(REQUESTED.length) console.log(`Targeted run: ${REQUESTED.join(', ')} (+ core)\n`);
 
 if(shouldRunPhase(['core'])){
@@ -1493,6 +1526,28 @@ try {
   await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
   await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
+  // 16b. The graph on the shared button bar. It is Informational -- you look
+  //      at it, nothing is staged -- so title + Done. Reset Layout and "Show
+  //      Castle" came out of the old header row and now sit with the other
+  //      view controls in the body, which is where the spec puts anything
+  //      that is not modal lifecycle.
+  try {
+    await assertInfoBar(app9.page, 'graphOverlay', 'Opening Graph');
+    const viewControls = await app9.page.evaluate(() => ({
+      resetLayoutInBody: !document.getElementById('graphResetLayoutBtn').closest('.modal-bar'),
+      castleSelectInBody: !document.getElementById('graphCastleSelect').closest('.modal-bar'),
+      viewModeInBody: !document.getElementById('graphViewMode').closest('.modal-bar'),
+    }));
+    assert(viewControls.resetLayoutInBody && viewControls.castleSelectInBody && viewControls.viewModeInBody,
+      `expected every view control out of the bar: ${JSON.stringify(viewControls)}`);
+    // the container must still get real height -- the bar is a non-flexing
+    // first child, so it must not have eaten the graph's own space
+    const containerH = await app9.page.evaluate(() =>
+      document.getElementById('graphContainer').getBoundingClientRect().height);
+    assert(containerH > 200, `expected the graph container to still fill the modal, got ${containerH}px`);
+    ok('modal bar: the Opening Graph is informational — Done only, view controls in the body');
+  } catch(e){ bad('modal bar: Opening Graph', e); }
+
   // 17. Drag a node, close and reopen the graph (fresh dagre relayout): the
   //     node should land back at dagre's own spot PLUS the saved delta, not
   //     at dagre's raw spot (the fix wouldn't be doing anything) and not
@@ -1513,7 +1568,7 @@ try {
     assert(dragged, 'dragNodeBy could not find the target node');
 
     // reopen: close, then rebuild the graph fresh (new cy instance, fresh dagre run)
-    await app9.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await app9.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await app9.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await app9.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const posAfter = await app9.page.evaluate((fen) => {
@@ -1851,7 +1906,21 @@ try {
   await app12.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
   await app12.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
   await app12.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
-  await app12.page.evaluate(() => document.getElementById('castleReportCloseBtn').click());
+
+  // 28b. Castle Preview on the shared button bar. "Walk in VR" stays in the
+  //      body: it closes this modal, but to go somewhere else rather than to
+  //      dismiss, so the bar's Leave keeps meaning "put this back".
+  try {
+    await assertInfoBar(app12.page, 'castleReportOverlay', 'Castle Preview');
+    const walkInBody = await app12.page.evaluate(() => {
+      const b = document.getElementById('castleWalkBtn');
+      return !!b && !b.closest('.modal-bar');
+    });
+    assert(walkInBody, 'expected "Walk in VR" to stay in the body, not move into the bar');
+    ok('modal bar: Castle Preview is informational — Done only, "Walk in VR" left in the body');
+  } catch(e){ bad('modal bar: Castle Preview', e); }
+
+  await app12.page.evaluate(() => document.querySelector('#castleReportOverlay .modal-bar .mb-leave').click());
   // "Run VR" (not the report's single-castle "Walk in VR"), so Main Street is
   // built with every real castle on it, same as generateMainStreet always does.
   await openVR(app12.page);
@@ -3117,7 +3186,7 @@ try {
       document.getElementById('unfocusBtn').style.display === 'none');
     assert(tableUntouched, 'expected the digraph menu NOT to re-focus the move table underneath it');
 
-    await appS2.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appS2.page.waitForTimeout(100);
     await reopenLine();
     await appS2.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
@@ -3125,7 +3194,7 @@ try {
     const graphValue = await appS2.page.evaluate(() => document.getElementById('graphCastleSelect').value);
     assert(graphValue === 'Beta',
       `expected the digraph's castle menu to come back on Beta, got ${JSON.stringify(graphValue)}`);
-    await appS2.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appS2.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     ok('digraph: "Show Castle" is remembered across sessions, without re-focusing the move table');
   } catch(e){ bad('digraph: "Show Castle" scope persists across sessions', e); }
 } finally {
@@ -4007,15 +4076,42 @@ try {
     ok('room-info exits: a Black line\'s White-move replies show the "N." badge on the thumbnail');
   } catch(e){ bad('room-info exits: numbered badge on White-move replies', e); }
 
+  // 64b. Room Info on the shared button bar. Its title is the ROOM, written
+  //      as rich markup (door icon, mnemonic word, thumbnail) into the bar's
+  //      own title element -- the bar is mounted with prefix:'roomInfo' so
+  //      that element keeps the #roomInfoTitle id showRoomInfoPanel writes to.
+  //      "Jump to VR" stays in the body for the same reason "Walk in VR" does.
+  try {
+    await assertInfoBar(appW2.page, 'roomInfoOverlay');
+    const t = await appW2.page.evaluate(() => {
+      const el = document.getElementById('roomInfoTitle');
+      return el ? { inBar: !!el.closest('.modal-bar'), isTitle: el.classList.contains('modal-bar-title'),
+                    hasIcon: !!el.querySelector('i.fa-door-open'), text: el.textContent.trim() } : null;
+    });
+    assert(t && t.inBar && t.isTitle,
+      `expected #roomInfoTitle to BE the bar's title element, got ${JSON.stringify(t)}`);
+    assert(t.hasIcon && t.text.length > 0,
+      `expected the room's rich label to survive the move into the bar, got ${JSON.stringify(t)}`);
+    const jumpInBody = await appW2.page.evaluate(() => {
+      const b = document.getElementById('roomInfoJumpBtn');
+      return !!b && !b.closest('.modal-bar');
+    });
+    assert(jumpInBody, 'expected "Jump to VR" to stay in the body, not move into the bar');
+    ok('modal bar: Room Info is informational — the room stays the title, Jump stays in the body');
+  } catch(e){ bad('modal bar: Room Info', e); }
+
   // 65. Twenty exit rows overflow the constrained modal -- the exits list
-  //     scrolls independently (overflow-y) and the Close button stays fully
+  //     scrolls independently (overflow-y) and the Leave button stays fully
   //     on-screen instead of being pushed past the viewport (the originally-
   //     reported bug: an unconstrained modal could grow past the fold,
   //     leaving no way to close it without scrolling the whole page).
+  //     Since the button-bar conversion the button is pinned ABOVE the
+  //     scrolling list rather than below it, which is a stronger guarantee of
+  //     the same thing -- the assertion is unchanged and still the point.
   try {
     const layout = await appW2.page.evaluate(() => {
       const exits = document.getElementById('roomInfoExits');
-      const closeBtn = document.getElementById('roomInfoCloseBtn');
+      const closeBtn = document.querySelector('#roomInfoOverlay .modal-bar .mb-leave');
       const r = closeBtn.getBoundingClientRect();
       return {
         overflowY: getComputedStyle(exits).overflowY,
@@ -5414,7 +5510,7 @@ try {
     const display = await appAF.page.evaluate(() => document.getElementById('roomInfoJumpBtn').style.display);
     assert(display === 'none', `expected the Jump button hidden for a node with no roomKey, got display=${JSON.stringify(display)}`);
     ok('room-info modal: Jump to VR is hidden for a node with no owning castle room');
-    await appAF.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
+    await appAF.page.evaluate(() => document.querySelector('#roomInfoOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('room-info modal: Jump to VR hidden without a roomKey', e); }
 
   // 91. Clicking Jump with VR closed (re)builds the main world and lands at
@@ -7604,7 +7700,7 @@ try {
     const display = await appAS.page.evaluate(() => document.getElementById('roomInfoJumpBtn').style.display);
     assert(display !== 'none', `expected Jump visible for the castle root, got display=${JSON.stringify(display)}`);
     ok('room-info modal: Jump to VR stays shown for the castle root (empty but street-reached)');
-    await appAS.page.evaluate(() => document.getElementById('roomInfoCloseBtn').click());
+    await appAS.page.evaluate(() => document.querySelector('#roomInfoOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('room-info modal: Jump shown for root', e); }
 
   // 144. The locked-door dead-end room hides Jump, even though it has a
@@ -8758,7 +8854,7 @@ try {
     assert(labels.g6 === 'g6\n2 (67%)', `expected the g6 edge label to carry its occurrence stat, got ${JSON.stringify(labels.g6)}`);
     assert(labels.e6 === 'e6\n1 (33%)', `expected the e6 edge label to carry its occurrence stat, got ${JSON.stringify(labels.e6)}`);
     ok('digraph edge labels show how often each reply has actually occurred ("N (M%)")');
-    await appBB.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appBB.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('digraph edge occurrence stat', e); }
 
   // 174. VR door plaques show the same stat -- including on a "locked" door
@@ -9418,9 +9514,16 @@ try {
     ok('Help modal loads topics.json and auto-opens the first topic with branded content');
   } catch(e){ bad('help modal: open and load default topic', e); }
 
+  // 85b. ...on the shared button bar, as an Informational modal: title + a
+  //      bare Done, no Save, and the old bottom-of-body Close gone.
+  try {
+    await assertInfoBar(appBI.page, 'helpOverlay', 'Help');
+    ok('modal bar: Help is an informational bar — title and Done only');
+  } catch(e){ bad('modal bar: Help', e); }
+
   // 86. Close hides the overlay.
   try {
-    await appBI.page.evaluate(() => document.getElementById('helpCloseBtn').click());
+    await appBI.page.evaluate(() => document.querySelector('#helpOverlay .modal-bar .mb-leave').click());
     await appBI.page.waitForFunction(() => document.getElementById('helpOverlay').style.display === 'none', { timeout: 5000 });
     ok('Help modal: Close hides the overlay');
   } catch(e){ bad('help modal: close', e); }
@@ -9796,7 +9899,7 @@ try {
       await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display !== 'none'),
       'setup: expected the panel to be open before testing close/reopen'
     );
-    await appBL.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appBL.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appBL.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appBL.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const reopened = await appBL.page.evaluate(() => document.getElementById('graphCoverage').style.display === 'none');
@@ -9956,7 +10059,7 @@ try {
       return n.position();
     }, leftFens[1]);
 
-    await appBN.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appBN.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appBN.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appBN.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
@@ -11178,8 +11281,20 @@ try {
     assert(info.lichessBadges === 2, `expected 2 lichess (knight) badges (lg1, lg2), got ${info.lichessBadges}`);
     assert(info.chesscomBadges === 0, `expected 0 chess.com badges -- the only chess.com-shaped games here (bare, lg4) are both filtered out, got ${info.chesscomBadges}`);
     ok('games-list: modal opens from the menu and lists only the games where the user played the line\'s own color');
-    await appAV.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
   } catch(e){ bad('games-list: modal open + render, filtered to the line\'s own color', e); }
+
+  // 154b. Browse Games on the shared button bar. Immediate: every filter under
+  //       the bar re-runs the search the moment you touch it, so nothing is
+  //       ever staged and there is no Save.
+  try {
+    await assertInfoBar(appAV.page, 'gamesListOverlay', 'Browse Games');
+    ok('modal bar: Browse Games is immediate — title and Done only');
+  } catch(e){ bad('modal bar: Browse Games', e); }
+
+  try {
+    await appAV.page.evaluate(() => document.querySelector('#gamesListOverlay .modal-bar .mb-leave').click());
+    await appAV.page.waitForFunction(() => document.getElementById('gamesListOverlay').style.display === 'none', { timeout: 5000 });
+  } catch(e){ bad('games-list: close after the first render', e); }
 
   // 154a. Closing on a backdrop click must not misfire on an ordinary text-
   //       selection drag that starts inside the moves-filter input and ends
@@ -11372,7 +11487,7 @@ try {
     const summary = await appAV2.page.evaluate(() => document.getElementById('gamesListSummary').textContent);
     assert(/as Black/.test(summary), `expected the summary to say "as Black", got "${summary}"`);
     ok('Browse Games: color filter buttons act as radios (Black/White/Either)');
-    await appAV2.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+    await appAV2.page.evaluate(() => document.querySelector('#gamesListOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('Browse Games: color filter radios', e); }
 
   // 159. The hamburger's "Browse Games" item, directly below "Search for a
@@ -13119,7 +13234,7 @@ try {
     assert(info.rows === 1, `expected the 1 game reaching move 1 (d4), got ${info.rows}`);
     assert(/d4/.test(info.movesInput), `expected the moves filter pre-filled with move 1, got "${info.movesInput}"`);
     ok('row menu: move 1\'s "Browse Games" opens filtered to move 1 itself');
-    await appBW.page.evaluate(() => document.getElementById('gamesListCloseBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#gamesListOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('row menu: move 1 context-row Browse Games', e); }
 
   // 177e. "Add Opponent Move" from move 1's context-row adds a manual reply
@@ -17770,13 +17885,20 @@ try {
   assert(lichessUserBefore === 'tester123', `expected the seeded backup to set a real localStorage key (sanity check on the fixture), got ${JSON.stringify(lichessUserBefore)}`);
 
   // 291. The link lives at the bottom of the About modal (after the
-  //      attributions list, right before the Close button) and opens the
+  //      attributions list, at the end of the scrolling body) and opens the
   //      warning step; "Make a Full Backup" there triggers a real download
   //      via the existing export path, without dismissing the warning.
+  //
+  //      The link deliberately did NOT move to the button bar's destructive
+  //      slot when About was converted: it is a hidden escape hatch you only
+  //      find by going looking, and About edits nothing for a destructive
+  //      button to be destroying. Asserted below (292b) by the bar having no
+  //      destructive button while the link is still reachable from here.
   try {
     await appDC.page.click('#menuBtn');
     await appDC.page.click('#menuAbout');
     await appDC.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appDC.page, 'aboutOverlay', 'About REPchess');
     await appDC.page.click('#resetToFactoryLink');
     await appDC.page.waitForSelector('#resetFactoryWarnOverlay', { state: 'visible', timeout: 5000 });
     assert((await appDC.page.evaluate(() => document.getElementById('aboutOverlay').style.display)) === 'none',
@@ -17802,6 +17924,27 @@ try {
     assert(lines.some(l => l.name === 'Test'), 'expected Cancel to leave existing data untouched');
     ok('Reset to Factory: Cancel on the warning step closes it without touching any data');
   } catch(e){ bad('Reset to Factory: warning-step Cancel is a no-op', e); }
+
+  // 292b. Reset to Factory stayed a small grey link in the body rather than
+  //       becoming the bar's red destructive button. About is Informational:
+  //       there is nothing here for a destructive action to destroy, and
+  //       promoting the hatch would advertise it on every visit.
+  try {
+    await appDC.page.click('#menuBtn');
+    await appDC.page.click('#menuAbout');
+    await appDC.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    const b = await assertInfoBar(appDC.page, 'aboutOverlay', 'About REPchess');
+    assert(b.destructive === null,
+      `expected no destructive button in About's bar, got ${JSON.stringify(b.destructive)}`);
+    const linkStillThere = await appDC.page.evaluate(() => {
+      const a = document.getElementById('resetToFactoryLink');
+      return !!a && a.closest('.modal-body') !== null && !a.closest('.modal-bar');
+    });
+    assert(linkStillThere, 'expected the Reset to Factory link to stay in the scrolling body, outside the bar');
+    await appDC.page.evaluate(() => document.querySelector('#aboutOverlay .modal-bar .mb-leave').click());
+    await appDC.page.waitForFunction(() => document.getElementById('aboutOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: About is informational — Done only, Reset to Factory left as a body link');
+  } catch(e){ bad('modal bar: About', e); }
 
   // 293. The typed-confirmation step: Delete Everything starts disabled,
   //      stays disabled for anything short of an exact "TOTAL DELETE" match
@@ -17904,8 +18047,28 @@ try {
     const groupCount = await appDD.page.evaluate(() => document.querySelectorAll('#transpBody .transp-group').length);
     assert(groupCount === 0, `expected no collision groups with no lines seeded, got ${groupCount}`);
     ok('Find Transpositions: empty state with no lines/castles built yet');
-    await appDD.page.evaluate(() => document.getElementById('transpCloseBtn').click());
   } catch(e){ bad('Find Transpositions: empty state', e); }
+
+  // 295b. The report on the shared button bar. Immediate, not an editor:
+  //       "Redirect Selected" acts on the groups listed above it, doesn't
+  //       close, and lets you resolve several batches in one visit -- the
+  //       spec names it as staying in the body, so there is no Save here.
+  try {
+    const b = await assertInfoBar(appDD.page, 'transpOverlay', 'Transpositions Between Castles');
+    assert(b.destructive === null,
+      `expected no destructive button in the report's bar, got ${JSON.stringify(b.destructive)}`);
+    const redirectInBody = await appDD.page.evaluate(() => {
+      const el = document.getElementById('transpRedirectBtn');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(redirectInBody, 'expected "Redirect Selected" to stay in its footer, not move into the bar');
+    ok('modal bar: the Transposition report is immediate — Done only, "Redirect Selected" left in the body');
+  } catch(e){ bad('modal bar: Transposition report', e); }
+
+  try {
+    await appDD.page.evaluate(() => document.querySelector('#transpOverlay .modal-bar .mb-leave').click());
+    await appDD.page.waitForFunction(() => document.getElementById('transpOverlay').style.display === 'none', { timeout: 5000 });
+  } catch(e){ bad('Find Transpositions: close after the empty state', e); }
 
   // 296. Two castles in two different lines reach the exact same position
   //      via different move orders (White's own d4/Nc3 played in reverse
@@ -18985,7 +19148,7 @@ try {
   //      transpositions"), and the circle-x dismiss icon hides the toast
   //      WITHOUT opening the report.
   try {
-    await appDN.page.click('#transpCloseBtn');
+    await appDN.page.click('#transpOverlay .modal-bar .mb-leave');
     await appDN.page.evaluate(() => window.__redirectTestHooks.showNewTranspositionsToast(1));
     const text = await appDN.page.evaluate(() => window.__redirectTestHooks.newTranspositionsToastText());
     assert(text === '1 new transposition found', `expected singular count text, got "${text}"`);
@@ -19195,7 +19358,7 @@ try {
     const whileOpen = await appDP.page.evaluate(() => window.__redirectTestHooks.isNewTranspositionsToastVisible());
     assert(!whileOpen, 'expected no toast while the Find Transpositions report is already open');
 
-    await appDP.page.click('#transpCloseBtn');
+    await appDP.page.click('#transpOverlay .modal-bar .mb-leave');
     const info = await appDP.page.evaluate(() => ({
       visible: window.__redirectTestHooks.isNewTranspositionsToastVisible(),
       text: window.__redirectTestHooks.newTranspositionsToastText(),
@@ -20125,7 +20288,7 @@ try {
       headers: [...document.querySelectorAll('#transpBody .transp-group h3')].map(h => h.textContent.replace(/\s+/g, ' ').trim()),
     }));
   };
-  const closeReport = () => appEA.page.evaluate(() => document.getElementById('transpCloseBtn').click());
+  const closeReport = () => appEA.page.evaluate(() => document.querySelector('#transpOverlay .modal-bar .mb-leave').click());
   // select Chigorin as the keeper in whichever group lists it, then press
   // Redirect Selected -- the real report action, which also auto-ports.
   const keepChigorin = async () => {
@@ -20421,7 +20584,7 @@ try {
     assert(/\bcmp-undecorated\b/.test(before), `expected complete atoms + undecorated room to score undecorated, got "${before}"`);
 
     await appEC.page.evaluate((k) => window.__graphTestHooks.setDecorated(k, true), roomKey);
-    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const after = await appEC.page.evaluate((k) =>
@@ -20539,7 +20702,7 @@ try {
     await appEC.page.evaluate((k) => window.__graphTestHooks.setMemorized(k, true), locked.reviewKey);
     await appEC.page.evaluate(({ k, r }) => window.__graphTestHooks.setReviewRecord(k, r),
       { k: locked.reviewKey, r: { last: now - 90 * DAY, due: now - 30 * DAY, step: 0, lapses: 1, lastGrade: 'C' } });
-    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
 
@@ -20608,7 +20771,7 @@ try {
   //      normal role-coloured view rather than silently still recoloured.
   try {
     await setGraphViewMode(appEC.page, 'completeness');
-    await appEC.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEC.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await appEC.page.evaluate(() => document.getElementById('buildGraphBtn').onclick());
     await appEC.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const after = await appEC.page.evaluate(() => ({
@@ -20680,7 +20843,7 @@ try {
   // 357. ...but only for that render -- closing restores the guard, so one
   //      impatient click can't silently disable it for good.
   try {
-    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appED.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await openGraph();
     await appED.page.waitForFunction(() =>
       /too large to graph/i.test(document.getElementById('graphContainer').textContent), { timeout: 20000 });
@@ -20691,7 +20854,7 @@ try {
   //      inert in the normal case.
   try {
     await appED.page.evaluate(() => window.__graphSizeTestHooks.setMaxMoves(500));
-    await appED.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appED.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await openGraph();
     await appED.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
     const nodes = await appED.page.evaluate(() => window.__graphTestHooks.cy().nodes().length);
@@ -21197,7 +21360,7 @@ try {
     await appEH.page.waitForFunction(() => !!window.__graphTestHooks, { timeout: 40000 });
   };
   const reopenGraph = async () => {
-    await appEH.page.evaluate(() => document.getElementById('graphCloseBtn').click());
+    await appEH.page.evaluate(() => document.querySelector('#graphOverlay .modal-bar .mb-leave').click());
     await openGraph();
   };
   const revClassOf = (roomKey) => appEH.page.evaluate((k) => {

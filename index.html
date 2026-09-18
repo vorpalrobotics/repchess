@@ -339,12 +339,20 @@
   .po-progress-value{font-weight:600}
 
   #roomInfoOverlay .modal{display:flex;flex-direction:column;max-height:85vh}
-  #roomInfoOverlay .modal h2,#roomInfoOverlay .modal-actions{flex:none}
+  /* the bar-host carries flex:0 0 auto of its own; the board/caption/Jump row
+     under the scrolling exits list must not flex either */
+  #roomInfoOverlay .modal-actions{flex:none}
+  /* Room Info's title is rich -- a door icon, the room's mnemonic word and a
+     thumbnail -- and genuinely needs two lines sometimes, so it wraps here
+     instead of ellipsising. The buttons are still flex:0 0 auto and never
+     wrap; the bar just gets taller, which is the trade the spec allows. */
+  #roomInfoOverlay .modal-bar-title{white-space:normal;overflow:visible;text-overflow:clip}
 
   #resetFactoryConfirmDeleteBtn:disabled{opacity:.4;cursor:not-allowed}
 
   .help-modal{display:flex;flex-direction:column;width:44em;max-width:92vw;height:70vh;max-height:80vh}
-  .help-modal h2,.help-modal .modal-actions{flex:none}
+  /* .help-body is the only thing in here that may take the leftover height;
+     the bar-host above it already carries flex:0 0 auto */
   .help-body{flex:1;display:flex;gap:1rem;overflow:hidden;min-height:0}
   .help-topics{flex:none;width:10em;overflow-y:auto;border-right:1px solid #ddd;padding-right:.6rem}
   .help-topic-btn{display:block;width:100%;text-align:left;background:none;border:none;padding:.45rem .5rem;
@@ -1083,22 +1091,27 @@
 <!-- help modal -- topics loaded from help/topics.json, content fetched from
      help/<file>.html per topic (see help/README.md) -->
 <div id="helpOverlay" class="overlay">
+  <!-- Informational: nothing to change, so a bare Done. .help-modal is
+       already a flex column with .help-body as its scroller, so the bar just
+       slots in at the top as another non-flexing row -- no .modal-body
+       wrapper needed here. See Documents/modal-buttons.md. -->
   <div class="modal help-modal">
-    <h2>Help</h2>
+    <div id="helpBar" class="modal-bar-host"></div>
     <div class="help-body">
       <div id="helpTopics" class="help-topics"></div>
       <div id="helpContent" class="help-content"></div>
-    </div>
-    <div class="modal-actions">
-      <button id="helpCloseBtn">Close</button>
     </div>
   </div>
 </div>
 
 <!-- about modal -->
 <div id="aboutOverlay" class="overlay">
-  <div class="modal" style="max-width:32em;max-height:85vh;overflow:auto">
-    <h2>About REPchess</h2>
+  <!-- Informational. The one in this batch that had overflow on .modal
+       itself, so the bar would have scrolled away with the attributions --
+       moved onto a real .modal-body, same fix Attributes needed. -->
+  <div class="modal" style="max-width:32em;max-height:85vh;display:flex;flex-direction:column">
+    <div id="aboutBar" class="modal-bar-host"></div>
+    <div class="modal-body">
     <p>Version 0.1</p>
     <p>Copyright (C) 2026 Vorpal Robotics, LLC</p>
     <h3 style="margin-bottom:.3em">Open Source Attributions</h3>
@@ -1111,10 +1124,13 @@
       <li><b>Font Awesome Free</b> — icons (icons: CC BY 4.0; fonts: SIL OFL 1.1; code: MIT License).</li>
     </ul>
     <hr style="margin:2em 0 1em;border:none;border-top:1px solid #ddd">
+    <!-- Reset to Factory stays here, deliberately. It is a hidden escape
+         hatch, styled small and grey so you only find it if you went
+         looking; promoting it to the bar's red destructive slot would
+         advertise it on every visit to the About box, and it doesn't destroy
+         "the thing this modal is editing" -- this modal edits nothing. -->
     <p style="text-align:center;margin-bottom:0"><a href="#" id="resetToFactoryLink" style="font-size:.75em;color:#999">Reset to Factory</a></p>
-    <div class="modal-actions">
-      <button id="aboutCloseBtn">Close</button>
-    </div>
+    </div><!-- /.modal-body -->
   </div>
 </div>
 
@@ -1226,17 +1242,25 @@
 <!-- opening graph modal -->
 <div id="graphOverlay" class="overlay">
   <div class="modal" style="position:fixed;inset:0;margin:0;max-width:none;border-radius:0;display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden">
-    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
-      <button id="graphCloseBtn" style="flex:0 0 auto">Close</button>
-      <h2 style="margin:0">Opening Graph</h2>
+    <!-- Informational (you look at the graph; nothing here is staged), so the
+         bar is title + Done. Reset Layout and "Show Castle" came OUT of the
+         old header row: they re-scope and re-draw the view, which the spec
+         keeps in the body. They join the View / Coverage row below, which is
+         where the other view controls already live.
+
+         No .modal-body: this modal is full-screen with overflow:hidden and
+         nothing in it scrolls -- #graphContainer is a sized flex child that
+         cytoscape pans inside. Wrapping it in an overflow:auto body would
+         fight that sizing for no benefit, and the bar is already pinned by
+         being a non-flexing first child. -->
+    <div id="graphBar" class="modal-bar-host"></div>
+    <div style="display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap">
       <button id="graphResetLayoutBtn" style="flex:0 0 auto;font-size:.8rem"
         title="Clear manual node dragging for this view (whole tree, or the focused castle/variation) and re-lay-out fresh">Reset Layout</button>
-      <span id="graphCastleWrap" style="display:none;margin-left:auto;font-size:.9rem">
+      <span id="graphCastleWrap" style="display:none;font-size:.9rem">
         <label for="graphCastleSelect">Show Castle:</label>
         <select id="graphCastleSelect" style="font-size:.9rem;padding:.15rem .3rem"></select>
       </span>
-    </div>
-    <div style="display:flex;align-items:baseline;gap:.5rem">
       <div id="graphStatus" style="font-size:.85em;color:#555;min-height:1.2em;flex:1"></div>
       <label for="graphViewMode" style="flex:0 0 auto;font-size:.8rem;color:#555">View:</label>
       <select id="graphViewMode" style="flex:0 0 auto;font-size:.8rem;padding:.1rem .2rem"
@@ -1273,12 +1297,14 @@
 <!-- generated castle report (G1: room model, inspectable) -->
 <div id="castleReportOverlay" class="overlay">
   <div class="modal" style="width:min(48em,95vw);max-height:90vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
-      <button id="castleReportCloseBtn" style="flex:0 0 auto">Close</button>
-      <h2 style="margin:0">Castle Preview</h2>
-      <button id="castleWalkBtn" style="flex:0 0 auto;margin-left:auto"><i class="fa-solid fa-person-walking"></i> Walk in VR</button>
+    <!-- Informational: a preview you read. "Walk in VR" closes this modal but
+         goes somewhere else rather than dismissing, so it stays in the body
+         beside the summary it acts on -- same call as Room Info's Jump. -->
+    <div id="castleReportBar" class="modal-bar-host"></div>
+    <div style="display:flex;align-items:baseline;gap:.6rem;margin-bottom:.5rem">
+      <div id="castleReportSummary" style="font-size:.82rem;color:#555;flex:1;min-width:0"></div>
+      <button id="castleWalkBtn" style="flex:0 0 auto"><i class="fa-solid fa-person-walking"></i> Walk in VR</button>
     </div>
-    <div id="castleReportSummary" style="font-size:.82rem;color:#555;margin-bottom:.5rem"></div>
     <div id="castleReportBody" style="flex:1;min-height:0;overflow:auto"></div>
   </div>
 </div>
@@ -1306,14 +1332,19 @@
 
 <!-- room info modal (click a graph node) -->
 <div id="roomInfoOverlay" class="overlay">
+  <!-- Informational. The bar is mounted with prefix:'roomInfo', so its title
+       element keeps the id #roomInfoTitle that showRoomInfoPanel already
+       writes the room's rich label into. "Jump to VR" DOES close this modal,
+       which the spec flags for a case-by-case call: it stays in the body,
+       because it leaves for somewhere else rather than just dismissing, and
+       the bar's Leave has to keep meaning "put this back the way it was". -->
   <div class="modal" style="min-width:20em;max-width:28em">
-    <h2 id="roomInfoTitle">Room</h2>
+    <div id="roomInfoBar" class="modal-bar-host"></div>
     <div id="roomInfoExits" class="room-info-exits"></div>
     <div id="roomInfoBoard" class="room-info-board"></div>
     <div id="roomInfoBoardCap" class="room-info-board-cap"></div>
     <div class="modal-actions">
       <button id="roomInfoJumpBtn"><i class="fa-solid fa-person-walking"></i> Jump to VR</button>
-      <button id="roomInfoCloseBtn">Close</button>
     </div>
   </div>
 </div>
@@ -1321,10 +1352,9 @@
 <!-- browse games modal (three-dot menu / hamburger, both labeled "Browse Games") -->
 <div id="gamesListOverlay" class="overlay">
   <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
-    <div class="crop-header">
-      <h2>Browse Games</h2>
-      <button id="gamesListCloseBtn">Close</button>
-    </div>
+    <!-- Immediate: the filters below re-run the search as you change them,
+         nothing is staged, so a bare Done. -->
+    <div id="gamesListBar" class="modal-bar-host"></div>
     <input type="text" id="gamesListMovesInput" placeholder="Moves from the start, e.g. 1. d4 Nf6 2. c4">
     <div id="gamesListMovesError"></div>
     <div class="games-list-toggle">
@@ -1345,10 +1375,11 @@
 <!-- cross-castle transposition report -->
 <div id="transpOverlay" class="overlay">
   <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
-    <div class="crop-header">
-      <h2>Transpositions Between Castles</h2>
-      <button id="transpCloseBtn">Close</button>
-    </div>
+    <!-- Immediate. "Redirect Selected" stays in its footer: the spec names it
+         explicitly, and it is a bulk action on the groups listed above it,
+         not this modal's lifecycle -- it doesn't close, and you can resolve
+         several batches without leaving. -->
+    <div id="transpBar" class="modal-bar-host"></div>
     <p style="font-size:.85em;color:#555;margin-top:0">
       Positions reached by two or more different castles via different move orders —
       each is currently a separate VR room even though the position is identical.
@@ -1889,6 +1920,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-397"></script>
+<script type="module" src="js/app.js?v=20260804-398"></script>
 </body>
 </html>

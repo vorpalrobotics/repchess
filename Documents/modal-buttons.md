@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and seven modals are
+**Status: the mechanism is built (`js/modalBar.js`) and fourteen modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -289,12 +289,53 @@ Order, worst first:
 - [ ] **Castle Generate** (`#castleGenOverlay`), **Line** (`#lineOverlay`),
       **Import Line**, **Search Line**, **Field** — Editor or Confirm.
 - [ ] **Analysis Queue / Add / Compare** — Immediate.
-- [ ] **Graph**, **Help**, **About**, **Room Info**, **Castle Report**,
-      **Games List**, **Transpositions** — Informational or Immediate;
-      Done only.
+- [x] **Graph**, **Help**, **About**, **Room Info**, **Castle Preview**,
+      **Browse Games**, **Transpositions** — Informational or Immediate;
+      Done only. Converted as one batch, since the contract is identical for
+      all seven: they share a `mountInfoBar()` helper in app.js and one
+      `assertInfoBar()` assertion in the tests rather than seven copies of
+      each. Four things this batch settled:
+
+      - **`onLeave` is the old close handler, verbatim.** Several do real
+        teardown — the graph drops its cytoscape instance and resets its
+        lenses, the Transposition report re-raises a toast it suppressed
+        while open, Browse Games clears its state. A conversion that
+        "just closes the overlay" would have lost all of it.
+      - **A body button that closes still isn't the Leave button.** Room
+        Info's `Jump to VR` and Castle Preview's `Walk in VR` both close, but
+        they leave *for somewhere else*; Leave has to keep meaning "put this
+        back the way it was", so they stayed in the body.
+      - **A destructive-looking link isn't a Destructive button.** About's
+        `Reset to Factory` is a small grey link, findable only if you go
+        looking, and About edits nothing for a destructive action to destroy.
+        Promoting it to the bar's red slot would advertise it on every visit.
+        It stays a body link.
+      - **Not every converted modal needs a `.modal-body`.** Five of these
+        were already flex columns with their own designated scroller
+        (`.help-body`, `.room-info-exits`, `#castleReportBody`,
+        `.games-list-body`, `#transpBody`), so the bar just slots in above as
+        another non-flexing row. The graph scrolls nothing at all — it is
+        full-screen with `overflow:hidden` and a sized `#graphContainer` that
+        cytoscape pans inside, so wrapping it would fight that sizing. Only
+        **About** needed the split, since it had `overflow:auto` on `.modal`
+        itself. `modalBarState` reports `visibleWhenScrolled: null` when
+        there is no `.modal-body`, so the shared assertion accepts null and
+        only rejects an actual `false`.
+
+      The graph also lost its old header row: `Reset Layout` and
+      `Show Castle` are view controls, not lifecycle, so they moved down to
+      join the `View` / `Coverage` row in the body.
 - [ ] **Quizzes** (`#quizOverlay`, `#openingQuizOverlay`) — Flow; bar gets
       `Done` only, all the test-flow buttons stay in the body.
 - [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm.
+- [ ] **Download** (`#downloadOverlay`), **Import Move Images**
+      (`#importMoveImagesOverlay`), **Perfect Opening**
+      (`#perfectOpeningOverlay`) and its progress panel
+      (`#perfectOpeningProgressOverlay`), **object-list pick**
+      (`#objlistPickOverlay`). Added late: these existed in the app but were
+      missing from this list, which made the remaining work look smaller than
+      it is. Categorise each when its turn comes — Perfect Opening's config
+      panel in particular looks like an Editor, not an Immediate.
 
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.
