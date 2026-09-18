@@ -1930,11 +1930,9 @@ async function openSurfaceAdjustDialog(opts){
     </div>
   `;
   ov.innerHTML = `
-    <div class="modal" style="width:min(34em,92vw);max-height:88vh;display:flex;flex-direction:column;overflow:auto">
-      <div class="cp-header">
-        <h2>Adjust Surface</h2>
-        <button id="saCancelBtn">Cancel</button>
-      </div>
+    <div class="modal" style="width:min(34em,92vw);max-height:88vh;display:flex;flex-direction:column">
+      <div class="modal-bar-host">${modalBarHtml({ title: 'Adjust Surface', save: true })}</div>
+      <div class="modal-body">
       <canvas id="saPreview" class="sa-preview" width="384" height="192"></canvas>
       <p class="sa-note">Preview is unlit — the room's own lighting will read darker.</p>
       ${slider('saBrightness', 'Brightness', adj.brightness)}
@@ -1948,19 +1946,30 @@ async function openSurfaceAdjustDialog(opts){
         <input type="color" id="saTintNative" value="${esc(adj.tint || '#cccccc')}">
         <button id="saClearTintBtn">Clear tint</button>
       </div>
+      <!-- Reset and Remove all stay in the body deliberately: both edit the
+           VALUE being adjusted rather than destroying the surface record, so
+           by Documents/modal-buttons.md they are body actions, not the bar's
+           destructive slot. Leaving/committing is the bar's job and only the
+           bar's. -->
       <div class="assets-editor-actions" style="margin-top:.8rem">
         <div class="left"><button id="saResetBtn">Reset</button></div>
-        ${opts.onRemove ? `<button id="saRemoveBtn" style="background:#c62828;color:#fff">Remove all</button>` : ''}
-        <button id="saApplyBtn">Apply</button>
+        ${opts.onRemove ? `<button id="saRemoveBtn" class="mb-destructive">Remove all</button>` : ''}
       </div>
+      </div><!-- /.modal-body -->
     </div>
   `;
+  let barCtl = null;
   const canvas = ov.querySelector('#saPreview');
   const tintSwatch = ov.querySelector('#saTintSwatch');
   const tintHex = ov.querySelector('#saTintHex');
   const tintNative = ov.querySelector('#saTintNative');
   let img = null;
   const repaint = () => {
+    // the choke point every change funnels through -- a slider fires its own
+    // input event, but a swatch click, "Clear tint" and "Reset" all mutate
+    // `adj` directly and would be invisible to the bar's watcher otherwise.
+    // Fourth modal to need this; see the spec's note on programmatic edits.
+    if(barCtl) barCtl.refresh();
     tintSwatch.style.background = adj.tint || 'transparent';
     ov.querySelector('#saBrightnessVal').textContent = adj.brightness.toFixed(2);
     ov.querySelector('#saContrastVal').textContent = adj.contrast.toFixed(2);
@@ -1997,13 +2006,26 @@ async function openSurfaceAdjustDialog(opts){
     setTint(null);
   };
   const close = () => { ov.style.display = 'none'; };
-  ov.querySelector('#saCancelBtn').onclick = close;
-  ov.querySelector('#saApplyBtn').onclick = () => {
-    if(adj.tint) addRecentColor(adj.tint);
-    close();
-    opts.onApply({ tint: adj.tint, brightness: adj.brightness, contrast: adj.contrast });
-  };
+  // This dialog's old "Apply" already meant commit-and-close, which is exactly
+  // the bar's Save -- so it maps straight across rather than needing a new
+  // meaning. Save is now dead until something actually changes, where Apply
+  // used to be pressable on an untouched dialog for a no-op write.
   if(opts.onRemove) ov.querySelector('#saRemoveBtn').onclick = () => { close(); opts.onRemove(); };
+
+  barCtl = wireModalBar(ov.querySelector('.modal-bar'), {
+    // the staged adjustment, against how it stood when the dialog opened
+    snapshot: () => ({ tint: adj.tint, brightness: adj.brightness, contrast: adj.contrast }),
+    watch: ov,
+    thing: 'this surface',
+    onLeave: close,
+    onSave: () => {
+      if(adj.tint) addRecentColor(adj.tint);
+      close();
+      opts.onApply({ tint: adj.tint, brightness: adj.brightness, contrast: adj.contrast });
+    },
+  });
+  // the backdrop is a way out too, so it goes through the same confirm
+  wireBackdropClose(ov, () => barCtl.leave());
 }
 
 async function openColorSwatchPicker(opts){
