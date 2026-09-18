@@ -432,6 +432,30 @@
   .cr-exits b{color:#888;font-weight:600;margin-right:.3em}
   .cr-empty{color:#999;font-style:italic}
 
+  /* ---------- Review Forecast (Documents/review-forecast.md) ----------
+     Same labelled-bar idiom as the digraph's coverage panel below, with one
+     difference that matters: a coverage bar is a FRACTION of a whole, so its
+     track is the denominator. A forecast bucket is a SHARE of a total, so
+     every bar here is scaled to the largest bucket -- otherwise the eight
+     buckets of a lopsided castle all render as slivers and the shape of the
+     week is unreadable, which is the one thing this view is for. */
+  .rf-section{margin:0 0 1.1rem}
+  .rf-section h3{margin:0 0 .15rem;font-size:1rem;color:#1f4e79}
+  .rf-section-note{margin:0 0 .5rem;font-size:.72rem;color:#888;line-height:1.35}
+  .rf-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555;padding:.1rem 0}
+  .rf-row.rf-zero{opacity:.45}
+  .rf-label{flex:0 0 9.5em}
+  .rf-bar{flex:1 1 auto;height:.7rem;background:#eee;border-radius:.35rem;overflow:hidden;min-width:2em}
+  .rf-fill{display:block;height:100%;border-radius:.35rem 0 0 .35rem}
+  /* tabular-nums so the columns line up down the list rather than jittering
+     with the digit widths */
+  .rf-value{flex:0 0 auto;min-width:10.5em;text-align:right;font-variant-numeric:tabular-nums}
+  .rf-value .rf-rooms{color:#888}
+  .rf-empty{font-size:.85rem;color:#888;padding:1rem 0;text-align:center}
+  .rf-callout{font-size:.78rem;color:#8a6d1f;background:#fffbe6;border:1px solid #f0e2a8;
+              border-radius:4px;padding:.4rem .55rem;margin:0 0 .9rem;line-height:1.4}
+  .rf-scope{display:flex;align-items:center;gap:.5rem;font-size:.9rem;margin-bottom:.8rem;flex-wrap:wrap}
+
   .graph-coverage{margin:.3rem 0 .5rem;display:flex;flex-direction:column;gap:.3rem}
   .graph-coverage-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555}
   .graph-coverage-label{flex:0 0 16em}
@@ -916,6 +940,7 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuThreeTest" title="Shift+click or right-click to force a fresh rebuild">Run VR</button>
+      <button id="menuReviewForecast" title="How much review is coming, and when — for pacing new memorization">Review Forecast</button>
       <button id="menuAssets">VR Assets</button>
       <button id="menuObjectLists">VR Object Lists</button>
       <button id="menuMnemonics">Mnemonics</button>
@@ -1371,6 +1396,23 @@
 </div>
 
 <!-- cross-castle transposition report -->
+<!-- Review Forecast (Documents/review-forecast.md). Informational under
+     Documents/modal-buttons.md: nothing here is staged, so the bar is a title
+     and a bare Done, and the scope dropdown is a view control that stays in
+     the body. -->
+<div id="reviewForecastOverlay" class="overlay">
+  <div class="modal" style="width:min(42em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div id="reviewForecastBar" class="modal-bar-host"></div>
+    <div class="modal-body">
+      <div class="rf-scope">
+        <label for="reviewForecastScope">Show:</label>
+        <select id="reviewForecastScope" style="font-size:.9rem;padding:.15rem .3rem"></select>
+      </div>
+      <div id="reviewForecastBody"></div>
+    </div>
+  </div>
+</div>
+
 <div id="transpOverlay" class="overlay">
   <div class="modal" style="width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column">
     <!-- Immediate. "Redirect Selected" stays in its footer: the spec names it
@@ -1916,6 +1958,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-403"></script>
+<script type="module" src="js/app.js?v=20260804-404"></script>
 </body>
 </html>

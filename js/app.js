@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-403';
+const BUILD_TAG = '-404';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8209,6 +8209,140 @@ async function reviewForecast(opts = {}){
   return buildReviewForecast(castles, ROOM_REVIEWS, MEMORIZED_ROOMS, opts);
 }
 
+/* ---------- Review Forecast: the modal (Phase 2) ----------
+   A thin renderer over buildReviewForecast, which is where all the rules
+   live. If something here looks like a rule, it belongs there instead. */
+
+// the scope the dropdown is on. null = every castle, which is the DEFAULT:
+// the pacing decision this feature exists for is not made per castle. When
+// you decide whether to memorize a new room today, your load is whatever is
+// due across the whole repertoire, and a per-castle view can show a quiet
+// castle while tomorrow is genuinely heavy elsewhere.
+let RF_SCOPE = null;
+
+function rfFmt(moves, rooms){
+  return `${moves} move${moves === 1 ? '' : 's'} <span class="rf-rooms">· ${rooms} room${rooms === 1 ? '' : 's'}</span>`;
+}
+/* One labelled row. `max` scales the bar: every row in a section is drawn
+   relative to the LARGEST row in that section, not to the section total.
+   Scaling to the total makes eight buckets of a lopsided castle render as
+   eight slivers, and the shape of the week -- the one thing this view is for
+   -- becomes unreadable. */
+function rfRow(label, color, moves, rooms, max){
+  const pct = max > 0 ? Math.round(moves / max * 100) : 0;
+  return `
+    <div class="rf-row${moves === 0 && rooms === 0 ? ' rf-zero' : ''}">
+      <span class="rf-label">${escapeHtml(label)}</span>
+      <span class="rf-bar"><span class="rf-fill" style="width:${pct}%;background:${color}"></span></span>
+      <span class="rf-value">${rfFmt(moves, rooms)}</span>
+    </div>`;
+}
+
+function renderReviewForecast(f){
+  const body = $('reviewForecastBody');
+  if(!f.castles){
+    body.innerHTML = `<p class="rf-empty">No castles built yet in this scope — generate one and memorize a room to start a schedule.</p>`;
+    return;
+  }
+
+  const bucketMax = Math.max(...REVIEW_FORECAST_BUCKETS.map(b => f.buckets[b.id].moves), 0);
+  const ladderMax = Math.max(...f.ladder.map(r => r.moves), 0);
+
+  /* A castle memorized long ago and never reviewed is legitimately ALL
+     overdue at step 0 -- bootstrapRoomReview dates the first review from the
+     memorized timestamp. That is correct and looks like neglect of work that
+     was never started, so it gets said in words rather than left to the bar
+     to imply. */
+  const callout = f.neverReviewed.rooms
+    ? `<p class="rf-callout">${f.neverReviewed.rooms} room${f.neverReviewed.rooms === 1 ? ' was' : 's were'} memorized but never reviewed
+       (${f.neverReviewed.moves} move${f.neverReviewed.moves === 1 ? '' : 's'}). Each starts at the bottom of the ladder and is due
+       a day after it was memorized, so an older castle can read as entirely overdue.</p>`
+    : '';
+
+  body.innerHTML = callout + `
+    <div class="rf-section">
+      <h3>Coming due</h3>
+      <p class="rf-section-note">By when each room actually falls due — not by how long its interval is.
+        Bars are scaled to the biggest bucket.</p>
+      ${REVIEW_FORECAST_BUCKETS.map(b =>
+        rfRow(b.label, b.color, f.buckets[b.id].moves, f.buckets[b.id].rooms, bucketMax)).join('')}
+    </div>
+    <div class="rf-section">
+      <h3>How well learned</h3>
+      <p class="rf-section-note">Where the memorized rooms sit on the interval ladder. Rooms climb a rung
+        each time you grade one A, so a repertoire you keep passing piles up at the bottom of this list.</p>
+      ${f.ladder.map(r =>
+        rfRow(`every ${r.days} day${r.days === 1 ? '' : 's'}`, '#1565c0', r.moves, r.rooms, ladderMax)).join('')}
+    </div>
+    <div class="rf-section">
+      <h3>Totals</h3>
+      ${rfRow('Memorized', '#2e7d32', f.totals.memorizedMoves, f.totals.memorizedRooms, f.totals.moves)}
+      ${rfRow('In this scope', '#9e9e9e', f.totals.moves, f.totals.rooms, f.totals.moves)}
+    </div>`;
+}
+
+/* Every built castle, by stable identity rather than by index -- two lines
+   can each have a castle of the same name, which the aggregation already
+   distinguishes with lineId (see its scoping tests). */
+let RF_SCOPE_OPTIONS = [];
+function populateReviewForecastScope(castles){
+  const sel = $('reviewForecastScope');
+  RF_SCOPE_OPTIONS = castles.map(c => ({ lineId: c.lineId, castleName: c.castleName }))
+    .sort((a, b) => a.castleName.localeCompare(b.castleName));
+  sel.innerHTML = '<option value="">All castles</option>' +
+    RF_SCOPE_OPTIONS.map((o, i) =>
+      `<option value="c:${i}">${escapeHtml(castleScopeLabel(o.castleName))}</option>`).join('');
+  sel.value = '';
+  for(let i = 0; i < RF_SCOPE_OPTIONS.length; i++){
+    const o = RF_SCOPE_OPTIONS[i];
+    if(RF_SCOPE && o.lineId === RF_SCOPE.lineId && o.castleName === RF_SCOPE.castleName){ sel.value = `c:${i}`; break; }
+  }
+  if(!sel.value) RF_SCOPE = null;   // the remembered castle is gone; fall back to All
+}
+
+async function drawReviewForecast(){
+  renderReviewForecast(await reviewForecast(RF_SCOPE || {}));
+}
+// re-scoping only needs the redraw, and rides the castle cache, but on a big
+// repertoire that is still an aggregation pass over every room -- so it gets
+// its own spinner rather than looking frozen
+async function refreshReviewForecast(){
+  const spinner = showSpinner('Reading your review schedule…');
+  await nextPaint();
+  try { await drawReviewForecast(); }
+  finally { hideSpinner(spinner); }
+}
+
+async function openReviewForecast(){
+  $('reviewForecastOverlay').style.display = 'flex';
+  $('reviewForecastBody').innerHTML = '';
+  // ONE spinner across both halves of the open. Taking a second one for the
+  // draw would hide and re-show it in between -- a visible flicker on a warm
+  // cache, and two "loading" flashes on a cold one.
+  const spinner = showSpinner('Reading your review schedule…');
+  await nextPaint();
+  try {
+    // gatherBuiltCastles is the expensive part and is cached; a cold one is
+    // seconds on a large repertoire, which is what the spinner is really for
+    populateReviewForecastScope(await gatherBuiltCastles(await getLines(LOCAL_USER)));
+    await drawReviewForecast();
+  } finally {
+    hideSpinner(spinner);
+  }
+}
+
+$('menuReviewForecast').onclick = () => {
+  $('menuList').style.display = 'none';
+  openReviewForecast();
+};
+$('reviewForecastScope').onchange = () => {
+  const v = $('reviewForecastScope').value;
+  RF_SCOPE = v.startsWith('c:') ? RF_SCOPE_OPTIONS[+v.slice(2)] || null : null;
+  refreshReviewForecast();
+};
+mountInfoBar('reviewForecastBar', 'Review Forecast',
+  () => { $('reviewForecastOverlay').style.display = 'none'; });
+
 /* ---------- cross-castle transposition detector ----------
    Two different castles (different line and/or castle name) can each reach
    the exact same chess position via their own, independent move order --
@@ -13169,6 +13303,18 @@ if(localStorage.getItem('threeTestDebug')){
     ladder: () => ROOM_REVIEW_LADDER,
     bucketOf: (rec, now) => reviewForecastBucket(rec, now),
     gatherBuiltCastles: async () => gatherBuiltCastles(await getLines(LOCAL_USER)),
+    // Phase 2 (the modal): the scope the dropdown is actually on, so a test
+    // can prove "All castles" is the default without reading the select's
+    // value and assuming what the blank option means.
+    scope: () => RF_SCOPE,
+    scopeOptions: () => RF_SCOPE_OPTIONS,
+    // writes the memorized map directly, so a test can age a room's
+    // memorized-at timestamp without walking into it in VR
+    setMemorized: (json) => setMeta('threeMemorizedRooms', json),
+    // the real key-building rule rather than one a test re-implements --
+    // sanitizeKeyPart is easy to get subtly wrong, and a wrong key fails in
+    // a way that looks like a bug in the feature
+    roomKeyFor: (instanceId, posKey) => castleRoomKey(instanceId, posKey),
   };
   window.__backupTestHooks = {
     buildBackupData: () => buildBackupData(),

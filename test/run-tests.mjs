@@ -21658,6 +21658,137 @@ try {
       `every counted move must land in exactly one bucket: ${bucketMoves} bucketed vs ${live.totals.moves} total`);
     ok(`Review Forecast: end to end over real castles (${live.castles} castle(s), ${live.totals.rooms} room(s), ${live.totals.moves} move(s))`);
   } catch(e){ bad('Review Forecast: end to end', e); }
+
+  /* --- Phase 2: the modal. A thin renderer over the core above, so these
+     test the wiring and the two decisions that are the modal's own -- the
+     default scope, and that the rendered numbers are the aggregation's --
+     rather than re-testing rules phase 1 already covers. --- */
+
+  // 274. It opens from the hamburger and comes up on ALL castles, not on one.
+  //      The pacing decision this feature exists for is not made per castle:
+  //      your load is whatever is due across the whole repertoire, and a
+  //      per-castle default can show a quiet castle while tomorrow is heavy
+  //      elsewhere. Asserted against the module's own scope state, not the
+  //      select's blank value, so it cannot pass by coincidence.
+  try {
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForSelector('#reviewForecastOverlay', { state: 'visible', timeout: 20000 });
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+
+    const scope = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.scope());
+    assert(scope === null, `expected the default scope to be every castle, got ${JSON.stringify(scope)}`);
+    const firstOption = await appEF.page.evaluate(() => {
+      const sel = document.getElementById('reviewForecastScope');
+      return { value: sel.value, text: sel.options[0]?.textContent, count: sel.options.length };
+    });
+    assert(firstOption.value === '' && /all castles/i.test(firstOption.text || ''),
+      `expected "All castles" selected first, got ${JSON.stringify(firstOption)}`);
+    assert(firstOption.count >= 2, `expected the seeded castle listed alongside All, got ${firstOption.count} option(s)`);
+    ok('Review Forecast: opens from the hamburger on "All castles", with the built castles listed');
+  } catch(e){ bad('Review Forecast: opens with the all-castles default', e); }
+
+  // 275. It is an Informational modal under the button-bar spec: a title and
+  //      a bare Done, no Save, and the scope dropdown is a view control that
+  //      stays in the body.
+  try {
+    await assertInfoBar(appEF.page, 'reviewForecastOverlay', 'Review Forecast');
+    const scopeInBody = await appEF.page.evaluate(() => {
+      const el = document.getElementById('reviewForecastScope');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(scopeInBody, 'expected the scope dropdown to stay in the body, not move into the bar');
+    ok('modal bar: Review Forecast is informational — title and Done only, scope left in the body');
+  } catch(e){ bad('modal bar: Review Forecast', e); }
+
+  // 276. What it renders IS the aggregation -- every bucket and every ladder
+  //      rung gets a row, and the numbers in them are the ones the core
+  //      returned. A renderer that quietly recomputed anything would be a
+  //      second source of truth, which is the thing phase 1 exists to avoid.
+  try {
+    const shown = await appEF.page.evaluate(() => {
+      const rows = [...document.querySelectorAll('#reviewForecastBody .rf-row')];
+      return rows.map(r => ({
+        label: r.querySelector('.rf-label').textContent.trim(),
+        value: r.querySelector('.rf-value').textContent.replace(/\s+/g, ' ').trim(),
+      }));
+    });
+    const [buckets, ladder, live] = await appEF.page.evaluate(async () => [
+      window.__reviewForecastTestHooks.buckets(),
+      window.__reviewForecastTestHooks.ladder(),
+      await window.__reviewForecastTestHooks.forecast(),
+    ]);
+    // 8 buckets + one rung per ladder step + 2 totals rows
+    assert(shown.length === buckets.length + ladder.length + 2,
+      `expected a row per bucket, per ladder rung, plus the two totals: got ${shown.length}`);
+    for(const b of buckets){
+      const row = shown.find(r => r.label === b.label);
+      assert(row, `expected a row for the "${b.label}" bucket, got ${JSON.stringify(shown.map(r => r.label))}`);
+      const got = live.buckets[b.id];
+      assert(row.value.startsWith(`${got.moves} move`),
+        `"${b.label}" should show the aggregation's own move count (${got.moves}), got ${JSON.stringify(row.value)}`);
+      assert(row.value.includes(`${got.rooms} room`),
+        `"${b.label}" should show the aggregation's own room count (${got.rooms}), got ${JSON.stringify(row.value)}`);
+    }
+    // ...and moves AND rooms are both shown, everywhere. Either alone
+    // misleads: moves measure repertoire, rooms measure work.
+    assert(shown.every(r => /\d+ moves?\b/.test(r.value) && /\d+ rooms?\b/.test(r.value)),
+      `every row must report moves AND rooms: ${JSON.stringify(shown.filter(r => !/room/.test(r.value)))}`);
+    ok('Review Forecast: every bucket and ladder rung is rendered, with the aggregation\'s own moves-and-rooms');
+  } catch(e){ bad('Review Forecast: rendering matches the aggregation', e); }
+
+  // 277. Picking a castle re-scopes, and picking All goes back -- through the
+  //      real dropdown, and checked against the module's scope state so a
+  //      re-render that silently ignored the choice would fail.
+  try {
+    const opts = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.scopeOptions());
+    assert(opts.length >= 1, `expected at least one built castle to scope to, got ${JSON.stringify(opts)}`);
+    await appEF.page.selectOption('#reviewForecastScope', 'c:0');
+    await appEF.page.waitForFunction(() => window.__reviewForecastTestHooks.scope() !== null, { timeout: 20000 });
+    const scoped = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.scope());
+    assert(scoped && scoped.castleName === opts[0].castleName && scoped.lineId === opts[0].lineId,
+      `expected the scope to be that castle by line AND name, got ${JSON.stringify(scoped)}`);
+
+    await appEF.page.selectOption('#reviewForecastScope', '');
+    await appEF.page.waitForFunction(() => window.__reviewForecastTestHooks.scope() === null, { timeout: 20000 });
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+    ok('Review Forecast: the scope dropdown re-scopes to a castle and back to all');
+  } catch(e){ bad('Review Forecast: scope dropdown', e); }
+
+  // 278. The never-reviewed callout. A castle memorized long ago and never
+  //      graded is legitimately ALL overdue at step 0, which looks like
+  //      neglect of work that was never started -- so it is said in words
+  //      rather than left to the bars to imply.
+  try {
+    const before = await appEF.page.evaluate(() => !!document.querySelector('#reviewForecastBody .rf-callout'));
+    assert(!before, 'setup: expected no callout before anything is memorized');
+
+    // memorize a real generated room, 10 days ago, without ever grading it
+    await appEF.page.evaluate(async () => {
+      const castles = await window.__reviewForecastTestHooks.gatherBuiltCastles();
+      const gr = castles[0].genRooms.find(r => r.exits.length);
+      const key = window.__reviewForecastTestHooks.roomKeyFor(castles[0].instanceId, gr.posKey);
+      const map = JSON.parse(await window.__backupTestHooks.getMeta('threeMemorizedRooms') || '{}');
+      map[key] = Date.now() - 10 * 86400000;
+      await window.__reviewForecastTestHooks.setMemorized(JSON.stringify(map));
+    });
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+
+    const callout = await appEF.page.evaluate(() => {
+      const el = document.querySelector('#reviewForecastBody .rf-callout');
+      return el ? el.textContent.replace(/\s+/g, ' ').trim() : null;
+    });
+    assert(callout && /never reviewed/i.test(callout),
+      `expected a never-reviewed callout once a room is memorized but ungraded, got ${JSON.stringify(callout)}`);
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+    assert(live.neverReviewed.rooms >= 1 && live.buckets.overdue.rooms >= 1,
+      `expected it counted and overdue: ${JSON.stringify({ never: live.neverReviewed, overdue: live.buckets.overdue })}`);
+    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
+    ok('Review Forecast: a memorized-but-never-graded room raises the callout instead of just reading as overdue');
+  } catch(e){ bad('Review Forecast: never-reviewed callout', e); }
 } finally {
   await appEF.close();
 }
