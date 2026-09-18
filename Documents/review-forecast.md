@@ -1,6 +1,6 @@
 # Review Forecast — design and phasing plan
 
-**Status: Phase 1 built. Phases 2-6 proposed.**
+**Status: Phases 1-2 built. Phases 3-6 proposed.**
 
 ## What it is for
 
@@ -166,18 +166,39 @@ merged-corridor fixture. If Phase 1 is right the rest is rendering.
 **Ships:** nothing visible. Worth it anyway — every later phase is a thin
 renderer over this, and a bug here would be invisible in all of them.
 
-## Phase 2 — the modal, with the numbers
+## Phase 2 — the modal, with the numbers ✅ BUILT
 
-Hamburger item, overlay, Informational bar, scope dropdown, spinner on a cold
-cache. Body is two plain lists:
+`menuReviewForecast` in the hamburger, `#reviewForecastOverlay`, Informational
+bar (title + `Done`), scope dropdown, spinner on a cold cache. Body is three
+sections of labelled bars: **Coming due** (the buckets), **How well learned**
+(the ladder rungs), and **Totals**.
 
-- the buckets, `N moves · M rooms` each, with a horizontal stacked bar for
-  proportion (the coverage-bar idiom already in the digraph);
-- the ladder-step distribution, same format.
+No pie, no calendar. **This is already the whole pacing feature** — open it,
+read the week, decide. Everything after makes it nicer to read, not more
+capable.
 
-No pie, no calendar. **This is already the whole pacing feature** — you can
-open it, see "next 7 days: 84 moves · 19 rooms", and decide. Everything after
-this phase makes it nicer to read, not more capable.
+Three things decided while building it:
+
+- **The default scope is All castles.** The pacing decision is not made per
+  castle: your load is whatever is due across the whole repertoire, and a
+  per-castle default can show a quiet castle while tomorrow is heavy
+  elsewhere. Per castle is one click away. There is a test asserting the
+  default against the module's own scope state, not against the select's
+  blank value, so it cannot pass by coincidence.
+- **Bars scale to the largest row in their section, not to the section
+  total.** A coverage bar is a *fraction of a whole*, so its track is the
+  denominator; a forecast bucket is a *share*, and scaling eight buckets to
+  their total renders a lopsided castle as eight slivers — which destroys
+  exactly the thing this view is for.
+- **One spinner across the whole open**, not one per half. Taking a second
+  for the draw hides and re-shows it in between: a flicker on a warm cache
+  and two loading flashes on a cold one.
+
+Its tests deliberately do **not** re-test the rules Phase 1 covers. They check
+the wiring and the modal's own two decisions: the default scope, and that the
+numbers rendered are the aggregation's own (a renderer that recomputed
+anything would be a second source of truth, which is what Phase 1 exists to
+prevent).
 
 ## Phase 3 — the pacing read
 
