@@ -9462,6 +9462,146 @@ try {
 //     visual feedback, nothing prevented navigating to Manage Mnemonics
 //     mid-restore and seeing incomplete data, which is what looked like a
 //     silent failure to import mnemonics after a full backup restore. ---
+/* --- Phase BGx: the backup COVERAGE audit. A source-level test, no browser:
+       it reads js/*.js and fails when the two halves of "full backup" drift
+       apart.
+
+       The bug it exists to prevent, which had already happened: clearAllData()
+       wipes NINE object stores including `meta`, but buildBackupData() exports
+       a hand-maintained allowlist of stores and meta keys. Perfect Opening
+       landed as DB v8; clearAllData learned about it (the version bump forced
+       the issue) and the exporter did not. The result was not a missing
+       backup -- it was a DESTRUCTIVE RESTORE: restoring any backup, even one
+       taken minutes earlier on the same browser, silently reset your Perfect
+       Opening configuration.
+
+       Nothing forces the exporter to keep up, which is exactly why a test has
+       to. Every store and every meta key the source actually writes must be
+       either exported by buildBackupData or named in BACKUP_EXCLUDED_STORES /
+       BACKUP_EXCLUDED_META with a reason. --- */
+if(shouldRunPhase(['import-export'])){
+try {
+  const JS_DIR = path.join(process.cwd(), '..', 'js');
+  const readJs = (name) => fs.readFileSync(path.join(JS_DIR, name), 'utf8');
+  const allJs = fs.readdirSync(JS_DIR).filter(f => f.endsWith('.js'));
+  const srcByFile = Object.fromEntries(allJs.map(f => [f, readJs(f)]));
+  const allSrc = Object.values(srcByFile).join('\n');
+  const appSrc = srcByFile['app.js'];
+  const dbSrc = srcByFile['db.js'];
+
+  // the body of a top-level `function name(...)` / `const name = {` block,
+  // by brace matching from its opening brace -- good enough for this file's
+  // style and far less brittle than a line-range slice.
+  const blockFrom = (src, marker) => {
+    const at = src.indexOf(marker);
+    if(at < 0) return '';
+    let i = src.indexOf('{', at), depth = 0;
+    for(let j = i; j < src.length; j++){
+      if(src[j] === '{') depth++;
+      else if(src[j] === '}' && --depth === 0) return src.slice(i, j + 1);
+    }
+    return '';
+  };
+  const keysOf = (objSrc) => [...objSrc.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/gm)].map(m => m[1]);
+
+  // 300. Every object store is exported or explicitly excluded.
+  try {
+    // clearAllData's own list, read from its `const stores = [...]` array
+    // specifically -- scraping every quoted word in the function would also
+    // pick up the transaction's 'readwrite' mode
+    const clearBody = blockFrom(dbSrc, 'async function clearAllData');
+    const storeArray = (clearBody.match(/const\s+stores\s*=\s*\[([^\]]+)\]/) || [, ''])[1];
+    const stores = new Set([
+      ...[...dbSrc.matchAll(/createObjectStore\('([^']+)'/g)].map(m => m[1]),
+      ...[...storeArray.matchAll(/'([a-zA-Z]+)'/g)].map(m => m[1]),
+    ]);
+    assert(stores.size >= 9, `sanity: expected to find the app's object stores, got ${JSON.stringify([...stores])}`);
+
+    // which exporter call in buildBackupData covers which store
+    const STORE_EXPORTERS = {
+      games: 'getGames(', lines: 'getLines(', prefs: 'getAllPrefs(',
+      mnemonics: 'getAllMnemonics(', assets: 'getAllAssets(',
+      objectLists: 'getAllObjectLists(', meta: 'getMeta(',
+    };
+    const buildSrc = blockFrom(appSrc, 'async function buildBackupData');
+    assert(buildSrc.length > 200, 'sanity: could not read buildBackupData');
+    const excludedStores = keysOf(blockFrom(appSrc, 'const BACKUP_EXCLUDED_STORES'));
+    assert(excludedStores.length, 'sanity: could not read BACKUP_EXCLUDED_STORES');
+
+    const missing = [...stores].filter(s => {
+      if(excludedStores.includes(s)) return false;
+      const call = STORE_EXPORTERS[s];
+      return !(call && buildSrc.includes(call));
+    });
+    assert(missing.length === 0,
+      `these object stores are wiped by clearAllData but neither exported by buildBackupData nor listed in ` +
+      `BACKUP_EXCLUDED_STORES -- a restore would silently destroy them: ${JSON.stringify(missing)}`);
+    ok(`backup coverage: all ${stores.size} object stores are exported or explicitly excluded`);
+  } catch(e){ bad('backup coverage: object stores', e); }
+
+  // 301. Every meta key the app writes is exported or explicitly excluded.
+  //      The meta store is one row per key and clearAllData empties the whole
+  //      thing, so an unexported key is destroyed by every restore.
+  try {
+    // setMeta('literal', …) plus setMeta(SOME_KEY, …) resolved through the
+    // `const SOME_KEY = 'literal'` declarations anywhere in js/
+    const constLiterals = Object.fromEntries(
+      [...allSrc.matchAll(/const\s+([A-Z][A-Z0-9_]*(?:_KEY|KEY))\s*=\s*'([^']+)'/g)].map(m => [m[1], m[2]]));
+    const metaKeys = new Set([
+      ...[...allSrc.matchAll(/setMeta\('([^']+)'/g)].map(m => m[1]),
+      ...[...allSrc.matchAll(/setMeta\(\s*([A-Z][A-Z0-9_]*)\s*,/g)]
+        .map(m => constLiterals[m[1]]).filter(Boolean),
+      // written straight into the meta store by the DB upgrade path, not via setMeta
+      ...[...dbSrc.matchAll(/metaStore\.put\(\{\s*key\s*:\s*'([^']+)'/g)].map(m => m[1]),
+    ]);
+    assert(metaKeys.size >= 8, `sanity: expected to find the app's meta keys, got ${JSON.stringify([...metaKeys])}`);
+    assert(metaKeys.has('threeRoomReviews'),
+      'sanity: the spaced-repetition key should be among the detected meta keys');
+
+    const buildSrc = blockFrom(appSrc, 'async function buildBackupData');
+    const excludedMeta = keysOf(blockFrom(appSrc, 'const BACKUP_EXCLUDED_META'));
+    assert(excludedMeta.length, 'sanity: could not read BACKUP_EXCLUDED_META');
+
+    /* A key counts as exported whether buildBackupData reads it by literal
+       (`getMeta('graphLayout')`) or through its constant
+       (`getMeta(MNEM_NOTES_KEY)`) -- both are used, so check both or three
+       perfectly-exported keys read as missing. */
+    const constsFor = (key) => Object.entries(constLiterals)
+      .filter(([, v]) => v === key).map(([name]) => name);
+    const isExported = (k) =>
+      buildSrc.includes(`getMeta('${k}')`) ||
+      constsFor(k).some(name => new RegExp(`getMeta\\(\\s*${name}\\s*\\)`).test(buildSrc));
+    const missing = [...metaKeys].filter(k => !excludedMeta.includes(k) && !isExported(k));
+    assert(missing.length === 0,
+      `these meta keys are written by the app but neither exported by buildBackupData nor listed in ` +
+      `BACKUP_EXCLUDED_META -- clearAllData empties the meta store, so every restore destroys them: ${JSON.stringify(missing)}`);
+    ok(`backup coverage: all ${metaKeys.size} meta keys are exported or explicitly excluded`);
+  } catch(e){ bad('backup coverage: meta keys', e); }
+
+  // 302. Every pref field the app writes survives the export. buildBackupData
+  //      copies prefs field-by-field rather than wholesale, so a field added
+  //      later is silently dropped from every backup -- the same class of gap
+  //      as the two above, one level down.
+  try {
+    const written = new Set([
+      ...[...allSrc.matchAll(/savePrefField\([^,]*,\s*'([a-zA-Z]+)'/g)].map(m => m[1]),
+      ...[...allSrc.matchAll(/setPref\([^)]*?\{\s*([a-zA-Z]+)\s*[,:}]/g)].map(m => m[1]),
+    ]);
+    // written through a computed key or a patch object the regex can't see
+    const INDIRECT = ['eval', 'evalLines', 'reply', 'hidden', 'mnemonic', 'seq'];
+    for(const f of INDIRECT) written.add(f);
+    const buildSrc = blockFrom(appSrc, 'async function buildBackupData');
+    const prefsMap = buildSrc.slice(buildSrc.indexOf('prefs:'), buildSrc.indexOf('mnemonics:'));
+    const missing = [...written].filter(f => !new RegExp(`\\b${f}\\s*:\\s*p\\.${f}\\b|\\b${f}\\s*:\\s*p\\[`).test(prefsMap)
+                                          && !new RegExp(`\\b${f}\\s*:\\s*p\\.`).test(prefsMap));
+    assert(missing.length === 0,
+      `these pref fields are written by the app but not copied by buildBackupData's prefs map, ` +
+      `so they are dropped from every backup: ${JSON.stringify(missing)}`);
+    ok(`backup coverage: all ${written.size} pref fields are copied into the export`);
+  } catch(e){ bad('backup coverage: pref fields', e); }
+} catch(e){ bad('Phase BGx: uncaught error outside a numbered test', e); }
+}
+
 if(shouldRunPhase(['import-export'])){
 try {
 const appBH = await launchApp();
@@ -9565,6 +9705,58 @@ try {
     assert(rebuilt.memorizedShapes === roundTripBackup.memorizedShapes, `expected a fresh export to still carry memorizedShapes, got ${rebuilt.memorizedShapes}`);
     ok('backup round trip: compareGames + graphLayout/decoratedRooms/memorizedShapes survive both restore and a fresh re-export');
   } catch(e){ bad('backup round trip: previously-dropped fields now survive', e); }
+
+  // 86b. The v7 fields, same round trip. These are the ones the coverage
+  //      audit (phase BGx) found missing, and the failure mode was worse than
+  //      "not backed up": clearAllData() empties the meta store on every
+  //      restore, so restoring ANY backup -- even one taken minutes earlier
+  //      on the same browser -- silently reset your Perfect Opening settings.
+  try {
+    const poConfig = JSON.stringify({ enabled: true, threads: 3, hashMB: 256,
+      maxLines: { 1: 9, default: 4 }, depth: { 1: 40, default: 26 } });
+    const recentColors = JSON.stringify(['#112233', '#445566']);
+    await seedBackup(appBH.page, {
+      version: 7, user: 'tester',
+      lines: [{ id: 'L-V7', name: 'V7', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [],
+      perfectOpeningConfig: poConfig,
+      recentSurfaceColors: recentColors,
+    });
+
+    const restored = await appBH.page.evaluate(() => Promise.all([
+      window.__backupTestHooks.getMeta('perfectOpeningConfig'),
+      window.__backupTestHooks.getMeta('recentSurfaceColors'),
+    ]));
+    assert(restored[0] === poConfig, `expected the Perfect Opening config to survive the restore, got ${restored[0]}`);
+    assert(restored[1] === recentColors, `expected the recent-colours row to survive the restore, got ${restored[1]}`);
+
+    const rebuilt = await appBH.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    assert(rebuilt.version === 7, `expected a fresh export to declare version 7, got ${JSON.stringify(rebuilt.version)}`);
+    assert(rebuilt.perfectOpeningConfig === poConfig,
+      `expected a fresh export to still carry perfectOpeningConfig, got ${rebuilt.perfectOpeningConfig}`);
+    assert(rebuilt.recentSurfaceColors === recentColors,
+      `expected a fresh export to still carry recentSurfaceColors, got ${rebuilt.recentSurfaceColors}`);
+    ok('backup round trip: v7 adds perfectOpeningConfig + recentSurfaceColors, both directions');
+  } catch(e){ bad('backup round trip: v7 Perfect Opening config', e); }
+
+  // 86c. ...and a v6 backup (no such fields) still restores cleanly, leaving
+  //      Perfect Opening on its defaults rather than failing. Every field in
+  //      applyBackupData is typeof-guarded precisely so the version number
+  //      describes what a file CONTAINS and is not a compatibility gate.
+  try {
+    await seedBackup(appBH.page, {
+      version: 6, user: 'tester',
+      lines: [{ id: 'L-V6', name: 'V6', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [],
+    });
+    const after = await appBH.page.evaluate(() => Promise.all([
+      window.__backupTestHooks.getMeta('perfectOpeningConfig'),
+      window.__perfectOpeningTestHooks.getLines(),
+    ]));
+    assert((after[1] || []).some(l => l.id === 'L-V6'), 'expected the v6 backup itself to restore');
+    assert(!after[0], `expected a v6 restore to leave no stale Perfect Opening config behind, got ${after[0]}`);
+    ok('backup round trip: an older v6 backup still restores, leaving the v7 fields at their defaults');
+  } catch(e){ bad('backup round trip: v6 backwards compatibility', e); }
 
   // 87. If applyBackupData throws partway through the write phase (a record
   //     malformed in a way the shallow top-level validation -- data.lines is

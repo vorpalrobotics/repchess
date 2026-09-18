@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-401';
+const BUILD_TAG = '-402';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7073,7 +7073,12 @@ async function buildBackupData(){
   const mnemonicsBySquare = await getAllMnemonics();
   const games = await getGames(LOCAL_USER);
   return {
-    version: 6,   // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists
+    // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists;
+    // v7 adds perfectOpeningConfig + recentSurfaceColors. Every field below
+    // is read back through a `typeof` guard in applyBackupData, so an older
+    // backup restores into a newer build unchanged -- the number says what a
+    // file CONTAINS, it is not a compatibility gate.
+    version: 7,
     // per-platform handles (independent of each other -- see userColorInGame)
     // so restoring on a fresh browser/profile keeps matching "which color did
     // I play" for BOTH platforms, not just whichever one this app version
@@ -7113,10 +7118,46 @@ async function buildBackupData(){
     roomReviews: await getMeta(ROOM_REVIEWS_KEY),           // VR room progress: spaced-repetition review history
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
+    /* Perfect Opening's SETTINGS -- the per-move max-lines and depth
+       schedules, thread and hash budgets, enabled flag. Real configuration
+       you tuned once and would have to reconstruct from memory. It lives in
+       the meta store, which clearAllData() wipes on every restore, so before
+       this it was not merely missing from backups: restoring any backup,
+       even one taken minutes earlier on the same browser, silently reset it.
+       Its QUEUE is deliberately not here -- see BACKUP_EXCLUDED_STORES. */
+    perfectOpeningConfig: await getMeta('perfectOpeningConfig'),
+    recentSurfaceColors: await getMeta('recentSurfaceColors'),   // the colour picker's "Recently used" row
     assets: await getAllAssets(),
     objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
   };
 }
+
+/* ---------- what a backup deliberately leaves out ----------
+
+   Read by the drift test in test/run-tests.mjs, which enumerates the stores
+   and meta keys the source actually writes and fails if any of them is
+   neither exported by buildBackupData() above nor listed here. That test is
+   the real fix for what this comment is about.
+
+   The gap it exists to prevent: clearAllData() wipes NINE stores including
+   meta, but buildBackupData() exports a hand-maintained allowlist. The two
+   halves drifted -- Perfect Opening landed as DB v8, clearAllData learned
+   about it because the version bump forced the issue, and the exporter did
+   not. The result was not a missing backup but a destructive restore.
+
+   So: anything added to a store, or any new meta key, is a backup decision.
+   Make it deliberately, here or in buildBackupData. */
+const BACKUP_EXCLUDED_STORES = {
+  analysisQueue: 'transient engine work queue -- jobs are re-queued from the tree on demand, and a queue restored onto a different machine would resume work that machine never started',
+  perfectOpeningQueue: 'same, for the unattended Perfect Opening run; its CONFIG is exported, its in-flight job list is not',
+  safetyBackup: 'the pre-restore rollback snapshot itself -- backing up a backup, and clearAllData deliberately spares it',
+};
+const BACKUP_EXCLUDED_META = {
+  builtCastlesCacheV2: 'derived cache, stamped with BUILD_TAG and rebuilt on demand',
+  gamesPositionIndexCache: 'derived cache, same',
+  mnemDefaultOffered: 'a one-time "we already offered you the default mnemonics" flag -- re-offering on a fresh browser is the better behaviour, so this should NOT travel',
+  assetsDefaultOffered: 'same, for the default asset pack',
+};
 async function exportBackup(){
   const data = await buildBackupData();
   const stamp = new Date().toISOString().slice(0,10);
@@ -7238,6 +7279,11 @@ async function applyBackupData(data, onMnemProgress){
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
+    // v7 fields. Absent in any older backup, and guarded like every field
+    // above, so restoring a v6 file leaves Perfect Opening at its defaults
+    // (getPerfectOpeningConfig merges over them) rather than failing.
+    if(typeof data.perfectOpeningConfig === 'string') await setMeta('perfectOpeningConfig', data.perfectOpeningConfig);
+    if(typeof data.recentSurfaceColors === 'string') await setMeta('recentSurfaceColors', data.recentSurfaceColors);
     for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
     for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
     log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
