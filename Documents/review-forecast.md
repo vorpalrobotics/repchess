@@ -1,6 +1,6 @@
 # Review Forecast — design and phasing plan
 
-**Status: proposed, not built.**
+**Status: Phase 1 built. Phases 2-6 proposed.**
 
 ## What it is for
 
@@ -119,9 +119,34 @@ Each phase ships on its own and is useful on its own. The order is driven by
 the pacing use case, not by how the UI reads top to bottom: the numbers that
 answer "should I memorize today?" come first, the long-horizon views last.
 
-## Phase 1 — the aggregation core, no UI
+## Phase 1 — the aggregation core, no UI ✅ BUILT
 
-The shared function everything else renders. `reviewForecast(scope)` returns:
+`buildReviewForecast(castles, reviews, memorized, opts)` in `js/app.js` — pure,
+everything injected including the clock — with `reviewForecast(opts)` as the
+thin async wrapper that fetches them. The bucket rule itself
+(`reviewForecastBucket`, `REVIEW_FORECAST_BUCKETS`) lives in `js/db.js` beside
+`roomReviewState`, which it delegates to, since that is where the scheduling
+rules live and both modules can reach them.
+
+Seven tests in phase EF: due-date-vs-ladder bucketing, locked-room exclusion,
+the unmemorized and never-reviewed buckets, scoping by castle and by line, the
+per-day map, the fully-shaped empty result, and one end-to-end run over real
+castle generation and real IDB.
+
+Two things worth knowing about what got built:
+
+- **The result reports what locked rooms hold** (`locked: {moves, rooms}`),
+  not just that they were skipped. It should always be zero — a room with no
+  exits and no non-center pairs has no outgoing moves either — and if it ever
+  is not, the forecast would be silently dropping moves from every total. A
+  number you can see beats an assumption you can't, and there is a test
+  asserting the zero.
+- **`gatherBuiltCastles` now carries `entryPosKey`** per castle, so consumers
+  can apply the "a castle root is never locked" exemption without guessing
+  that `genRooms[0]` is the root. The coverage bars compute the same thing
+  independently today and could be moved onto it.
+
+Returns:
 
 - the eight buckets, each `{ moves, rooms }`;
 - the ladder-step distribution, each `{ step, days, moves, rooms }`;
