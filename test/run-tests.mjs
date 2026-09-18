@@ -1660,6 +1660,24 @@ try {
     await app10.page.click('#pickerGrid .asset-card-color');
     await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'visible', timeout: 5000 });
     presetHex = await app10.page.evaluate(() => document.querySelector('#colorSwatchPickerOverlay .color-swatch').dataset.hex);
+    /* The swatch picker is IMMEDIATE, not an editor -- clicking a swatch
+       (below) commits that colour and closes on the spot, and the `Apply`
+       beside the hex field is the same immediate commit for the one value
+       you can't click. So: a bare Done, no Save at all, and `Apply` /
+       `Remove color` left in the body where they act. */
+    const sw = await modalBarState(app10.page, 'colorSwatchPickerOverlay');
+    assert(sw && sw.title === 'Choose Color', `expected the shared bar, got ${JSON.stringify(sw && sw.title)}`);
+    assert(sw.leave.text === 'Done' && !sw.leave.disabled && sw.save === null,
+      `an immediate modal gets an enabled Done and no Save: ${JSON.stringify(sw)}`);
+    assert(sw.barIsFirst && sw.strayIds.length === 0,
+      `expected the bar first and the old header Cancel gone: ${JSON.stringify(sw)}`);
+    const applyInBody = await app10.page.evaluate(() => {
+      const el = document.getElementById('cswApplyBtn');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(applyInBody, 'expected the custom-hex Apply to stay in the body, not become a bar button');
+    ok('modal bar: the colour swatch picker is immediate — Done only, Apply left in the body');
+
     await app10.page.click('#colorSwatchPickerOverlay .color-swatch');
     await app10.page.waitForSelector('#colorSwatchPickerOverlay', { state: 'hidden', timeout: 5000 });
     await app10.page.waitForTimeout(150);   // room rebuild after applyEdit
@@ -4775,6 +4793,69 @@ try {
     return { w: c.width, h: c.height, alphas: points.map(([x, y]) => id[(y * c.width + x) * 4 + 3]) };
   }, { dataUrl, points });
 
+  // 76b. The crop editor on the shared button bar. An Editor: the working
+  //      image and the pending crop rectangle are staged until Save, so a
+  //      freshly-opened editor reads clean and Save is dead, and the tool
+  //      buttons (Undo/Redo/Auto-crop/Crop/Erase/Brush) all stay in the body
+  //      where they act. The discard confirm this brings is the point of
+  //      converting it -- the old Cancel binned every erase stroke silently.
+  try {
+    await appAB.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
+    await appAB.page.waitForFunction(() => {
+      const img = document.getElementById('cropImg');
+      return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
+    }, { timeout: 5000 });
+
+    let cb = await modalBarState(appAB.page, 'cropOverlay');
+    assert(cb && cb.title === 'Edit image', `expected the shared bar, got ${JSON.stringify(cb && cb.title)}`);
+    assert(cb.save && cb.save.disabled && cb.leave.text === 'Done',
+      `a freshly-opened crop editor has nothing staged yet: ${JSON.stringify(cb)}`);
+    assert(cb.barIsFirst && cb.strayIds.length === 0,
+      `expected the bar first and no stray close/save buttons: ${JSON.stringify(cb)}`);
+    const toolsInBody = await appAB.page.evaluate(() =>
+      ['cropUndoBtn','cropRedoBtn','cropAutoBtn','cropApplyBtn','cropEraseBtn','cropBrushBtn']
+        .every(id => { const el = document.getElementById(id); return !!el && !el.closest('.modal-bar'); }));
+    assert(toolsInBody, 'expected every crop/erase tool button to stay in the body');
+
+    /* A brush stroke arms Save -- and this is the case the snapshot would
+       have missed if it were history alone: a stroke is NOT pushed to
+       history until you leave brush mode, so mid-stroke historyIndex is
+       still 0 while there is real work Save would commit (test 77 below
+       saves exactly that way). Reading clean here would have meant a dead
+       Save over savable work, and a Done that binned the strokes with no
+       confirm -- which is the bug converting this modal was meant to fix.
+       Auto-crop is deliberately NOT used to dirty it: on this fully-opaque
+       fixture auto-crop finds the full bounds and is a genuine no-op, which
+       the bar correctly reports as clean. */
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());
+    await appAB.page.evaluate(() => {
+      const wrap = document.getElementById('cropWrap');
+      const r = wrap.getBoundingClientRect();
+      const clientX = r.left + 0.5 * r.width, clientY = r.top + 0.5 * r.height;
+      wrap.dispatchEvent(new PointerEvent('pointerdown', { clientX, clientY, buttons: 1, bubbles: true }));
+      wrap.dispatchEvent(new PointerEvent('pointerup', { clientX, clientY, bubbles: true }));
+    });
+    await appAB.page.waitForTimeout(80);
+    cb = await modalBarState(appAB.page, 'cropOverlay');
+    assert(!cb.save.disabled && cb.leave.text === 'Cancel',
+      `an uncommitted brush stroke is still unsaved work: ${JSON.stringify(cb)}`);
+
+    // ...and undoing back to the original disarms it again, because the
+    // snapshot is a cheap IDENTITY for the staged image (history step +
+    // pending rectangle + brush state), not the multi-megabyte image itself
+    await appAB.page.evaluate(() => document.getElementById('cropBrushBtn').click());   // commit the stroke to history
+    await appAB.page.waitForTimeout(150);
+    await appAB.page.evaluate(() => document.getElementById('cropUndoBtn').click());
+    await appAB.page.waitForTimeout(250);
+    cb = await modalBarState(appAB.page, 'cropOverlay');
+    assert(cb.save.disabled && cb.leave.text === 'Done',
+      `undone back to the original, there is nothing left to save: ${JSON.stringify(cb)}`);
+
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
+    await appAB.page.evaluate(() => window.__cropTestHooks.result());
+    ok('modal bar: the crop editor stages its edits — Save arms on a real mutation and disarms on undo');
+  } catch(e){ bad('modal bar: crop editor', e); }
+
   // 77. Clicking (a zero-length drag) with the brush erases a circle of the
   //     slider's diameter, centered on the cursor, leaving everything outside
   //     that radius untouched.
@@ -4797,7 +4878,7 @@ try {
       wrap.dispatchEvent(new PointerEvent('pointerdown', { clientX, clientY, buttons: 1, bubbles: true }));
       wrap.dispatchEvent(new PointerEvent('pointerup', { clientX, clientY, bubbles: true }));
     });
-    await appAB.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-save').click());
     const result = await appAB.page.evaluate(() => window.__cropTestHooks.result());
     assert(typeof result === 'string' && result.startsWith('data:image/png'), `expected a saved PNG data-URL, got ${JSON.stringify(result)}`);
 
@@ -4833,7 +4914,7 @@ try {
     assert(duringBrush === 'hidden', `expected the image hidden WHILE brush mode is active (so a hole shows the checkered backdrop, not the stale image), got visibility=${duringBrush}`);
     assert(afterBrush !== 'hidden', `expected the image visible again after leaving brush mode, got visibility=${afterBrush}`);
     ok('brush erase gives live visual feedback: the stale image is hidden behind the canvas while brushing');
-    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAB.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: brush erase shows live feedback while dragging', e); }
 
@@ -4862,7 +4943,7 @@ try {
       `expected the cursor sized to the 60px slider value (${cursor.expectedDia.toFixed(1)} display px), got ${cursor.w}x${cursor.h}`);
     assert(cursor.sizeLabel === '60px', `expected the size readout to show "60px", got ${JSON.stringify(cursor.sizeLabel)}`);
     ok('brush erase: round cursor indicator tracks the pointer, sized to the current slider value');
-    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAB.page.evaluate(() => window.__cropTestHooks.result());   // let the cancelled promise settle
   } catch(e){ bad('crop editor: brush cursor size follows the slider', e); }
 
@@ -4885,7 +4966,7 @@ try {
     assert(state.brushCanvasOn === false, 'expected brush mode to turn off when Erase BG (bucket) is turned on');
     assert(state.eraseToolsOn === true, 'expected Erase BG (bucket) mode to be on');
     ok('brush erase and bucket (flood-fill) erase are mutually exclusive');
-    await appAB.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAB.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: brush and bucket erase are mutually exclusive', e); }
 
@@ -4913,7 +4994,7 @@ try {
       return img && img.naturalWidth > 0 && document.getElementById('cropOverlay').style.display === 'flex';
     }, { timeout: 5000 });
     await appAB.page.evaluate(() => document.getElementById('cropAutoBtn').click());
-    await appAB.page.evaluate(() => document.getElementById('cropSaveBtn').click());
+    await appAB.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-save').click());
     const result = await appAB.page.evaluate(() => window.__cropTestHooks.result());
     assert(typeof result === 'string' && result.startsWith('data:image/png'), `expected a saved PNG data-URL, got ${JSON.stringify(result)}`);
     const probe = await alphaProbe(result, [[0,0]]);
@@ -6383,7 +6464,7 @@ try {
     assert(defaults.tol === '32' && defaults.tolLabel === '32', `expected fuzz to default to 32, got ${JSON.stringify(defaults)}`);
     assert(defaults.brush === '30' && defaults.brushLabel === '30px', `expected brush size to default to 30px, got ${JSON.stringify(defaults)}`);
     ok('crop editor: fuzz/brush-size sliders default to 32/30px with nothing saved yet');
-    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAK.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: slider defaults before any save', e); }
 
@@ -6404,7 +6485,7 @@ try {
       tol: localStorage.getItem('cropEraseTol'), brush: localStorage.getItem('cropBrushSize'),
     }));
     assert(stored.tol === '75' && stored.brush === '90', `expected the new slider values persisted to localStorage, got ${JSON.stringify(stored)}`);
-    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAK.page.evaluate(() => window.__cropTestHooks.result());
 
     await appAK.page.evaluate((url) => window.__cropTestHooks.open(url), srcUrl);
@@ -6418,7 +6499,7 @@ try {
     assert(reopened.tol === '75' && reopened.tolLabel === '75', `expected fuzz to restore to the saved 75, got ${JSON.stringify(reopened)}`);
     assert(reopened.brush === '90' && reopened.brushLabel === '90px', `expected brush size to restore to the saved 90px, got ${JSON.stringify(reopened)}`);
     ok('crop editor: fuzz/brush-size sliders persist to localStorage and restore on reopen');
-    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAK.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: slider values persist across reopens', e); }
 
@@ -6455,7 +6536,7 @@ try {
     const afterRedo = await historyState();
     assert(!afterRedo.undoDisabled && afterRedo.redoDisabled, `expected redo to reapply the crop and re-disable redo, got ${JSON.stringify(afterRedo)}`);
     ok('crop editor: redo reapplies the undone crop');
-    await appAK.page.evaluate(() => document.getElementById('cropCancelBtn').click());
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     await appAK.page.evaluate(() => window.__cropTestHooks.result());
   } catch(e){ bad('crop editor: undo/redo across a crop mutation', e); }
 
@@ -6476,10 +6557,23 @@ try {
       const img = document.getElementById('cropImg');
       return img.naturalWidth > 0;
     }, { timeout: 5000 });
-    await appAK.page.evaluate(() => document.getElementById('cropSaveBtn').click());
-    const result = await appAK.page.evaluate(() => window.__cropTestHooks.result());
-    const afterUndo = await alphaProbe(result, [[50,50]]);
+    /* Reads the editor's live image rather than saving and reading the
+       resolved value. Undoing all the way back to step 0 leaves nothing to
+       commit, so since the button-bar conversion Save is (correctly) dead
+       here and there is no resolved value to read -- Done is the way out,
+       and it resolves null meaning "leave the caller's image alone", which
+       is the same net effect the old no-op SAVE had. Probing #cropImg is
+       also the stronger test: it checks undo restored the pixels without
+       routing through the save path at all, exactly as the pre-undo
+       assertion above already does. */
+    const afterUndoSrc = await appAK.page.evaluate(() => document.getElementById('cropImg').src);
+    const afterUndo = await alphaProbe(afterUndoSrc, [[50,50]]);
     assert(afterUndo.alphas[0] === 255, `expected undo to restore the fully-opaque source image, got alpha ${afterUndo.alphas[0]}`);
+
+    const cleanBar = await modalBarState(appAK.page, 'cropOverlay');
+    assert(cleanBar.save.disabled && cleanBar.leave.text === 'Done',
+      `undone back to the original leaves nothing to save: ${JSON.stringify(cleanBar)}`);
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     ok('crop editor: undo unwinds a bucket-erase click back to the source image');
   } catch(e){ bad('crop editor: undo unwinds a bucket erase', e); }
 
@@ -6508,11 +6602,13 @@ try {
     const brushModeOff = await appAK.page.evaluate(() => document.getElementById('cropBrushCanvas').style.display !== 'block');
     assert(brushModeOff, 'expected undo to exit brush mode rather than leaving it active mid-navigation');
 
-    await appAK.page.evaluate(() => document.getElementById('cropSaveBtn').click());
-    const result = await appAK.page.evaluate(() => window.__cropTestHooks.result());
-    const probe = await alphaProbe(result, [[30,30], [70,70]]);
+    // same as test 123: undone back to step 0 there is nothing to commit, so
+    // Save is correctly dead and the editor's live image is what to probe.
+    const undoneSrc = await appAK.page.evaluate(() => document.getElementById('cropImg').src);
+    const probe = await alphaProbe(undoneSrc, [[30,30], [70,70]]);
     assert(probe.alphas[0] === 255, `expected undo to also discard the first committed stroke (fully back to source), got alpha ${probe.alphas[0]}`);
     assert(probe.alphas[1] === 255, `expected the never-committed second stroke to be discarded entirely, got alpha ${probe.alphas[1]}`);
+    await appAK.page.evaluate(() => document.querySelector('#cropOverlay .modal-bar .mb-leave').click());
     ok('crop editor: undo discards an uncommitted in-progress brush stroke instead of baking it in');
   } catch(e){ bad('crop editor: undo discards uncommitted brush strokes', e); }
 } finally {
@@ -6630,7 +6726,7 @@ try {
     await appAL.page.waitForSelector('#cropOverlay', { state: 'visible', timeout: 5000 });
     const [newAssetZ2, cropZ] = await Promise.all([zIndexOf('#assetNewOverlay'), zIndexOf('#cropOverlay')]);
     assert(cropZ > newAssetZ2, `expected Crop/Erase BG… (z=${cropZ}) to stack above the New Asset modal (z=${newAssetZ2})`);
-    await appAL.page.click('#cropCancelBtn');
+    await appAL.page.click('#cropOverlay .modal-bar .mb-leave');
     await appAL.page.waitForSelector('#cropOverlay', { state: 'hidden', timeout: 5000 });
     ok('Generate…/Crop launched from the New Asset modal stack above it');
 
@@ -7398,6 +7494,30 @@ try {
     card.click();
   });
   await appAR2.page.waitForSelector('#assetSizeW', { timeout: 5000 });
+
+  // 89b. The eyedropper's colour picker on the shared button bar. An Editor:
+  //      the sampled colour is staged until Save, so a freshly-opened picker
+  //      with nothing sampled reads clean and Save is dead. Opened from
+  //      inside the assets modal, so it is also the case the spec warns
+  //      about -- every selector here is scoped to #colorPickerOverlay, or
+  //      it would match the assets bar underneath instead.
+  try {
+    await appAR2.page.evaluate(() => document.getElementById('assetEyedropperBtn').click());
+    await appAR2.page.waitForSelector('#colorPickerOverlay', { state: 'visible', timeout: 5000 });
+    const cp = await modalBarState(appAR2.page, 'colorPickerOverlay');
+    assert(cp && cp.title === 'Pick side color',
+      `expected the shared bar titled for the picker, got ${JSON.stringify(cp && cp.title)}`);
+    assert(cp.save && cp.save.disabled && cp.leave.text === 'Done',
+      `nothing sampled yet, so nothing to save: ${JSON.stringify(cp)}`);
+    assert(cp.barIsFirst && cp.strayIds.length === 0,
+      `expected the bar first and the old Cancel/SAVE row gone: ${JSON.stringify(cp)}`);
+    // the instruction moved out of the heading into the body -- a bar title
+    // is a name, and has to survive being ellipsised at phone width
+    assert(!/click/i.test(cp.title), `expected a name, not a sentence, as the title: ${JSON.stringify(cp.title)}`);
+    await appAR2.page.evaluate(() => document.querySelector('#colorPickerOverlay .modal-bar .mb-leave').click());
+    await appAR2.page.waitForFunction(() => document.getElementById('colorPickerOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: the eyedropper colour picker stages its sample — Done only until something is picked');
+  } catch(e){ bad('modal bar: eyedropper colour picker', e); }
 
   // 90. Switching an EXISTING asset's type carries its saved size over --
   //     not the new type's hardcoded default.

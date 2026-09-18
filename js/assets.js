@@ -579,10 +579,14 @@ function openColorPicker(imageDataUrl, initialColor, onSave){
   }
   ov.style.display = 'flex';
   let picked = initialColor || null;
+  /* Editor: the sampled colour is staged until Save. The instruction moved
+     out of the heading into the body -- a bar title is a name, not a
+     sentence, and it has to survive being ellipsised at phone width. */
   ov.innerHTML = `
     <div class="modal">
+      ${modalBarHtml({ title: 'Pick side color', save: true, prefix: 'cp' })}
       <div class="cp-header">
-        <h2>Pick side color — click anywhere on the image</h2>
+        <p style="margin:0;font-size:.85rem;color:#555">Click anywhere on the image to sample a color.</p>
         <div class="cp-current">
           <span>Selected:</span>
           <div class="side-color-swatch" id="cpSwatch"></div>
@@ -590,19 +594,18 @@ function openColorPicker(imageDataUrl, initialColor, onSave){
         </div>
       </div>
       <div class="cp-stage"><img id="cpImg" src="${imageDataUrl}" alt=""></div>
-      <div class="cp-actions">
-        <button id="cpCancelBtn">Cancel</button>
-        <button id="cpSaveBtn">SAVE</button>
-      </div>
     </div>
   `;
   const cpSwatch = ov.querySelector('#cpSwatch');
   const cpHex = ov.querySelector('#cpHex');
-  const cpSave = ov.querySelector('#cpSaveBtn');
+  let barCtl = null;
+  /* the choke point: a colour is sampled by CLICKING THE IMAGE, which fires
+     no input event for the bar's watcher to see. Everything that can change
+     `picked` ends here. Guarded because the first paint runs before wiring. */
   const paint = () => {
     cpSwatch.style.background = picked || '';
     cpHex.textContent = picked || 'none yet';
-    cpSave.disabled = !picked;
+    if(barCtl) barCtl.refresh();
   };
   paint();
 
@@ -623,8 +626,16 @@ function openColorPicker(imageDataUrl, initialColor, onSave){
     paint();
   };
   const close = () => { ov.style.display = 'none'; };
-  ov.querySelector('#cpCancelBtn').onclick = close;
-  cpSave.onclick = () => { if(picked){ onSave(picked); close(); } };
+  /* Snapshot rather than "is anything picked": re-sampling the colour you
+     arrived with now reads as clean and leaves Save dead, where the old
+     `disabled = !picked` would happily commit that no-op. Same correction
+     Surface Adjust's Apply -> Save made. */
+  barCtl = wireModalBar(ov.querySelector('.modal-bar'), {
+    snapshot: () => ({ picked }),
+    thing: 'this color',
+    onLeave: close,
+    onSave: () => { if(picked){ onSave(picked); close(); } },
+  });
 }
 
 /* ---------- size lock ----------
@@ -1061,8 +1072,8 @@ export function cropImage(sourceDataUrl){
 
   ov.innerHTML = `
     <div class="modal">
+      ${modalBarHtml({ title: 'Edit image', save: true, prefix: 'crop' })}
       <div class="crop-header">
-        <h2>Edit image</h2>
         <span class="crop-dims" id="cropDims"></span>
       </div>
       <div class="crop-stage">
@@ -1092,11 +1103,11 @@ export function cropImage(sourceDataUrl){
           size <input type="range" id="cropBrushSizeInput" min="4" max="200" value="${savedBrushSize}" style="width:120px">
           <span id="cropBrushSizeVal" style="font-family:ui-monospace,monospace;min-width:2.6em">${savedBrushSize}px</span>
         </span>
-        <span class="spacer"></span>
-        <button id="cropCancelBtn">Cancel</button>
-        <button id="cropSaveBtn">SAVE</button>
       </div>
     </div>`;
+  /* assigned once the Promise below is running; paint() and
+     updateHistoryButtons() both fire before then, so they guard on it. */
+  let barCtl = null;
 
   const stage = ov.querySelector('.crop-stage');
   const wrap  = ov.querySelector('#cropWrap');
@@ -1108,9 +1119,15 @@ export function cropImage(sourceDataUrl){
   const undoBtn = ov.querySelector('#cropUndoBtn');
   const redoBtn = ov.querySelector('#cropRedoBtn');
 
+  /* One of this editor's THREE choke points (the others are paint(), for a
+     dragged crop bar, and eraseCircle(), for a brush stroke that hasn't been
+     committed to history yet). Every committed mutation -- a crop, a
+     bucket-erase click, a batch of brush strokes -- and every undo/redo lands
+     here, and none of them fires an input event the bar's watcher would see. */
   function updateHistoryButtons(){
     undoBtn.disabled = historyIndex <= 0;
     redoBtn.disabled = historyIndex >= history.length - 1;
+    if(barCtl) barCtl.refresh();
   }
   // records a new committed mutation as the next undo step, discarding any
   // "future" redo entries once the user has branched off from an undone
@@ -1150,6 +1167,9 @@ export function cropImage(sourceDataUrl){
     const cw = Math.max(1, Math.round((sel.r-sel.l)*natW));
     const ch = Math.max(1, Math.round((sel.b-sel.t)*natH));
     if(!eraseMode) dims.textContent = `${natW}×${natH}  →  ${cw}×${ch}`;   // erase mode shows its own status
+    // the other choke point: dragging a crop bar moves `sel`, which is a
+    // pending change Save would commit, and fires no input event either
+    if(barCtl) barCtl.refresh();
   }
   function onImgReady(){ natW = img.naturalWidth; natH = img.naturalHeight; fitWrap(); paint(); }
   img.onload = onImgReady;
@@ -1331,7 +1351,16 @@ export function cropImage(sourceDataUrl){
     brushCursor.style.top = (e.clientY - r.top) + 'px';
   }
   function eraseCircle(x, y, radius){
+    /* Third choke point, and the one that is easy to miss: a brush stroke is
+       NOT pushed to history until you leave brush mode (commitBrushCanvas),
+       so between the first stamp and that commit there is real unsaved work
+       that historyIndex cannot see. Without this the bar would read clean
+       mid-stroke -- Save dead on work Save would actually have committed,
+       and Done offering to bin the strokes with no confirm. Fires once per
+       stroke, on the transition, not once per circle stamped along a drag. */
+    const firstStamp = !brushDirty;
     brushDirty = true;
+    if(firstStamp && barCtl) barCtl.refresh();
     brushCtx.globalCompositeOperation = 'destination-out';
     brushCtx.beginPath();
     brushCtx.arc(x, y, radius, 0, Math.PI * 2);
@@ -1396,17 +1425,40 @@ export function cropImage(sourceDataUrl){
       if(!brushMode){ await applyCrop().catch(err => console.error('[crop] crop failed', err)); }  // bake in any pending crop before erasing
       setBrushMode(!brushMode);
     };
-    ov.querySelector('#cropCancelBtn').onclick = () => { ov.style.display = 'none'; resolve(null); };
-    ov.querySelector('#cropSaveBtn').onclick = async () => {
-      try{
-        await applyCrop();                 // commit any pending bar selection first (no-op if full)
-        ov.style.display = 'none';
-        resolve(work);
-      }catch(err){
-        console.error('[crop] crop save failed', err);
-        dims.textContent = 'could not crop that image';
-      }
-    };
+    /* Editor, and the first whose staged value is far too big to compare.
+       snap() runs JSON.stringify on every repaint -- i.e. on every mousemove
+       of a crop-bar drag -- and `work` is a multi-megabyte data URL, so
+       stringifying it there would be a real stall. The snapshot is a cheap
+       IDENTITY for that value instead: the history step you are on, plus the
+       pending crop rectangle. Those are exactly the two things Save would
+       commit, and undoing back to step 0 with a full rectangle correctly
+       reads clean again, because history[0] is always the original.
+
+       `brushDirty` is the third component because a brush stroke is not
+       pushed to history until you LEAVE brush mode: between the first stamp
+       and that commit, historyIndex alone would report clean over work Save
+       would really have committed. See eraseCircle.
+
+       The discard confirm is new and the point of converting this one: the
+       old Cancel threw away every erase stroke and crop in the session
+       without a word. */
+    barCtl = wireModalBar(ov.querySelector('.modal-bar'), {
+      snapshot: () => ({ step: historyIndex, sel, brush: brushDirty }),
+      watch: ov,
+      thing: 'this image',
+      onLeave: () => { ov.style.display = 'none'; resolve(null); },
+      onSave: async () => {
+        try{
+          await applyCrop();                 // commit any pending bar selection first (no-op if full)
+          ov.style.display = 'none';
+          resolve(work);
+        }catch(err){
+          console.error('[crop] crop save failed', err);
+          dims.textContent = 'could not crop that image';
+        }
+      },
+    });
+    barCtl.refresh();
   });
 }
 
@@ -2045,10 +2097,7 @@ async function openColorSwatchPicker(opts){
   `).join('');
   ov.innerHTML = `
     <div class="modal" style="width:min(34em,92vw);max-height:88vh;display:flex;flex-direction:column">
-      <div class="cp-header">
-        <h2>Choose Color</h2>
-        <button id="cswCancelBtn">Cancel</button>
-      </div>
+      ${modalBarHtml({ title: 'Choose Color', prefix: 'csw' })}
       ${recent.length ? `
         <p class="color-swatch-label">Recently used</p>
         <div class="color-swatch-grid">${swatchRow(recent)}</div>
@@ -2084,7 +2133,19 @@ async function openColorSwatchPicker(opts){
     if(!HEX_RE.test(hex)){ alert('enter a color as #rrggbb'); return; }
     choose(hex);
   };
-  ov.querySelector('#cswCancelBtn').onclick = close;
+  /* IMMEDIATE, not an Editor -- the checklist guessed wrong about this one.
+     Nothing here is staged: clicking any swatch commits that colour and
+     closes, and the `Apply` beside the hex field is the same immediate
+     commit for the one value you can't click. So the bar is a bare `Done`,
+     and the header's old `Cancel` was already the wrong word: a modal you
+     leave without losing anything says Done.
+
+     `Apply` and `Remove color` stay in the body. Apply commits a value, it
+     is not this modal's lifecycle, and the spec names `Remove color`
+     explicitly -- it edits the value being picked, it doesn't destroy a
+     record. (The retired-`Apply` rule is about the BAR's vocabulary; a body
+     button that commits one field is a different thing.) */
+  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: close });
   if(opts.onRemove){
     ov.querySelector('#cswRemoveBtn').onclick = () => { close(); opts.onRemove(); };
   }
