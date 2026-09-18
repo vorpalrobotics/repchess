@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and fourteen modals are
+**Status: the mechanism is built (`js/modalBar.js`) and seventeen modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -285,7 +285,55 @@ Order, worst first:
       values, so it commits nothing and destroys nothing. `drawPlan()` is the
       choke point (a dragged door fires no `input` event on the overlay), so
       `let barCtl = null` is declared above it and the first draw is guarded.
-- [ ] **Colour picker / swatch picker / crop editor** — Editor.
+- [x] **Colour picker / swatch picker / crop editor** — the first bars built
+      inside modals a module creates at runtime rather than static markup, so
+      `modalBarHtml()` is interpolated straight into the `innerHTML` template
+      and the bar is the `.modal`'s literal first child. Three findings:
+
+      - **The swatch picker is Immediate, not an Editor** — this list guessed
+        wrong. Nothing in it is staged: clicking any swatch commits that
+        colour and closes, and the `Apply` beside the hex field is the same
+        immediate commit for the one value you cannot click. So it gets a
+        bare `Done`, and its old header `Cancel` was already the wrong word.
+        `Apply` and `Remove color` stay in the body; the retired-`Apply` rule
+        governs the BAR's vocabulary, not a body button that commits one
+        field.
+      - **A snapshot does not have to be the staged value — for a large one
+        it must not be.** `snap()` runs `JSON.stringify` on every repaint,
+        which in the crop editor means every mousemove of a crop-bar drag,
+        and its staged value is a multi-megabyte data URL. Its snapshot is a
+        cheap *identity* for that value instead: `{ step: historyIndex, sel }`
+        — exactly the two things Save would commit. Undoing back to step 0
+        with a full rectangle correctly reads clean again, because
+        `history[0]` is always the original. **Any editor staging an image,
+        a file or a big blob should do the same.**
+
+        The catch that comes with it: an identity has to cover *every* piece
+        of pending work, and one was easy to miss. A brush stroke is not
+        pushed to the crop editor's history until you leave brush mode, so
+        between the first stamp and that commit `historyIndex` reports clean
+        over work Save would really have committed — a dead Save, and a
+        `Done` that would bin the strokes without a confirm. The snapshot's
+        third component (`brushDirty`) exists for exactly that window, and
+        `eraseCircle` refreshes the bar once per stroke, on the transition,
+        not once per circle stamped along a drag. **When you swap a value for
+        an identity, enumerate the uncommitted states, not just the
+        committed ones.**
+      - **Save being dead when clean is a real behaviour change, not just a
+        styling one.** Undo your way back to the original in the crop editor
+        and there is nothing to commit, so `Save` greys out and `Done` is the
+        way out — it resolves `null`, which callers already treat as "leave
+        the image alone", the same net effect the old no-op `SAVE` had. Two
+        tests had been reading the *resolved* value to prove undo worked;
+        they now probe the editor's live `#cropImg`, which tests undo without
+        routing through the save path at all.
+
+      The crop editor's discard confirm is new and the point of converting
+      it: the old `Cancel` threw away every erase stroke and crop in the
+      session without a word. Its choke points are `paint()` (a dragged crop
+      bar) and `updateHistoryButtons()` (every committed mutation and every
+      undo/redo); the colour picker's is `paint()`, since a colour is sampled
+      by clicking the image and fires no input event.
 - [ ] **Castle Generate** (`#castleGenOverlay`), **Line** (`#lineOverlay`),
       **Import Line**, **Search Line**, **Field** — Editor or Confirm.
 - [ ] **Analysis Queue / Add / Compare** — Immediate.
