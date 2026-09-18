@@ -72,8 +72,8 @@ export function modalBarHtml({ title, save = false, saveLabel = 'Save', destruct
                    becomes its tooltip
      thing         name for the discard prompt ("this list")
      kind          'editor' (default) or 'confirm' -- see below
-     saveLabel     must match the one passed to modalBarHtml
-     busyLabel     shown while onSave runs (default 'Saving…')
+     busyLabel     shown while onSave runs (default 'Saving…'); pair it with
+                   modalBarHtml's saveLabel ('Importing…' for 'Import')
 
    Returns a controller: refresh() after any programmatic mutation the watch
    element's events won't catch (adding a row, reordering), setInvalid(msg) to
@@ -98,7 +98,15 @@ export function wireModalBar(barEl, opts){
      IS the discard, and a confirm-on-cancel would just be a second prompt
      about the prompt. */
   const isConfirm = opts.kind === 'confirm';
-  const saveLabel = opts.saveLabel || 'Save';
+  /* Read back off the rendered button rather than making the caller repeat
+     itself. paint() rewrites this label on every repaint (for the busy
+     state), so if it defaulted to 'Save' here, a bar rendered with
+     saveLabel:'Import' would show "Import" for exactly as long as it took
+     the first paint to overwrite it -- and the only clue would be a button
+     quietly reading the wrong word. Passing the label in two places and
+     silently breaking when they disagree is not an API; the markup is the
+     single place it is set. */
+  const saveLabel = opts.saveLabel || (saveBtn && saveBtn.textContent.trim()) || 'Save';
   const busyLabel = opts.busyLabel || 'Saving…';
 
   let baseline = opts.snapshot ? snap(opts.snapshot) : null;
