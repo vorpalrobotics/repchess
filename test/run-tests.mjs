@@ -6564,7 +6564,7 @@ try {
     assert(minAttr > 3, `expected the depth field's min to reflect real 2-pair content (>3m), got ${minAttr}`);
 
     await appAN.page.fill('#roomGeomD', '2.5');   // well under the content minimum
-    await appAN.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-save').click());
     await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appAN.page.waitForTimeout(200);
 
@@ -6591,7 +6591,7 @@ try {
     await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
     const cur = await appAN.page.evaluate((k) => window.__threeTestEdit.roomSize(k), roomKey);
     await appAN.page.fill('#roomGeomD', String(cur.d + 1));   // any valid resize -- the exact new size isn't what's under test
-    await appAN.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-save').click());
     await appAN.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appAN.page.waitForTimeout(250);
 
@@ -6650,7 +6650,7 @@ try {
 
     await appAN2.page.fill('#roomGeomW', '8');
     await appAN2.page.fill('#roomGeomD', '8');
-    await appAN2.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appAN2.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-save').click());
     await appAN2.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appAN2.page.waitForTimeout(200);
     const applied = await appAN2.page.evaluate(() => window.__threeTestEdit.roomSize('roomC'));
@@ -6870,9 +6870,47 @@ try {
     await appAQ.page.waitForTimeout(60);
     await appAQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
     await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'visible', timeout: 5000 });
-    const label = await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').textContent.trim());
+
+    /* --- the shared button bar (Documents/modal-buttons.md). Room Geometry
+       is the first MIXED modal: its size fields, the doors dragged on the
+       plan and the make-default checkbox are staged until Save, but the
+       room-name inputs, the building-defaults box and the presets box all
+       write straight through. Only the staged half may count as unsaved. --- */
+    let gb = await modalBarState(appAQ.page, 'roomGeomOverlay');
+    assert(gb && /Room Geometry/.test(gb.title), `expected the shared bar, got ${JSON.stringify(gb && gb.title)}`);
+    assert(gb.save && gb.save.disabled && gb.leave.text === 'Done',
+      `expected an untouched dialog to read clean, got ${JSON.stringify(gb)}`);
+    assert(gb.destructive && gb.destructive.text === 'Reset Room…',
+      `expected the real destructive action in the bar, got ${JSON.stringify(gb.destructive)}`);
+    assert(gb.barIsFirst && gb.strayIds.length === 0 && gb.visibleWhenScrolled === true,
+      `expected the bar first, pinned, nothing stray: ${JSON.stringify(gb)}`);
+
+    // a room NAME is written the moment you type it -- immediate, already on
+    // disk. Counting it as unsaved would arm Save over work that is done, and
+    // offer to discard a rename that cannot be discarded.
+    await appAQ.page.evaluate(() => {
+      const inp = document.querySelector('#roomGeomOverlay [data-room-name-for]');
+      inp.value = 'Renamed Live';
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    gb = await modalBarState(appAQ.page, 'roomGeomOverlay');
+    assert(gb.save.disabled && gb.leave.text === 'Done',
+      `a room name writes through immediately, so it must NOT read as unsaved: ${JSON.stringify(gb)}`);
+
+    // ...whereas the size fields are staged, and do
+    await appAQ.page.fill('#roomGeomW', '9');
+    gb = await modalBarState(appAQ.page, 'roomGeomOverlay');
+    assert(!gb.save.disabled && gb.save.primary && gb.leave.text === 'Cancel',
+      `expected a staged size change to arm Save, got ${JSON.stringify(gb)}`);
+    ok('modal bar: Room Geometry counts only its STAGED half as unsaved, not its write-through controls');
+
+    // put it back so the Reset Room… assertions below start from the state
+    // this test's setup built, not a half-edited one
+    await appAQ.page.evaluate(() => document.getElementById('roomGeomResetBtn').click());
+
+    const label = await appAQ.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-destructive').textContent.trim());
     assert(label === 'Reset Room…', `expected the button relabeled "Reset Room…", got "${label}"`);
-    await appAQ.page.evaluate(() => document.getElementById('roomGeomClearBtn').click());   // confirm() auto-accepted by the harness
+    await appAQ.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-destructive').click());   // confirm() auto-accepted by the harness
     await appAQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appAQ.page.waitForTimeout(300);
 
@@ -10013,7 +10051,7 @@ try {
     assert(btnLabelNow && btnLabelNow.includes('toaster'),
       `expected the object button's label to update to "toaster" immediately after picking, got ${JSON.stringify(btnLabelNow)}`);
 
-    await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    await appBQ.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-leave').click());
     await appBQ.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
     await appBQ.page.waitForTimeout(150);
     const info = await appBQ.page.evaluate(() => window.__threeTestEdit.elevatorInfo());
@@ -10040,7 +10078,7 @@ try {
     // reopen the dialog and confirm the fields now read 6x6.
     await appBQ.page.fill('#roomGeomW', '6');
     await appBQ.page.fill('#roomGeomD', '6');
-    await appBQ.page.evaluate(() => document.getElementById('roomGeomApplyBtn').click());
+    await appBQ.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-save').click());
     await appBQ.page.waitForSelector('#roomGeomOverlay', { state: 'hidden', timeout: 5000 });
     await appBQ.page.waitForTimeout(150);
     await appBQ.page.evaluate(() => document.querySelector('#threeTestCanvasWrap i.fa-ruler-combined').closest('button').click());
@@ -10050,7 +10088,7 @@ try {
       d: Number(document.getElementById('roomGeomD').value),
     }));
     assert(applied.w === 6 && applied.d === 6, `expected the car to actually resize to 6x6, got ${JSON.stringify(applied)}`);
-    await appBQ.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    await appBQ.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-leave').click());
     ok('elevator car: Room Geometry editor allows shrinking to a compact 6x6');
   } catch(e){ bad('elevator car: 6x6 minimum size', e); }
 
@@ -10386,7 +10424,7 @@ try {
   //      preview just silently listed the list's items with no hint that
   //      one of them wasn't actually reaching the panel.
   try {
-    await appBQ2.page.evaluate(() => document.getElementById('roomGeomCancelBtn').click());
+    await appBQ2.page.evaluate(() => document.querySelector('#roomGeomOverlay .modal-bar .mb-leave').click());
     await appBQ2.page.evaluate((t) => window.__threeTestEdit.setSlotAsset(t, 'obj-C1', 'toaster'), floor1Target);
     await appBQ2.page.evaluate((k) => window.__threeTestEdit.enter(k), carKey);
     await appBQ2.page.waitForTimeout(150);

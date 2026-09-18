@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and six modals are
+**Status: the mechanism is built (`js/modalBar.js`) and seven modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -273,8 +273,18 @@ Order, worst first:
       don't destroy a record). One real behaviour change: Save is dead until
       something changes, where `Apply` was pressable on an untouched dialog
       for a no-op write.
-- [ ] **Room Geometry** (`#roomGeomOverlay`) — Editor + Destructive
-      (`Reset Room…`).
+- [x] **Room Geometry** (`#roomGeomOverlay`) — Editor + Destructive
+      (`Reset Room…`). The first **mixed** modal, and the one that made the
+      rule explicit: the size fields, the doors dragged on the plan and the
+      make-default checkbox are staged until Save, but the room-name inputs,
+      the building-defaults box and the presets box all write straight
+      through the moment you touch them. **The snapshot covers the staged
+      half only.** Including the write-through controls would arm Save over
+      work already on disk, and offer to discard a rename that cannot be
+      discarded. `Reset size/doors` stayed in the body — it restores *staged*
+      values, so it commits nothing and destroys nothing. `drawPlan()` is the
+      choke point (a dragged door fires no `input` event on the overlay), so
+      `let barCtl = null` is declared above it and the first draw is guarded.
 - [ ] **Colour picker / swatch picker / crop editor** — Editor.
 - [ ] **Castle Generate** (`#castleGenOverlay`), **Line** (`#lineOverlay`),
       **Import Line**, **Search Line**, **Field** — Editor or Confirm.
