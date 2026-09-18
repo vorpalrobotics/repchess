@@ -7535,6 +7535,16 @@ try {
     ]}],
   }, { defaultPlayerColor: 'white' });
   const isCached = () => appAU.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  /* Invalidation is ASYNC -- the click that causes it returns before the
+     cache flag has actually flipped -- so reading isCached() straight
+     afterwards races it and, under load, wins. That is what made this
+     group look flaky with a different sub-test failing each run. Waits
+     for the flip instead, and reports the same message on timeout so a
+     genuine failure still reads as one. */
+  const expectInvalidated = async (msg) => {
+    try { await appAU.page.waitForFunction(() => !window.__vrCacheTestHooks.isCached(), { timeout: 5000 }); }
+    catch { throw new Error(msg); }
+  };
   const closeVR = () => closeVRHelper(appAU.page);
 
   // 148. Nothing cached before the first "Run VR"; cached immediately after.
@@ -7700,6 +7710,16 @@ try {
   await appAV.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAV.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  /* Invalidation is ASYNC -- the click that causes it returns before the
+     cache flag has actually flipped -- so reading isCached() straight
+     afterwards races it and, under load, wins. That is what made this
+     group look flaky with a different sub-test failing each run. Waits
+     for the flip instead, and reports the same message on timeout so a
+     genuine failure still reads as one. */
+  const expectInvalidated = async (msg) => {
+    try { await appAV.page.waitForFunction(() => !window.__vrCacheTestHooks.isCached(), { timeout: 5000 }); }
+    catch { throw new Error(msg); }
+  };
   const closeVR = () => closeVRHelper(appAV.page);
   const primeCache = async () => {
     await openVR(appAV.page);
@@ -7722,7 +7742,7 @@ try {
     await appAV.page.fill('#fieldModalInput', 'c4');
     await appAV.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
     await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
-    assert((await isCached()) === false, 'expected setting a standard response to invalidate the cache');
+    await expectInvalidated('expected setting a standard response to invalidate the cache');
     await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
     ok('VR cache: setting a standard response invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by setting a standard response', e); }
@@ -7734,7 +7754,7 @@ try {
     await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
     await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
     await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
-    assert((await isCached()) === false, 'expected importing a variation to invalidate the cache');
+    await expectInvalidated('expected importing a variation to invalidate the cache');
     ok('VR cache: importing a variation invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by importing a variation', e); }
 
@@ -7743,12 +7763,12 @@ try {
   try {
     await primeCache();
     await appAV.page.evaluate(() => window.__vrCacheTestHooks.addManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
-    assert((await isCached()) === false, 'expected addManualReply to invalidate the cache');
+    await expectInvalidated('expected addManualReply to invalidate the cache');
     ok('VR cache: adding a manual opponent try invalidates the cache');
 
     await primeCache();
     await appAV.page.evaluate(() => window.__vrCacheTestHooks.removeManualReply(['d4','Nf6','c4','e6'], 'Nc3'));
-    assert((await isCached()) === false, 'expected removeManualReply to invalidate the cache');
+    await expectInvalidated('expected removeManualReply to invalidate the cache');
     ok('VR cache: removing a manual opponent try invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by manual reply add/remove', e); }
 
@@ -7761,7 +7781,7 @@ try {
     await appAV.page.fill('#attrRoomName', 'Foyer');
     await appAV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
-    assert((await isCached()) === false, 'expected renaming a room (Attributes modal) to invalidate the cache');
+    await expectInvalidated('expected renaming a room (Attributes modal) to invalidate the cache');
     ok('VR cache: renaming a room via the Attributes modal invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by room rename', e); }
 
@@ -7771,13 +7791,13 @@ try {
     await primeCache();
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
-    assert((await isCached()) === false, 'expected hiding a branch to invalidate the cache');
+    await expectInvalidated('expected hiding a branch to invalidate the cache');
     ok('VR cache: hiding a branch invalidates the cache');
 
     await primeCache();
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="hide"]').click());
-    assert((await isCached()) === false, 'expected un-hiding a branch to invalidate the cache');
+    await expectInvalidated('expected un-hiding a branch to invalidate the cache');
     ok('VR cache: un-hiding a branch invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by hide/unhide toggle', e); }
 } finally {
@@ -7811,6 +7831,16 @@ try {
   await appAW.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
 
   const isCached = () => appAW.page.evaluate(() => window.__vrCacheTestHooks.isCached());
+  /* Invalidation is ASYNC -- the click that causes it returns before the
+     cache flag has actually flipped -- so reading isCached() straight
+     afterwards races it and, under load, wins. That is what made this
+     group look flaky with a different sub-test failing each run. Waits
+     for the flip instead, and reports the same message on timeout so a
+     genuine failure still reads as one. */
+  const expectInvalidated = async (msg) => {
+    try { await appAW.page.waitForFunction(() => !window.__vrCacheTestHooks.isCached(), { timeout: 5000 }); }
+    catch { throw new Error(msg); }
+  };
   const closeVR = () => closeVRHelper(appAW.page);
   const primeCache = async () => {
     await openVR(appAW.page);
@@ -7829,7 +7859,7 @@ try {
     await appAW.page.fill('#castleGenStreetNumber', '2');
     await appAW.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
     await appAW.page.waitForFunction(() => document.getElementById('castleGenOverlay').style.display === 'none', { timeout: 5000 });
-    assert((await isCached()) === false, "expected Generate Castle's own street-number save to invalidate the cache");
+    await expectInvalidated("expected Generate Castle's own street-number save to invalidate the cache");
     ok("VR cache: Generate Castle's own street-number save invalidates the cache");
   } catch(e){ bad('VR cache: invalidated by Generate Castle street number', e); }
 
@@ -7839,7 +7869,7 @@ try {
     await primeCache();
     await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rmq[data-q="!"]').click());
-    assert((await isCached()) === false, 'expected setting a move-quality glyph to invalidate the cache');
+    await expectInvalidated('expected setting a move-quality glyph to invalidate the cache');
     ok('VR cache: setting a move-quality glyph invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by move-quality glyph', e); }
 
