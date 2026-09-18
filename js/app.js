@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-289';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-290';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-84';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-3';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-59';
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-395';
+const BUILD_TAG = '-397';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -204,6 +204,10 @@ const LS_OQ_QUESTIONS='oq_lastQuestions', LS_OQ_MAXDEPTH='oq_lastMaxDepth', LS_O
 const LS_OQ_ROOMFILTER='oq_roomFilter';
 const LS_SHOW_ALL_BRANCHES='repchess_showAllBranches';
 const LS_COMPACT_MODE='repchess_compactMode';
+/* the "Show:" scope (the focused castle/room) as it stood when you last left,
+   so opening the same system tomorrow lands where you were working today
+   rather than on "All". See rememberShowScope. */
+const LS_SHOW_SCOPE='repchess_showScope';
 $('userIdLichess').value  = localStorage.getItem(LS_ID)  || '';
 $('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
@@ -2431,17 +2435,46 @@ async function loadMemorizedRooms(){
   try { MEMORIZED_ROOMS = JSON.parse(await getMeta('threeMemorizedRooms') || '{}'); }
   catch { MEMORIZED_ROOMS = {}; }
 }
+/* VR's Close handler fires refreshMemorizedRoomsAndTree() WITHOUT awaiting it
+   -- it has to return so the overlay actually goes away -- so for a moment
+   afterwards the move table is about to be rebuilt out from under whatever
+   runs next. Now that the refresh yields a frame first (so its spinner can
+   paint), that moment is long enough to matter to the test harness, which
+   otherwise races the rebuild and finds rows briefly missing. Incremented
+   synchronously, in the same task that hides the overlay, so "overlay hidden"
+   already implies "refresh pending". Nothing in the app itself reads it. */
+let postVrRefreshDepth = 0;
+window.__postVrRefreshPending = () => postVrRefreshDepth > 0;
 // re-reads memorized-room progress and, if the move table is the screen
 // underneath, re-renders it so a room just memorized/unmemorized in VR shows
 // its new green/plain state (refreshBranchName) the moment you close VR,
 // rather than only after the digraph is next opened (which does its own
 // independent loadMemorizedRooms call) or the line is reopened.
 async function refreshMemorizedRoomsAndTree(){
-  await loadMemorizedRooms();
-  if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
-  // the graph may well be open behind VR -- you can jump into a room from it,
-  // grade the room, and come straight back to it. A no-op when it isn't.
-  await refreshGraphRoomState();
+  /* Spinner, because this is not quick. renderTreeBody rebuilds the entire
+     move table synchronously, and the graph restyle re-reads four stores
+     before it can repaint a node -- ten to fifteen seconds on a large castle.
+     Without one, whatever was on screen behind VR (very often the digraph
+     itself: jumping into a room to review it is exactly what Review mode is
+     for, so you land back on it) just sits there ignoring clicks, looking
+     hung rather than busy.
+
+     Same showSpinner/nextPaint pair openLine uses, and for the same reason:
+     the expensive part is synchronous, so the browser has to be given a frame
+     to actually paint the spinner BEFORE the main thread is blocked. */
+  postVrRefreshDepth++;
+  const spinner = showSpinner('Updating from your walkthrough…');
+  await nextPaint();
+  try {
+    await loadMemorizedRooms();
+    if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
+    // the graph may well be open behind VR -- you can jump into a room from it,
+    // grade the room, and come straight back to it. A no-op when it isn't.
+    await refreshGraphRoomState();
+  } finally {
+    hideSpinner(spinner);
+    postVrRefreshDepth--;
+  }
 }
 // "fully decorated" room progress (see js/threeVR.js's own DECORATED, which
 // this mirrors) -- same independent-read pattern as MEMORIZED_ROOMS above.
@@ -3343,6 +3376,15 @@ $('graphCastleSelect').onchange = () => {
   const name = $('graphCastleSelect').value;
   if(!name){ GRAPH_FOCUS_SEQ = null; }
   else { const rs = castleRootRoomSeq(name); GRAPH_FOCUS_SEQ = rs || null; }
+  /* Remembered for NEXT time, without touching the move table's live focus.
+     GRAPH_FOCUS_SEQ itself is deliberately session-local -- it resets on every
+     fresh graph open (see showTranspositionGraph) so the graph starts at the
+     move-table scope -- which is exactly the mechanism that makes this work:
+     store the pick as the durable scope, and tomorrow's restore re-applies it
+     to the move table, so the graph inherits it on open and this menu comes
+     back where you left it. Deliberately does NOT re-focus the table now;
+     picking a castle to LOOK at shouldn't hide rows behind the overlay. */
+  rememberShowScope(GRAPH_FOCUS_SEQ ? showScopeForSeq(GRAPH_FOCUS_SEQ) : null);
   showTranspositionGraph();
 };
 
@@ -4387,6 +4429,61 @@ let FOCUSED_SEQ = null;
    focus can be re-applied after a full tree rebuild (compact/visibility toggle)
    instead of being silently orphaned when innerHTML is wiped. */
 let FOCUSED_ROW_KEY = null;
+
+/* ---------- remembering the "Show:" scope across sessions ----------
+
+   Both "Show:" menus are a VIEW of the focus, not state of their own: the
+   move table's reads focusedTableSelectValue(), and the digraph's reads
+   focusedCastleName(), which falls back to FOCUSED_SEQ when the graph has no
+   right-click focus of its own. So there is exactly one thing to persist --
+   the move-table focus -- and both menus come back with it.
+
+   Persisted per LINE, by the same stable identity a rebuild already uses to
+   re-apply focus (the row's data-seq, plus the our-move seq), rather than by
+   a dropdown value: `room:<n>` indexes into a list rebuilt on every open and
+   would point somewhere else tomorrow. GRAPH_FOCUS_SEQ is deliberately NOT
+   persisted -- it resets on every fresh graph open by design.
+
+   Saved only from the paths where the user actually chose a scope. The
+   rebuild path clears and re-applies focus constantly (every compact /
+   visibility toggle, every import), and openLine clears it before the tree
+   it would re-focus even exists; letting those write would erase yesterday's
+   scope as a side effect of a redraw. */
+function rememberShowScope(scope){
+  if(!CURRENT_LINE) return;
+  const key = scope ? scope.key : FOCUSED_ROW_KEY;
+  const seq = scope ? scope.seq : FOCUSED_SEQ;
+  try {
+    if(key){
+      localStorage.setItem(LS_SHOW_SCOPE, JSON.stringify({
+        lineId: CURRENT_LINE.id, key, seq: seq || null }));
+    } else {
+      localStorage.removeItem(LS_SHOW_SCOPE);
+    }
+  } catch {}   // private mode / quota -- a remembered menu is not worth throwing over
+}
+/* a room seq -> the {key, seq} pair rememberShowScope stores, for callers that
+   have a scope in hand but haven't focused the move table on it. Same
+   one-ply-back convention focusOnSeqRow uses to find the row: a room's own
+   "Focus on this Variation" lives on the OPPONENT-move row before it. */
+function showScopeForSeq(roomSeq){
+  return roomSeq && roomSeq.length
+    ? { key: roomSeq.slice(0, -1).join(','), seq: roomSeq }
+    : null;
+}
+/* Re-applies the remembered scope to the freshly-rendered tree. A no-op when
+   the saved scope belongs to another line, or when its row no longer exists
+   (the variation was deleted, or compact mode hoisted it into a run) --
+   reapplyFocus already stays cleanly unfocused in that case, and the saved
+   value is LEFT alone so toggling compact mode back off restores it. */
+function restoreShowScope(){
+  if(!CURRENT_LINE) return;
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(LS_SHOW_SCOPE) || 'null'); } catch { return; }
+  if(!saved || saved.lineId !== CURRENT_LINE.id || !saved.key) return;
+  reapplyFocus(saved.key, saved.seq || null);
+}
+
 function clearFocus(){
   focusHidden.forEach(el=>el.classList.remove('focus-hidden'));
   focusHidden = [];
@@ -4424,7 +4521,9 @@ function focusOnLine(dataRow, seq=null){
   $('unfocusBtn').style.display='inline-block';
   syncTableCastleSelect();
 }
-$('unfocusBtn').onclick = clearFocus;
+// Unfocus is the user saying "show me everything again", so it forgets the
+// remembered scope too -- unlike the clearFocus() a rebuild does internally.
+$('unfocusBtn').onclick = () => { clearFocus(); rememberShowScope(); };
 
 /* "Show Castle:" dropdown on the move-table toolbar -- same fast-focus
    shortcut as the digraph's own (see populateGraphCastleSelect), so the
@@ -4536,14 +4635,17 @@ function focusOnSeqRow(seq){
 }
 $('tableCastleSelect').onchange = () => {
   const val = $('tableCastleSelect').value;
-  if(!val){ clearFocus(); return; }
-  if(val.startsWith('castle:')){
+  // whatever this resolves to (or fails to), it is the user's own choice of
+  // scope, so it's the one that gets remembered for next time
+  if(!val){ clearFocus(); }
+  else if(val.startsWith('castle:')){
     const roomSeq = castleRootRoomSeq(val.slice('castle:'.length));
     if(roomSeq) focusOnSeqRow(roomSeq); else clearFocus();
-    return;
+  } else {
+    const opt = TABLE_ROOM_OPTIONS[+val.slice('room:'.length)];
+    if(opt) focusOnSeqRow(opt.seq); else clearFocus();
   }
-  const opt = TABLE_ROOM_OPTIONS[+val.slice('room:'.length)];
-  if(opt) focusOnSeqRow(opt.seq); else clearFocus();
+  rememberShowScope();
 };
 
 /* ---------- hidden-branch visibility toggle ----------
@@ -5389,6 +5491,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       rowMenu.classList.remove('show');
       focusOnLine(tr, childrenSeq);
+      rememberShowScope();
     };
     hideBtn.onclick = async e => {
       e.stopPropagation();
@@ -5830,6 +5933,7 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     focusOnLine(tr);
+    rememberShowScope();
   };
   hideBtn.onclick = async e => {
     e.stopPropagation();
@@ -6100,6 +6204,10 @@ async function openLine(line){
     board?.setOrientation(line.color==='black' ? COLOR.black : COLOR.white);
 
     renderTreeBody(line);
+    // ...and put the "Show:" scope back where you left it last time. After
+    // renderTreeBody, which builds the rows it needs, and which on this first
+    // render has no in-memory focus of its own to re-apply.
+    restoreShowScope();
   } finally {
     hideSpinner(spinner);
   }
@@ -6511,6 +6619,7 @@ async function searchForLine(text){
     return;
   }
   focusOnLine(lastRow);
+  rememberShowScope();
   log(`found and focused: ${moves.join(' ')}`);
 }
 

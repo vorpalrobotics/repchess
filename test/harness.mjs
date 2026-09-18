@@ -275,4 +275,22 @@ export async function closeVR(page){
   await page.waitForFunction(
     () => document.getElementById('threeTestOverlay').style.display === 'none',
     { timeout: 20000 });
+  await settleVrClose(page);
+}
+
+/* The overlay hiding is NOT the close finishing. Its handler fires
+   refreshMemorizedRoomsAndTree() without awaiting it (it has to return so the
+   overlay actually goes away), and that rebuilds the whole move table --
+   after yielding a frame first, so its spinner can paint before the
+   synchronous rebuild blocks the main thread. Anything that touches a row in
+   that gap sees it vanish and come back. Waits for the app's own pending
+   flag, which is set synchronously in the same task that hides the overlay,
+   so there is no window where this returns too early. Tolerates an older
+   build (or a page with no app) by treating a missing hook as settled. */
+export async function settleVrClose(page){
+  try {
+    await page.waitForFunction(
+      () => typeof window.__postVrRefreshPending !== 'function' || !window.__postVrRefreshPending(),
+      { timeout: 20000 });
+  } catch { /* a stuck refresh is the caller's own assertions to catch, not ours */ }
 }

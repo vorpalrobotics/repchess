@@ -7,6 +7,7 @@
 */
 import { openAssetPicker } from './assets.js?v=20260804-84';
 import { openNewObjectListModal } from './objectLists.js?v=20260804-59';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-3';
 
 let THREE = null;
 
@@ -8807,8 +8808,10 @@ function renderRoomGeomDialog(ov, roomKey){
   const roomNameRows = nameRow(roomKey, 'This', '#555')
     + forwardExits.map(ex => nameRow(ex.target, ex.label || 'door', '#2e7d32')).join('');
   ov.innerHTML = `
-    <div class="modal" style="width:min(28em,92vw);max-height:92vh;overflow:auto">
-      <h2 title="${escHtml(roomKey)}">Room Geometry — ${escHtml(roomTitle)}</h2>
+    <div class="modal" style="width:min(28em,92vw);max-height:92vh;display:flex;flex-direction:column">
+      <div class="modal-bar-host" title="${escHtml(roomKey)}">${modalBarHtml({
+        title: `Room Geometry — ${escHtml(roomTitle)}`, save: true, destructive: 'Reset Room…' })}</div>
+      <div class="modal-body">
       <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:.2rem">
         <label style="display:flex;flex-direction:column;font-size:.8rem;gap:.2rem">Width (m)
           <input type="number" step="0.1" min="${Math.max(ROOM_GEOM_MIN, contentMin.w)}" id="roomGeomW" value="${w}" style="width:6em">
@@ -8832,20 +8835,19 @@ function renderRoomGeomDialog(ov, roomKey){
       <div id="roomGeomPresetsBox" style="border:1px solid #e0e0e0;border-radius:4px;padding:.4rem .5rem;margin-bottom:.6rem">${presetsBoxHtml(roomKey)}</div>
       <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.76rem;color:#555;margin-bottom:.6rem;line-height:1.3">
         <input type="checkbox" id="roomGeomMakeDefault" style="margin-top:.15rem">
-        <span>On Apply, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door and locked doors each keep their own style).</span>
+        <span>On Save, make this room's floor / walls / ceiling / stairs / doors the default for new rooms in this building (walls are anchored to the entrance door; the exit door and locked doors each keep their own style).</span>
       </label>
-      <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;gap:.4rem">
-          <button id="roomGeomResetBtn">Reset size/doors</button>
-          <button id="roomGeomClearBtn" style="background:#c62828;color:#fff">Reset Room…</button>
-        </div>
-        <div>
-          <button id="roomGeomCancelBtn">Cancel</button>
-          <button id="roomGeomApplyBtn">Apply</button>
-        </div>
+      <!-- "Reset size/doors" stays in the body: it puts the STAGED values
+           back to the room's base, committing nothing and destroying nothing,
+           so it is a body action. "Reset Room…" is the real destructive one
+           and lives in the bar. See Documents/modal-buttons.md. -->
+      <div class="modal-actions" style="display:flex;justify-content:flex-start">
+        <button id="roomGeomResetBtn">Reset size/doors</button>
       </div>
+      </div><!-- /.modal-body -->
     </div>
   `;
+  let barCtl = null;   // assigned once the handlers below exist; see drawPlan
   const wEl = ov.querySelector('#roomGeomW'), dEl = ov.querySelector('#roomGeomD'), hEl = ov.querySelector('#roomGeomH');
   const canvas = ov.querySelector('#roomGeomPlan');
   const exitErrEl = ov.querySelector('#roomGeomExitError');
@@ -8923,6 +8925,13 @@ function renderRoomGeomDialog(ov, roomKey){
   };
 
   const drawPlan = () => {
+    // Every STAGED change in here ends with a redraw -- a door dragged on the
+    // plan, an exit type changed, "Reset size/doors" -- and none of them fires
+    // an input event on `ov` that the button bar's watcher would see. So this
+    // is the choke point that tells the bar, same trick as the asset editor's
+    // updateImgInfo and the object-list editor's renderItems. Guarded because
+    // the first draw happens before the bar is wired.
+    if(barCtl) barCtl.refresh();
     const ctx = canvas.getContext('2d');
     const { W, H, rw, rd, scale, pw, pd, ox, oy, px, pz } = planGeom();
     ctx.clearRect(0, 0, W, H);
@@ -9122,7 +9131,49 @@ function renderRoomGeomDialog(ov, roomKey){
   drawPlan();
   wireDefaultsBox(ov, roomKey);
   wirePresetsBox(ov, roomKey);
-  ov.querySelector('#roomGeomCancelBtn').onclick = closeRoomGeomDialog;
+  /* The staged half of this dialog, and only the staged half.
+
+     Room Geometry is MIXED: the size fields, the doors dragged on the plan
+     and the make-default checkbox are staged until Apply, but the room-name
+     inputs, the building-defaults box and the presets box all write straight
+     through the moment you use them. Counting those as "unsaved" would arm
+     Save over work already on disk, and offer to discard a rename that
+     cannot be discarded. So the snapshot covers the staged three and nothing
+     else. */
+  const geomSnapshot = () => ({
+    w: wEl.value, d: dEl.value, h: hEl.value,
+    exits: stagedExits,
+    makeDefault: ov.querySelector('#roomGeomMakeDefault').checked,
+  });
+  barCtl = wireModalBar(ov.querySelector('.modal-bar'), {
+    snapshot: geomSnapshot,
+    watch: ov,
+    thing: `this room's layout`,
+    onLeave: closeRoomGeomDialog,
+    onSave: () => {
+      const w2 = Math.max(ROOM_GEOM_MIN, contentMin.w, Number(wEl.value) || room.size.w);
+      const d2 = Math.max(ROOM_GEOM_MIN, contentMin.d, Number(dEl.value) || room.size.d);
+      const h2 = Math.max(ROOM_GEOM_MIN, contentMin.h, Number(hEl.value) || room.size.h);
+      const makeDefault = ov.querySelector('#roomGeomMakeDefault').checked;
+      closeRoomGeomDialog();
+      if(makeDefault) captureBuildingDefaults(roomKey);   // snapshot before the rebuild so the readout/rooms pick it up
+      commitRoomGeomDialog(roomKey, { w: w2, d: d2, h: h2 }, stagedExits);
+    },
+    onDestructive: () => {
+      // a wiped room must never be captured as the default, so drop the checkbox first
+      ov.querySelector('#roomGeomMakeDefault').checked = false;
+      if(!confirm(
+        `Reset "${roomKey}" back to a brand-new, never-customized room?\n\n` +
+        `The floor, walls, ceiling, stairs, door skins, every placed prop and its ` +
+        `nudge, object-list wall assignments, the room's size, and its doors' ` +
+        `positions/types will ALL be permanently reset. The room falls back to the ` +
+        `building defaults (floor/wall/ceiling/door skins), same as a genuinely new ` +
+        `room. Room names and building defaults are kept.\n\nThis cannot be undone.`
+      )) return;
+      closeRoomGeomDialog();
+      clearRoomStyles(roomKey);     // wipes this room only; LAYOUT.__defaults is untouched
+    },
+  });
   ov.querySelector('#roomGeomResetBtn').onclick = () => {
     const base = ROOMS[roomKey].size;
     wEl.value = base.w; dEl.value = base.d; hEl.value = base.h;
@@ -9135,29 +9186,6 @@ function renderRoomGeomDialog(ov, roomKey){
     // out as the building default
     ov.querySelector('#roomGeomMakeDefault').checked = false;
     drawPlan();
-  };
-  ov.querySelector('#roomGeomClearBtn').onclick = () => {
-    // a wiped room must never be captured as the default, so drop the checkbox first
-    ov.querySelector('#roomGeomMakeDefault').checked = false;
-    if(!confirm(
-      `Reset "${roomKey}" back to a brand-new, never-customized room?\n\n` +
-      `The floor, walls, ceiling, stairs, door skins, every placed prop and its ` +
-      `nudge, object-list wall assignments, the room's size, and its doors' ` +
-      `positions/types will ALL be permanently reset. The room falls back to the ` +
-      `building defaults (floor/wall/ceiling/door skins), same as a genuinely new ` +
-      `room. Room names and building defaults are kept.\n\nThis cannot be undone.`
-    )) return;
-    closeRoomGeomDialog();
-    clearRoomStyles(roomKey);     // wipes this room only; LAYOUT.__defaults is untouched
-  };
-  ov.querySelector('#roomGeomApplyBtn').onclick = () => {
-    const w2 = Math.max(ROOM_GEOM_MIN, contentMin.w, Number(wEl.value) || room.size.w);
-    const d2 = Math.max(ROOM_GEOM_MIN, contentMin.d, Number(dEl.value) || room.size.d);
-    const h2 = Math.max(ROOM_GEOM_MIN, contentMin.h, Number(hEl.value) || room.size.h);
-    const makeDefault = ov.querySelector('#roomGeomMakeDefault').checked;
-    closeRoomGeomDialog();
-    if(makeDefault) captureBuildingDefaults(roomKey);   // snapshot before the rebuild so the readout/rooms pick it up
-    commitRoomGeomDialog(roomKey, { w: w2, d: d2, h: h2 }, stagedExits);
   };
 }
 
