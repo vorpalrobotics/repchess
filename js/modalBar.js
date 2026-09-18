@@ -15,6 +15,11 @@
    changes plus the "Unsaved changes" text are the whole warning system, which
    is why none of them is optional.
 
+   CONFIRM modals (kind:'confirm') are the one exception to all of that: their
+   primary is a decision rather than a commit, so it is live from the moment
+   the modal opens and can carry its own verb (`Preview`, `Import`). See
+   isConfirm below.
+
    Why this exists at all: buttons used to sit in five different places, and
    several modals had them in two at once -- Manage Object Lists had `Close`
    in the header and `SAVE` at the bottom of a scrolling body, so on a long
@@ -33,8 +38,15 @@ function snap(fn){
 
 /* The markup. `save` and `destructive` are opt-in: a modal with nothing
    staged (an index, a help page) gets a bare `Done` rather than a Save that
-   is disabled forever -- see the spec's "Modal categories". */
-export function modalBarHtml({ title, save = false, destructive = null, prefix = 'mb' }){
+   is disabled forever -- see the spec's "Modal categories".
+
+   `saveLabel` renames the primary button without adding a fourth ROLE. The
+   spec's Confirm category asks for "the action verb as primary", and there
+   are modals whose primary genuinely isn't a save: Import Variations imports,
+   Search for a Variation searches, Preview Castle generates. Calling all
+   three `Save` would be the same vagueness the vocabulary exists to kill.
+   The role, the class and the position are unchanged -- only the word is. */
+export function modalBarHtml({ title, save = false, saveLabel = 'Save', destructive = null, prefix = 'mb' }){
   return `
     <div class="modal-bar">
       <h2 class="modal-bar-title" id="${prefix}Title">${title || ''}</h2>
@@ -42,7 +54,7 @@ export function modalBarHtml({ title, save = false, destructive = null, prefix =
       <div class="modal-bar-buttons">
         ${destructive ? `<button type="button" class="mb-destructive" id="${prefix}Destroy">${destructive}</button>` : ''}
         <button type="button" class="mb-leave" id="${prefix}Leave">Done</button>
-        ${save ? `<button type="button" class="mb-save" id="${prefix}Save" disabled>Save</button>` : ''}
+        ${save ? `<button type="button" class="mb-save" id="${prefix}Save" disabled>${saveLabel}</button>` : ''}
       </div>
     </div>`;
 }
@@ -59,6 +71,9 @@ export function modalBarHtml({ title, save = false, destructive = null, prefix =
      validate      optional () => message|null; a message holds Save back and
                    becomes its tooltip
      thing         name for the discard prompt ("this list")
+     kind          'editor' (default) or 'confirm' -- see below
+     saveLabel     must match the one passed to modalBarHtml
+     busyLabel     shown while onSave runs (default 'Saving…')
 
    Returns a controller: refresh() after any programmatic mutation the watch
    element's events won't catch (adding a row, reordering), setInvalid(msg) to
@@ -69,6 +84,22 @@ export function wireModalBar(barEl, opts){
   const saveBtn = q('.mb-save');
   const destroyBtn = q('.mb-destructive');
   const stateEl = q('.modal-bar-state');
+
+  /* A CONFIRM modal is a decision, not an edit, and that changes two things.
+
+     Its primary is not gated on dirtiness: you open Preview Castle, agree
+     with every default it filled in, and press Preview. Under the editor
+     rule that press is impossible, because nothing changed. So a confirm's
+     primary is live whenever validation passes.
+
+     And its Leave stays `Cancel` throughout, because there is always a
+     pending decision to decline -- `Done` would imply something was settled.
+     For the same reason it never asks you to confirm the discard: declining
+     IS the discard, and a confirm-on-cancel would just be a second prompt
+     about the prompt. */
+  const isConfirm = opts.kind === 'confirm';
+  const saveLabel = opts.saveLabel || 'Save';
+  const busyLabel = opts.busyLabel || 'Saving…';
 
   let baseline = opts.snapshot ? snap(opts.snapshot) : null;
   let invalid = null;
@@ -88,13 +119,16 @@ export function wireModalBar(barEl, opts){
     // the body instead.
     if(opts.validate) invalid = opts.validate() || null;
     const dirty = isDirty();
-    leaveBtn.textContent = dirty ? 'Cancel' : 'Done';
+    leaveBtn.textContent = (isConfirm || dirty) ? 'Cancel' : 'Done';
     leaveBtn.disabled = busy;
-    if(stateEl) stateEl.textContent = dirty ? 'Unsaved changes' : '';
+    // a confirm has nothing staged to be "unsaved" -- the pending thing is
+    // the decision itself, and the primary button already says what it is
+    if(stateEl) stateEl.textContent = (dirty && !isConfirm) ? 'Unsaved changes' : '';
     if(saveBtn){
-      saveBtn.disabled = busy || !dirty || !!invalid;
-      saveBtn.classList.toggle('is-dirty', dirty && !invalid && !busy);
-      saveBtn.textContent = busy ? 'Saving…' : 'Save';
+      const live = isConfirm ? true : dirty;
+      saveBtn.disabled = busy || !live || !!invalid;
+      saveBtn.classList.toggle('is-dirty', live && !invalid && !busy);
+      saveBtn.textContent = busy ? busyLabel : saveLabel;
       // a Save you can't use says why, rather than looking broken
       if(invalid) saveBtn.title = invalid; else saveBtn.removeAttribute('title');
     }
@@ -106,7 +140,8 @@ export function wireModalBar(barEl, opts){
      this one has to still be worth reading the day it matters. */
   function leave(){
     if(busy) return;
-    if(isDirty() && !confirm(`Discard your changes to ${opts.thing || 'this'}?`)) return;
+    // a confirm's Cancel IS the discard -- see isConfirm above
+    if(!isConfirm && isDirty() && !confirm(`Discard your changes to ${opts.thing || 'this'}?`)) return;
     opts.onLeave && opts.onLeave();
   }
 

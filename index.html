@@ -1190,50 +1190,47 @@
 
 <!-- add note / mnemonic modal -->
 <div id="fieldOverlay" class="overlay">
+  <!-- Editor, one field. The bar is mounted with prefix:'fieldModal' so its
+       title element keeps the #fieldModalTitle id openFieldModal already
+       rewrites per use ("Edit Mnemonic", "Set Standard Response", …). -->
   <div class="modal">
-    <h2 id="fieldModalTitle">Add Note</h2>
+    <div id="fieldModalBar" class="modal-bar-host"></div>
     <div class="field">
       <input id="fieldModalInput" style="width:100%;max-width:22em">
     </div>
     <div id="fieldModalError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div class="modal-actions">
-      <button id="fieldModalCancelBtn">Cancel</button>
-      <button id="fieldModalSaveBtn">SAVE</button>
-    </div>
   </div>
 </div>
 
 <!-- import line modal -->
 <div id="importLineOverlay" class="overlay">
+  <!-- Editor with an action verb for its primary: it imports, it doesn't
+       "save". Gated on dirtiness as usual, which here means the textarea has
+       something in it -- pressing Import on an empty box used to just raise
+       an error. -->
   <div class="modal" style="min-width:28em">
-    <h2>Import Variations</h2>
+    <div id="importLineBar" class="modal-bar-host"></div>
     <p style="font-size:.85em;color:#555;margin-top:0">
       Paste one or more variations in algebraic notation, one variation per line, e.g. <code>1. e4 e5 2. Nf3 Nc6 3. Bb5 a6</code>.
       Sets each of your moves as the standard response along each path in the currently open opening system.
     </p>
     <textarea id="importLineInput" rows="8" style="width:100%;box-sizing:border-box;font-family:inherit"></textarea>
     <div id="importLineError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div class="modal-actions">
-      <button id="importLineCancelBtn">Cancel</button>
-      <button id="importLineSaveBtn">IMPORT</button>
-    </div>
   </div>
 </div>
 
 <!-- search for a line modal -->
 <div id="searchLineOverlay" class="overlay">
+  <!-- Same shape as Import: an action verb for the primary, gated on there
+       being something typed to search for. -->
   <div class="modal" style="min-width:28em">
-    <h2>Search for a Variation</h2>
+    <div id="searchLineBar" class="modal-bar-host"></div>
     <p style="font-size:.85em;color:#555;margin-top:0">
       Paste a move sequence starting from move 1, e.g. <code>1. e4 e5 2. Nf3 Nc6 3. Bb5 a6</code>.
       If found, expands and focuses on that exact path in the tree; everything else collapses out of view.
     </p>
     <textarea id="searchLineInput" rows="4" style="width:100%;box-sizing:border-box;font-family:inherit"></textarea>
     <div id="searchLineError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div class="modal-actions">
-      <button id="searchLineCancelBtn">Cancel</button>
-      <button id="searchLineSaveBtn">SEARCH</button>
-    </div>
   </div>
 </div>
 
@@ -1309,8 +1306,15 @@
 
 <!-- generate-castle options (shown before generating) -->
 <div id="castleGenOverlay" class="overlay">
+  <!-- The first CONFIRM in the rollout, and the shape that made the bar grow
+       a `kind`. Its primary is a decision, not a commit: you open it, agree
+       with the street number it filled in for you, and press Preview without
+       having changed a thing. Under the editor rule that press is impossible,
+       so a confirm's primary is live from the moment it opens, and its Leave
+       stays `Cancel` throughout because there is always a pending decision to
+       decline. See js/modalBar.js's isConfirm. -->
   <div class="modal" style="max-width:28em">
-    <h2 style="margin-top:0">Preview Castle</h2>
+    <div id="castleGenBar" class="modal-bar-host"></div>
     <div class="field" id="castleGenStreetField" style="display:none">
       <label for="castleGenStreetNumber">Street number</label>
       <input type="number" id="castleGenStreetNumber" min="1" step="1" style="width:6em">
@@ -1321,10 +1325,6 @@
       <span>Regenerate fresh — <b>wipe all prior VR decorations</b> for this castle's rooms (object placements &amp; surfaces). Use while testing, before you commit to memorizing it.</span>
     </label>
     <div id="castleGenError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
-      <button id="castleGenCancelBtn">Cancel</button>
-      <button id="castleGenGoBtn"><i class="fa-solid fa-dungeon"></i> Preview</button>
-    </div>
   </div>
 </div>
 
@@ -1456,8 +1456,10 @@
 
 <!-- new line modal -->
 <div id="lineOverlay" class="overlay">
+  <!-- Editor. Always opened blank (newLineBtn resets every field), so
+       dirty-gating reads naturally: type a name and Save comes alive. -->
   <div class="modal">
-    <h2>New Opening System</h2>
+    <div id="lineBar" class="modal-bar-host"></div>
     <div class="field">
       <label>Name:</label><input id="lineNameInput" style="width:14em">
     </div>
@@ -1482,10 +1484,6 @@
       <label>White moves:</label><input id="lineTriggersInput" style="width:14em" placeholder="e.g. e4, d4">
     </div>
     <div id="lineModalError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div class="modal-actions">
-      <button id="lineCancelBtn">Cancel</button>
-      <button id="lineSaveBtn">SAVE</button>
-    </div>
   </div>
 </div>
 
@@ -1918,6 +1916,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-399"></script>
+<script type="module" src="js/app.js?v=20260804-400"></script>
 </body>
 </html>

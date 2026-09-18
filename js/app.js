@@ -1,10 +1,10 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-291';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-85';
-import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-3';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-60';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-292';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-86';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-4';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-61';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-399';
+const BUILD_TAG = '-400';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2187,8 +2187,21 @@ async function wipeCastleDecorations(games, seq){
   await setMeta('threeLayout', JSON.stringify(layout));
   return removed;
 }
-$('castleGenCancelBtn').onclick = () => { $('castleGenOverlay').style.display = 'none'; PENDING_CASTLE_GEN = null; };
-$('castleGenGoBtn').onclick = async () => {
+/* Confirm: the primary is a decision, so it is live from the moment the modal
+   opens -- you very often agree with the street number it filled in and press
+   Preview without touching anything. Street-number validation stays where it
+   was, at press time with its message in the body: it needs a PREFS scan
+   against every other castle, and the modal is dismissed far more often than
+   it is submitted. */
+wireModalBar(
+  mountBarHtml('castleGenBar', { title: 'Preview Castle', save: true, saveLabel: 'Preview' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Generating…',
+    onLeave: () => { $('castleGenOverlay').style.display = 'none'; PENDING_CASTLE_GEN = null; },
+    onSave: () => castleGenGo(),
+  });
+async function castleGenGo(){
   const ctx = PENDING_CASTLE_GEN;
   if(!ctx){ $('castleGenOverlay').style.display = 'none'; return; }
   // street number: required for a castle root; must be unique among the other
@@ -2216,7 +2229,7 @@ $('castleGenGoBtn').onclick = async () => {
     log(`wiped VR decorations for ${n} room(s)`);
   }
   showGeneratedCastleReport(ctx.games, ctx.seq);
-};
+}
 
 let LAST_GENERATED_CASTLE = null;   // stashed so "Walk in VR" can hand it to the VR engine
 async function showGeneratedCastleReport(games, seq){
@@ -3341,9 +3354,15 @@ $('graphResetLayoutBtn').onclick = async () => {
    Mounted once at load -- these overlays are static markup, built with the
    page rather than rendered per open. */
 function mountInfoBar(hostId, title, onLeave, htmlOpts){
+  return wireModalBar(mountBarHtml(hostId, { title, ...(htmlOpts || {}) }), { onLeave });
+}
+/* renders a bar into its host and hands back the .modal-bar element, so the
+   caller can wire it with whatever options it needs. The half of mountInfoBar
+   that the modals with a Save also want. */
+function mountBarHtml(hostId, htmlOpts){
   const host = $(hostId);
-  host.innerHTML = modalBarHtml({ title, ...(htmlOpts || {}) });
-  return wireModalBar(host.querySelector('.modal-bar'), { onLeave });
+  host.innerHTML = modalBarHtml(htmlOpts);
+  return host.querySelector('.modal-bar');
 }
 
 function closeGraphOverlay(){
@@ -3884,24 +3903,44 @@ function openFieldModal(field, currentValue, onSave, validate){
   fieldModalSave = onSave;
   fieldModalValidate = validate || null;
   $('fieldOverlay').style.display='flex';
+  // re-baseline AFTER the input is filled: this one overlay is reused for
+  // every single-field prompt in the app, so a baseline left over from the
+  // last use would read the new value as an edit the moment it opened
+  fieldModalBar.markClean();
   $('fieldModalInput').focus();
 }
 $('fieldModalInput').addEventListener('input', () => { $('fieldModalError').textContent = ''; });
-$('fieldModalCancelBtn').onclick = () => {
-  $('fieldOverlay').style.display='none';
-  fieldModalSave = null; fieldModalValidate = null;
-};
-$('fieldModalSaveBtn').onclick = () => {
-  let v = $('fieldModalInput').value.trim();
-  if(fieldModalValidate){
-    const result = fieldModalValidate(v);
-    if(!result.ok){ $('fieldModalError').textContent = result.error; return; }
-    v = result.value;
-  }
-  $('fieldOverlay').style.display='none';
-  if(fieldModalSave) fieldModalSave(v);
-  fieldModalSave = null; fieldModalValidate = null;
-};
+/* Editor. prefix:'fieldModal' keeps the bar's title element at the
+   #fieldModalTitle id openFieldModal rewrites per use, and its baseline is
+   re-taken on every open (openFieldModal calls fieldModalBar.markClean()
+   after filling the input) -- this one overlay is reused for half a dozen
+   different fields, so a baseline from the last one would be nonsense.
+
+   `fieldModalValidate` stays a press-time check with its message in the body,
+   not the bar's live `validate`: it is the caller's own rule (legal-move
+   parsing, for one) and can rewrite the value it approves. */
+const fieldModalBar = wireModalBar(
+  mountBarHtml('fieldModalBar', { title: 'Add Note', save: true, prefix: 'fieldModal' }),
+  {
+    snapshot: () => ({ v: $('fieldModalInput').value.trim() }),
+    watch: $('fieldOverlay'),
+    thing: 'this field',
+    onLeave: () => {
+      $('fieldOverlay').style.display='none';
+      fieldModalSave = null; fieldModalValidate = null;
+    },
+    onSave: () => {
+      let v = $('fieldModalInput').value.trim();
+      if(fieldModalValidate){
+        const result = fieldModalValidate(v);
+        if(!result.ok){ $('fieldModalError').textContent = result.error; return; }
+        v = result.value;
+      }
+      $('fieldOverlay').style.display='none';
+      if(fieldModalSave) fieldModalSave(v);
+      fieldModalSave = null; fieldModalValidate = null;
+    },
+  });
 
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------
    Most room decoration now happens in the VR walkthrough, so this modal is
@@ -6554,8 +6593,21 @@ $('menuImportLine').onclick = ()=>{
   $('importLineOverlay').style.display='flex';
   $('importLineInput').focus();
 };
-$('importLineCancelBtn').onclick = ()=>{ $('importLineOverlay').style.display='none'; };
-$('importLineSaveBtn').onclick = ()=> importLine($('importLineInput').value);
+/* Editor whose primary carries its own verb: this imports, it does not
+   "save", and the spec's Confirm row already allows the action verb as the
+   primary. Ordinary dirty-gating still applies -- which here means an empty
+   textarea leaves Import dead, where before it was pressable and just raised
+   an error. */
+wireModalBar(
+  mountBarHtml('importLineBar', { title: 'Import Variations', save: true, saveLabel: 'Import', prefix: 'importLine' }),
+  {
+    snapshot: () => ({ v: $('importLineInput').value.trim() }),
+    watch: $('importLineOverlay'),
+    thing: 'this paste',
+    busyLabel: 'Importing…',
+    onLeave: ()=>{ $('importLineOverlay').style.display='none'; },
+    onSave: ()=> importLine($('importLineInput').value),
+  });
 
 /* ---------- search for a line: find an exact path and reveal it ----------
    Paste a move sequence starting from move 1; walks the currently-open
@@ -6661,8 +6713,18 @@ $('menuSearchLine').onclick = ()=>{
   $('searchLineOverlay').style.display='flex';
   $('searchLineInput').focus();
 };
-$('searchLineCancelBtn').onclick = ()=>{ $('searchLineOverlay').style.display='none'; };
-$('searchLineSaveBtn').onclick = ()=> searchForLine($('searchLineInput').value);
+// same shape as Import: its own verb, gated on there being something to
+// search for
+wireModalBar(
+  mountBarHtml('searchLineBar', { title: 'Search for a Variation', save: true, saveLabel: 'Search', prefix: 'searchLine' }),
+  {
+    snapshot: () => ({ v: $('searchLineInput').value.trim() }),
+    watch: $('searchLineOverlay'),
+    thing: 'this search',
+    busyLabel: 'Searching…',
+    onLeave: ()=>{ $('searchLineOverlay').style.display='none'; },
+    onSave: ()=> searchForLine($('searchLineInput').value),
+  });
 $('menuBrowseGames').onclick = async ()=>{
   $('menuList').style.display='none';
   await openBrowseGames();
@@ -6699,8 +6761,25 @@ $('newLineBtn').onclick = () => {
   $('lineOverlay').style.display='flex';
   $('lineNameInput').focus();
 };
-$('lineCancelBtn').onclick = () => { $('lineOverlay').style.display='none'; };
-$('lineSaveBtn').onclick = async () => {
+/* Editor. Always opened blank by newLineBtn above, which resets every field
+   before showing it, so the baseline taken at mount stays correct for every
+   open and Save comes alive as soon as you type a name. Its validation is
+   press-time with the message in the body: parsing candidate moves through
+   chess.js on every keystroke is not a live check. */
+wireModalBar(
+  mountBarHtml('lineBar', { title: 'New Opening System', save: true, prefix: 'line' }),
+  {
+    snapshot: () => ({
+      name: $('lineNameInput').value.trim(),
+      color: $('lineColorInput').value,
+      opening: $('lineOpeningInput').value.trim(),
+      mode: $('lineTriggerModeInput').value,
+      triggers: $('lineTriggersInput').value.trim(),
+    }),
+    watch: $('lineOverlay'),
+    thing: 'this opening system',
+    onLeave: () => { $('lineOverlay').style.display='none'; },
+    onSave: async () => {
   const name = $('lineNameInput').value.trim();
   const color = $('lineColorInput').value;
   if(!name){ $('lineModalError').textContent='enter a name'; return; }
@@ -6728,7 +6807,8 @@ $('lineSaveBtn').onclick = async () => {
   await createLine(LOCAL_USER, {name, color, openingMoves});
   $('lineOverlay').style.display='none';
   renderHome();
-};
+    },
+  });
 
 /* ---------- UI actions ---------- */
 // "Import Now" fetches every platform with a non-empty username, one after
