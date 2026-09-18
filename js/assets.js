@@ -139,7 +139,7 @@ const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
    genuine soft edges keep their crop bounds essentially unchanged. */
 const AUTO_CROP_ALPHA = 24;
 
-import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-3';
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one

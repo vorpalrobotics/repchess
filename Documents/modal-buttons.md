@@ -77,7 +77,7 @@ Three roles. A modal uses the subset it needs, and **never invents a fourth**.
 | Role | Label | Does | Present when |
 |---|---|---|---|
 | **Leave** | `Done` / `Cancel` | Closes the modal | Always |
-| **Save** | `Save` | Commits changes **and closes** | Editor modals |
+| **Save** | `Save`, or the action verb | Commits changes **and closes** | Editor and Confirm modals |
 | **Destructive** | `Delete…`, `Reset…` | Removes the thing the modal is editing | Where it applies |
 
 **There is deliberately no `Apply`** (commit and stay open). Only a handful of
@@ -97,6 +97,14 @@ buttons:
 
 - **Clean** (no unsaved changes) → reads **`Done`**, enabled.
 - **Dirty** (unsaved changes) → reads **`Cancel`**, enabled.
+
+**The primary may carry its own verb** (`modalBarHtml({ saveLabel })`). Some
+modals' primary genuinely isn't a save: Import Variations imports, Search for
+a Variation searches, Preview Castle generates. Calling all three `Save` would
+be the same vagueness this vocabulary exists to kill. The role, the class, the
+position and the colour are unchanged — only the word is, so this is not a
+fourth role. Use the plain `Save` unless a specific verb is *more* precise,
+and give it a matching `busyLabel` (`Importing…`, not `Saving…`).
 
 Labels are Title Case. Not `SAVE`, not `CLOSE`. The app currently has both
 `SAVE` and `Save`, and 18 `Close` against 26 `Cancel` used interchangeably;
@@ -118,6 +126,34 @@ which it always should.
 **Invalid** matters: a modal with a validation error must not present an
 enabled Save that will fail. Disable it and put the reason in the `title`, and
 show the error in the body where it belongs.
+
+### Confirm modals are the exception (`kind: 'confirm'`)
+
+A Confirm's primary is a **decision, not a commit**, and that changes two rows
+of the table above:
+
+| | Leave | Primary |
+|---|---|---|
+| **Confirm, any state** | `Cancel`, enabled | **enabled**, primary, its own verb |
+
+- **It is not gated on dirtiness.** You open Preview Castle, agree with the
+  street number it filled in for you, and press `Preview` without having
+  changed a thing. Under the editor rule that press is impossible. This is
+  easy to get wrong and hard to notice, because the modal looks fine — the
+  button is simply dead. The test that caught it presses `Preview` on an
+  untouched dialog, which is the normal way to use it.
+- **Its Leave stays `Cancel` throughout**, because there is always a pending
+  decision to decline; `Done` would imply something had been settled.
+- **It never asks you to confirm the discard.** Declining *is* the discard,
+  and a confirm-on-cancel would just be a second prompt about the prompt.
+- **It shows no "Unsaved changes".** Nothing is staged; the pending thing is
+  the decision, and the primary button already names it.
+
+Reach for this only when the modal really is a decision. A modal with a field
+you must fill in before the action means anything — Import Variations, Search
+for a Variation — is an ordinary **Editor** that happens to have a verb on its
+primary, and should stay dirty-gated so the button is dead until there is
+something to act on.
 
 ## Colours
 
@@ -228,7 +264,7 @@ forever teaches you to ignore the disabled state everywhere else.
 |---|---|---|
 | **Editor** — stages changes, commits on Save | Leave + Save (+ Destructive) | Yes |
 | **Immediate** — every action takes effect at once | Leave only (`Done`) | No, never dirty |
-| **Confirm** — a single yes/no decision | Leave (`Cancel`) + the action verb as primary | No |
+| **Confirm** — a single yes/no decision | Leave (`Cancel`) + the action verb as primary | No — and the primary is **not** dirty-gated; see *States* |
 | **Informational** — nothing to change | Leave only (`Done`) | No |
 | **Flow** — a multi-step run (quiz, import) | Leave only (`Done`/`Exit`); step buttons stay in the body | No |
 
@@ -334,8 +370,37 @@ Order, worst first:
       bar) and `updateHistoryButtons()` (every committed mutation and every
       undo/redo); the colour picker's is `paint()`, since a colour is sampled
       by clicking the image and fires no input event.
-- [ ] **Castle Generate** (`#castleGenOverlay`), **Line** (`#lineOverlay`),
-      **Import Line**, **Search Line**, **Field** — Editor or Confirm.
+- [x] **Castle Generate** (`#castleGenOverlay`), **Line** (`#lineOverlay`),
+      **Import Line**, **Search Line**, **Field** — the batch that grew the
+      mechanism, because it holds the first real **Confirm**.
+
+      - **Preview Castle** is that Confirm, and the reason `kind:'confirm'`
+        exists. Its primary is a decision: you agree with the street number
+        it filled in and press `Preview` having changed nothing. Under the
+        editor rule that press is impossible. See *States* for the full
+        shape.
+      - **Import Line** and **Search Line** look like Confirms and are not.
+        Each has a field you must fill in before the action means anything,
+        so they are ordinary Editors that happen to carry a verb on the
+        primary (`Import`, `Search`) — and staying dirty-gated is an
+        improvement: `IMPORT` used to be pressable on an empty textarea and
+        simply raised an error.
+      - **Field** (`#fieldOverlay`) is ONE overlay reused for every
+        single-field prompt in the app — standard response, mnemonic, branch
+        name, street name — with its title rewritten per use. So it is the
+        first bar that must **re-take its baseline on every open**
+        (`markClean()` after the input is filled), or a value belonging to
+        the previous prompt reads as an edit the user just made. It keeps
+        the `#fieldModalTitle` id via `prefix:'fieldModal'`.
+      - **Line** (`#lineOverlay`) is create-only (renames go through the
+        field modal) and `newLineBtn` blanks every field before showing it,
+        so one baseline taken at mount stays correct for every open.
+
+      Validation in all five stays press-time with its message in the body,
+      not the bar's live `validate`: parsing candidate moves through chess.js
+      on every keystroke, or scanning PREFS for a street-number clash on a
+      modal that is dismissed far more often than submitted, is not a live
+      check.
 - [ ] **Analysis Queue / Add / Compare** — Immediate.
 - [x] **Graph**, **Help**, **About**, **Room Info**, **Castle Preview**,
       **Browse Games**, **Transpositions** — Informational or Immediate;

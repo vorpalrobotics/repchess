@@ -273,8 +273,24 @@ try {
   //    so we verify the tree-writing core through the paste-import UI.
   try {
     await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
+
+    /* An EDITOR whose primary carries its own verb -- it imports, it does not
+       "save". Empty textarea is clean, so Import is dead: before the bar it
+       was pressable on an empty box and just raised an error. */
+    let ib = await modalBarState(app2.page, 'importLineOverlay');
+    assert(ib && ib.title === 'Import Variations', `expected the shared bar, got ${JSON.stringify(ib && ib.title)}`);
+    assert(ib.save && ib.save.text === 'Import' && ib.save.disabled && ib.leave.text === 'Done',
+      `nothing pasted yet, so nothing to import: ${JSON.stringify(ib)}`);
+    assert(ib.barIsFirst && ib.strayIds.length === 0,
+      `expected the bar first and the old Cancel/IMPORT row gone: ${JSON.stringify(ib)}`);
+
     await app2.page.fill('#importLineInput', '1. d4 Nf6 2. c4 e6 3. Nc3');
-    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    ib = await modalBarState(app2.page, 'importLineOverlay');
+    assert(!ib.save.disabled && ib.save.primary && ib.leave.text === 'Cancel',
+      `expected a pasted variation to arm Import: ${JSON.stringify(ib)}`);
+    ok('modal bar: Import Variations is an editor with its own verb — dead until something is pasted');
+
+    await app2.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await app2.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-opp="Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
@@ -310,7 +326,7 @@ try {
   try {
     await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
     await app2.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
-    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await app2.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     // showSpinner() runs synchronously as the very first line of importLine,
     // before its first await -- by the time the click's own evaluate()
     // resolves, the overlay is already showing.
@@ -332,7 +348,7 @@ try {
     await app2.page.evaluate(() => document.getElementById('menuImportLine').click());
     await app2.page.fill('#importLineInput',
       '1. d4 Nf6 2. c4 e6 3. Nc3 Bb4\n1. d4 Nf6 2. c4 e6 3. Nc3 g6');
-    await app2.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await app2.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await app2.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     const rows = await app2.page.evaluate(() => [
       !!document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6,Nc3,Bb4"]'),
@@ -401,7 +417,28 @@ try {
     await app3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
     await app3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
     await app3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-    await app3.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+
+    /* --- the CONFIRM bar shape (Documents/modal-buttons.md). This press is
+       the whole reason `kind:'confirm'` exists: nothing has been changed --
+       the street number was filled in for us and agreed with -- and under
+       the editor rule a clean modal's primary is dead, so Preview would be
+       unpressable and everything below this line would hang. A confirm's
+       primary is live from the moment it opens, and its Leave stays Cancel
+       because there is always a decision to decline. --- */
+    const cg = await modalBarState(app3.page, 'castleGenOverlay');
+    assert(cg && cg.title === 'Preview Castle', `expected the shared bar, got ${JSON.stringify(cg && cg.title)}`);
+    assert(cg.save && cg.save.text === 'Preview',
+      `a confirm's primary carries its own verb, not "Save": ${JSON.stringify(cg.save)}`);
+    assert(!cg.save.disabled && cg.save.primary,
+      `expected Preview live on an untouched confirm: ${JSON.stringify(cg.save)}`);
+    assert(cg.leave.text === 'Cancel',
+      `a confirm's Leave stays Cancel, never Done: ${JSON.stringify(cg.leave)}`);
+    assert(cg.state === '', `a confirm stages nothing, so no unsaved-changes text: ${JSON.stringify(cg.state)}`);
+    assert(cg.barIsFirst && cg.strayIds.length === 0,
+      `expected the bar first and the old Cancel/Preview row gone: ${JSON.stringify(cg)}`);
+    ok('modal bar: Preview Castle is a confirm — its primary is live untouched and carries its own verb');
+
+    await app3.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
     await app3.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
     await app3.page.evaluate(() => document.getElementById('castleWalkBtn').click());
     await app3.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -461,7 +498,7 @@ try {
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appC2.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appC2.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appC2.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appC2.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appC2.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appC2.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appC2.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -535,7 +572,7 @@ try {
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app4.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app4.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app4.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app4.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app4.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app4.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app4.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -637,7 +674,7 @@ try {
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app5.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app5.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app5.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app5.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app5.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app5.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app5.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -726,7 +763,7 @@ try {
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app6.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app6.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app6.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app6.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app6.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app6.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app6.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -782,7 +819,7 @@ try {
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appGZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appGZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appGZ.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appGZ.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appGZ.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appGZ.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appGZ.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -1463,7 +1500,7 @@ try {
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app8.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app8.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app8.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app8.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app8.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app8.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app8.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -1643,7 +1680,7 @@ try {
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app10.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app10.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app10.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app10.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app10.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app10.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app10.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -1922,7 +1959,7 @@ try {
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app12.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app12.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app12.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app12.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app12.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
 
   // 28b. Castle Preview on the shared button bar. "Walk in VR" stays in the
@@ -2005,7 +2042,7 @@ try {
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await app13.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await app13.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await app13.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await app13.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await app13.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await app13.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await app13.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -2864,7 +2901,7 @@ try {
 
     let dialogMessage = null;
     app19.page.once('dialog', d => { dialogMessage = d.message(); });
-    await app19.page.evaluate(() => document.getElementById('searchLineSaveBtn').click());
+    await app19.page.evaluate(() => document.querySelector('#searchLineOverlay .modal-bar .mb-save').click());
     await app19.page.waitForFunction(() => document.getElementById('searchLineError').textContent.length > 0, { timeout: 5000 });
 
     assert(dialogMessage && dialogMessage.startsWith('Variation not found'),
@@ -4183,7 +4220,7 @@ try {
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appX.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appX.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appX.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appX.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appX.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -6638,7 +6675,7 @@ try {
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appAL.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appAL.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appAL.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appAL.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appAL.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appAL.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appAL.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -7148,8 +7185,27 @@ try {
     await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
     await appAP.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
     await appAP.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
+
+    /* The field modal is ONE overlay reused for every single-field prompt in
+       the app -- standard response here, mnemonics, branch names, the street
+       name -- so its bar re-takes its baseline on each open, after the input
+       has been filled with that use's current value. Without that, a value
+       left from the last prompt (or a pre-filled edit) would read as an edit
+       the user just made, arming Save over nothing. Its title is per-use too,
+       which is why the bar carries the #fieldModalTitle id. */
+    let fb = await modalBarState(appAP.page, 'fieldOverlay');
+    assert(fb && /Standard Response/i.test(fb.title),
+      `expected the bar titled for THIS use of the field modal, got ${JSON.stringify(fb && fb.title)}`);
+    assert(fb.save.disabled && fb.leave.text === 'Done',
+      `a freshly-opened field prompt has nothing typed yet: ${JSON.stringify(fb)}`);
+
     await appAP.page.fill('#fieldModalInput', 'c4');
-    await appAP.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    fb = await modalBarState(appAP.page, 'fieldOverlay');
+    assert(!fb.save.disabled && fb.save.text === 'Save' && fb.leave.text === 'Cancel',
+      `expected typing a response to arm Save: ${JSON.stringify(fb)}`);
+    ok('modal bar: the shared field prompt re-baselines per open, and titles itself per use');
+
+    await appAP.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
 
     await appAP.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     const title = await appAP.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
@@ -8175,7 +8231,7 @@ try {
     await appAV.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="response"]').click());
     await appAV.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
     await appAV.page.fill('#fieldModalInput', 'c4');
-    await appAV.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     await expectInvalidated('expected setting a standard response to invalidate the cache');
     await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
@@ -8187,7 +8243,7 @@ try {
     await primeCache();
     await appAV.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appAV.page.fill('#importLineInput', '1. d4 Nf6 2. c4 g6 3. Nc3');
-    await appAV.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
     await expectInvalidated('expected importing a variation to invalidate the cache');
     ok('VR cache: importing a variation invalidates the cache');
@@ -8292,7 +8348,7 @@ try {
     await appAW.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="generateCastle"]').click());
     await appAW.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 5000 });
     await appAW.page.fill('#castleGenStreetNumber', '2');
-    await appAW.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+    await appAW.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
     await appAW.page.waitForFunction(() => document.getElementById('castleGenOverlay').style.display === 'none', { timeout: 5000 });
     await expectInvalidated("expected Generate Castle's own street-number save to invalidate the cache");
     ok("VR cache: Generate Castle's own street-number save invalidates the cache");
@@ -8651,7 +8707,7 @@ try {
 
     await appAZ.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appAZ.page.fill('#importLineInput', '1. d4 Nf6 2. c4');
-    await appAZ.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appAZ.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await appAZ.page.waitForFunction(() => {
       const row = document.querySelector('tr.data-row[data-seq="d4,Nf6"]');
       return row && row.querySelector('.ourReply')?.textContent?.trim() === 'c4';
@@ -13371,7 +13427,7 @@ try {
     // unlike the 'c4' used elsewhere in this suite for a WHITE reply at a
     // different (White-to-move) node.
     await appBW.page.fill('#fieldModalInput', 'c5');
-    await appBW.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
     await appBW.page.waitForSelector('tr.data-row[data-seq="d4,c5"]', { timeout: 5000 });
     ok('row menu: move 1\'s "Add Opponent Move" adds a manual reply to move 1, re-rendered in place');
   } catch(e){ bad('row menu: move 1 context-row Add Opponent Move', e); }
@@ -13414,7 +13470,7 @@ try {
     await appBW.page.evaluate(s => document.querySelector(`${s} [data-act="addMove"]`).click(), rowSel);
     await appBW.page.waitForSelector('#fieldOverlay', { state: 'visible', timeout: 5000 });
     await appBW.page.fill('#fieldModalInput', 'g6');
-    await appBW.page.evaluate(() => document.getElementById('fieldModalSaveBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
     const manualSel = 'tr.data-row[data-seq="d4,Nf6,c4,g6"]';
     await appBW.page.waitForSelector(manualSel, { timeout: 5000 });
     ok('row menu: "Add Opponent Move" records a manual try as a new child row');
@@ -13478,7 +13534,7 @@ try {
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBX.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBX.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appBX.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBX.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appBX.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appBX.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appBX.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -13611,7 +13667,7 @@ try {
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBY.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBY.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appBY.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBY.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appBY.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appBY.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appBY.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -13700,7 +13756,7 @@ try {
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appBZ.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appBZ.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appBZ.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appBZ.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appBZ.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appBZ.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appBZ.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -13928,7 +13984,7 @@ try {
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appCB.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appCB.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appCB.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appCB.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appCB.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -14178,7 +14234,7 @@ try {
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] .rowMenuBtn').click());
   await appCB3.page.evaluate(() => document.querySelector('tr.data-row[data-opp="Nf6"] [data-act="generateCastle"]').click());
   await appCB3.page.waitForSelector('#castleGenOverlay', { state: 'visible', timeout: 8000 });
-  await appCB3.page.evaluate(() => document.getElementById('castleGenGoBtn').click());
+  await appCB3.page.evaluate(() => document.querySelector('#castleGenOverlay .modal-bar .mb-save').click());
   await appCB3.page.waitForSelector('#castleReportOverlay', { state: 'visible', timeout: 15000 });
   await appCB3.page.evaluate(() => document.getElementById('castleWalkBtn').click());
   await appCB3.page.waitForFunction(() => !!window.__threeTestEdit && !!window.__threeTestState, { timeout: 20000 });
@@ -14295,7 +14351,7 @@ try {
   await appCC.page.evaluate(() => document.getElementById('menuImportLine').click());
   await appCC.page.fill('#importLineInput',
     '1. d4 Nf6 2. c4 e6 3. Nc3 g6 4. e4\n1. d4 d5 2. c4 e6 3. Nc3 g6 4. e4');
-  await appCC.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+  await appCC.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
   await appCC.page.waitForFunction(() => document.getElementById('importLineOverlay').style.display === 'none', { timeout: 40000 });
   await openVR(appCC.page);
   // openVR's own readiness check (__threeTestEdit/__threeTestState) is set
@@ -18688,7 +18744,7 @@ try {
   try {
     await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 Nf6 3. Nf3 e6 4. e3');
-    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await appDH.page.waitForFunction(() => /routed to a redirected room/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
     assert(/2 routed/.test(await appDH.page.evaluate(() => document.getElementById('progress').textContent)),
       `expected the log to report 2 entries routed, got "${await appDH.page.evaluate(() => document.getElementById('progress').textContent)}"`);
@@ -18712,7 +18768,7 @@ try {
   try {
     await appDH.page.evaluate(() => document.getElementById('menuImportLine').click());
     await appDH.page.fill('#importLineInput', '1. Nc3 d5 2. d4 c5 3. e4');
-    await appDH.page.evaluate(() => document.getElementById('importLineSaveBtn').click());
+    await appDH.page.evaluate(() => document.querySelector('#importLineOverlay .modal-bar .mb-save').click());
     await appDH.page.waitForFunction(() => /imported 2 move/i.test(document.getElementById('progress').textContent), { timeout: 10000 });
     const progressText = await appDH.page.evaluate(() => document.getElementById('progress').textContent);
     assert(!/routed/i.test(progressText), `expected no "routed" mention for an unrelated sibling branch, got "${progressText}"`);
