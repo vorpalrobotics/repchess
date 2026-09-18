@@ -863,6 +863,8 @@
   .mnem-square .mnem-icon-only i{width:1.1em;text-align:center;margin-right:.25em;color:inherit}
   .mnem-square .mnem-icon-only.mnem-ok{color:#2e7d32}
   .mnem-square .mnem-icon-only.mnem-missing{color:#c62828}
+  /* a flex column so the button bar stays put while the piece table scrolls */
+  .mnem-editor-modal{max-height:90vh;display:flex;flex-direction:column}
   .mnem-editor-table td i.mnem-icon-needed-ok{color:#2e7d32}
   .mnem-editor-table td i.mnem-icon-needed-missing{color:#c62828}
   .mnem-coord-file,.mnem-coord-rank{position:absolute;font-size:.65rem;font-weight:700;color:#0006}
@@ -1592,8 +1594,13 @@
 <!-- manage mnemonics modal (full-screen grid) -->
 <div id="mnemonicsOverlay" class="overlay">
   <div class="modal">
+    <!-- shared button bar (Documents/modal-buttons.md). This manager is
+         IMMEDIATE -- the notes field autosaves, the grid writes through, and
+         the square editor below is its own modal -- so a bare Done. The
+         coverage filter and Export/Import stay in the body: the bar is
+         lifecycle only. -->
+    <div id="mnemonicsBar" class="modal-bar-host"></div>
     <div class="mnem-header">
-      <h2>Manage Mnemonics</h2>
       <div class="mnem-coverage-bar">
         <label for="mnemonicsCoverageSelect">Repertoire coverage</label>
         <select id="mnemonicsCoverageSelect">
@@ -1603,7 +1610,6 @@
       </div>
       <button id="mnemonicsExportBtn" title="Export all mnemonics (words + images) to a JSON file">Export</button>
       <button id="mnemonicsImportBtn" title="Import a mnemonics JSON file (replaces all current mnemonics)">Import</button>
-      <button id="mnemonicsCloseBtn">Close</button>
     </div>
     <div class="mnem-mode-bar" id="mnemModeBar">
       <span class="mnem-mode-label">View:</span>
@@ -1784,8 +1790,9 @@
 
 <!-- mnemonics square editor modal -->
 <div id="mnemonicsEditorOverlay" class="overlay">
-  <div class="modal">
-    <h2 id="mnemonicsEditorTitle">Edit Square</h2>
+  <div class="modal mnem-editor-modal">
+    <div id="mnemonicsEditorBar" class="modal-bar-host"></div>
+    <div class="modal-body">
     <table class="mnem-editor-table">
       <colgroup>
         <col style="width:1.8em">
@@ -1803,10 +1810,7 @@
         <tr><td><i class="fa-solid fa-fw fa-chess-king" id="mnemKingIcon"></i></td><td><input id="mnemKingInput" maxlength="40"></td><td><div class="mnem-img-drop" id="mnemKingImgDrop"><span class="mnem-img-clear">&times;</span><span class="mnem-img-crop"><i class="fa-solid fa-crop-simple"></i></span><i class="fa-solid fa-image"></i><img id="mnemKingImgPreview" style="display:none"><input id="mnemKingImgFile" type="file" accept="image/*" style="display:none"></div></td><td><textarea id="mnemKingDescInput" maxlength="200" rows="4"></textarea></td></tr>
       </tbody>
     </table>
-    <div class="modal-actions">
-      <button id="mnemonicsEditorCancelBtn">Cancel</button>
-      <button id="mnemonicsEditorSaveBtn">SAVE</button>
-    </div>
+    </div><!-- /.modal-body -- Cancel/SAVE moved to the bar above -->
   </div>
 </div>
 
@@ -1885,6 +1889,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-393"></script>
+<script type="module" src="js/app.js?v=20260804-394"></script>
 </body>
 </html>

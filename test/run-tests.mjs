@@ -2559,6 +2559,64 @@ try {
     assert(classes.knightMissing, 'expected an unfilled d4 knight slot to render red (mnem-missing) instead of blank');
     ok('filled slots render green, unfilled ones render red, with no system selected');
   } catch(e){ bad('mnemonics: no-selection three-state coloring', e); }
+
+  /* --- the shared button bar, fourth and fifth modals converted
+     (Documents/modal-buttons.md). Manage Mnemonics is IMMEDIATE -- its notes
+     autosave, its grid writes through -- and its square editor is a separate
+     Editor modal. --- */
+
+  // 52b. The manager gets a bare Done. Export/Import and the coverage filter
+  //      stay in the body: the bar is lifecycle only, and neither of those
+  //      leaves or commits the modal.
+  try {
+    const bar = await modalBarState(app17.page, 'mnemonicsOverlay');
+    assert(bar, 'expected Manage Mnemonics to use the shared bar');
+    assert(bar.title === 'Manage Mnemonics' && bar.leave.text === 'Done',
+      `unexpected bar: ${JSON.stringify(bar)}`);
+    assert(bar.save === null && bar.destructive === null,
+      `expected no Save/Delete on an immediate view, got ${JSON.stringify(bar)}`);
+    assert(bar.barIsFirst && bar.strayIds.length === 0,
+      `expected the bar first with nothing stray, got ${JSON.stringify(bar)}`);
+    const bodyBtns = await app17.page.evaluate(() =>
+      [...document.querySelectorAll('#mnemonicsOverlay .mnem-header button')].map(b => b.id));
+    assert(bodyBtns.includes('mnemonicsExportBtn') && bodyBtns.includes('mnemonicsImportBtn'),
+      `expected Export/Import to stay in the body near the filter they act with, got ${JSON.stringify(bodyBtns)}`);
+    ok('modal bar: Manage Mnemonics is immediate -- a bare Done, with Export/Import left in the body');
+  } catch(e){ bad('modal bar: mnemonics manager', e); }
+
+  // 52c. The square editor IS an editor: Save dead until something changes,
+  //      and its staged IMAGES count as changes even though a drop or a crop
+  //      fires no input event the bar could see on its own.
+  try {
+    await app17.page.evaluate(() => document.querySelector('.mnem-square[data-square="d4"]').click());
+    await app17.page.waitForSelector('#mnemonicsEditorOverlay', { state: 'visible', timeout: 5000 });
+    let eb = await modalBarState(app17.page, 'mnemonicsEditorOverlay');
+    assert(eb && /Edit Square d4/.test(eb.title), `expected the bar to name the square, got ${JSON.stringify(eb && eb.title)}`);
+    assert(eb.save && eb.save.disabled && eb.leave.text === 'Done',
+      `expected an untouched square editor to read clean, got ${JSON.stringify(eb)}`);
+    assert(eb.destructive === null, 'expected no destructive action on the square editor');
+    assert(eb.barIsFirst && eb.strayIds.length === 0 && eb.visibleWhenScrolled === true,
+      `expected the bar first, pinned, nothing stray: ${JSON.stringify(eb)}`);
+
+    await app17.page.fill('#mnemKnightInput', 'knife');
+    eb = await modalBarState(app17.page, 'mnemonicsEditorOverlay');
+    assert(!eb.save.disabled && eb.save.primary && eb.leave.text === 'Cancel',
+      `expected typing a word to arm Save, got ${JSON.stringify(eb)}`);
+    await app17.page.fill('#mnemKnightInput', '');
+    eb = await modalBarState(app17.page, 'mnemonicsEditorOverlay');
+    assert(eb.save.disabled && eb.leave.text === 'Done',
+      `expected undoing it to return to clean, got ${JSON.stringify(eb)}`);
+
+    // the image half: clearing d4's pawn image is a staged change made
+    // entirely outside the form fields
+    await app17.page.evaluate(() =>
+      document.querySelector('#mnemPawnImgDrop .mnem-img-clear').click());
+    eb = await modalBarState(app17.page, 'mnemonicsEditorOverlay');
+    assert(!eb.save.disabled && eb.leave.text === 'Cancel',
+      `expected a staged IMAGE change to count, even though it fires no input event: ${JSON.stringify(eb)}`);
+    ok('modal bar: the square editor tracks both its words and its staged images');
+    await app17.page.click('#mnemonicsEditorOverlay .modal-bar .mb-leave');
+  } catch(e){ bad('modal bar: mnemonics square editor', e); }
 } finally {
   await app17.close();
 }
