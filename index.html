@@ -478,6 +478,29 @@
   .rf-donut .rf-seg:hover{opacity:1}
   .rf-donut-top{font-size:17px;font-weight:600;fill:#1f4e79;text-anchor:middle;font-variant-numeric:tabular-nums}
   .rf-donut-bottom{font-size:9px;fill:#888;text-anchor:middle;letter-spacing:.03em}
+  /* ---- the calendar ---- */
+  .rf-cal-strip{display:flex;gap:.25rem;margin:0 0 .6rem}
+  .rf-cal-month{flex:1 1 0;min-width:0;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa;
+                padding:.3rem .2rem;cursor:pointer;text-align:center;font:inherit;color:#555;overflow:hidden}
+  .rf-cal-month:hover{border-color:#90caf9}
+  .rf-cal-month.on{border-color:#1565c0;background:#f3f8fd;color:#1f4e79;font-weight:600}
+  .rf-cal-month-name{font-size:.7rem;letter-spacing:.02em;white-space:nowrap}
+  .rf-cal-month-n{font-size:.78rem;font-variant-numeric:tabular-nums}
+  .rf-cal-month-spark{height:.22rem;border-radius:.11rem;background:#1565c0;margin:.2rem auto 0;min-width:1px}
+  .rf-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+  .rf-cal-dow{font-size:.66rem;color:#aaa;text-align:center;padding:.1rem 0;letter-spacing:.03em}
+  .rf-cal-cell{border:1px solid #eee;border-radius:3px;min-height:2.9rem;padding:.12rem .22rem;
+               font-size:.66rem;color:#bbb;position:relative;overflow:hidden}
+  .rf-cal-cell.rf-cal-out{border-color:transparent;background:transparent}
+  .rf-cal-cell.rf-cal-past{background:#fafafa;color:#d0d0d0}
+  .rf-cal-cell.rf-cal-today{border-color:#1565c0;border-width:2px;padding:.06rem .16rem}
+  /* a loaded cell sits on a blue wash, so its date and room count need to
+     come up off it -- the #bbb that reads as "secondary" on white disappears
+     entirely on the darker end of the scale */
+  .rf-cal-cell.rf-cal-has{color:#41688f}
+  .rf-cal-load{font-size:.86rem;font-weight:600;color:#12395f;line-height:1.15;font-variant-numeric:tabular-nums}
+  .rf-cal-rooms{font-size:.62rem;color:#41688f;font-variant-numeric:tabular-nums}
+  .rf-cal-none{font-size:.72rem;color:#888;padding:.8rem 0;text-align:center}
 
   .graph-coverage{margin:.3rem 0 .5rem;display:flex;flex-direction:column;gap:.3rem}
   .graph-coverage-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555}
@@ -1981,6 +2004,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-406"></script>
+<script type="module" src="js/app.js?v=20260804-407"></script>
 </body>
 </html>

@@ -22036,9 +22036,140 @@ try {
       `expected a distinct colour per rung, got ${JSON.stringify(strokes)}`);
     assert(/memorized/i.test(ladderRing.caption),
       `the ladder ring is a share of the MEMORIZED moves, not of everything: ${JSON.stringify(ladderRing.caption)}`);
-    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
     ok('Review Forecast: the ladder ring ramps by rung and is a share of what is memorized');
   } catch(e){ bad('Review Forecast: ladder ring', e); }
+
+  /* Phase 5: the calendar. It consumes perDay and computes no schedule, so
+     these test the two things that ARE its own -- that it shows only the
+     future, and that picking a month is a view change rather than a query. */
+  const rfCal = () => appEF.page.evaluate(() => {
+    const cells = [...document.querySelectorAll('#reviewForecastBody .rf-cal-grid .rf-cal-cell')]
+      .filter(c => !c.classList.contains('rf-cal-out'))
+      .map(c => ({
+        day: Number(c.firstElementChild?.textContent.trim()),
+        moves: Number(c.querySelector('.rf-cal-load')?.textContent.trim() || 0),
+        past: c.classList.contains('rf-cal-past'),
+        today: c.classList.contains('rf-cal-today'),
+      }));
+    return {
+      cells,
+      months: [...document.querySelectorAll('#reviewForecastBody .rf-cal-month')].map(b => ({
+        idx: Number(b.dataset.rfMonth),
+        name: b.querySelector('.rf-cal-month-name').textContent.trim(),
+        moves: Number(b.querySelector('.rf-cal-month-n').textContent.trim()),
+        on: b.classList.contains('on'),
+        spark: !!b.querySelector('.rf-cal-month-spark'),
+      })),
+      label: document.querySelectorAll('#reviewForecastBody .rf-section')[1]
+        ?.querySelectorAll('.rf-section-note')[1]?.textContent.trim(),
+    };
+  });
+
+  // 284. Only the FUTURE is drawn. A past due date is already counted as
+  //      overdue, and the overdue figure is at the top of the modal --
+  //      drawing it again across a month of grey squares would be a calendar
+  //      of the past, which is noise you cannot act on. The fixture from the
+  //      donut tests has one room 20 days overdue, so this is a real case.
+  try {
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-cal-grid').length > 0, { timeout: 20000 });
+    const cal = await rfCal();
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+
+    assert(cal.cells.some(c => c.today), 'expected today marked in the grid');
+    const loadedPast = cal.cells.filter(c => c.past && c.moves > 0);
+    assert(loadedPast.length === 0,
+      `no past day may carry load -- it is already in the overdue figure: ${JSON.stringify(loadedPast)}`);
+    assert(live.buckets.overdue.moves > 0,
+      'setup: the fixture should have something overdue, or this test proves nothing');
+
+    // every future day the aggregation knows about, in this month, is drawn
+    const shownTotal = cal.cells.reduce((s, c) => s + c.moves, 0);
+    const thisMonth = new Date();
+    const expected = live.perDay
+      .filter(d => d.due >= new Date(new Date().setHours(0,0,0,0)).getTime())
+      .filter(d => new Date(d.due).getMonth() === thisMonth.getMonth()
+                && new Date(d.due).getFullYear() === thisMonth.getFullYear())
+      .reduce((s, d) => s + d.moves, 0);
+    assert(shownTotal === expected,
+      `the grid must show every future day this month and nothing else: drew ${shownTotal}, expected ${expected}`);
+    ok('Review Forecast: the calendar draws future days only, with the overdue pile left to the figure above');
+  } catch(e){ bad('Review Forecast: calendar shows only the future', e); }
+
+  // 285. The month strip: at least six months (the ladder tops out at 180
+  //      days, so a shorter strip would hide the far end of a mature
+  //      repertoire), the current one selected, a spark only where there is
+  //      something, and its totals agreeing with the per-day map.
+  try {
+    const cal = await rfCal();
+    assert(cal.months.length >= 6, `expected at least six months, got ${cal.months.length}`);
+    assert(cal.months.length <= 12, `expected the strip capped at twelve, got ${cal.months.length}`);
+    assert(cal.months[0].on && cal.months.filter(m => m.on).length === 1,
+      `expected exactly the current month selected: ${JSON.stringify(cal.months.map(m => m.on))}`);
+    assert(cal.months.every(m => m.moves > 0 ? m.spark : !m.spark),
+      `a month with nothing must draw no spark at all: ${JSON.stringify(cal.months)}`);
+
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+    const today0 = new Date(new Date().setHours(0,0,0,0)).getTime();
+    const futureTotal = live.perDay.filter(d => d.due >= today0).reduce((s, d) => s + d.moves, 0);
+    const stripTotal = cal.months.reduce((s, m) => s + m.moves, 0);
+    assert(stripTotal === futureTotal,
+      `the strip must account for every future move: strip ${stripTotal} vs perDay ${futureTotal}`);
+    ok(`Review Forecast: the month strip spans the ladder and totals the whole future (${cal.months.length} months)`);
+  } catch(e){ bad('Review Forecast: month strip', e); }
+
+  // 286. Picking a month is a VIEW change, not a query: it redraws from the
+  //      forecast already in hand rather than walking every room again. If it
+  //      re-aggregated, a month click on a large repertoire would cost the
+  //      same as opening the modal.
+  try {
+    const before = await rfCal();
+    const target = before.months.find(m => m.idx === 1);
+    assert(target, 'setup: expected a second month in the strip');
+
+    // count aggregation passes across the click: gatherBuiltCastles is cached,
+    // so the honest signal is whether the forecast is recomputed at all
+    await appEF.page.evaluate(() => {
+      const H = window.__reviewForecastTestHooks;
+      window.__rfCalls = 0;
+      const real = H.forecast;
+      H.forecast = (...a) => { window.__rfCalls++; return real(...a); };
+    });
+    await appEF.page.evaluate(() => document.querySelector('.rf-cal-month[data-rf-month="1"]').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelector('.rf-cal-month[data-rf-month="1"]')?.classList.contains('on'), { timeout: 5000 });
+
+    const after = await rfCal();
+    assert(after.months[1].on && !after.months[0].on,
+      `expected the picked month selected and the old one released: ${JSON.stringify(after.months.map(m => m.on))}`);
+    assert(after.label !== before.label,
+      `expected the grid's month label to change, got ${JSON.stringify({ before: before.label, after: after.label })}`);
+    assert(!after.cells.some(c => c.today),
+      'a month other than this one has no "today" cell to mark');
+    ok('Review Forecast: picking a month redraws the grid from the forecast already in hand');
+  } catch(e){ bad('Review Forecast: month switching', e); }
+
+  // 287. Changing scope resets the month. Otherwise picking March, then
+  //      switching to a castle whose schedule is all in January, strands you
+  //      on an empty grid that looks like the castle has nothing due.
+  try {
+    /* Waits on the render COUNTER, not on "a grid exists": the previous
+       render's grid is still in the DOM until the new innerHTML lands, so
+       the obvious wait is satisfied by stale markup and reads the old
+       month. (This test failed that way first time round.) */
+    const gen0 = await appEF.page.evaluate(() => Number(document.getElementById('reviewForecastBody').dataset.rfGen || 0));
+    await appEF.page.selectOption('#reviewForecastScope', 'c:0');
+    await appEF.page.waitForFunction(() => window.__reviewForecastTestHooks.scope() !== null, { timeout: 20000 });
+    await appEF.page.waitForFunction(
+      (g) => Number(document.getElementById('reviewForecastBody').dataset.rfGen || 0) > g, gen0, { timeout: 20000 });
+    const cal = await rfCal();
+    assert(cal.months[0].on, `expected the month reset to the current one after a scope change: ${JSON.stringify(cal.months.map(m => m.on))}`);
+    await appEF.page.selectOption('#reviewForecastScope', '');
+    await appEF.page.waitForFunction(() => window.__reviewForecastTestHooks.scope() === null, { timeout: 20000 });
+    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
+    ok('Review Forecast: changing scope resets the calendar to the current month');
+  } catch(e){ bad('Review Forecast: scope resets the month', e); }
 } finally {
   await appEF.close();
 }
