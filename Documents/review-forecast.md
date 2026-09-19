@@ -1,6 +1,6 @@
 # Review Forecast — design and phasing plan
 
-**Status: Phases 1-4 built. Phases 5-6 proposed.**
+**Status: Phases 1-5 built. Phase 6 is whatever real use turns up.**
 
 ## What it is for
 
@@ -268,14 +268,44 @@ is proportional to its bucket and says so in its tooltip, zero buckets produce
 no slice at all, and a ring with nothing in it is omitted rather than drawn
 empty.
 
-## Phase 5 — the calendar
+## Phase 5 — the calendar ✅ BUILT
 
-Month grid, one cell per day, `moves` with `rooms` subscripted. Forward/back
-by month, plus a compact 6-month strip above for orientation — at 60- and
-180-day intervals a single month shows almost nothing. Past days collapse into
-the single Overdue figure; a calendar of the past is noise.
+Month grid, one cell per day, moves with rooms under them, shaded by load.
+Consumes Phase 1's `perDay` map directly and computes no schedule of its own.
 
-Consumes Phase 1's `perDay` map directly.
+**Changed from the proposal:** no forward/back arrows. The strip above *is*
+the navigation — each month is a button — which is one control instead of
+three and makes "jump to the busy month" a single click rather than repeated
+paging. The strip spans at least six months, because the ladder tops out at
+180 days and a shorter one would hide the far end of a mature repertoire,
+extending to cover whatever is actually scheduled and capped at twelve so a
+stray far-future date cannot produce a hundred columns.
+
+**Future days only.** A past due date is already counted as overdue and that
+figure sits at the top of the modal; drawing it again across a month of grey
+squares would be a calendar of the past, which is noise you cannot act on.
+
+**Cell shading is scaled within the displayed month** — the same call the bars
+make, for the same reason: it makes that month's own shape readable.
+Cross-month comparison is what the strip is for, so nothing is lost by not
+also attempting it in the grid.
+
+**Picking a month is a view change, not a query.** It redraws from the
+forecast already in hand (`RF_LAST`); the modal is a snapshot and does not
+live-update, so a month click has no business walking every room again. On a
+large repertoire that would make paging cost the same as opening the modal.
+
+Two things worth knowing for the next person:
+
+- **Changing scope resets the month.** Otherwise picking March and then
+  switching to a castle whose schedule is all in January strands you on an
+  empty grid that looks like the castle has nothing due.
+- **`renderReviewForecast` bumps a counter into `body.dataset.rfGen`.** A test
+  waiting for a re-render cannot wait on "the grid exists" — the previous
+  render's grid is still in the DOM until the new `innerHTML` lands, so that
+  wait is satisfied by stale markup and reads the old month. The
+  scope-reset test failed exactly that way before the counter existed. Same
+  reason `applyBackupData` has `__importBackupGen`.
 
 ## Phase 6 — extensions
 

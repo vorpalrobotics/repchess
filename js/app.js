@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-406';
+const BUILD_TAG = '-407';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8370,10 +8370,116 @@ function rfDonutHtml(slices, centerTop, centerBottom, ariaLabel){
     </div>`;
 }
 
+/* ---------- the calendar (Phase 5) ----------
+
+   Consumes Phase 1's perDay map directly; nothing here computes a schedule.
+
+   FUTURE DAYS ONLY. A past due date is already counted as overdue, and the
+   overdue figure sits at the top of the modal -- drawing it again across a
+   month of grey squares would be a calendar of the past, which is noise you
+   cannot act on.
+
+   Cell shading is scaled WITHIN THE DISPLAYED MONTH, the same call the bars
+   make and for the same reason: it makes that month's own shape readable.
+   Cross-month comparison is what the strip above is for, so nothing is lost
+   by not also trying to do it here. */
+let RF_MONTH = 0;                                   // months from the current one
+const rfMonthIndex = (ms) => { const d = new Date(ms); return d.getFullYear() * 12 + d.getMonth(); };
+
+function rfCalendarHtml(f){
+  const today = startOfLocalDay(f.generatedAt);
+  const future = f.perDay.filter(d => d.due >= today);
+  if(!future.length){
+    return `<div class="rf-section"><h3>When it lands</h3>
+      <p class="rf-cal-none">Nothing is scheduled ahead — anything outstanding is in the overdue figure above.</p></div>`;
+  }
+
+  /* The strip spans far enough to cover everything actually scheduled, but at
+     least six months: the ladder tops out at 180 days, so a shorter strip
+     would hide the far end of a mature repertoire, and a longer one would be
+     empty columns for most people. Capped so a stray far-future date cannot
+     produce a hundred of them. */
+  const nowIdx = rfMonthIndex(today);
+  const lastIdx = rfMonthIndex(future[future.length - 1].due);
+  const months = Math.min(12, Math.max(6, lastIdx - nowIdx + 1));
+  if(RF_MONTH >= months) RF_MONTH = 0;              // scope changed under us
+
+  const byMonth = new Map();
+  for(const d of future){
+    const k = rfMonthIndex(d.due) - nowIdx;
+    const m = byMonth.get(k) || { moves: 0, rooms: 0 };
+    m.moves += d.moves; m.rooms += d.rooms;
+    byMonth.set(k, m);
+  }
+  const monthMax = Math.max(...[...byMonth.values()].map(m => m.moves), 0);
+
+  const strip = Array.from({ length: months }, (_, i) => {
+    const d = new Date(today); d.setDate(1); d.setMonth(d.getMonth() + i);
+    const m = byMonth.get(i) || { moves: 0, rooms: 0 };
+    const w = monthMax > 0 ? Math.round(m.moves / monthMax * 100) : 0;
+    return `<button type="button" class="rf-cal-month${i === RF_MONTH ? ' on' : ''}" data-rf-month="${i}"
+      title="${escapeHtml(d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}: ${m.moves} move${m.moves === 1 ? '' : 's'}, ${m.rooms} room${m.rooms === 1 ? '' : 's'}">
+      <div class="rf-cal-month-name">${escapeHtml(d.toLocaleDateString(undefined, { month: 'short' }))}</div>
+      <div class="rf-cal-month-n">${m.moves}</div>
+      ${m.moves ? `<div class="rf-cal-month-spark" style="width:${w}%"></div>` : ''}
+    </button>`;
+  }).join('');
+
+  // the displayed month's grid
+  const first = new Date(today); first.setDate(1); first.setMonth(first.getMonth() + RF_MONTH);
+  const year = first.getFullYear(), month = first.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const loadByDay = new Map(future.map(d => [startOfLocalDay(d.due), d]));
+  const shown = [];
+  for(let day = 1; day <= daysInMonth; day++){
+    const ms = startOfLocalDay(new Date(year, month, day).getTime());
+    shown.push({ day, ms, load: loadByDay.get(ms) || null });
+  }
+  const cellMax = Math.max(...shown.map(c => c.load ? c.load.moves : 0), 0);
+
+  const dow = Array.from({ length: 7 }, (_, i) =>
+    `<div class="rf-cal-dow">${escapeHtml(new Date(2024, 8, 1 + i).toLocaleDateString(undefined, { weekday: 'narrow' }))}</div>`).join('');
+  const lead = Array.from({ length: first.getDay() }, () => `<div class="rf-cal-cell rf-cal-out"></div>`).join('');
+  const cells = shown.map(c => {
+    const past = c.ms < today, isToday = c.ms === today;
+    const cls = `rf-cal-cell${past ? ' rf-cal-past' : ''}${isToday ? ' rf-cal-today' : ''}${c.load ? ' rf-cal-has' : ''}`;
+    if(!c.load){
+      return `<div class="${cls}"><div>${c.day}</div></div>`;
+    }
+    // a light blue wash whose strength is this day's share of the month's
+    // heaviest -- floored so the lightest loaded day is still visibly loaded
+    const tint = cellMax > 0 ? 0.12 + 0.55 * (c.load.moves / cellMax) : 0;
+    const label = `${new Date(c.ms).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}: ` +
+      `${c.load.moves} move${c.load.moves === 1 ? '' : 's'} across ${c.load.rooms} room${c.load.rooms === 1 ? '' : 's'}`;
+    return `<div class="${cls}" style="background:rgba(21,101,192,${tint.toFixed(3)})" title="${escapeHtml(label)}">
+      <div>${c.day}</div>
+      <div class="rf-cal-load">${c.load.moves}</div>
+      <div class="rf-cal-rooms">${c.load.rooms} room${c.load.rooms === 1 ? '' : 's'}</div>
+    </div>`;
+  }).join('');
+
+  const monthName = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  return `
+    <div class="rf-section">
+      <h3>When it lands</h3>
+      <p class="rf-section-note">Future days only — anything outstanding is already in the overdue figure above.
+        Pick a month; shading is relative to the busiest day <em>in that month</em>, so each month's own shape reads.</p>
+      <div class="rf-cal-strip">${strip}</div>
+      <p class="rf-section-note" style="margin:.1rem 0 .35rem">${escapeHtml(monthName)}</p>
+      <div class="rf-cal-grid">${dow}${lead}${cells}</div>
+    </div>`;
+}
+
+/* Bumped on every completed draw. A test waiting for a re-render cannot wait
+   on "the grid exists" -- the PREVIOUS render's grid is still in the DOM
+   until innerHTML lands, so that wait is satisfied by stale markup and reads
+   the old month. Same reason applyBackupData has __importBackupGen. */
+let RF_RENDER_GEN = 0;
 function renderReviewForecast(f){
   const body = $('reviewForecastBody');
   if(!f.castles){
     body.innerHTML = `<p class="rf-empty">No castles built yet in this scope — generate one and memorize a room to start a schedule.</p>`;
+    body.dataset.rfGen = String(++RF_RENDER_GEN);
     return;
   }
 
@@ -8414,6 +8520,7 @@ function renderReviewForecast(f){
         </div>
       </div>
     </div>
+    ${rfCalendarHtml(f)}
     <div class="rf-section">
       <h3>How well learned</h3>
       <p class="rf-section-note">Where the memorized rooms sit on the interval ladder. Rooms climb a rung
@@ -8434,6 +8541,7 @@ function renderReviewForecast(f){
       ${rfRow('Memorized', '#2e7d32', f.totals.memorizedMoves, f.totals.memorizedRooms, f.totals.moves)}
       ${rfRow('In this scope', '#9e9e9e', f.totals.moves, f.totals.rooms, f.totals.moves)}
     </div>`;
+  body.dataset.rfGen = String(++RF_RENDER_GEN);
 }
 
 /* Every built castle, by stable identity rather than by index -- two lines
@@ -8455,8 +8563,13 @@ function populateReviewForecastScope(castles){
   if(!sel.value) RF_SCOPE = null;   // the remembered castle is gone; fall back to All
 }
 
+/* The forecast this modal is currently showing. The modal is a SNAPSHOT --
+   it does not live-update while open -- so switching the calendar's month is
+   a view change over this, not a reason to walk every room again. */
+let RF_LAST = null;
 async function drawReviewForecast(){
-  renderReviewForecast(await reviewForecast(RF_SCOPE || {}));
+  RF_LAST = await reviewForecast(RF_SCOPE || {});
+  renderReviewForecast(RF_LAST);
 }
 // re-scoping only needs the redraw, and rides the castle cache, but on a big
 // repertoire that is still an aggregation pass over every room -- so it gets
@@ -8493,8 +8606,19 @@ $('menuReviewForecast').onclick = () => {
 $('reviewForecastScope').onchange = () => {
   const v = $('reviewForecastScope').value;
   RF_SCOPE = v.startsWith('c:') ? RF_SCOPE_OPTIONS[+v.slice(2)] || null : null;
+  RF_MONTH = 0;   // a different scope is a different calendar; don't strand it on month 4
   refreshReviewForecast();
 };
+/* Delegated, because the strip is rebuilt on every draw -- binding per button
+   would leave the previous render's handlers behind on every month switch.
+   Redraws from the already-loaded forecast rather than re-aggregating: the
+   month is a view, not a query. */
+$('reviewForecastBody').addEventListener('click', (e) => {
+  const btn = e.target.closest('.rf-cal-month');
+  if(!btn || !RF_LAST) return;
+  RF_MONTH = +btn.dataset.rfMonth || 0;
+  renderReviewForecast(RF_LAST);
+});
 mountInfoBar('reviewForecastBar', 'Review Forecast',
   () => { $('reviewForecastOverlay').style.display = 'none'; });
 
