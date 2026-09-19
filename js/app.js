@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-412';
+const BUILD_TAG = '-413';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8640,7 +8640,11 @@ $('reviewForecastBody').addEventListener('click', (e) => {
   RF_MONTH = +btn.dataset.rfMonth || 0;
   renderReviewForecast(RF_LAST);
 });
-mountInfoBar('reviewForecastBar', 'Review Forecast',
+/* Titled to match its menu item. The ids and the internal names stay
+   `reviewForecast*` -- renaming those is churn across a lot of test
+   references for no user-visible gain, and Documents/review-forecast.md
+   still describes the design under its original name. */
+mountInfoBar('reviewForecastBar', 'VR Schedule',
   () => { $('reviewForecastOverlay').style.display = 'none'; });
 
 /* ---------- cross-castle transposition detector ----------

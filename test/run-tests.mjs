@@ -21957,7 +21957,7 @@ try {
   //      a bare Done, no Save, and the scope dropdown is a view control that
   //      stays in the body.
   try {
-    await assertInfoBar(appEF.page, 'reviewForecastOverlay', 'Review Forecast');
+    await assertInfoBar(appEF.page, 'reviewForecastOverlay', 'VR Schedule');
     const scopeInBody = await appEF.page.evaluate(() => {
       const el = document.getElementById('reviewForecastScope');
       return !!el && !el.closest('.modal-bar');
