@@ -5332,6 +5332,97 @@ try {
 
 } catch(e){ bad('Phase AC2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AC3: regression -- nudging a WALL-LIST-DRIVEN move object in edit
+//     mode used to squash it. setSlotXformLive asked slotAssetFor "is this an
+//     image prop?", and that only ever sees a per-slot override, so a picture
+//     that came from the bucket's assigned list read as a word-only plaque
+//     and got re-scaled to the plaque's 1.1 x 0.55 sprite scale: roughly the
+//     right width, half the height, and stuck that way until the next full
+//     rebuild (leaving edit mode) quietly put it back. Uses a cylindrical
+//     billboard rather than the extruded asset Phase AC2 uses, because
+//     buildBillboardAsset makes its PlaneGeometry synchronously -- so the
+//     world bounding box is real here even though the fixture's image never
+//     decodes. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appAC3 = await launchApp();
+try {
+  await seedBackup(appAC3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'billboardProp', name: 'billboardProp', type: 'billboard-cylindrical', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.8, h: 1.6 } }],
+    objectLists: [
+      { id: 'picture_list', name: 'Picture List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'PictureWord', assetId: 'billboardProp' }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAC3.page);
+  const roomKey = await appAC3.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAC3.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAC3.page.waitForTimeout(300);
+  const slotIds = await appAC3.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const slotId = slotIds.filter(id => id !== 'obj-C1').sort()[0];
+  await appAC3.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'picture_list'), roomKey);
+  await appAC3.page.waitForTimeout(300);
+
+  // 85d. A list-driven image keeps its size through a live nudge: the prop
+  //      moves, its scale stays uniform, and its bounding-box height is the
+  //      one the asset declares (1.6m), not the plaque's half-height.
+  try {
+    const before = await appAC3.page.evaluate((sid) => window.__threeTestEdit.accessoryRenderInfo(sid), slotId);
+    assert(before, `test setup issue: expected an accessory mesh for slot ${slotId} once the wall list is assigned, got null`);
+    assert(Math.abs(before.size.y - 1.6) < 0.05,
+      `test setup issue: expected the list-driven billboard built at its declared 1.6m height, got ${JSON.stringify(before.size)}`);
+
+    await appAC3.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appAC3.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), slotId);
+    const selected = await appAC3.page.evaluate(() => window.__threeTestEdit.selected());
+    assert(selected && selected.slotId === slotId, `expected the list-driven object selectable, got ${JSON.stringify(selected)}`);
+    await appAC3.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+    await appAC3.page.waitForTimeout(150);
+
+    const after = await appAC3.page.evaluate((sid) => window.__threeTestEdit.accessoryRenderInfo(sid), slotId);
+    assert(after, 'expected the accessory still in the scene after a nudge');
+    assert(Math.abs(after.scale.x - after.scale.y) < 1e-6,
+      `expected the nudge to leave the prop's scale uniform, got ${JSON.stringify(after.scale)}`);
+    assert(Math.abs(after.scale.y - before.scale.y) < 1e-6,
+      `a nudge moves a prop, it must not resize it: scale.y went ${before.scale.y} -> ${after.scale.y}`);
+    assert(Math.abs(after.size.y - before.size.y) < 0.02,
+      `expected the nudged prop to keep its 1.6m height, got ${JSON.stringify({ before: before.size, after: after.size })}`);
+    ok('a wall-list-driven move object keeps its full height through a live nudge (not squashed to the word-plaque scale)');
+  } catch(e){ bad('live nudge: list-driven image keeps its size', e); }
+
+  // 85e. ...and the underlying resolver is what makes that work: a
+  //      list-driven slot with no per-slot override still resolves to the
+  //      list item's asset, which is what tells the live path "this is an
+  //      image, transform it like one" rather than "this is a plaque".
+  try {
+    const word = await appAC3.page.evaluate((args) => window.__threeTestEdit.slotListWord(args.k, args.sid),
+      { k: roomKey, sid: slotId });
+    assert(word === 'PictureWord', `expected the slot to resolve to the list item, got ${JSON.stringify(word)}`);
+    const layout = await appAC3.page.evaluate(() => window.__threeTestEdit.layoutSnapshot());
+    const overrides = (layout[roomKey] && layout[roomKey].slots) || {};
+    assert(!overrides[slotId],
+      `the regression only bites when there is NO per-slot override -- this fixture must not have one, got ${JSON.stringify(overrides)}`);
+    ok('live nudge regression: the fixture really is list-driven with no per-slot asset override');
+  } catch(e){ bad('live nudge: list-driven fixture has no per-slot override', e); }
+} finally {
+  await appAC3.close();
+}
+
+} catch(e){ bad('Phase AC3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AD: "fully decorated" -- the door-naming half of the check
 //     (only for a door whose target is NOT empty/locked -- see isRoomEmpty
 //     and the locked-doors feature), and the vacuous-true case. ---
@@ -7747,6 +7838,36 @@ try {
   await appAR3.page.evaluate(() => document.getElementById('menuAssets').click());
   await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
 
+  // 91b. Regression, reported from real use: the manager's FIRST open after a
+  //      page load had no bar at all -- no Done, and no Escape either (the bar
+  //      is what installs that handler), on an overlay with no backdrop-close.
+  //      The only way out was reloading. openAssetManager never called
+  //      renderBar(); every other call sat on an editor transition, so opening
+  //      any asset once populated the bar and it stayed populated for the rest
+  //      of the session -- which is exactly why the bar tests below (94b on)
+  //      never saw it: test 92 opens the editor first.
+  //
+  //      This runs before anything else touches the editor, and asserts a
+  //      usable Done rather than merely a present one: the earlier shape of
+  //      this bug would also be satisfied by a button wired to nothing.
+  try {
+    const bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar, 'expected the shared button bar on the asset manager\'s very first open, found none');
+    assert(bar.leave && bar.leave.text === 'Done' && !bar.leave.disabled,
+      `expected an enabled "Done" on a freshly-opened manager, got ${JSON.stringify(bar.leave)}`);
+    await appAR3.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave').click());
+    await appAR3.page.waitForSelector('#assetsOverlay', { state: 'hidden', timeout: 5000 });
+
+    // ...and it is still there on the next open, now that the bar is rendered
+    // per open rather than left behind by whatever the last view happened to be
+    await appAR3.page.evaluate(() => document.getElementById('menuAssets').click());
+    await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+    const again = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(again && again.leave.text === 'Done' && again.save === null,
+      `expected the grid bar again on a reopen, got ${JSON.stringify(again)}`);
+    ok('asset manager: the button bar is there on the first open, and the way out actually closes it');
+  } catch(e){ bad('asset manager: no way out on first open (regression)', e); }
+
   // 92. A brand-new asset defaults to "Billboard (cylindrical)", not
   //     "Extruded" -- and "Billboard (sprite)" is no longer offered at all.
   try {
@@ -10101,7 +10222,7 @@ try {
     assert(rowState.mnemRow !== 'none' && rowState.assetsRow !== 'none', `expected both rows shown, got ${JSON.stringify(rowState)}`);
     assert(rowState.mnemChecked && rowState.assetsChecked, `expected both checkboxes checked by default, got ${JSON.stringify(rowState)}`);
 
-    await appBJ.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    await appBJ.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const afterMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const afterAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
@@ -10128,27 +10249,65 @@ try {
 
 } catch(e){ bad("phase @ line 6605 (tags: ['mnemonics'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BK: declining (Skip) the starter-content offer leaves both
+// --- Phase BK: the offer's button bar, and declining it -- which leaves both
 //     stores empty but still remembers both decisions, so it doesn't nag on
 //     every boot. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBK = await launchApp();
 try {
-  // 297. Skip -> nothing installed, but both offers are still marked made.
+  // 296b. The offer is a CONFIRM on the shared bar (Documents/modal-buttons.md):
+  //       everything arrives ticked and the expected answer is to press the
+  //       verb, so the primary is live immediately -- under the editor rule
+  //       (Save gated on dirtiness) accepting an offer you agree with would
+  //       be impossible. Leave stays "Cancel" throughout for the same reason:
+  //       there is always a pending decision to decline.
   try {
     await appBK.page.evaluate(() => window.__defaultContentTestHooks.offer());
     await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
-    await appBK.page.evaluate(() => document.getElementById('defaultContentSkipBtn').onclick());
+
+    const b = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(b, 'expected the shared button bar on the starter-content offer');
+    assert(b.title === 'Starter Content', `expected the bar titled "Starter Content", got ${JSON.stringify(b.title)}`);
+    assert(b.barIsFirst, 'expected the bar to be the modal\'s first child');
+    assert(b.strayIds.length === 0, `expected the old Skip/Install buttons gone from the body, got ${JSON.stringify(b.strayIds)}`);
+    assert(b.leave.text === 'Cancel' && !b.leave.disabled,
+      `expected a confirm's Leave to read "Cancel" from the moment it opens, got ${JSON.stringify(b.leave)}`);
+    assert(b.save && !b.save.disabled && b.save.primary && b.save.text === 'Install Selected',
+      `expected "Install Selected" live and primary with nothing touched, got ${JSON.stringify(b.save)}`);
+    assert(b.state === '', `a confirm stages nothing, so expected no unsaved-changes text, got ${JSON.stringify(b.state)}`);
+    assert(b.destructive === null, `expected no destructive button on the offer, got ${JSON.stringify(b.destructive)}`);
+
+    // unticking everything leaves the primary with nothing to install -- that
+    // is Cancel's job, so it must not stay live and pretend otherwise
+    await appBK.page.uncheck('#defaultContentMnemChk');
+    await appBK.page.uncheck('#defaultContentAssetsChk');
+    const empty = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(empty.save.disabled, `expected the primary disabled with nothing ticked, got ${JSON.stringify(empty.save)}`);
+    assert(empty.leave.text === 'Cancel', `expected Leave still "Cancel" with nothing ticked, got ${JSON.stringify(empty.leave)}`);
+
+    await appBK.page.check('#defaultContentMnemChk');
+    const one = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(!one.save.disabled && one.save.primary, `expected the primary live again once one item is ticked, got ${JSON.stringify(one.save)}`);
+    await appBK.page.check('#defaultContentAssetsChk');
+    // deliberately left open -- test 297 declines this same offer, and the
+    // offer is one-shot per browser so it cannot be raised twice
+    ok('starter-content offer: a Confirm on the shared bar (primary live immediately, disabled only with nothing ticked)');
+  } catch(e){ bad('starter-content offer: button bar', e); }
+
+  // 297. Cancel -> nothing installed, but both offers are still marked made.
+  try {
+    await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK.page.evaluate(() => document.getElementById('dcLeave').onclick());
     const mnemStored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
-    assert(Object.keys(mnemStored).length === 0, `expected Skip to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
-    assert(assetsStored.length === 0, `expected Skip to leave the assets store empty, got ${assetsStored.length} asset(s)`);
+    assert(Object.keys(mnemStored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
+    assert(assetsStored.length === 0, `expected declining to leave the assets store empty, got ${assetsStored.length} asset(s)`);
     const mnemOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
     const assetsOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
-    assert(!!mnemOffered && !!assetsOffered, 'expected Skip to still mark both offers as made (so it does not nag again)');
-    ok('Skip on the starter-content offer installs nothing but remembers both decisions');
-  } catch(e){ bad('starter-content offer: Skip leaves both stores empty but remembers both decisions', e); }
+    assert(!!mnemOffered && !!assetsOffered, 'expected declining to still mark both offers as made (so it does not nag again)');
+    ok('declining the starter-content offer installs nothing but remembers both decisions');
+  } catch(e){ bad('starter-content offer: declining leaves both stores empty but remembers both decisions', e); }
 } finally {
   await appBK.close();
 }
@@ -10177,7 +10336,7 @@ try {
     assert(rowState.mnemRow === 'none', `expected the mnemonics row hidden (store already has content), got ${JSON.stringify(rowState)}`);
     assert(rowState.assetsRow !== 'none', `expected the assets row shown (store is empty), got ${JSON.stringify(rowState)}`);
 
-    await appBK2.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    await appBK2.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const mnemStored = await appBK2.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK2.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
@@ -10205,8 +10364,11 @@ try {
   try {
     await appBK3.page.evaluate(() => window.__defaultContentTestHooks.offer());
     await appBK3.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
-    await appBK3.page.evaluate(() => { document.getElementById('defaultContentAssetsChk').checked = false; });
-    await appBK3.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    // a real uncheck, not a programmatic `checked = false`: the bar's primary
+    // is gated on at least one item being ticked, and only a genuine change
+    // event repaints it -- so this also proves one-of-two keeps it live
+    await appBK3.page.uncheck('#defaultContentAssetsChk');
+    await appBK3.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const mnemStored = await appBK3.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK3.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
@@ -17358,12 +17520,12 @@ try {
   //       available" option once a multi-threaded build is faked in,
   //       defaulting to "Max available" (0) rather than any specific count.
   try {
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     const hiddenWhileSingleThreaded = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click())
       .then(() => appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 }))
       .then(() => appCW.page.evaluate(() => document.getElementById('poThreadsField').style.display === 'none'));
     assert(hiddenWhileSingleThreaded, 'expected the Threads field hidden on a single-threaded build (the harness\'s real default)');
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
 
     await appCW.page.evaluate(() => {
       const { engine } = window.__aqTestHooks;
@@ -17405,7 +17567,7 @@ try {
     await appCW.page.fill('#poHashMB', '1024');
     await appCW.page.selectOption('#poThreadsSelect', '3');
     await appCW.page.check('#poEnabledCheckbox');
-    await appCW.page.click('#poSaveBtn');
+    await appCW.page.click('#poSave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
@@ -17432,7 +17594,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poDepth1', '99');
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
@@ -17442,29 +17604,44 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth1').value);
     assert(reopenedDepth === '50', `expected reopening to show the last saved value (50), not the cancelled edit, got ${reopenedDepth}`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: Cancel discards unsaved edits, reopening shows the last saved state');
   } catch(e){ bad('Perfect Opening: Cancel discards edits', e); }
 
-  // 264. Save validates: a non-positive value in a required-positive field
-  //      (e.g. move-1 max lines set to 0) is rejected with a visible error,
-  //      and nothing gets persisted.
+  // 264. Validation holds Save back: a non-positive value in a
+  //      required-positive field (e.g. move-1 max lines set to 0) disables
+  //      the primary with the reason in its tooltip AND in the body, so the
+  //      bad value can never be committed. Since the bar's conversion this
+  //      is the spec's "Invalid" state rather than a rejection discovered
+  //      on the way out -- the modal stays open because Save was never
+  //      clickable, and clearing the bad field brings it back to life.
   try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poMaxLines1', '0');
     await appCW.page.fill('#poDepth1', '99');   // an otherwise-valid change, to prove NOTHING saves when one field fails
-    await appCW.page.click('#poSaveBtn');
 
+    const invalid = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(invalid.save.disabled, `expected Save disabled while a field is out of range, got ${JSON.stringify(invalid.save)}`);
     const errorVisible = await appCW.page.evaluate(() => document.getElementById('poError').style.display !== 'none' && document.getElementById('poError').textContent.length > 0);
     assert(errorVisible, 'expected a visible validation error for a non-positive max-lines field');
     const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
     assert(stillOpen, 'expected the modal to stay open on a validation failure, not silently close');
 
+    // fixing the one bad field revives Save -- an Invalid state you can't get
+    // out of would be worse than the old save-time rejection, not better
+    await appCW.page.fill('#poMaxLines1', '12');
+    const fixed = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(!fixed.save.disabled && fixed.save.primary,
+      `expected Save live again once the out-of-range field is fixed, got ${JSON.stringify(fixed.save)}`);
+    const errorCleared = await appCW.page.evaluate(() => document.getElementById('poError').style.display === 'none');
+    assert(errorCleared, 'expected the body error to clear once the field is back in range');
+
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.depth[1] === 50, `expected NOTHING to save when validation fails (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
-    await appCW.page.click('#poCancelBtn');
-    ok('Perfect Opening: Save rejects a non-positive required field, persisting nothing');
+    assert(config.depth[1] === 50, `expected NOTHING to have saved while validation failed (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
+    await appCW.page.click('#poLeave');   // still dirty -- the harness accepts the discard prompt
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: a non-positive required field disables Save with the reason shown, and fixing it revives Save');
   } catch(e){ bad('Perfect Opening: Save validation rejects bad input', e); }
 
   // 265. Tolerance specifically allows exactly 0 (a valid, if extreme,
@@ -17474,7 +17651,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poTolerance', '0');
-    await appCW.page.click('#poSaveBtn');
+    await appCW.page.click('#poSave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     assert(config.toleranceCp === 0, `expected a tolerance of exactly 0 to be accepted, got ${config.toleranceCp}`);
@@ -17489,7 +17666,7 @@ try {
     appCW.page.once('dialog', d => { confirmMsg = d.message(); });   // read-only -- harness's own listener still accepts it
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    await appCW.page.click('#poResetBtn');
+    await appCW.page.click('#poDestroy');
     await appCW.page.waitForFunction(() => document.getElementById('poDepth1').value === '20', { timeout: 5000 });
 
     assert(confirmMsg && /permanently|delete|cannot be undone/i.test(confirmMsg), `expected a clear destructive-action warning, got ${JSON.stringify(confirmMsg)}`);
@@ -17498,7 +17675,7 @@ try {
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     const defaults = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
     assert(JSON.stringify(config) === JSON.stringify(defaults), `expected Reset to restore full defaults, got ${JSON.stringify(config)}`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: Reset confirms with a clear warning, then wipes to defaults and refreshes the open panel');
   } catch(e){ bad('Perfect Opening: Reset confirms and wipes', e); }
 
@@ -17510,7 +17687,7 @@ try {
       appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 })).then(() =>
       appCW.page.evaluate(() => document.getElementById('poStatus').textContent));
     assert(/not started/i.test(notStarted), `expected a "not started" status with no line yet, got "${notStarted}"`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
 
     const line = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
     await appCW.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getConfig().then(cfg => {
@@ -17522,9 +17699,78 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const withProgress = await appCW.page.evaluate(() => document.getElementById('poStatus').textContent);
     assert(withProgress.includes('42'), `expected the status line to report the 42 generated variations, got "${withProgress}"`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: status line reports real progress once a line/variation count exist, "not started" otherwise');
   } catch(e){ bad('Perfect Opening: status line reflects progress', e); }
+
+  // 267b. The control panel is on the shared button bar as an EDITOR
+  //       (Documents/modal-buttons.md): clean on open despite arriving
+  //       pre-filled, Save gated on an actual edit, Reset in the destructive
+  //       slot, and nothing left in the body that still closes or commits.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+
+    const clean = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(clean, 'expected the shared button bar on the Perfect Opening panel');
+    assert(clean.title === 'Perfect Opening Project', `expected the bar titled "Perfect Opening Project", got ${JSON.stringify(clean.title)}`);
+    assert(clean.barIsFirst, 'expected the bar to be the modal\'s first child');
+    assert(clean.visibleWhenScrolled !== false, 'expected the bar to stay pinned when the settings body scrolls');
+    assert(clean.strayIds.length === 0, `expected no close/save buttons left in the body, got ${JSON.stringify(clean.strayIds)}`);
+    // the fields arrive pre-filled from saved config -- that must NOT read as
+    // unsaved work, which is the whole reason the baseline is taken on open
+    assert(clean.leave.text === 'Done' && !clean.leave.disabled, `expected an enabled "Done" on a freshly-opened panel, got ${JSON.stringify(clean.leave)}`);
+    assert(clean.save && clean.save.disabled, `expected Save disabled until something is actually edited, got ${JSON.stringify(clean.save)}`);
+    assert(clean.state === '', `expected no unsaved-changes text on open, got ${JSON.stringify(clean.state)}`);
+    assert(clean.destructive && /^Reset Perfect Opening…$/.test(clean.destructive.text),
+      `expected Reset in the destructive slot, ellipsised because it confirms, got ${JSON.stringify(clean.destructive)}`);
+
+    // read the loaded value rather than assuming one, so undoing the edit
+    // below really does restore the exact state the baseline was taken from
+    const loadedHash = await appCW.page.evaluate(() => document.getElementById('poHashMB').value);
+    await appCW.page.fill('#poHashMB', String(+loadedHash + 512));
+    const dirty = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(dirty.leave.text === 'Cancel', `expected Leave to become "Cancel" once edited, got ${JSON.stringify(dirty.leave)}`);
+    assert(!dirty.save.disabled && dirty.save.primary, `expected Save live and primary once edited, got ${JSON.stringify(dirty.save)}`);
+    assert(dirty.state === 'Unsaved changes', `expected the unsaved-changes marker, got ${JSON.stringify(dirty.state)}`);
+
+    // typing a value back to what it was reads clean again -- dirtiness is a
+    // snapshot comparison, never a "you touched something" flag
+    await appCW.page.fill('#poHashMB', loadedHash);
+    const undone = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(undone.leave.text === 'Done' && undone.save.disabled && undone.state === '',
+      `expected the bar back to clean after undoing the edit by hand, got ${JSON.stringify(undone)}`);
+
+    await appCW.page.click('#poLeave');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: the control panel is an Editor on the shared bar (clean on open, Save gated, Reset destructive)');
+  } catch(e){ bad('Perfect Opening: control panel button bar', e); }
+
+  // 267c. ...and leaving it dirty warns before throwing the edit away.
+  try {
+    let discardMsg = null;
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poTolerance', '17');
+    appCW.page.once('dialog', d => { discardMsg = d.message(); });   // read-only -- harness's own listener accepts it
+    await appCW.page.click('#poLeave');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    assert(discardMsg && /discard/i.test(discardMsg), `expected a discard warning when leaving with an unsaved edit, got ${JSON.stringify(discardMsg)}`);
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.toleranceCp !== 17, `expected the discarded tolerance edit not to have been persisted, got ${config.toleranceCp}`);
+    ok('Perfect Opening: leaving the control panel with an unsaved edit warns first');
+  } catch(e){ bad('Perfect Opening: control panel discard warning', e); }
+
+  // 267d. The Progress panel stages nothing, so it gets the informational
+  //       bar -- a bare "Done", no Save that would sit disabled forever.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appCW.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appCW.page, 'perfectOpeningProgressOverlay', 'Perfect Opening Progress');
+    await appCW.page.click('#poProgressLeave');
+    await appCW.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: the Progress panel is informational -- a bare Done on the shared bar');
+  } catch(e){ bad('Perfect Opening: Progress panel button bar', e); }
 } finally {
   await appCW.close();
 }
@@ -17998,7 +18244,7 @@ try {
     ]));
     const status = await openPanel();
     assert(status.includes('3') && /2 positions queued for expansion/.test(status), `expected the queue depth reported alongside the variation count, got "${status}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: reports the number of positions queued for expansion');
   } catch(e){ bad('Perfect Opening status: queue depth', e); }
 
@@ -18008,14 +18254,14 @@ try {
     await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
     const status = await openPanel();
     assert(/caught up/i.test(status), `expected a "caught up" status with an empty queue while enabled, got "${status}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
 
     const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     config.enabled = false;
     await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
     const pausedStatus = await openPanel();
     assert(/paused/i.test(pausedStatus), `expected a "paused" status with the project disabled, got "${pausedStatus}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: distinguishes "caught up" (enabled, empty queue) from "paused" (disabled)');
   } catch(e){ bad('Perfect Opening status: caught-up vs. paused wording', e); }
 
@@ -18042,7 +18288,7 @@ try {
     });
     const after = await appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
     assert(/caught up/i.test(after), `expected the OPEN panel's status to refresh to "caught up" once the scheduler drained the queue, got "${after}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: a panel left open refreshes live as the scheduler processes jobs');
   } catch(e){ bad('Perfect Opening status: live refresh while open', e); }
 
@@ -18126,7 +18372,7 @@ try {
     await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDA.page.click('#poEnabledCheckbox');
-    await appDA.page.click('#poSaveBtn');
+    await appDA.page.click('#poSave');
     await appDA.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
 
     const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
@@ -18176,14 +18422,14 @@ try {
     await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningManage');
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    await appDA.page.click('#poCancelBtn');
+    await appDA.page.click('#poLeave');
 
     await appDA.page.click('#menuBtn');
     await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
     await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningProgress');
     await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: the hamburger submenu opens both Manage and Progress');
   } catch(e){ bad('Perfect Opening: hamburger submenu (Manage/Progress)', e); }
 
@@ -18230,7 +18476,7 @@ try {
     assert(rows['Moves fully explored'] === '2', `expected "Moves fully explored" to show 2, got ${JSON.stringify(rows)}`);
     assert(rows['Variations generated'] === '2', `expected "Variations generated" to show 2, got ${JSON.stringify(rows)}`);
     assert(rows['Positions queued for expansion'] === '1', `expected "Positions queued for expansion" to show 1, got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: Progress tracks "moves fully explored" and reports Paused when disabled despite a leftover queued job');
   } catch(e){ bad('Perfect Opening: Progress stats (deepestCompleteMove + status)', e); }
 
@@ -18279,7 +18525,7 @@ try {
     ));
     assert(rows[`Estimated time to complete move ${target}`] === expectedEta,
       `expected the ETA row to match the app's own recomputation ("${expectedEta}"), got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: avgJobMs tracks real elapsed time, and Progress shows a matching ETA for the current move');
   } catch(e){ bad('Perfect Opening: avgJobMs + ETA display', e); }
 
@@ -18315,7 +18561,7 @@ try {
         row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
     ));
     assert(rows['Search speed'] === '1.4m evals/sec', `expected the Progress row to show "1.4m evals/sec", got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
   } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
 
@@ -18404,7 +18650,7 @@ try {
     await appDB.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appDB.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDB.page.click('#poEnabledCheckbox');
-    await appDB.page.click('#poSaveBtn');
+    await appDB.page.click('#poSave');
     await appDB.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
 
     const config = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());

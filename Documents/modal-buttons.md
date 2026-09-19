@@ -1,7 +1,9 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and twenty-five modals are
-converted.** Everything below is the contract; the rollout checklist at the
+**Status: the rollout is complete.** The mechanism is built (`js/modalBar.js`)
+and every modal in the app is on the bar except the reset-to-factory
+warn/confirm pair, which is deliberately exempt — see the last checklist entry
+for why. Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
 ## The problem this solves
@@ -485,7 +487,39 @@ Order, worst first:
       No discard confirm: a Flow has no dirty concept, and leaving mid-quiz
       loses a score rather than unsaved work (the opening quiz writes its
       grades as it goes, which is what its own undo list is for).
-- [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm.
+- [x] **Default content** (`#defaultContentOverlay`) — **Confirm**, and about
+      as pure a one as the category has: a boot-time offer whose checkboxes
+      arrive ticked, where the expected answer is to press the verb. Under
+      the editor rule, accepting an offer you agree with would be impossible,
+      which is exactly the case `kind:'confirm'` exists for.
+
+      `Skip` retires along with `Close`. It said the right thing, but the
+      vocabulary has one word for declining and `Cancel` is it — and the
+      title above it (`Starter Content`) plus the body copy make the scope of
+      the decline unambiguous.
+
+      One behaviour gained: the primary **disables when nothing is ticked**.
+      `Install Selected` with nothing selected installed nothing and closed —
+      a second, quieter Cancel wearing the verb's label. That's the Invalid
+      state, so it's now disabled with the reason in its tooltip.
+
+      It hides the modal *before* installing rather than holding it open in
+      the busy state, which is the opposite of Import Games above. The
+      difference is real: each bundle raises the full-screen spinner with its
+      own message, so the work is already visible and a modal left sitting
+      behind it would only be in the way.
+
+- [ ] **Reset-to-factory warn/confirm** — **deliberately left alone.** Its
+      second step makes you type `TOTAL DELETE`, so its primary is a
+      Confirm's primary that must nevertheless stay *gated*, which the rule
+      above ("a Confirm's primary is live from the moment the modal opens")
+      forbids outright. Rather than amend the Confirm section for it, the
+      user's call was that this flow is genuinely special and should stay as
+      it is: unlike every other modal here it is not something you meet in
+      the course of ordinary use, so the consistency the bar buys is worth
+      much less than it is elsewhere, and the bespoke gating is doing real
+      safety work. **Nothing further is planned here** — the rollout is
+      otherwise complete.
 - [x] **Import Games** (`#downloadOverlay`) — **Confirm**, by the pre-filled
       test above: every field is restored from localStorage on open, which is
       the whole point of it remembering your handles, so the normal use is to
@@ -542,12 +576,40 @@ Order, worst first:
       `wirePickerBar()` scoped to `containerEl`, not `getElementById`, which
       would find whichever copy landed in the document first.
 
-- [ ] **Perfect Opening** (`#perfectOpeningOverlay`) and its progress panel
-      (`#perfectOpeningProgressOverlay`). Added late: these existed in the app
-      but were missing from this list, which made the remaining work look
-      smaller than it is. Categorise each against the pre-filled-vs-must-fill
-      test rather than by its label — that test has now caught three modals
-      this list had filed wrong.
+- [x] **Perfect Opening** (`#perfectOpeningOverlay`) — **Editor**, and the
+      clearest case yet for why the pre-filled-vs-must-fill test is about
+      *intent* rather than about whether the fields arrive filled in. Every
+      field here is pre-filled from saved config, which is the surface
+      signature of a Confirm; but nobody opens this panel to glance at the
+      depth schedule and press the primary. You open it to *change* something.
+      So: `Save` gated on dirtiness, `Cancel`/`Done` as usual, and the
+      discard prompt on the way out.
+
+      `Reset Perfect Opening…` moves into the destructive slot unchanged —
+      it already ended in `…` and already confirmed, and it already kept the
+      panel open afterwards (it reopens it, which re-baselines the bar, so
+      the reset panel reads clean rather than as twelve pending edits).
+
+      **Validation moved from save time to the `validate()` hook**, which is
+      the real behaviour change. It used to be a rejection you discovered by
+      pressing `Save`: the modal stayed open and an error appeared. Now a
+      non-positive depth or cap disables `Save` as you type, with the reason
+      in the tooltip *and* still in `#poError` in the body — the spec's
+      **Invalid** state. The checks were already pure arithmetic over a dozen
+      fields, so they are cheap enough for a per-keystroke `validate()`; the
+      messages and the "tolerance may be exactly 0" carve-out are unchanged,
+      now in one function (`poValidationError`) instead of inline in the save
+      handler.
+
+      The modal also gained `max-height` + a `.modal-body` wrapper. It is a
+      long panel — four sections of numeric fields — and without a scroller
+      of its own a short viewport pushed the buttons off the bottom, which is
+      the exact failure the bar exists to prevent.
+
+- [x] **Perfect Opening Progress** (`#perfectOpeningProgressOverlay`) —
+      **Informational**: a read-only report of what the scheduler has done, so
+      a bare `Done`. Its old `Close` is retired along with every other one.
+      No `.modal-body`; the report is at most six rows and never scrolls.
 
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.
