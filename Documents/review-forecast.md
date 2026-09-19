@@ -1,6 +1,6 @@
 # Review Forecast — design and phasing plan
 
-**Status: Phases 1-2 built. Phases 3-6 proposed.**
+**Status: Phases 1-3 built. Phases 4-6 proposed.**
 
 ## What it is for
 
@@ -200,24 +200,41 @@ numbers rendered are the aggregation's own (a renderer that recomputed
 anything would be a second source of truth, which is what Phase 1 exists to
 prevent).
 
-## Phase 3 — the pacing read
+## Phase 3 — the pacing read ✅ BUILT
 
-The one thing the feature exists for, made explicit instead of inferred:
+Three cumulative load cards (**Due now**, **By tomorrow**, **Next 7 days**,
+that last one highlighted) above everything else, then one sentence.
 
-- a prominent **next-7-days load**, since that is the window a "should I
-  memorize today?" decision actually turns on;
-- the same figure for today and tomorrow;
-- the **never-reviewed** line from Phase 1;
-- a plain-language summary line.
+**The windows are cumulative, and overdue counts in all of them.** That is how
+the work actually arrives: sit down tomorrow and you face what is overdue,
+plus what was due today, plus tomorrow's own. Per-bucket numbers make you add
+three of them in your head to get the one you wanted, and dropping overdue
+would understate the load exactly when it is worst.
 
-Small once Phases 1–2 exist, and it is the payload. Deliberately *not* merged
-into Phase 2 so that phase can ship without waiting on wording.
+**The sentence is the payload, and it turns on a fact nobody had written down
+yet:** a room you memorize today first falls due *tomorrow*
+(`bootstrapRoomReview` dates it from the memorized timestamp plus one day). So
+the number a "should I memorize today?" decision is really made against is
+**tomorrow alone**, not the cumulative week — that is the pile the new room
+would land on. Hence `tomorrowOnly` in the aggregation, deliberately not
+cumulative, sitting next to windows that are.
 
-**Open:** whether to go further and compare against a rolling average of what
-you actually complete per day. That would turn "84 moves" into "about two
-normal days' worth", which is a much better pacing signal — but nothing is
-recorded about completed sessions today, so it needs its own store and its own
-phase. Listed here, not scheduled.
+It also names the **heaviest single day in the next 30**, which is the other
+half of pacing ("is there a wall coming?"). Future days only: a past due date
+is already counted as overdue, and a heaviest day in the past is not something
+anyone can act on. Worth having because the scheduler's fuzz does nothing
+below about a week, so short-interval pile-ups are real and this is the first
+thing that can show one.
+
+**It makes no recommendation, on purpose.** Nothing here knows how much you
+can get through in a sitting, so a "that's too much" threshold would be a
+guess dressed up as advice. There is a test asserting the wording stays
+factual.
+
+**Open, unchanged:** a rolling average of what you actually complete per day
+would turn "24 moves" into "about two normal days' worth", which is a much
+better signal — but nothing records completed sessions, so it needs its own
+store and its own phase.
 
 ## Phase 4 — the pie
 

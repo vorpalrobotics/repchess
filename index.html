@@ -455,6 +455,17 @@
   .rf-callout{font-size:.78rem;color:#8a6d1f;background:#fffbe6;border:1px solid #f0e2a8;
               border-radius:4px;padding:.4rem .55rem;margin:0 0 .9rem;line-height:1.4}
   .rf-scope{display:flex;align-items:center;gap:.5rem;font-size:.9rem;margin-bottom:.8rem;flex-wrap:wrap}
+  /* the pacing block: the three cumulative windows, big, above everything
+     else -- this is the number the feature exists to give you */
+  .rf-load{display:flex;gap:.6rem;margin:0 0 .7rem;flex-wrap:wrap}
+  .rf-load-card{flex:1 1 9em;min-width:9em;border:1px solid #e0e0e0;border-radius:6px;padding:.5rem .6rem;background:#fafafa}
+  .rf-load-card.rf-load-lead{border-color:#1565c0;background:#f3f8fd}
+  .rf-load-when{font-size:.72rem;color:#888;text-transform:uppercase;letter-spacing:.03em}
+  .rf-load-moves{font-size:1.35rem;font-weight:600;color:#1f4e79;line-height:1.25;font-variant-numeric:tabular-nums}
+  .rf-load-rooms{font-size:.75rem;color:#777;font-variant-numeric:tabular-nums}
+  .rf-pacing{font-size:.82rem;color:#444;line-height:1.5;margin:0 0 1rem;
+             border-left:3px solid #1565c0;padding:.1rem 0 .1rem .6rem}
+  .rf-pacing b{color:#1f4e79}
 
   .graph-coverage{margin:.3rem 0 .5rem;display:flex;flex-direction:column;gap:.3rem}
   .graph-coverage-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555}
@@ -1958,6 +1969,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-404"></script>
+<script type="module" src="js/app.js?v=20260804-405"></script>
 </body>
 </html>

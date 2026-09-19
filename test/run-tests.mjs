@@ -21659,6 +21659,78 @@ try {
     ok(`Review Forecast: end to end over real castles (${live.castles} castle(s), ${live.totals.rooms} room(s), ${live.totals.moves} move(s))`);
   } catch(e){ bad('Review Forecast: end to end', e); }
 
+  // 273b. Phase 3's load windows are CUMULATIVE, and overdue counts toward
+  //       every one of them. That is how the work actually arrives: sit down
+  //       tomorrow and you face what is overdue, plus what was due today,
+  //       plus tomorrow's own. Leaving overdue out would understate the load
+  //       exactly when it is worst.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 0 },
+      { posKey: 'od', moveCount: 3 },   // overdue
+      { posKey: 'dn', moveCount: 5 },   // due now
+      { posKey: 'tm', moveCount: 7 },   // tomorrow
+      { posKey: 'wk', moveCount: 9 },   // later this week
+      { posKey: 'mo', moveCount: 11 },  // next month -- must NOT be in any window
+    ]);
+    const reviews = {
+      // due 30 days ago on a 1-day interval: comfortably past due + max(1 day,
+      // half the interval), which is what roomReviewState calls overdue
+      [keyOf(c, 'od')]: rec(-30, 0),
+      [keyOf(c, 'dn')]: rec(0, 0),
+      [keyOf(c, 'tm')]: rec(1, 0),
+      [keyOf(c, 'wk')]: rec(5, 2),
+      [keyOf(c, 'mo')]: rec(20, 3),
+    };
+    const f = await run([c], reviews, {});
+    assert(f.buckets.overdue.moves === 3 && f.buckets.due.moves === 5,
+      `setup: expected one overdue and one due-now room: ${JSON.stringify(f.buckets)}`);
+
+    assert(f.load.now.moves === 8 && f.load.now.rooms === 2,
+      `"due now" is overdue + due: ${JSON.stringify(f.load.now)}`);
+    assert(f.load.tomorrow.moves === 15 && f.load.tomorrow.rooms === 3,
+      `"by tomorrow" adds tomorrow's own on top: ${JSON.stringify(f.load.tomorrow)}`);
+    assert(f.load.week.moves === 24 && f.load.week.rooms === 4,
+      `"next 7 days" adds the rest of the week: ${JSON.stringify(f.load.week)}`);
+    assert(f.load.week.moves < f.totals.memorizedMoves,
+      `the month-away room must not be counted in any window: ${JSON.stringify({ week: f.load.week, total: f.totals })}`);
+
+    // and tomorrowOnly is NOT cumulative -- it is the pile a room memorized
+    // today would actually land on, since a new room first falls due tomorrow
+    assert(f.tomorrowOnly.moves === 7 && f.tomorrowOnly.rooms === 1,
+      `tomorrowOnly is tomorrow alone, not cumulative: ${JSON.stringify(f.tomorrowOnly)}`);
+    ok('Review Forecast: load windows are cumulative, overdue counts in all of them, and tomorrowOnly is not');
+  } catch(e){ bad('Review Forecast: cumulative load windows', e); }
+
+  // 273c. The busiest day in the next 30 -- "is there a wall coming?", the
+  //       other half of pacing. Future days only: a past due date is already
+  //       counted as overdue, and a heaviest day in the past is not something
+  //       anyone can act on.
+  try {
+    const c = castle('Alpha', 'L1', [
+      { posKey: 'p0', moveCount: 0 },
+      { posKey: 'big1', moveCount: 8 },    // same day as big2 -> 14 together
+      { posKey: 'big2', moveCount: 6 },
+      { posKey: 'mid',  moveCount: 10 },   // a single bigger room, different day
+      { posKey: 'past', moveCount: 99 },   // long overdue: must never win
+      { posKey: 'far',  moveCount: 99 },   // beyond the 30-day horizon
+    ]);
+    const reviews = {
+      [keyOf(c, 'big1')]: rec(9, 2),
+      [keyOf(c, 'big2')]: rec(9, 2),
+      [keyOf(c, 'mid')]:  rec(3, 1),
+      [keyOf(c, 'past')]: rec(-40, 0),
+      [keyOf(c, 'far')]:  rec(200, 5),
+    };
+    const f = await run([c], reviews, {});
+    assert(f.busiestDay, `expected a busiest day, got ${JSON.stringify(f.busiestDay)}`);
+    assert(f.busiestDay.moves === 14 && f.busiestDay.rooms === 2,
+      `expected the two same-day rooms to combine and win: ${JSON.stringify(f.busiestDay)}`);
+    assert(f.busiestDay.due > f.generatedAt,
+      `expected a FUTURE day, not the 99-move overdue one: ${JSON.stringify(f.busiestDay)}`);
+    ok('Review Forecast: the busiest upcoming day combines same-day rooms and ignores the past and the far future');
+  } catch(e){ bad('Review Forecast: busiest upcoming day', e); }
+
   /* --- Phase 2: the modal. A thin renderer over the core above, so these
      test the wiring and the two decisions that are the modal's own -- the
      default scope, and that the rendered numbers are the aggregation's --
@@ -21786,9 +21858,62 @@ try {
     const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
     assert(live.neverReviewed.rooms >= 1 && live.buckets.overdue.rooms >= 1,
       `expected it counted and overdue: ${JSON.stringify({ never: live.neverReviewed, overdue: live.buckets.overdue })}`);
-    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
     ok('Review Forecast: a memorized-but-never-graded room raises the callout instead of just reading as overdue');
   } catch(e){ bad('Review Forecast: never-reviewed callout', e); }
+
+  // 279. Phase 3's pacing block: three cumulative windows at the top, and the
+  //      one sentence the feature exists for. The modal is left open from the
+  //      test above, with one memorized-but-ungraded room, so the numbers are
+  //      real rather than fixtures.
+  try {
+    const shown = await appEF.page.evaluate(() => {
+      const cards = [...document.querySelectorAll('#reviewForecastBody .rf-load-card')].map(c => ({
+        when: c.querySelector('.rf-load-when').textContent.trim(),
+        moves: c.querySelector('.rf-load-moves').textContent.trim(),
+        lead: c.classList.contains('rf-load-lead'),
+      }));
+      const p = document.querySelector('#reviewForecastBody .rf-pacing');
+      return { cards, pacing: p ? p.textContent.replace(/\s+/g, ' ').trim() : null };
+    });
+    assert(shown.cards.length === 3, `expected three load windows, got ${JSON.stringify(shown.cards)}`);
+    assert(/due now/i.test(shown.cards[0].when) && /tomorrow/i.test(shown.cards[1].when) && /7 days/i.test(shown.cards[2].when),
+      `expected Due now / By tomorrow / Next 7 days in order, got ${JSON.stringify(shown.cards.map(c => c.when))}`);
+    assert(shown.cards[2].lead && !shown.cards[0].lead,
+      'expected the 7-day window highlighted — it is the one a pacing decision turns on');
+
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+    assert(shown.cards[0].moves.startsWith(String(live.load.now.moves)),
+      `the cards must show the aggregation's own windows: ${JSON.stringify({ card: shown.cards[0].moves, load: live.load.now })}`);
+
+    // the pacing sentence states the FACT that a new room first falls due
+    // tomorrow. It deliberately makes no recommendation: nothing here knows
+    // how much you can get through in a sitting, and inventing a "that's too
+    // much" threshold would dress a guess up as advice.
+    assert(shown.pacing && /memorize today/i.test(shown.pacing) && /tomorrow/i.test(shown.pacing),
+      `expected the pacing sentence about memorizing today, got ${JSON.stringify(shown.pacing)}`);
+    assert(!/should|too many|too much|recommend/i.test(shown.pacing),
+      `the pacing line must state facts, not give advice it has no basis for: ${JSON.stringify(shown.pacing)}`);
+    ok('Review Forecast: the pacing block leads with the 7-day window and states what memorizing today would add');
+  } catch(e){ bad('Review Forecast: pacing block', e); }
+
+  // 280. With nothing memorized in scope there is no schedule to pace
+  //      against, so the block says so instead of rendering three zeroes and
+  //      a sentence about a pile that doesn't exist.
+  try {
+    await appEF.page.evaluate(() => window.__reviewForecastTestHooks.setMemorized('{}'));
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+    const state = await appEF.page.evaluate(() => ({
+      cards: document.querySelectorAll('#reviewForecastBody .rf-load-card').length,
+      pacing: (document.querySelector('#reviewForecastBody .rf-pacing') || {}).textContent?.replace(/\s+/g, ' ').trim(),
+    }));
+    assert(state.cards === 0, `expected no load cards with nothing memorized, got ${state.cards}`);
+    assert(state.pacing && /nothing is on the review schedule/i.test(state.pacing),
+      `expected an explanation rather than three zeroes, got ${JSON.stringify(state.pacing)}`);
+    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
+    ok('Review Forecast: an empty schedule explains itself instead of rendering zeroes');
+  } catch(e){ bad('Review Forecast: empty-schedule pacing block', e); }
 } finally {
   await appEF.close();
 }
