@@ -1575,8 +1575,13 @@
 
 <!-- add-to-analysis-queue modal (a move row's ⋮ menu) -->
 <div id="analysisAddOverlay" class="overlay">
+  <!-- CONFIRM, not Immediate as the checklist guessed: it stages nothing you
+       have to touch. You open it from a row's menu, agree with the depth and
+       line count it filled in, and press Add. Under the editor rule that
+       press is impossible. prefix:'analysisAdd' keeps the #analysisAddTitle
+       id the child-count title is written into. -->
   <div class="modal" style="max-width:26em">
-    <h2 id="analysisAddTitle" style="margin-top:0">Add to Analysis Queue</h2>
+    <div id="analysisAddBar" class="modal-bar-host"></div>
     <div class="field">
       <label for="analysisAddDepth">Depth</label>
       <input type="number" id="analysisAddDepth" min="1" step="1" value="40" style="width:6em">
@@ -1586,17 +1591,14 @@
       <input type="number" id="analysisAddLines" min="1" max="6" step="1" value="4" style="width:6em">
     </div>
     <div id="analysisAddError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
-      <button id="analysisAddCancelBtn">Cancel</button>
-      <button id="analysisAddGoBtn">Add</button>
-    </div>
   </div>
 </div>
 
 <!-- "Analyze Others" depth modal (Compare Games' analyze-all icon) -->
 <div id="compareAnalyzeOverlay" class="overlay">
+  <!-- Confirm, same shape as Add above. -->
   <div class="modal" style="max-width:22em">
-    <h2 style="margin-top:0">Analyze Other Replies</h2>
+    <div id="compareAnalyzeBar" class="modal-bar-host"></div>
     <div class="field">
       <label for="compareAnalyzeDepth">Depth</label>
       <input type="number" id="compareAnalyzeDepth" min="1" step="1" value="20" style="width:6em">
@@ -1604,23 +1606,20 @@
     <div style="font-size:.72rem;color:#888;margin-top:-.4rem">A single quick line per move, at the live board's
       thread count, jumped to the front of the analysis queue.</div>
     <div id="compareAnalyzeError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
-      <button id="compareAnalyzeCancelBtn">Cancel</button>
-      <button id="compareAnalyzeGoBtn">Analyze</button>
-    </div>
   </div>
 </div>
 
 <!-- analysis queue modal (hamburger menu) -->
 <div id="analysisQueueOverlay" class="overlay">
   <div class="modal" style="width:min(46em,95vw);max-height:88vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
-      <h2 style="margin:0">Analysis Queue</h2>
-      <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-left:.5rem">Threads:
-        <select id="aqThreadsSelect"></select>
-      </label>
-      <button id="analysisQueueCloseBtn" style="flex:0 0 auto;margin-left:auto">Close</button>
-    </div>
+    <!-- Immediate: the queue writes through (rows cancel and reorder
+         themselves, the thread count applies at once), so a bare Done. The
+         Threads selector came OUT of the old header row -- it is a setting
+         for the work, not this modal's lifecycle. -->
+    <div id="analysisQueueBar" class="modal-bar-host"></div>
+    <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-bottom:.4rem">Threads:
+      <select id="aqThreadsSelect"></select>
+    </label>
     <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis Queue" to queue deep background analysis.</p>
     <div style="flex:1;min-height:0;overflow:auto">
       <table id="analysisQueueTable" class="aq-table" style="display:none">
@@ -2006,6 +2005,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-408"></script>
+<script type="module" src="js/app.js?v=20260804-409"></script>
 </body>
 </html>

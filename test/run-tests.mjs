@@ -2904,7 +2904,7 @@ try {
   //     table's hourglass markers appear on all of them and one combined
   //     summary is logged (not one message per child overwriting the last).
   try {
-    await app18.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await app18.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await app18.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
     const q = await app18.page.evaluate(() => window.__aqTestHooks.getQueue());
     const seqs = q.map(it => it.seq.join(',')).sort();
@@ -3845,13 +3845,28 @@ try {
     ok('analysis queue: a real pointer drag shows the drop-indicator bar and commits the move on release');
   } catch(e){ bad('analysis queue: pointer-drag end to end', e); }
 
+  // 68b. The queue itself IS Immediate, unlike the two modals that feed it:
+  //      rows cancel and reorder themselves and the thread count applies at
+  //      once, so nothing is ever staged and there is no Save. The Threads
+  //      selector came out of the old header row into the body -- it is a
+  //      setting for the work, not this modal's lifecycle.
+  try {
+    await assertInfoBar(app23.page, 'analysisQueueOverlay', 'Analysis Queue');
+    const threadsInBody = await app23.page.evaluate(() => {
+      const el = document.getElementById('aqThreadsField');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(threadsInBody, 'expected the Threads selector in the body, not the bar');
+    ok('modal bar: the Analysis Queue is immediate — Done only, Threads left in the body');
+  } catch(e){ bad('modal bar: Analysis Queue', e); }
+
   // 69. Deleting a repertoire line also drops any of ITS rows from the
   //     analysis queue store -- not just the in-memory ANALYSIS_QUEUE mirror.
   //     Confirmed by reloading straight from IDB via refreshAnalysisQueue(),
   //     which bypasses the delete handler's own in-memory prune entirely, so
   //     a leftover row would only show up after this reload.
   try {
-    await app23.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+    await app23.page.evaluate(() => document.querySelector('#analysisQueueOverlay .modal-bar .mb-leave').click());
     await app23.page.evaluate(() => document.getElementById('backBtn').click());
     await app23.page.waitForSelector('.line-row', { timeout: 40000 });
 
@@ -7293,10 +7308,28 @@ try {
     ok('setting a standard response opens the analysis-queue Add modal, not an instant-search modal');
   } catch(e){ bad('set standard response: opens the queue Add modal', e); }
 
+  // 133b. Add is a CONFIRM, which the rollout checklist had down as
+  //       Immediate. It stages nothing you have to touch: the depth and line
+  //       count arrive pre-filled and the normal use -- test 134 below, which
+  //       presses Add without editing either -- would be impossible under the
+  //       editor rule, because a clean modal's primary is dead.
+  try {
+    const b = await modalBarState(appAP.page, 'analysisAddOverlay');
+    assert(b && /Add .* to Analysis Queue/.test(b.title),
+      `expected the bar to carry the per-use title, got ${JSON.stringify(b && b.title)}`);
+    assert(b.save && b.save.text === 'Add' && !b.save.disabled && b.save.primary,
+      `a confirm's primary is live and carries its own verb: ${JSON.stringify(b.save)}`);
+    assert(b.leave.text === 'Cancel' && b.state === '',
+      `a confirm's Leave stays Cancel and it stages nothing: ${JSON.stringify(b)}`);
+    assert(b.barIsFirst && b.strayIds.length === 0,
+      `expected the bar first and the old Cancel/Add row gone: ${JSON.stringify(b)}`);
+    ok('modal bar: Add to Analysis Queue is a confirm — live untouched, titled per use');
+  } catch(e){ bad('modal bar: analysis Add', e); }
+
   // 134. Confirming queues both newly-visible children instead of running a
   //      live search -- no engine.analyze() call, just two queue entries.
   try {
-    await appAP.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appAP.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appAP.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
     const q = await appAP.page.evaluate(() => window.__aqTestHooks.getQueue());
     const seqs = q.map(it => it.seq.join(',')).sort();
@@ -8312,7 +8345,7 @@ try {
     await appAV.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     await expectInvalidated('expected setting a standard response to invalidate the cache');
-    await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-leave').click());
     ok('VR cache: setting a standard response invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by setting a standard response', e); }
 
@@ -13119,8 +13152,21 @@ try {
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     const defaultDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
     assert(defaultDepth === '20', `expected the depth dialog to default to 20, got "${defaultDepth}"`);
+
+    /* Confirm, like Add: the depth arrives pre-filled and Analyze is live
+       before anything is edited. Checked HERE, before the fill below, because
+       after it the modal would be dirty and a live primary would prove
+       nothing about the confirm rule. */
+    const cb = await modalBarState(appAZ2.page, 'compareAnalyzeOverlay');
+    assert(cb && cb.title === 'Analyze Other Replies', `expected the shared bar, got ${JSON.stringify(cb && cb.title)}`);
+    assert(cb.save && cb.save.text === 'Analyze' && !cb.save.disabled,
+      `expected Analyze live on an untouched confirm: ${JSON.stringify(cb.save)}`);
+    assert(cb.leave.text === 'Cancel' && cb.barIsFirst && cb.strayIds.length === 0,
+      `expected a confirm bar, first, with nothing stray: ${JSON.stringify(cb)}`);
+    ok('modal bar: Analyze Other Replies is a confirm — live on the pre-filled depth');
+
     await appAZ2.page.fill('#compareAnalyzeDepth', '18');
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     // the overlay itself closes synchronously, before queueAlternatesForAnalysis's
     // sequential per-move awaits (each does its own getPref IDB read) actually
     // finish -- wait on the real completion signal (both items landing in the
@@ -13168,7 +13214,7 @@ try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     await appAZ2.page.fill('#compareAnalyzeDepth', '25');
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     // same race as test 165 above -- c4 is the LAST of the three per-move
     // awaits (Nf3, g3, then the standard), so it's the most likely of all to
     // still be mid-flight when the overlay's own (synchronous) close fires.
@@ -13191,7 +13237,7 @@ try {
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     const restoredDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
     assert(restoredDepth === '25', `expected the just-saved depth (25, from test 165b) restored on reopen, got "${restoredDepth}"`);
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeCancelBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-leave').click());
     ok('Compare Games: "Analyze Others" depth persists in its own localStorage key across dialog reopens');
   } catch(e){ bad('Compare Games: depth persistence', e); }
 
@@ -13224,7 +13270,7 @@ try {
     await appAZ2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
     await appAZ2.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
     await appAZ2.page.selectOption('#aqThreadsSelect', '6');
-    await appAZ2.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#analysisQueueOverlay .modal-bar .mb-leave').click());
 
     await appAZ2.page.evaluate(() => {
       window.__aqFakeEngine = { pending: null, callCount: 0, calls: [] };
@@ -13259,7 +13305,7 @@ try {
     // interrupt the above and jump to the front instead of waiting in line.
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
 
     await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
@@ -13597,7 +13643,7 @@ try {
     await appBW.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     const title = await appBW.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
     assert(title === 'Add to Analysis Queue', `expected the single-seq modal title, got "${title}"`);
-    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
     const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
     assert(q[0].seq.join(',') === 'd4,Nf6', `expected the row's own seq queued, got ${JSON.stringify(q[0].seq)}`);
@@ -13658,7 +13704,7 @@ try {
     // children -- with move 1's single opponent reply (Nf6) here, it collapses
     // to the same generic title the single-node action uses.
     assert(title === 'Add to Analysis Queue', `expected the generic (1-child) title, got "${title}"`);
-    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
     const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
     assert(q[0].seq.join(',') === 'd4,Nf6', `expected move 1's own opponent reply (d4,Nf6) queued, got ${JSON.stringify(q[0].seq)}`);

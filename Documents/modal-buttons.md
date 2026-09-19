@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and nineteen modals are
+**Status: the mechanism is built (`js/modalBar.js`) and twenty-two modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -401,7 +401,31 @@ Order, worst first:
       on every keystroke, or scanning PREFS for a street-number clash on a
       modal that is dismissed far more often than submitted, is not a live
       check.
-- [ ] **Analysis Queue / Add / Compare** — Immediate.
+- [x] **Analysis Queue / Add / Compare** — and **two of the three are
+      Confirms, not Immediate** as this list had them. That is now twice the
+      checklist has guessed the category wrong (the swatch picker was the
+      other), both times in the same direction: **assuming a modal with
+      fields in it stages something.**
+
+      "Add to Analysis Queue" and "Analyze Other Replies" both arrive with
+      their depth (and line count) pre-filled, and the normal use is to press
+      the verb without touching either — which is impossible under the editor
+      rule, because a clean modal's primary is dead. The existing tests prove
+      it: they press Add and Analyze on untouched dialogs. **The test for the
+      Compare confirm had to go BEFORE the fill that follows it**, or a live
+      primary would have proved nothing.
+
+      Only the **queue list itself** is Immediate: rows cancel and reorder
+      themselves and the thread count applies at once, so a bare `Done`. Its
+      `Threads` selector came out of the old header row into the body — a
+      setting for the work, not this modal's lifecycle, same call as the
+      graph's Reset Layout.
+
+      The rule of thumb this leaves: **pre-filled fields you would normally
+      accept mean Confirm; fields you must fill in before the action means
+      anything mean Editor.** Import Variations is the Editor side of that
+      line, Add to Analysis Queue the Confirm side, and they look nearly
+      identical until you ask which one you would press unchanged.
 - [x] **Graph**, **Help**, **About**, **Room Info**, **Castle Preview**,
       **Browse Games**, **Transpositions** — Informational or Immediate;
       Done only. Converted as one batch, since the contract is identical for

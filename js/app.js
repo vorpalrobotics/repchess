@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-408';
+const BUILD_TAG = '-409';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -11898,22 +11898,33 @@ function openAnalysisQueueAddModal(lineId, seqs){
   $('analysisAddError').textContent = '';
   $('analysisAddOverlay').style.display='flex';
 }
-$('analysisAddCancelBtn').onclick = () => {
-  $('analysisAddOverlay').style.display='none';
-  aqAddCtx = null;
-};
-$('analysisAddGoBtn').onclick = async () => {
-  if(!aqAddCtx) return;
-  const depth = parseInt($('analysisAddDepth').value, 10);
-  const multipv = parseInt($('analysisAddLines').value, 10);
-  if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
-  if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
-  const {lineId, seqs} = aqAddCtx;
-  $('analysisAddOverlay').style.display='none';
-  aqAddCtx = null;
-  if(seqs.length > 1) await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv);
-  else await addToAnalysisQueue(lineId, seqs[0], depth, multipv);
-};
+/* Confirm: the depth and line count arrive pre-filled and the normal use is
+   to press Add without touching them, so the primary is live from the moment
+   it opens. Validation stays press-time with its message in the body -- it is
+   the caller's own rule, and this modal is dismissed far more often than it
+   is submitted. */
+wireModalBar(
+  mountBarHtml('analysisAddBar', { title: 'Add to Analysis Queue', save: true, saveLabel: 'Add', prefix: 'analysisAdd' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Adding…',
+    onLeave: () => {
+      $('analysisAddOverlay').style.display='none';
+      aqAddCtx = null;
+    },
+    onSave: async () => {
+      if(!aqAddCtx) return;
+      const depth = parseInt($('analysisAddDepth').value, 10);
+      const multipv = parseInt($('analysisAddLines').value, 10);
+      if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
+      if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
+      const {lineId, seqs} = aqAddCtx;
+      $('analysisAddOverlay').style.display='none';
+      aqAddCtx = null;
+      if(seqs.length > 1) await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv);
+      else await addToAnalysisQueue(lineId, seqs[0], depth, multipv);
+    },
+  });
 
 function seqEq(a,b){
   return a.length===b.length && a.every((m,i)=>m===b[i]);
@@ -12003,21 +12014,28 @@ function openCompareAnalyzeModal(lineId, seq, moves, onQueued){
   $('compareAnalyzeError').textContent = '';
   $('compareAnalyzeOverlay').style.display='flex';
 }
-$('compareAnalyzeCancelBtn').onclick = () => {
-  $('compareAnalyzeOverlay').style.display='none';
-  compareAnalyzeCtx = null;
-};
-$('compareAnalyzeGoBtn').onclick = async () => {
-  if(!compareAnalyzeCtx) return;
-  const depth = parseInt($('compareAnalyzeDepth').value, 10);
-  if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
-  localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
-  const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
-  $('compareAnalyzeOverlay').style.display='none';
-  compareAnalyzeCtx = null;
-  await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
-  onQueued?.();
-};
+// Confirm, same shape as Add above: a pre-filled depth you normally accept.
+wireModalBar(
+  mountBarHtml('compareAnalyzeBar', { title: 'Analyze Other Replies', save: true, saveLabel: 'Analyze', prefix: 'compareAnalyze' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Queueing…',
+    onLeave: () => {
+      $('compareAnalyzeOverlay').style.display='none';
+      compareAnalyzeCtx = null;
+    },
+    onSave: async () => {
+      if(!compareAnalyzeCtx) return;
+      const depth = parseInt($('compareAnalyzeDepth').value, 10);
+      if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
+      localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
+      const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
+      $('compareAnalyzeOverlay').style.display='none';
+      compareAnalyzeCtx = null;
+      await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
+      onQueued?.();
+    },
+  });
 
 async function queueAlternatesForAnalysis(lineId, seqs, depth){
   const orderOf = it => it.order ?? it.createdAt;
@@ -12253,7 +12271,8 @@ $('menuAnalysisQueue').onclick = async () => {
   populateAqThreadsSelect();   // in case the modal opens before engine.init() resolves
   $('analysisQueueOverlay').style.display='flex';
 };
-$('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
+mountInfoBar('analysisQueueBar', 'Analysis Queue',
+  () => { $('analysisQueueOverlay').style.display='none'; });
 
 /* ---------- Perfect Opening project control panel ----------
    Phase 2 of the Perfect Opening project (see db.js's own section for the
