@@ -1,6 +1,6 @@
 # Review Forecast — design and phasing plan
 
-**Status: Phases 1-3 built. Phases 4-6 proposed.**
+**Status: Phases 1-4 built. Phases 5-6 proposed.**
 
 ## What it is for
 
@@ -236,13 +236,37 @@ would turn "24 moves" into "about two normal days' worth", which is a much
 better signal — but nothing records completed sessions, so it needs its own
 store and its own phase.
 
-## Phase 4 — the pie
+## Phase 4 — the pie ✅ BUILT
 
-Inline SVG, two modes on a toggle: by forecast bucket, and by ladder step.
-Colours reuse the Review lens's palette so a room is the same colour in both
-places. The ladder-step mode is the "how well-learned is this castle?" view,
-and it is the one that will show whether the ladder is pitched right — a
-repertoire that is always passing climbs steadily and piles up at the top.
+Inline SVG donuts, no new dependency. **Changed from the proposal:** not one
+chart on a mode toggle, but **one ring per section, beside its own bars**.
+That removes a control, shows both readings at once, and — the real reason —
+lets the bars act as the ring's legend, so it needs no legend of its own and
+no colour-matching squint.
+
+**The ring is not a second reading of the bars.** The bars are scaled to the
+largest row in their section, deliberately, so the shape of the week is
+legible — and that scaling throws away "what share of the whole is this?".
+The ring is exactly that share. They are complementary by construction, which
+is why they sit side by side rather than as alternatives.
+
+**Drawn as dash-offset circle segments, not arc paths.** No trig, no
+large-arc-flag edge cases, and — the case that decided it — a single 100%
+slice renders as a full ring instead of collapsing to a zero-length arc. That
+is the classic way the path approach fails, on exactly the input you least
+want it to: a fresh repertoire, where everything is one colour. There is a
+test for it.
+
+**The ladder ring ramps light-to-dark up the rungs** rather than reusing the
+bars' single colour. The rungs are one quantity, not seven categories, so the
+bars share a colour — but seven identical blues make a ring nobody can read,
+and "how much has climbed" is the whole reading it offers.
+
+Its tests check the share arithmetic, not pixels: slices tile the ring exactly
+(each starts where the last ended, the last ends at the circumference), each
+is proportional to its bucket and says so in its tooltip, zero buckets produce
+no slice at all, and a ring with nothing in it is omitted rather than drawn
+empty.
 
 ## Phase 5 — the calendar
 

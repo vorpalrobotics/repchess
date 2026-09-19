@@ -466,6 +466,18 @@
   .rf-pacing{font-size:.82rem;color:#444;line-height:1.5;margin:0 0 1rem;
              border-left:3px solid #1565c0;padding:.1rem 0 .1rem .6rem}
   .rf-pacing b{color:#1f4e79}
+  /* the donut sits beside its own bars, which double as its legend -- so it
+     needs no legend of its own and no colour-matching squint. Stacks under
+     them at phone width. */
+  .rf-chart{display:flex;gap:1.1rem;align-items:center;flex-wrap:wrap}
+  .rf-chart-rows{flex:1 1 18em;min-width:15em}
+  .rf-donut{flex:0 0 auto;width:124px;height:124px}
+  .rf-donut svg{width:100%;height:100%;display:block}
+  .rf-donut .rf-seg{transition:opacity .12s}
+  .rf-donut:hover .rf-seg{opacity:.55}
+  .rf-donut .rf-seg:hover{opacity:1}
+  .rf-donut-top{font-size:17px;font-weight:600;fill:#1f4e79;text-anchor:middle;font-variant-numeric:tabular-nums}
+  .rf-donut-bottom{font-size:9px;fill:#888;text-anchor:middle;letter-spacing:.03em}
 
   .graph-coverage{margin:.3rem 0 .5rem;display:flex;flex-direction:column;gap:.3rem}
   .graph-coverage-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555}
@@ -1969,6 +1981,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-405"></script>
+<script type="module" src="js/app.js?v=20260804-406"></script>
 </body>
 </html>
