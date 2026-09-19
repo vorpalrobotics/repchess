@@ -1,8 +1,9 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and thirty-three modals are
-converted** — everything except the three reset-to-factory / default-content
-modals, which need a spec amendment first (see the checklist). Everything below is the contract; the rollout checklist at the
+**Status: the rollout is complete.** The mechanism is built (`js/modalBar.js`)
+and every modal in the app is on the bar except the reset-to-factory
+warn/confirm pair, which is deliberately exempt — see the last checklist entry
+for why. Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
 ## The problem this solves
@@ -486,13 +487,39 @@ Order, worst first:
       No discard confirm: a Flow has no dirty concept, and leaving mid-quiz
       loses a score rather than unsaved work (the opening quiz writes its
       grades as it goes, which is what its own undo list is for).
-- [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm, and
-      **the only group left**. Held back deliberately: the reset flow's second
-      step makes you type `TOTAL DELETE`, so its primary is a Confirm's
-      primary that must nevertheless stay *gated* — which the current rule
-      ("a Confirm's primary is live from the moment the modal opens") forbids
-      outright. That needs a real amendment to the Confirm section, not a
-      one-off `kind`, so it is a spec decision before it is a conversion.
+- [x] **Default content** (`#defaultContentOverlay`) — **Confirm**, and about
+      as pure a one as the category has: a boot-time offer whose checkboxes
+      arrive ticked, where the expected answer is to press the verb. Under
+      the editor rule, accepting an offer you agree with would be impossible,
+      which is exactly the case `kind:'confirm'` exists for.
+
+      `Skip` retires along with `Close`. It said the right thing, but the
+      vocabulary has one word for declining and `Cancel` is it — and the
+      title above it (`Starter Content`) plus the body copy make the scope of
+      the decline unambiguous.
+
+      One behaviour gained: the primary **disables when nothing is ticked**.
+      `Install Selected` with nothing selected installed nothing and closed —
+      a second, quieter Cancel wearing the verb's label. That's the Invalid
+      state, so it's now disabled with the reason in its tooltip.
+
+      It hides the modal *before* installing rather than holding it open in
+      the busy state, which is the opposite of Import Games above. The
+      difference is real: each bundle raises the full-screen spinner with its
+      own message, so the work is already visible and a modal left sitting
+      behind it would only be in the way.
+
+- [ ] **Reset-to-factory warn/confirm** — **deliberately left alone.** Its
+      second step makes you type `TOTAL DELETE`, so its primary is a
+      Confirm's primary that must nevertheless stay *gated*, which the rule
+      above ("a Confirm's primary is live from the moment the modal opens")
+      forbids outright. Rather than amend the Confirm section for it, the
+      user's call was that this flow is genuinely special and should stay as
+      it is: unlike every other modal here it is not something you meet in
+      the course of ordinary use, so the consistency the bar buys is worth
+      much less than it is elsewhere, and the bespoke gating is doing real
+      safety work. **Nothing further is planned here** — the rollout is
+      otherwise complete.
 - [x] **Import Games** (`#downloadOverlay`) — **Confirm**, by the pre-filled
       test above: every field is restored from localStorage on open, which is
       the whole point of it remembering your handles, so the normal use is to

@@ -1242,8 +1242,14 @@
      empty (see maybeOfferDefaultContent in app.js), both checked by default -->
 <div id="defaultContentOverlay" class="overlay">
   <div class="modal" style="max-width:28em">
-    <h2>Install Starter Content?</h2>
-    <p>You don't have this set up yet. REPchess can install a ready-made set to get you started — you can edit or replace any of it later.</p>
+    <!-- shared button bar; see Documents/modal-buttons.md. Confirm: both
+         boxes arrive ticked and the expected answer is to press the verb, so
+         the primary is live from the moment it opens. Rendered and wired per
+         offer by maybeOfferDefaultContent, whose handlers close over which
+         rows are being offered this time. No .modal-body -- two checkboxes
+         and a sentence never scroll. -->
+    <div id="defaultContentBar" class="modal-bar-host"></div>
+    <p style="margin-top:0">You don't have this set up yet. REPchess can install a ready-made set to get you started — you can edit or replace any of it later.</p>
     <div class="field" style="text-align:left">
       <label id="defaultContentMnemRow" style="display:block;margin:.6em 0">
         <input type="checkbox" id="defaultContentMnemChk"> Default Mnemonics (memory-palace words &amp; images)
@@ -1251,10 +1257,6 @@
       <label id="defaultContentAssetsRow" style="display:block;margin:.6em 0">
         <input type="checkbox" id="defaultContentAssetsChk"> Default Assets (VR props &amp; object lists)
       </label>
-    </div>
-    <div class="modal-actions">
-      <button id="defaultContentSkipBtn">Skip</button>
-      <button id="defaultContentInstallBtn">Install Selected</button>
     </div>
   </div>
 </div>
@@ -2011,6 +2013,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-414"></script>
+<script type="module" src="js/app.js?v=20260804-415"></script>
 </body>
 </html>

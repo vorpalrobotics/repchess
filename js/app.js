@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-414';
+const BUILD_TAG = '-415';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7586,13 +7586,37 @@ async function maybeOfferDefaultContent(){
   $('defaultContentAssetsRow').style.display = offerAssets ? '' : 'none';
   $('defaultContentMnemChk').checked = true;
   $('defaultContentAssetsChk').checked = true;
+
+  /* CONFIRM (Documents/modal-buttons.md): everything is pre-ticked and the
+     expected answer is to press the verb, so the primary is live from the
+     moment the offer appears and Leave stays `Cancel` throughout. The old
+     `Skip` said the same thing in a word the vocabulary doesn't have.
+
+     Wired per offer rather than once at load, because both handlers close
+     over which rows are actually being offered this time. */
+  const wants = (offered, chkId) => offered && $(chkId).checked;
+  wireModalBar(
+    mountBarHtml('defaultContentBar', { title: 'Starter Content', save: true,
+                                        saveLabel: 'Install Selected', prefix: 'dc' }),
+    {
+      kind: 'confirm',
+      watch: $('defaultContentOverlay'),
+      // "Install Selected" with nothing selected installs nothing, which is
+      // Cancel's job -- the primary shouldn't pretend to be a second way out
+      validate: () => (wants(offerMnem, 'defaultContentMnemChk') || wants(offerAssets, 'defaultContentAssetsChk'))
+        ? null : 'Tick at least one item to install.',
+      onLeave: () => { $('defaultContentOverlay').style.display = 'none'; },
+      // hides first, then installs: each bundle raises the full-screen
+      // spinner with its own message, so the work stays visible without the
+      // modal sitting behind it. (Import Games keeps its modal up for the
+      // busy state precisely because it has no such spinner.)
+      onSave: async () => {
+        $('defaultContentOverlay').style.display = 'none';
+        if(wants(offerMnem, 'defaultContentMnemChk')) await installDefaultMnemonics();
+        if(wants(offerAssets, 'defaultContentAssetsChk')) await installDefaultAssets();
+      },
+    });
   $('defaultContentOverlay').style.display = 'flex';
-  $('defaultContentSkipBtn').onclick = () => { $('defaultContentOverlay').style.display = 'none'; };
-  $('defaultContentInstallBtn').onclick = async () => {
-    $('defaultContentOverlay').style.display = 'none';
-    if(offerMnem && $('defaultContentMnemChk').checked) await installDefaultMnemonics();
-    if(offerAssets && $('defaultContentAssetsChk').checked) await installDefaultAssets();
-  };
 }
 
 async function installDefaultMnemonics(){

@@ -10101,7 +10101,7 @@ try {
     assert(rowState.mnemRow !== 'none' && rowState.assetsRow !== 'none', `expected both rows shown, got ${JSON.stringify(rowState)}`);
     assert(rowState.mnemChecked && rowState.assetsChecked, `expected both checkboxes checked by default, got ${JSON.stringify(rowState)}`);
 
-    await appBJ.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    await appBJ.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const afterMnem = await appBJ.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const afterAssets = await appBJ.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
@@ -10128,27 +10128,65 @@ try {
 
 } catch(e){ bad("phase @ line 6605 (tags: ['mnemonics'])" + ': uncaught error outside a numbered test (setup or otherwise)', e); }
 }
-// --- Phase BK: declining (Skip) the starter-content offer leaves both
+// --- Phase BK: the offer's button bar, and declining it -- which leaves both
 //     stores empty but still remembers both decisions, so it doesn't nag on
 //     every boot. ---
 if(shouldRunPhase(['mnemonics'])){
 try {
 const appBK = await launchApp();
 try {
-  // 297. Skip -> nothing installed, but both offers are still marked made.
+  // 296b. The offer is a CONFIRM on the shared bar (Documents/modal-buttons.md):
+  //       everything arrives ticked and the expected answer is to press the
+  //       verb, so the primary is live immediately -- under the editor rule
+  //       (Save gated on dirtiness) accepting an offer you agree with would
+  //       be impossible. Leave stays "Cancel" throughout for the same reason:
+  //       there is always a pending decision to decline.
   try {
     await appBK.page.evaluate(() => window.__defaultContentTestHooks.offer());
     await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
-    await appBK.page.evaluate(() => document.getElementById('defaultContentSkipBtn').onclick());
+
+    const b = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(b, 'expected the shared button bar on the starter-content offer');
+    assert(b.title === 'Starter Content', `expected the bar titled "Starter Content", got ${JSON.stringify(b.title)}`);
+    assert(b.barIsFirst, 'expected the bar to be the modal\'s first child');
+    assert(b.strayIds.length === 0, `expected the old Skip/Install buttons gone from the body, got ${JSON.stringify(b.strayIds)}`);
+    assert(b.leave.text === 'Cancel' && !b.leave.disabled,
+      `expected a confirm's Leave to read "Cancel" from the moment it opens, got ${JSON.stringify(b.leave)}`);
+    assert(b.save && !b.save.disabled && b.save.primary && b.save.text === 'Install Selected',
+      `expected "Install Selected" live and primary with nothing touched, got ${JSON.stringify(b.save)}`);
+    assert(b.state === '', `a confirm stages nothing, so expected no unsaved-changes text, got ${JSON.stringify(b.state)}`);
+    assert(b.destructive === null, `expected no destructive button on the offer, got ${JSON.stringify(b.destructive)}`);
+
+    // unticking everything leaves the primary with nothing to install -- that
+    // is Cancel's job, so it must not stay live and pretend otherwise
+    await appBK.page.uncheck('#defaultContentMnemChk');
+    await appBK.page.uncheck('#defaultContentAssetsChk');
+    const empty = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(empty.save.disabled, `expected the primary disabled with nothing ticked, got ${JSON.stringify(empty.save)}`);
+    assert(empty.leave.text === 'Cancel', `expected Leave still "Cancel" with nothing ticked, got ${JSON.stringify(empty.leave)}`);
+
+    await appBK.page.check('#defaultContentMnemChk');
+    const one = await modalBarState(appBK.page, 'defaultContentOverlay');
+    assert(!one.save.disabled && one.save.primary, `expected the primary live again once one item is ticked, got ${JSON.stringify(one.save)}`);
+    await appBK.page.check('#defaultContentAssetsChk');
+    // deliberately left open -- test 297 declines this same offer, and the
+    // offer is one-shot per browser so it cannot be raised twice
+    ok('starter-content offer: a Confirm on the shared bar (primary live immediately, disabled only with nothing ticked)');
+  } catch(e){ bad('starter-content offer: button bar', e); }
+
+  // 297. Cancel -> nothing installed, but both offers are still marked made.
+  try {
+    await appBK.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
+    await appBK.page.evaluate(() => document.getElementById('dcLeave').onclick());
     const mnemStored = await appBK.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
-    assert(Object.keys(mnemStored).length === 0, `expected Skip to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
-    assert(assetsStored.length === 0, `expected Skip to leave the assets store empty, got ${assetsStored.length} asset(s)`);
+    assert(Object.keys(mnemStored).length === 0, `expected declining to leave the mnemonics store empty, got ${Object.keys(mnemStored).length} square(s)`);
+    assert(assetsStored.length === 0, `expected declining to leave the assets store empty, got ${assetsStored.length} asset(s)`);
     const mnemOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getMnemOffered());
     const assetsOffered = await appBK.page.evaluate(() => window.__defaultContentTestHooks.getAssetsOffered());
-    assert(!!mnemOffered && !!assetsOffered, 'expected Skip to still mark both offers as made (so it does not nag again)');
-    ok('Skip on the starter-content offer installs nothing but remembers both decisions');
-  } catch(e){ bad('starter-content offer: Skip leaves both stores empty but remembers both decisions', e); }
+    assert(!!mnemOffered && !!assetsOffered, 'expected declining to still mark both offers as made (so it does not nag again)');
+    ok('declining the starter-content offer installs nothing but remembers both decisions');
+  } catch(e){ bad('starter-content offer: declining leaves both stores empty but remembers both decisions', e); }
 } finally {
   await appBK.close();
 }
@@ -10177,7 +10215,7 @@ try {
     assert(rowState.mnemRow === 'none', `expected the mnemonics row hidden (store already has content), got ${JSON.stringify(rowState)}`);
     assert(rowState.assetsRow !== 'none', `expected the assets row shown (store is empty), got ${JSON.stringify(rowState)}`);
 
-    await appBK2.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    await appBK2.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const mnemStored = await appBK2.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK2.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
@@ -10205,8 +10243,11 @@ try {
   try {
     await appBK3.page.evaluate(() => window.__defaultContentTestHooks.offer());
     await appBK3.page.waitForSelector('#defaultContentOverlay', { state: 'visible', timeout: 5000 });
-    await appBK3.page.evaluate(() => { document.getElementById('defaultContentAssetsChk').checked = false; });
-    await appBK3.page.evaluate(() => document.getElementById('defaultContentInstallBtn').onclick());
+    // a real uncheck, not a programmatic `checked = false`: the bar's primary
+    // is gated on at least one item being ticked, and only a genuine change
+    // event repaints it -- so this also proves one-of-two keeps it live
+    await appBK3.page.uncheck('#defaultContentAssetsChk');
+    await appBK3.page.evaluate(() => document.getElementById('dcSave').onclick());
 
     const mnemStored = await appBK3.page.evaluate(() => window.__mnemExportTestHooks.getStored());
     const assetsStored = await appBK3.page.evaluate(() => window.__assetsTestHooks.getAllAssets());
