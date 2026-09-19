@@ -2,6 +2,11 @@
 
 **Status: Phases 1-5 built. Phase 6 is whatever real use turns up.**
 
+**In the UI it is called "VR Schedule"** — that is the hamburger item and the
+modal's title. The code, the ids (`reviewForecast*`) and this document keep
+the original name; renaming them would be churn across a lot of test
+references for no user-visible gain.
+
 ## What it is for
 
 Not "which rooms are due" — the digraph's Review lens already answers that,

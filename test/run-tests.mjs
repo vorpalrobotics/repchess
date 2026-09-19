@@ -1396,6 +1396,55 @@ try {
     await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 5000 });
   } catch(e){ bad('quiz setup opened', e); }
 
+  // 11b. The quiz is a FLOW under Documents/modal-buttons.md: three sub-views
+  //      (setup, play, summary) that the bar is the same across, so one bare
+  //      Done for all of them and every step button left in the body where it
+  //      acts. START / GIVE UP / Quiz Again are exactly the buttons the spec
+  //      names as staying put.
+  try {
+    await assertInfoBar(app7.page, 'quizOverlay', 'Quiz Mnemonics');
+    const inBody = await app7.page.evaluate(() =>
+      ['quizStartBtn', 'quizGiveUpBtn', 'quizAgainBtn', 'quizCustomAll', 'quizCustomNone']
+        .every(id => { const el = document.getElementById(id); return !!el && !el.closest('.modal-bar'); }));
+    assert(inBody, 'expected every quiz step button to stay in the body');
+    ok('modal bar: the mnemonics quiz is a flow — one Done across its views, step buttons in the body');
+  } catch(e){ bad('modal bar: mnemonics quiz', e); }
+
+  // 11c. Done does the FULL teardown from any view. The summary used to carry
+  //      its own Close which never cleared the running clock's interval; now
+  //      there is one way out and it is the complete one. Tested through the
+  //      clock itself rather than an internal: start a quiz, let it tick,
+  //      leave, and confirm it has actually stopped.
+  try {
+    await app7.page.evaluate(() => document.getElementById('quizStartBtn').click());
+    await app7.page.waitForSelector('#quizPlay', { state: 'visible', timeout: 5000 });
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizClock').textContent.trim() !== '0:00', { timeout: 5000 });
+
+    await app7.page.evaluate(() => document.querySelector('#quizOverlay .modal-bar .mb-leave').click());
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizOverlay').style.display === 'none', { timeout: 5000 });
+    const stopped = await app7.page.evaluate(async () => {
+      const read = () => document.getElementById('quizClock').textContent.trim();
+      const before = read();
+      await new Promise(r => setTimeout(r, 1600));
+      return { before, after: read() };
+    });
+    assert(stopped.before === stopped.after,
+      `leaving must clear the quiz clock's interval, but it kept ticking: ${JSON.stringify(stopped)}`);
+
+    /* Put the modal back on SETUP before handing over. Leaving hides the
+       overlay but not the play view inside it, so the next test's
+       "#quizPlay is not shown" assertion would read THIS quiz's leftover
+       display:block and fail -- which is exactly what happened the first
+       time round. Reopening runs quizOpenSetup, which resets the views. */
+    await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
+    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 5000 });
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizPlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: leaving the quiz stops its clock — the full teardown runs from every view');
+  } catch(e){ bad('modal bar: quiz teardown on leave', e); }
+
   // 12. The coverage select is broken out into per-system optgroups with a
   //     "(whole system)" option plus one "↳ <castle>" option per castle --
   //     the same structure Manage Mnemonics already uses.
@@ -1803,6 +1852,35 @@ try {
     assert(!setupVisible, 'setup screen should not show when the chessboard library failed to load');
     ok('Test > Chessboard reaches the real feature (degrades gracefully without cm-chessboard)');
   } catch(e){ bad('chessboard test menu wiring', e); }
+
+  // 23b. The opening quiz is a Flow too. Its play and summary views can't be
+  //      reached here (cm-chessboard is null in the harness, as the test
+  //      above establishes), but the bar is mounted with the overlay and its
+  //      contract holds regardless of which view is showing -- which is the
+  //      point of a Flow having ONE bar rather than one per view.
+  //
+  //      The summary's old "Exit test mode" is gone: it skipped
+  //      disableMoveInput and oqClearHighlights, so it left different state
+  //      behind than the header's Close did. Consolidating closes that gap,
+  //      and strayIds proves nothing else in the modal still closes it.
+  try {
+    await app11.page.evaluate(() => { document.getElementById('openingQuizOverlay').style.display = 'flex'; });
+    await assertInfoBar(app11.page, 'openingQuizOverlay', 'Opening Quiz');
+    const inBody = await app11.page.evaluate(() =>
+      ['oqStartBtn', 'oqUnsureBtn', 'oqGiveUpBtn', 'oqUndoBtn', 'oqAgainSameBtn', 'oqAgainNewBtn']
+        .every(id => { const el = document.getElementById(id); return !!el && !el.closest('.modal-bar'); }));
+    assert(inBody, 'expected every test-flow button to stay in the body');
+    const goneForGood = await app11.page.evaluate(() => ({
+      exit: !!document.getElementById('oqExitBtn'),
+      close: !!document.getElementById('oqCloseBtn'),
+    }));
+    assert(!goneForGood.exit && !goneForGood.close,
+      `expected the two old exits replaced by the bar, got ${JSON.stringify(goneForGood)}`);
+    await app11.page.evaluate(() => document.querySelector('#openingQuizOverlay .modal-bar .mb-leave').click());
+    await app11.page.waitForFunction(
+      () => document.getElementById('openingQuizOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: the opening quiz is a flow — one Done, test-flow buttons in the body, both old exits gone');
+  } catch(e){ bad('modal bar: opening quiz', e); }
 
   // 24. oqCoverageEligible: before a castle's root sequence is reached there is
   //     only ever one move that stays on the path to it (forced); at/past the
@@ -2826,7 +2904,7 @@ try {
   //     table's hourglass markers appear on all of them and one combined
   //     summary is logged (not one message per child overwriting the last).
   try {
-    await app18.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await app18.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await app18.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
     const q = await app18.page.evaluate(() => window.__aqTestHooks.getQueue());
     const seqs = q.map(it => it.seq.join(',')).sort();
@@ -3767,13 +3845,28 @@ try {
     ok('analysis queue: a real pointer drag shows the drop-indicator bar and commits the move on release');
   } catch(e){ bad('analysis queue: pointer-drag end to end', e); }
 
+  // 68b. The queue itself IS Immediate, unlike the two modals that feed it:
+  //      rows cancel and reorder themselves and the thread count applies at
+  //      once, so nothing is ever staged and there is no Save. The Threads
+  //      selector came out of the old header row into the body -- it is a
+  //      setting for the work, not this modal's lifecycle.
+  try {
+    await assertInfoBar(app23.page, 'analysisQueueOverlay', 'Analysis Queue');
+    const threadsInBody = await app23.page.evaluate(() => {
+      const el = document.getElementById('aqThreadsField');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(threadsInBody, 'expected the Threads selector in the body, not the bar');
+    ok('modal bar: the Analysis Queue is immediate — Done only, Threads left in the body');
+  } catch(e){ bad('modal bar: Analysis Queue', e); }
+
   // 69. Deleting a repertoire line also drops any of ITS rows from the
   //     analysis queue store -- not just the in-memory ANALYSIS_QUEUE mirror.
   //     Confirmed by reloading straight from IDB via refreshAnalysisQueue(),
   //     which bypasses the delete handler's own in-memory prune entirely, so
   //     a leftover row would only show up after this reload.
   try {
-    await app23.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+    await app23.page.evaluate(() => document.querySelector('#analysisQueueOverlay .modal-bar .mb-leave').click());
     await app23.page.evaluate(() => document.getElementById('backBtn').click());
     await app23.page.waitForSelector('.line-row', { timeout: 40000 });
 
@@ -7215,10 +7308,28 @@ try {
     ok('setting a standard response opens the analysis-queue Add modal, not an instant-search modal');
   } catch(e){ bad('set standard response: opens the queue Add modal', e); }
 
+  // 133b. Add is a CONFIRM, which the rollout checklist had down as
+  //       Immediate. It stages nothing you have to touch: the depth and line
+  //       count arrive pre-filled and the normal use -- test 134 below, which
+  //       presses Add without editing either -- would be impossible under the
+  //       editor rule, because a clean modal's primary is dead.
+  try {
+    const b = await modalBarState(appAP.page, 'analysisAddOverlay');
+    assert(b && /Add .* to Analysis Queue/.test(b.title),
+      `expected the bar to carry the per-use title, got ${JSON.stringify(b && b.title)}`);
+    assert(b.save && b.save.text === 'Add' && !b.save.disabled && b.save.primary,
+      `a confirm's primary is live and carries its own verb: ${JSON.stringify(b.save)}`);
+    assert(b.leave.text === 'Cancel' && b.state === '',
+      `a confirm's Leave stays Cancel and it stages nothing: ${JSON.stringify(b)}`);
+    assert(b.barIsFirst && b.strayIds.length === 0,
+      `expected the bar first and the old Cancel/Add row gone: ${JSON.stringify(b)}`);
+    ok('modal bar: Add to Analysis Queue is a confirm — live untouched, titled per use');
+  } catch(e){ bad('modal bar: analysis Add', e); }
+
   // 134. Confirming queues both newly-visible children instead of running a
   //      live search -- no engine.analyze() call, just two queue entries.
   try {
-    await appAP.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appAP.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appAP.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, { timeout: 5000 });
     const q = await appAP.page.evaluate(() => window.__aqTestHooks.getQueue());
     const seqs = q.map(it => it.seq.join(',')).sort();
@@ -8234,7 +8345,7 @@ try {
     await appAV.page.evaluate(() => document.querySelector('#fieldOverlay .modal-bar .mb-save').click());
     await appAV.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     await expectInvalidated('expected setting a standard response to invalidate the cache');
-    await appAV.page.evaluate(() => document.getElementById('analysisAddCancelBtn').click());
+    await appAV.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-leave').click());
     ok('VR cache: setting a standard response invalidates the cache');
   } catch(e){ bad('VR cache: invalidated by setting a standard response', e); }
 
@@ -9283,6 +9394,29 @@ try {
       `expected the locally-stored original to stay at 512px, got ${storedDims.w}x${storedDims.h}`);
     ok('mnemonics export downscales images to the export cap without touching the stored originals');
   } catch(e){ bad('mnemonics export image downscale', e); }
+
+  // 80b. Import Move Images on the shared button bar. Immediate: dropping or
+  //      choosing files files each one into its square's mnemonic on the
+  //      spot, so there is nothing to commit and a bare Done. The drop zone
+  //      IS the action and stays in the body.
+  //
+  //      This modal had NO test coverage at all before now -- not the bar,
+  //      not the import. The bar contract is what this conversion is
+  //      responsible for; the import flow itself remains untested.
+  try {
+    await appBE.page.evaluate(() => document.getElementById('menuImportMoveImages').click());
+    await appBE.page.waitForSelector('#importMoveImagesOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appBE.page, 'importMoveImagesOverlay', 'Import Move Images');
+    const dropInBody = await appBE.page.evaluate(() => {
+      const el = document.getElementById('importMoveImagesDrop');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(dropInBody, 'expected the drop zone to stay in the body — it is the action, not the lifecycle');
+    await appBE.page.evaluate(() => document.querySelector('#importMoveImagesOverlay .modal-bar .mb-leave').click());
+    await appBE.page.waitForFunction(
+      () => document.getElementById('importMoveImagesOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: Import Move Images is immediate — Done only, drop zone left in the body');
+  } catch(e){ bad('modal bar: Import Move Images', e); }
 } finally {
   await appBE.close();
 }
@@ -12209,6 +12343,38 @@ try {
       btn.click();
     });
     await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+
+    /* --- the picker's own bar. Immediate, like the colour swatch picker:
+       clicking a card (below) commits that pick and closes, so nothing is
+       staged and there is no Save. It is also the rollout's most deeply
+       NESTED bar -- a sub-overlay living inside the manager's own modal,
+       which is why its modal carries the `modal` class: without it
+       wireModalBar's closest('.modal') would walk past the picker and bind
+       Escape onto the MANAGER's modal, clobbering the handler the manager's
+       own bar installed there. --- */
+    const pb = await modalBarState(appAY3.page, 'objlistPickOverlay');
+    assert(pb && pb.title === 'Pick an image asset',
+      `expected the picker's own bar, got ${JSON.stringify(pb && pb.title)}`);
+    assert(pb.leave.text === 'Done' && pb.save === null,
+      `a picker stages nothing, so Done and no Save: ${JSON.stringify(pb)}`);
+    assert(pb.strayIds.length === 0,
+      `expected no stray close/save buttons in the picker: ${JSON.stringify(pb.strayIds)}`);
+    const picksInBody = await appAY3.page.evaluate(() =>
+      ['objlistPickNone', 'objlistPickNewAsset'].every(id => {
+        const el = document.getElementById(id);
+        return !!el && !el.closest('.modal-bar');
+      }));
+    assert(picksInBody,
+      '"Use word only" and "New Asset…" are picks, not ways out — they stay in the body');
+    // the bar must belong to the PICKER, not be the manager's bar found by a
+    // selector that escaped its overlay (the mistake the spec warns about)
+    const ownBar = await appAY3.page.evaluate(() => {
+      const bar = document.querySelector('#objlistPickOverlay .modal-bar');
+      return !!bar && bar.closest('.objlist-pick-modal') !== null;
+    });
+    assert(ownBar, 'expected the bar inside the picker modal itself');
+    ok('modal bar: the asset picker is immediate — its own nested bar, Done only, picks left in the body');
+
     await appAY3.page.fill('#objlistPickFilter', 'evilAsset');
     await appAY3.page.waitForFunction(() => document.querySelectorAll('#objlistPickGrid .asset-card').length === 1, { timeout: 5000 });
     await appAY3.page.evaluate(() => document.querySelector('#objlistPickGrid .asset-card').click());
@@ -12315,7 +12481,7 @@ try {
     // modal (only that inner modal was cancelled) -- close it first so it
     // doesn't intercept clicks meant for the grid/editor below.
     await appAY3.page.evaluate(() => {
-      document.getElementById('objlistPickCancel')?.click();
+      document.querySelector('#objlistPickOverlay .modal-bar .mb-leave')?.click();
       document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click();
     });
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
@@ -13041,8 +13207,21 @@ try {
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     const defaultDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
     assert(defaultDepth === '20', `expected the depth dialog to default to 20, got "${defaultDepth}"`);
+
+    /* Confirm, like Add: the depth arrives pre-filled and Analyze is live
+       before anything is edited. Checked HERE, before the fill below, because
+       after it the modal would be dirty and a live primary would prove
+       nothing about the confirm rule. */
+    const cb = await modalBarState(appAZ2.page, 'compareAnalyzeOverlay');
+    assert(cb && cb.title === 'Analyze Other Replies', `expected the shared bar, got ${JSON.stringify(cb && cb.title)}`);
+    assert(cb.save && cb.save.text === 'Analyze' && !cb.save.disabled,
+      `expected Analyze live on an untouched confirm: ${JSON.stringify(cb.save)}`);
+    assert(cb.leave.text === 'Cancel' && cb.barIsFirst && cb.strayIds.length === 0,
+      `expected a confirm bar, first, with nothing stray: ${JSON.stringify(cb)}`);
+    ok('modal bar: Analyze Other Replies is a confirm — live on the pre-filled depth');
+
     await appAZ2.page.fill('#compareAnalyzeDepth', '18');
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     // the overlay itself closes synchronously, before queueAlternatesForAnalysis's
     // sequential per-move awaits (each does its own getPref IDB read) actually
     // finish -- wait on the real completion signal (both items landing in the
@@ -13090,7 +13269,7 @@ try {
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     await appAZ2.page.fill('#compareAnalyzeDepth', '25');
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     // same race as test 165 above -- c4 is the LAST of the three per-move
     // awaits (Nf3, g3, then the standard), so it's the most likely of all to
     // still be mid-flight when the overlay's own (synchronous) close fires.
@@ -13113,7 +13292,7 @@ try {
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
     const restoredDepth = await appAZ2.page.inputValue('#compareAnalyzeDepth');
     assert(restoredDepth === '25', `expected the just-saved depth (25, from test 165b) restored on reopen, got "${restoredDepth}"`);
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeCancelBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-leave').click());
     ok('Compare Games: "Analyze Others" depth persists in its own localStorage key across dialog reopens');
   } catch(e){ bad('Compare Games: depth persistence', e); }
 
@@ -13146,7 +13325,7 @@ try {
     await appAZ2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
     await appAZ2.page.waitForSelector('#analysisQueueOverlay', { state: 'visible', timeout: 5000 });
     await appAZ2.page.selectOption('#aqThreadsSelect', '6');
-    await appAZ2.page.evaluate(() => document.getElementById('analysisQueueCloseBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#analysisQueueOverlay .modal-bar .mb-leave').click());
 
     await appAZ2.page.evaluate(() => {
       window.__aqFakeEngine = { pending: null, callCount: 0, calls: [] };
@@ -13181,7 +13360,7 @@ try {
     // interrupt the above and jump to the front instead of waiting in line.
     await appAZ2.page.evaluate((sel) => document.querySelector(sel).nextElementSibling.querySelector('.meta-actual-analyze-all').click(), rowSel);
     await appAZ2.page.waitForSelector('#compareAnalyzeOverlay', { state: 'visible', timeout: 5000 });
-    await appAZ2.page.evaluate(() => document.getElementById('compareAnalyzeGoBtn').click());
+    await appAZ2.page.evaluate(() => document.querySelector('#compareAnalyzeOverlay .modal-bar .mb-save').click());
     await appAZ2.page.waitForFunction(() => document.getElementById('compareAnalyzeOverlay').style.display === 'none', { timeout: 5000 });
 
     await appAZ2.page.waitForFunction(() => window.__aqFakeEngine.callCount === 2, { timeout: 5000 });
@@ -13519,7 +13698,7 @@ try {
     await appBW.page.waitForSelector('#analysisAddOverlay', { state: 'visible', timeout: 5000 });
     const title = await appBW.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
     assert(title === 'Add to Analysis Queue', `expected the single-seq modal title, got "${title}"`);
-    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
     const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
     assert(q[0].seq.join(',') === 'd4,Nf6', `expected the row's own seq queued, got ${JSON.stringify(q[0].seq)}`);
@@ -13580,7 +13759,7 @@ try {
     // children -- with move 1's single opponent reply (Nf6) here, it collapses
     // to the same generic title the single-node action uses.
     assert(title === 'Add to Analysis Queue', `expected the generic (1-child) title, got "${title}"`);
-    await appBW.page.evaluate(() => document.getElementById('analysisAddGoBtn').click());
+    await appBW.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
     await appBW.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 1, { timeout: 5000 });
     const q = await appBW.page.evaluate(() => window.__aqTestHooks.getQueue());
     assert(q[0].seq.join(',') === 'd4,Nf6', `expected move 1's own opponent reply (d4,Nf6) queued, got ${JSON.stringify(q[0].seq)}`);
@@ -16326,7 +16505,7 @@ try {
 }
 
 // --- Phase CP: auto-import Phase 3 (continued) + Phase 4 -- the manual
-//     "Import Now" button (dlBtn), refactored to call
+//     "Import Now" button (now the bar primary), refactored to call
 //     importGamesFromPlatform, driven through the REAL modal UI end to end
 //     against mocked Lichess/chess.com responses; and the redesigned
 //     download modal itself, now showing BOTH platforms' fields at once
@@ -16340,16 +16519,30 @@ try {
     { id: 'rf2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp2' } } } },
   ]);
 
-  // 242. Filling in the download modal and clicking "Import Now" (dlBtn)
-  //      fetches from the (mocked) real Lichess endpoint, remembers the
+  // 242. Filling in the download modal and pressing "Import Now" (the bar's
+  //      primary) fetches from the (mocked) real Lichess endpoint, remembers the
   //      username, reports the correct imported/total count, and closes
   //      the modal on success -- the same outward behavior as before the
   //      importGamesFromPlatform extraction.
   try {
     await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+
+    /* Confirm: every field arrives pre-filled from localStorage, so Import
+       Now is live before anything is typed -- checked here, BEFORE the fill
+       below, or a live primary would prove nothing. A first-time user with
+       nothing remembered still gets a live button and the press-time "enter
+       a username" message in the body. */
+    const db = await modalBarState(appCP.page, 'downloadOverlay');
+    assert(db && db.title === 'Import Games', `expected the shared bar, got ${JSON.stringify(db && db.title)}`);
+    assert(db.save && db.save.text === 'Import Now' && !db.save.disabled,
+      `expected Import Now live on an untouched confirm: ${JSON.stringify(db.save)}`);
+    assert(db.leave.text === 'Cancel' && db.barIsFirst && db.strayIds.length === 0,
+      `expected a confirm bar, first, with nothing stray: ${JSON.stringify(db)}`);
+    ok('modal bar: Import Games is a confirm — live on the remembered handles');
+
     await appCP.page.fill('#userIdLichess', 'realflow');
-    await appCP.page.click('#dlBtn');
+    await appCP.page.click('#downloadOverlay .modal-bar .mb-save');
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 10000 });
 
     const progressText = await appCP.page.evaluate(() => document.getElementById('downloadProgress').textContent);
@@ -16381,7 +16574,7 @@ try {
     assert(state.sourceDropdown === null, 'expected the old single-source dropdown to be gone entirely, not just hidden');
     assert(state.autoImportChecked === true, `expected the auto-import checkbox to reflect the persisted enabled flag, got ${state.autoImportChecked}`);
     ok('auto-import: the download modal shows both platforms\' fields at once, each independently pre-filled, plus the auto-import checkbox state');
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('auto-import: combined modal renders both platforms + checkbox state', e); }
 
   // 244. Toggling the checkbox persists immediately (not just on a later
@@ -16393,11 +16586,11 @@ try {
     const persistedOff = await appCP.page.evaluate((keys) => localStorage.getItem(keys.autoImport), await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
     assert(persistedOff === '0', `expected unchecking to immediately persist "0", got "${persistedOff}"`);
 
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
     await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
     const checkedOnReopen = await appCP.page.evaluate(() => document.getElementById('autoImportCheckbox').checked);
     assert(checkedOnReopen === false, `expected the unchecked state to survive closing and reopening the modal, got ${checkedOnReopen}`);
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
     ok('auto-import: the auto-import checkbox persists immediately and survives modal reopen');
   } catch(e){ bad('auto-import: auto-import checkbox persistence', e); }
 } finally {
@@ -16434,7 +16627,7 @@ try {
     await appCQ.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
     await appCQ.page.fill('#userIdLichess', 'bothlichess');
     await appCQ.page.fill('#userIdChesscom', 'bothchesscom');
-    await appCQ.page.click('#dlBtn');
+    await appCQ.page.click('#downloadOverlay .modal-bar .mb-save');
     await appCQ.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 15000 });
 
     const progressText = await appCQ.page.evaluate(() => document.getElementById('downloadProgress').textContent);
@@ -21764,7 +21957,7 @@ try {
   //      a bare Done, no Save, and the scope dropdown is a view control that
   //      stays in the body.
   try {
-    await assertInfoBar(appEF.page, 'reviewForecastOverlay', 'Review Forecast');
+    await assertInfoBar(appEF.page, 'reviewForecastOverlay', 'VR Schedule');
     const scopeInBody = await appEF.page.evaluate(() => {
       const el = document.getElementById('reviewForecastScope');
       return !!el && !el.closest('.modal-bar');

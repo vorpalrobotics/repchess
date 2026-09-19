@@ -1,10 +1,10 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-293';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-294';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-87';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-62';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-63';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-407';
+const BUILD_TAG = '-413';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6819,7 +6819,26 @@ const IMPORT_PLATFORMS = [
   { source: 'lichess',  userField: 'userIdLichess',  userKey: LS_ID,          sizeField: 'maxGames',   sizeKey: LS_MAX,     sizeDefault: 300 },
   { source: 'chesscom', userField: 'userIdChesscom', userKey: LS_ID_CHESSCOM, sizeField: 'monthsBack', sizeKey: LS_MONTHS,  sizeDefault: 12 },
 ];
-$('dlBtn').onclick = async ()=>{
+/* Confirm, and the first one whose action is genuinely long-running -- a
+   network fetch per platform plus an indexing pass. Two things fall out of
+   that which the old buttons did not give:
+
+   Leave is disabled while it runs. The old Cancel only hid the overlay; the
+   import carried on invisibly and logDl kept writing progress into a hidden
+   element. Now you watch it finish, and the handler hides the modal itself on
+   success exactly as before.
+
+   busyLabel says "Importing…", not "Saving…", which for a minutes-long fetch
+   is the difference between a label and an explanation. */
+wireModalBar(
+  mountBarHtml('downloadBar', { title: 'Import Games', save: true, saveLabel: 'Import Now', prefix: 'download' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Importing…',
+    onLeave: ()=>{ $('downloadOverlay').style.display='none'; },
+    onSave: ()=> runGameImport(),
+  });
+async function runGameImport(){
   const platforms = IMPORT_PLATFORMS
     .map(p => ({ ...p, username: $(p.userField).value.trim().toLowerCase() }))
     .filter(p => p.username);
@@ -6854,8 +6873,8 @@ $('dlBtn').onclick = async ()=>{
     // silently discarding whatever variation the user had focused.
     if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
     else await renderHome();
-  }catch(e){ console.error('[dlBtn] import failed',e); logDl(e.message,true); }
-};
+  }catch(e){ console.error('[import games] failed',e); logDl(e.message,true); }
+}
 
 // Recover from any restore an earlier (now-closed/crashed) session never
 // finished confirming, before the first Home render -- see
@@ -7009,7 +7028,9 @@ $('menuDownload').onclick = ()=>{
   $('autoImportCheckbox').checked = localStorage.getItem(LS_AUTO_IMPORT) === '1';
   $('downloadOverlay').style.display='flex';
 };
-$('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
+// the auto-import checkbox writes through the moment you tick it, which is
+// fine under Confirm: nothing here is dirty-tracked, so a body control that
+// takes effect at once needs no special handling
 $('autoImportCheckbox').onchange = ()=>{
   localStorage.setItem(LS_AUTO_IMPORT, $('autoImportCheckbox').checked ? '1' : '0');
 };
@@ -8619,7 +8640,11 @@ $('reviewForecastBody').addEventListener('click', (e) => {
   RF_MONTH = +btn.dataset.rfMonth || 0;
   renderReviewForecast(RF_LAST);
 });
-mountInfoBar('reviewForecastBar', 'Review Forecast',
+/* Titled to match its menu item. The ids and the internal names stay
+   `reviewForecast*` -- renaming those is churn across a lot of test
+   references for no user-visible gain, and Documents/review-forecast.md
+   still describes the design under its original name. */
+mountInfoBar('reviewForecastBar', 'VR Schedule',
   () => { $('reviewForecastOverlay').style.display = 'none'; });
 
 /* ---------- cross-castle transposition detector ----------
@@ -9841,7 +9866,8 @@ $('menuImportMoveImages').onclick = ()=>{
   $('importMoveImagesResults').innerHTML = '';
   $('importMoveImagesOverlay').style.display='flex';
 };
-$('importMoveImagesCloseBtn').onclick = ()=>{ $('importMoveImagesOverlay').style.display='none'; };
+mountInfoBar('importMoveImagesBar', 'Import Move Images',
+  ()=>{ $('importMoveImagesOverlay').style.display='none'; });
 const importMoveImagesDrop = $('importMoveImagesDrop');
 importMoveImagesDrop.addEventListener('click', ()=> $('importMoveImagesFile').click());
 $('importMoveImagesFile').addEventListener('change', e=>{
@@ -10249,11 +10275,18 @@ $('quizCustomAll').onclick = ()=>{
 };
 $('quizCustomNone').onclick = ()=>{ QUIZ_CUSTOM.clear(); quizBuildCustomGrid(); };
 $('quizStartBtn').onclick = ()=> quizStart();
-$('quizCloseBtn').onclick = ()=>{
+/* Flow: one bare Done across all three sub-views (setup, play, summary).
+   Leaving mid-quiz loses a score and nothing persistent, so there is no
+   discard confirm -- a Flow has no dirty concept by the spec's own table.
+
+   This is the FULL teardown, the one the header's Close used to do. The
+   summary's own Close did strictly less (it never cleared the timer), and
+   running the superset from every view is both simpler and slightly more
+   correct than keeping two exits that behaved differently. */
+mountInfoBar('quizBar', 'Quiz Mnemonics', ()=>{
   if(QUIZ) clearInterval(QUIZ.timerInterval);
   $('quizOverlay').style.display='none';
-};
-$('quizDoneBtn').onclick = ()=>{ $('quizOverlay').style.display='none'; };
+});
 $('quizAgainBtn').onclick = ()=>{ quizOpenSetup(); };
 $('quizGiveUpBtn').onclick = quizGiveUp;
 
@@ -11196,17 +11229,19 @@ function oqRestorePrefsIfSwapped(){
     OQ.savedPrefs = null;
   }
 }
-$('oqCloseBtn').onclick = ()=>{
+/* Flow, same shape as the mnemonics quiz. Also the full teardown: the
+   summary's old "Exit test mode" skipped disableMoveInput and
+   oqClearHighlights, so consolidating on this one closes that gap instead of
+   preserving two ways out that left different state behind. Safe from every
+   view -- oqRestorePrefsIfSwapped nulls savedPrefs so it is idempotent, and
+   the rest are no-ops once the board is done. */
+mountInfoBar('oqBar', 'Opening Quiz', ()=>{
   if(oqBoard) oqBoard.disableMoveInput();
   if(OQ) OQ.finished = true;
   oqRestorePrefsIfSwapped();
   oqClearHighlights();
   $('openingQuizOverlay').style.display='none';
-};
-$('oqExitBtn').onclick = ()=>{
-  oqRestorePrefsIfSwapped();
-  $('openingQuizOverlay').style.display='none';
-};
+});
 $('oqUnsureBtn').onclick = ()=> oqToggleUnsure();
 $('oqGiveUpBtn').onclick = ()=> oqGiveUp();
 $('oqUndoBtn').onclick = ()=> oqUndoChanges();
@@ -11889,22 +11924,33 @@ function openAnalysisQueueAddModal(lineId, seqs){
   $('analysisAddError').textContent = '';
   $('analysisAddOverlay').style.display='flex';
 }
-$('analysisAddCancelBtn').onclick = () => {
-  $('analysisAddOverlay').style.display='none';
-  aqAddCtx = null;
-};
-$('analysisAddGoBtn').onclick = async () => {
-  if(!aqAddCtx) return;
-  const depth = parseInt($('analysisAddDepth').value, 10);
-  const multipv = parseInt($('analysisAddLines').value, 10);
-  if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
-  if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
-  const {lineId, seqs} = aqAddCtx;
-  $('analysisAddOverlay').style.display='none';
-  aqAddCtx = null;
-  if(seqs.length > 1) await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv);
-  else await addToAnalysisQueue(lineId, seqs[0], depth, multipv);
-};
+/* Confirm: the depth and line count arrive pre-filled and the normal use is
+   to press Add without touching them, so the primary is live from the moment
+   it opens. Validation stays press-time with its message in the body -- it is
+   the caller's own rule, and this modal is dismissed far more often than it
+   is submitted. */
+wireModalBar(
+  mountBarHtml('analysisAddBar', { title: 'Add to Analysis Queue', save: true, saveLabel: 'Add', prefix: 'analysisAdd' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Adding…',
+    onLeave: () => {
+      $('analysisAddOverlay').style.display='none';
+      aqAddCtx = null;
+    },
+    onSave: async () => {
+      if(!aqAddCtx) return;
+      const depth = parseInt($('analysisAddDepth').value, 10);
+      const multipv = parseInt($('analysisAddLines').value, 10);
+      if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
+      if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
+      const {lineId, seqs} = aqAddCtx;
+      $('analysisAddOverlay').style.display='none';
+      aqAddCtx = null;
+      if(seqs.length > 1) await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv);
+      else await addToAnalysisQueue(lineId, seqs[0], depth, multipv);
+    },
+  });
 
 function seqEq(a,b){
   return a.length===b.length && a.every((m,i)=>m===b[i]);
@@ -11994,21 +12040,28 @@ function openCompareAnalyzeModal(lineId, seq, moves, onQueued){
   $('compareAnalyzeError').textContent = '';
   $('compareAnalyzeOverlay').style.display='flex';
 }
-$('compareAnalyzeCancelBtn').onclick = () => {
-  $('compareAnalyzeOverlay').style.display='none';
-  compareAnalyzeCtx = null;
-};
-$('compareAnalyzeGoBtn').onclick = async () => {
-  if(!compareAnalyzeCtx) return;
-  const depth = parseInt($('compareAnalyzeDepth').value, 10);
-  if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
-  localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
-  const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
-  $('compareAnalyzeOverlay').style.display='none';
-  compareAnalyzeCtx = null;
-  await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
-  onQueued?.();
-};
+// Confirm, same shape as Add above: a pre-filled depth you normally accept.
+wireModalBar(
+  mountBarHtml('compareAnalyzeBar', { title: 'Analyze Other Replies', save: true, saveLabel: 'Analyze', prefix: 'compareAnalyze' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Queueing…',
+    onLeave: () => {
+      $('compareAnalyzeOverlay').style.display='none';
+      compareAnalyzeCtx = null;
+    },
+    onSave: async () => {
+      if(!compareAnalyzeCtx) return;
+      const depth = parseInt($('compareAnalyzeDepth').value, 10);
+      if(!Number.isFinite(depth) || depth < 1){ $('compareAnalyzeError').textContent = 'enter a valid depth'; return; }
+      localStorage.setItem(LS_COMPARE_DEPTH, String(depth));
+      const {lineId, seq, moves, onQueued} = compareAnalyzeCtx;
+      $('compareAnalyzeOverlay').style.display='none';
+      compareAnalyzeCtx = null;
+      await queueAlternatesForAnalysis(lineId, moves.map(m => [...seq, m]), depth);
+      onQueued?.();
+    },
+  });
 
 async function queueAlternatesForAnalysis(lineId, seqs, depth){
   const orderOf = it => it.order ?? it.createdAt;
@@ -12244,7 +12297,8 @@ $('menuAnalysisQueue').onclick = async () => {
   populateAqThreadsSelect();   // in case the modal opens before engine.init() resolves
   $('analysisQueueOverlay').style.display='flex';
 };
-$('analysisQueueCloseBtn').onclick = () => { $('analysisQueueOverlay').style.display='none'; };
+mountInfoBar('analysisQueueBar', 'Analysis Queue',
+  () => { $('analysisQueueOverlay').style.display='none'; });
 
 /* ---------- Perfect Opening project control panel ----------
    Phase 2 of the Perfect Opening project (see db.js's own section for the

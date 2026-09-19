@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and seventeen modals are
+**Status: the mechanism is built (`js/modalBar.js`) and twenty-five modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -401,7 +401,31 @@ Order, worst first:
       on every keystroke, or scanning PREFS for a street-number clash on a
       modal that is dismissed far more often than submitted, is not a live
       check.
-- [ ] **Analysis Queue / Add / Compare** — Immediate.
+- [x] **Analysis Queue / Add / Compare** — and **two of the three are
+      Confirms, not Immediate** as this list had them. That is now twice the
+      checklist has guessed the category wrong (the swatch picker was the
+      other), both times in the same direction: **assuming a modal with
+      fields in it stages something.**
+
+      "Add to Analysis Queue" and "Analyze Other Replies" both arrive with
+      their depth (and line count) pre-filled, and the normal use is to press
+      the verb without touching either — which is impossible under the editor
+      rule, because a clean modal's primary is dead. The existing tests prove
+      it: they press Add and Analyze on untouched dialogs. **The test for the
+      Compare confirm had to go BEFORE the fill that follows it**, or a live
+      primary would have proved nothing.
+
+      Only the **queue list itself** is Immediate: rows cancel and reorder
+      themselves and the thread count applies at once, so a bare `Done`. Its
+      `Threads` selector came out of the old header row into the body — a
+      setting for the work, not this modal's lifecycle, same call as the
+      graph's Reset Layout.
+
+      The rule of thumb this leaves: **pre-filled fields you would normally
+      accept mean Confirm; fields you must fill in before the action means
+      anything mean Editor.** Import Variations is the Editor side of that
+      line, Add to Analysis Queue the Confirm side, and they look nearly
+      identical until you ask which one you would press unchanged.
 - [x] **Graph**, **Help**, **About**, **Room Info**, **Castle Preview**,
       **Browse Games**, **Transpositions** — Informational or Immediate;
       Done only. Converted as one batch, since the contract is identical for
@@ -438,17 +462,92 @@ Order, worst first:
       The graph also lost its old header row: `Reset Layout` and
       `Show Castle` are view controls, not lifecycle, so they moved down to
       join the `View` / `Coverage` row in the body.
-- [ ] **Quizzes** (`#quizOverlay`, `#openingQuizOverlay`) — Flow; bar gets
-      `Done` only, all the test-flow buttons stay in the body.
+- [x] **Quizzes** (`#quizOverlay`, `#openingQuizOverlay`) — Flow; bar gets
+      `Done` only, all the test-flow buttons stay in the body. The first
+      modals where the bar is the same across **every** sub-view, so one bar
+      mounted once covers setup, play and summary — unlike the Object Lists
+      and Assets managers, whose views want different bars.
+
+      What this batch turned up: **each quiz had TWO ways out that did
+      different teardown.** The header's `Close` was the full version; the
+      summary's own `Close` / `Exit test mode` were subsets — the mnemonics
+      one never cleared the running clock's interval, and the opening one
+      skipped `disableMoveInput` and `oqClearHighlights`. Consolidating on
+      one bar Leave running the superset closes that gap rather than
+      preserving two exits that left different state behind.
+
+      **Generalise it:** when a modal has more than one way out, they are
+      worth diffing before you pick which becomes the bar's Leave. The bar
+      enforces one exit, which is only an improvement if it is the *complete*
+      one. Neither quiz's discrepancy was a reported bug; both were found by
+      reading the two handlers side by side during the conversion.
+
+      No discard confirm: a Flow has no dirty concept, and leaving mid-quiz
+      loses a score rather than unsaved work (the opening quiz writes its
+      grades as it goes, which is what its own undo list is for).
 - [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm.
-- [ ] **Download** (`#downloadOverlay`), **Import Move Images**
-      (`#importMoveImagesOverlay`), **Perfect Opening**
-      (`#perfectOpeningOverlay`) and its progress panel
-      (`#perfectOpeningProgressOverlay`), **object-list pick**
-      (`#objlistPickOverlay`). Added late: these existed in the app but were
-      missing from this list, which made the remaining work look smaller than
-      it is. Categorise each when its turn comes — Perfect Opening's config
-      panel in particular looks like an Editor, not an Immediate.
+- [x] **Import Games** (`#downloadOverlay`) — **Confirm**, by the pre-filled
+      test above: every field is restored from localStorage on open, which is
+      the whole point of it remembering your handles, so the normal use is to
+      press `Import Now` unchanged. A first-time user with nothing remembered
+      still gets a live primary and the existing press-time "enter a
+      username" message in the body.
+
+      It is also **the first converted modal whose action is genuinely
+      long-running** — a network fetch per platform plus an indexing pass —
+      and the busy state earns its keep there. The old `Cancel` merely hid
+      the overlay while the import carried on invisibly, with `logDl` writing
+      progress into a hidden element; the bar disables Leave for the
+      duration, so you watch it finish. `busyLabel: 'Importing…'` rather than
+      the default `Saving…`, which over a minutes-long fetch is the
+      difference between a label and an explanation.
+
+      Its auto-import checkbox writes through on tick, which needs no special
+      handling here: a Confirm dirty-tracks nothing, so a body control that
+      takes effect at once is simply a body control.
+
+- [x] **Import Move Images** (`#importMoveImagesOverlay`) — **Immediate**,
+      and the simplest conversion in the whole rollout: dropping or choosing
+      files files each one into its square's mnemonic on the spot, so there
+      is nothing to commit and a bare `Done`. The drop zone *is* the action
+      and stays in the body. No `.modal-body` wrapper either — its results
+      list already caps itself at 240px and scrolls on its own, so the modal
+      cannot grow past the viewport and the bar cannot scroll away.
+
+      Worth recording: this modal had **no test coverage at all** before the
+      conversion — not the bar, not the import. The bar contract is now
+      tested; **the import flow itself still is not.**
+
+- [x] **Object-list asset picker** (`#objlistPickOverlay`) — **Immediate**,
+      the same shape as the colour swatch picker: clicking an asset card
+      commits that pick and closes, so nothing is staged and the bar is a
+      bare `Done`. Its old `Cancel` was already the wrong word. `Use word
+      only (no image)` and `New Asset…` stay in the body — both are *picks*,
+      not ways out; the first commits "no image" exactly as a card commits an
+      asset.
+
+      **The rollout's most deeply nested bar, and the one structural lesson
+      here:** this is a sub-overlay living *inside* the manager's own modal,
+      so its `.objlist-pick-modal` had to take the `modal` class as well.
+      Without it, `wireModalBar`'s `closest('.modal')` walks straight past the
+      picker and binds Escape onto the **manager's** modal — silently
+      clobbering the handler the manager's own bar installed there, because
+      that binding is an `onkeydown` assignment rather than a listener.
+      Adding the class is safe only because `.objlist-pick-modal` overrides
+      every property `.modal` sets and comes later in source order; check
+      that before doing the same elsewhere.
+
+      Its markup exists **twice** — once in the manager's shell, once in the
+      standalone New List overlay — so the bar is wired through a shared
+      `wirePickerBar()` scoped to `containerEl`, not `getElementById`, which
+      would find whichever copy landed in the document first.
+
+- [ ] **Perfect Opening** (`#perfectOpeningOverlay`) and its progress panel
+      (`#perfectOpeningProgressOverlay`). Added late: these existed in the app
+      but were missing from this list, which made the remaining work look
+      smaller than it is. Categorise each against the pre-filled-vs-must-fill
+      test rather than by its label — that test has now caught three modals
+      this list had filed wrong.
 
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.

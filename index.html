@@ -742,7 +742,6 @@
   .objlist-pick-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
   .objlist-pick-modal{background:#fff;border-radius:6px;padding:1rem;width:90vw;height:86vh;max-width:none;display:flex;flex-direction:column;box-shadow:0 4px 16px rgba(0,0,0,.3)}
   .objlist-pick-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.6rem;flex-wrap:wrap}
-  .objlist-pick-head strong{font-size:1rem}
   #objlistPickGrid{flex:1 1 auto;min-height:0;overflow:auto}
   #colorPickerOverlay{z-index:170;background:rgba(0,0,0,.7)}
   #colorPickerOverlay .modal{width:96vw;height:94vh;max-width:none;display:flex;flex-direction:column;padding:.8rem}
@@ -848,8 +847,6 @@
   .mnem-square.mnem-unused .mnem-cell-empty{opacity:.35}
 
   #quizOverlay .modal{min-width:24em;text-align:center}
-  .quiz-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
-  .quiz-header h2{margin:0}
   #quizClock{font-family:'Courier New',monospace;font-size:1.1rem;font-weight:700}
   #quizTrialNum{font-size:.85rem;color:#666;margin-bottom:.5rem}
   #quizPromptArea{border:2px solid #ccc;border-radius:6px;padding:1.4rem 1rem;margin-bottom:.8rem;transition:background-color .15s,border-color .15s}
@@ -986,7 +983,8 @@
     <button id="menuBtn" title="Menu">&#9776;</button>
     <div id="menuList">
       <button id="menuThreeTest" title="Shift+click or right-click to force a fresh rebuild">Run VR</button>
-      <button id="menuReviewForecast" title="How much review is coming, and when — for pacing new memorization">Review Forecast</button>
+      <button id="menuReviewForecast" title="How much review is coming, and when — for pacing new memorization">VR Schedule</button>
+      <hr class="row-menu-sep">
       <button id="menuAssets">VR Assets</button>
       <button id="menuObjectLists">VR Object Lists</button>
       <button id="menuMnemonics">Mnemonics</button>
@@ -1098,8 +1096,14 @@
 
 <!-- import games modal -->
 <div id="downloadOverlay" class="overlay">
+  <!-- Confirm: every field arrives pre-filled from localStorage (that is the
+       point of it remembering your handles), so the normal use is to press
+       Import Now unchanged -- which the editor rule would make impossible.
+       A first-time user with no handle saved still gets a live button and the
+       existing press-time "enter a username" message in the body, same as
+       Preview Castle's street-number check. -->
   <div class="modal">
-    <h2>Import Games</h2>
+    <div id="downloadBar" class="modal-bar-host"></div>
 
     <h3 class="modal-h3">Lichess.org</h3>
     <div class="field">
@@ -1122,10 +1126,6 @@
     </div>
 
     <div id="downloadProgress"></div>
-    <div class="modal-actions">
-      <button id="downloadCancelBtn">Cancel</button>
-      <button id="dlBtn">IMPORT NOW</button>
-    </div>
   </div>
 </div>
 
@@ -1577,8 +1577,13 @@
 
 <!-- add-to-analysis-queue modal (a move row's ⋮ menu) -->
 <div id="analysisAddOverlay" class="overlay">
+  <!-- CONFIRM, not Immediate as the checklist guessed: it stages nothing you
+       have to touch. You open it from a row's menu, agree with the depth and
+       line count it filled in, and press Add. Under the editor rule that
+       press is impossible. prefix:'analysisAdd' keeps the #analysisAddTitle
+       id the child-count title is written into. -->
   <div class="modal" style="max-width:26em">
-    <h2 id="analysisAddTitle" style="margin-top:0">Add to Analysis Queue</h2>
+    <div id="analysisAddBar" class="modal-bar-host"></div>
     <div class="field">
       <label for="analysisAddDepth">Depth</label>
       <input type="number" id="analysisAddDepth" min="1" step="1" value="40" style="width:6em">
@@ -1588,17 +1593,14 @@
       <input type="number" id="analysisAddLines" min="1" max="6" step="1" value="4" style="width:6em">
     </div>
     <div id="analysisAddError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
-      <button id="analysisAddCancelBtn">Cancel</button>
-      <button id="analysisAddGoBtn">Add</button>
-    </div>
   </div>
 </div>
 
 <!-- "Analyze Others" depth modal (Compare Games' analyze-all icon) -->
 <div id="compareAnalyzeOverlay" class="overlay">
+  <!-- Confirm, same shape as Add above. -->
   <div class="modal" style="max-width:22em">
-    <h2 style="margin-top:0">Analyze Other Replies</h2>
+    <div id="compareAnalyzeBar" class="modal-bar-host"></div>
     <div class="field">
       <label for="compareAnalyzeDepth">Depth</label>
       <input type="number" id="compareAnalyzeDepth" min="1" step="1" value="20" style="width:6em">
@@ -1606,23 +1608,20 @@
     <div style="font-size:.72rem;color:#888;margin-top:-.4rem">A single quick line per move, at the live board's
       thread count, jumped to the front of the analysis queue.</div>
     <div id="compareAnalyzeError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
-    <div style="display:flex;gap:.6rem;justify-content:flex-end;margin-top:.4rem">
-      <button id="compareAnalyzeCancelBtn">Cancel</button>
-      <button id="compareAnalyzeGoBtn">Analyze</button>
-    </div>
   </div>
 </div>
 
 <!-- analysis queue modal (hamburger menu) -->
 <div id="analysisQueueOverlay" class="overlay">
   <div class="modal" style="width:min(46em,95vw);max-height:88vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
-      <h2 style="margin:0">Analysis Queue</h2>
-      <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-left:.5rem">Threads:
-        <select id="aqThreadsSelect"></select>
-      </label>
-      <button id="analysisQueueCloseBtn" style="flex:0 0 auto;margin-left:auto">Close</button>
-    </div>
+    <!-- Immediate: the queue writes through (rows cancel and reorder
+         themselves, the thread count applies at once), so a bare Done. The
+         Threads selector came OUT of the old header row -- it is a setting
+         for the work, not this modal's lifecycle. -->
+    <div id="analysisQueueBar" class="modal-bar-host"></div>
+    <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-bottom:.4rem">Threads:
+      <select id="aqThreadsSelect"></select>
+    </label>
     <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis Queue" to queue deep background analysis.</p>
     <div style="flex:1;min-height:0;overflow:auto">
       <table id="analysisQueueTable" class="aq-table" style="display:none">
@@ -1758,10 +1757,10 @@
 <!-- quiz mnemonics modal -->
 <div id="quizOverlay" class="overlay">
   <div class="modal">
-    <div class="quiz-header">
-      <h2>Quiz Mnemonics</h2>
-      <button id="quizCloseBtn">Close</button>
-    </div>
+    <!-- Flow (Documents/modal-buttons.md): three sub-views (setup, play,
+         summary) that the bar is the same across, so one bare Done for all of
+         them and every step button left in the body where it acts. -->
+    <div id="quizBar" class="modal-bar-host"></div>
 
     <div id="quizEmpty">Add some mnemonics first (Manage Mnemonics) before quizzing.</div>
 
@@ -1829,9 +1828,11 @@
     <div id="quizSummary">
       <div class="quiz-score" id="quizScorePct"></div>
       <div id="quizScoreTime"></div>
+      <!-- the summary's own "Close" is gone: it did strictly LESS teardown
+           than the header's did (it never cleared the timer), and the bar's
+           Done now runs the full version from every view. -->
       <div class="modal-actions">
         <button id="quizAgainBtn">Quiz Again</button>
-        <button id="quizDoneBtn">Close</button>
       </div>
     </div>
   </div>
@@ -1840,10 +1841,8 @@
 <!-- opening quiz modal (play the line from a chosen node) -->
 <div id="openingQuizOverlay" class="overlay">
   <div class="modal">
-    <div class="quiz-header">
-      <h2>Opening Quiz</h2>
-      <button id="oqCloseBtn">Close</button>
-    </div>
+    <!-- Flow, same as the mnemonics quiz above. -->
+    <div id="oqBar" class="modal-bar-host"></div>
     <div id="oqSetup">
       <div class="quiz-setup-row">
         <label for="oqNumQuestions">Number of questions</label>
@@ -1894,10 +1893,14 @@
           title="Put every room listed above back on the schedule it had before this session">Undo these changes</button>
         <div id="oqUndoNote"></div>
       </div>
+      <!-- "Exit test mode" is gone for the same reason the mnemonics quiz's
+           Close was: it did strictly LESS teardown than the header's Close
+           (it skipped disableMoveInput and oqClearHighlights), so
+           consolidating on the bar's Done closes that gap rather than
+           preserving two ways out that behave differently. -->
       <div class="modal-actions oq-summary-actions">
         <button id="oqAgainSameBtn">Test again (same choices)</button>
         <button id="oqAgainNewBtn">Test with new choices</button>
-        <button id="oqExitBtn">Exit test mode</button>
       </div>
     </div>
   </div>
@@ -1931,8 +1934,13 @@
 
 <!-- bulk move-image import modal -->
 <div id="importMoveImagesOverlay" class="overlay">
+  <!-- Immediate: dropping or choosing files files each one into its square's
+       mnemonic on the spot, so there is nothing to commit and a bare Done.
+       The drop zone IS the action and stays in the body; no .modal-body
+       wrapper, because the results list already caps itself at 240px and
+       scrolls on its own, so the modal cannot grow past the viewport. -->
   <div class="modal">
-    <h2>Import Move Images</h2>
+    <div id="importMoveImagesBar" class="modal-bar-host"></div>
     <p class="asset-hint">Drop image files named for the move they belong to — piece letter
       (N/B/R/Q/K) plus the destination square, e.g. <code>Nf6.png</code> or <code>Bc4.jpg</code>.
       Pawn moves use just the square, e.g. <code>a1.png</code>. Each file is filed into the
@@ -1944,9 +1952,6 @@
       <input id="importMoveImagesFile" type="file" accept="image/*" multiple style="display:none">
     </div>
     <div id="importMoveImagesResults" class="import-move-images-results"></div>
-    <div class="modal-actions">
-      <button id="importMoveImagesCloseBtn">Close</button>
-    </div>
   </div>
 </div>
 
@@ -2004,6 +2009,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-407"></script>
+<script type="module" src="js/app.js?v=20260804-413"></script>
 </body>
 </html>
