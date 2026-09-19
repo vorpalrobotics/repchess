@@ -21911,9 +21911,134 @@ try {
     assert(state.cards === 0, `expected no load cards with nothing memorized, got ${state.cards}`);
     assert(state.pacing && /nothing is on the review schedule/i.test(state.pacing),
       `expected an explanation rather than three zeroes, got ${JSON.stringify(state.pacing)}`);
-    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
     ok('Review Forecast: an empty schedule explains itself instead of rendering zeroes');
   } catch(e){ bad('Review Forecast: empty-schedule pacing block', e); }
+
+  /* Phase 4: the donuts. They are NOT a second reading of the bars beside
+     them -- the bars are scaled to the largest row in their section, which
+     deliberately throws away "what share of the whole is this?", and that
+     share is exactly what the ring shows. So these test the share
+     arithmetic, not the pixels. */
+  const rfDonuts = () => appEF.page.evaluate(() =>
+    [...document.querySelectorAll('#reviewForecastBody .rf-donut')].map(d => ({
+      center: d.querySelector('.rf-donut-top')?.textContent.trim(),
+      caption: d.querySelector('.rf-donut-bottom')?.textContent.trim(),
+      segs: [...d.querySelectorAll('.rf-seg')].map(s => ({
+        dash: s.getAttribute('stroke-dasharray'),
+        offset: Number(s.getAttribute('stroke-dashoffset')),
+        stroke: s.getAttribute('stroke'),
+        title: s.querySelector('title')?.textContent || '',
+      })),
+    })));
+
+  // 281. The one case the arc-path approach gets wrong, which is why this is
+  //      drawn with dash offsets instead: a SINGLE 100% slice. With paths it
+  //      collapses to a zero-length arc and the ring vanishes -- on exactly
+  //      the input you least want it to, a fresh repertoire where everything
+  //      is one colour. The modal is left on an empty schedule by the test
+  //      above, so every room sits in "Not memorized yet".
+  try {
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+    const donuts = await rfDonuts();
+    assert(donuts.length >= 1, `expected the "Coming due" ring even with nothing memorized, got ${donuts.length}`);
+    const one = donuts[0];
+    assert(one.segs.length === 1, `expected exactly one slice, got ${JSON.stringify(one.segs)}`);
+    const C = 2 * Math.PI * 50;
+    const [len, gap] = one.segs[0].dash.split(/\s+/).map(Number);
+    assert(Math.abs(len - C) < 0.01 && Math.abs(gap) < 0.01,
+      `a 100% slice must span the whole ring, got dasharray ${JSON.stringify(one.segs[0].dash)} (circumference ${C.toFixed(3)})`);
+    assert(one.segs[0].offset === 0, `the only slice starts at the top, got offset ${one.segs[0].offset}`);
+    assert(/100%/.test(one.segs[0].title), `expected the slice to report 100%, got ${JSON.stringify(one.segs[0].title)}`);
+    // ...and the LADDER ring is absent entirely, because nothing is memorized
+    // -- an empty ring would be a circle implying a whole that isn't there
+    assert(donuts.length === 1, `expected no ladder ring with nothing memorized, got ${donuts.length} ring(s)`);
+    ok('Review Forecast: a single 100% slice draws a full ring, and a ring with nothing in it is omitted');
+  } catch(e){ bad('Review Forecast: donut edge cases', e); }
+
+  // 282. The share arithmetic: every slice is proportional, they sum to the
+  //      whole ring with no gap or overlap, zero buckets produce no slice at
+  //      all, and each slice carries its own label and percentage.
+  try {
+    // put a real spread back: four rooms, four different buckets
+    await appEF.page.evaluate(async () => {
+      const H = window.__reviewForecastTestHooks;
+      const castles = await H.gatherBuiltCastles();
+      const DAY = 86400000, now = Date.now();
+      const mem = {}, rev = {};
+      const plan = [[-20, 0], [0, 0], [1, 0], [5, 2]];
+      let i = 0;
+      for(const c of castles){
+        for(const gr of c.genRooms){
+          if(!gr.exits.length || i >= plan.length) continue;
+          const key = H.roomKeyFor(c.instanceId, gr.posKey);
+          const [d, step] = plan[i++];
+          mem[key] = now - 40 * DAY;
+          const due = new Date(now + d * DAY); due.setHours(0, 0, 0, 0);
+          rev[key] = { last: now - DAY, due: due.getTime(), step, lapses: 0, lastGrade: 'A' };
+        }
+      }
+      await H.setMemorized(JSON.stringify(mem));
+      await window.__reviewTestHooks.setReviews(rev);
+    });
+    await appEF.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appEF.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-donut .rf-seg').length > 1, { timeout: 20000 });
+
+    const donuts = await rfDonuts();
+    const live = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.forecast());
+    const C = 2 * Math.PI * 50;
+    const bucketRing = donuts[0];
+
+    // one slice per NON-ZERO bucket, never one per bucket
+    const nonZero = Object.values(live.buckets).filter(b => b.moves > 0).length;
+    assert(bucketRing.segs.length === nonZero,
+      `expected a slice per non-zero bucket (${nonZero}), got ${bucketRing.segs.length}`);
+
+    // they tile the ring exactly: each starts where the last ended, and the
+    // last one ends at the circumference
+    let expected = 0;
+    for(const s of bucketRing.segs){
+      assert(Math.abs(-s.offset - expected) < 0.01,
+        `slice should start where the previous ended (${expected.toFixed(3)}), got ${(-s.offset).toFixed(3)}`);
+      expected += Number(s.dash.split(/\s+/)[0]);
+    }
+    assert(Math.abs(expected - C) < 0.05,
+      `slices must tile the whole ring with no gap or overlap: ${expected.toFixed(3)} vs ${C.toFixed(3)}`);
+
+    // each slice is proportional to its bucket's moves, and says so
+    const totalMoves = live.totals.moves;
+    for(const s of bucketRing.segs){
+      const m = s.title.match(/: (\d+) \((\d+)%\)$/);
+      assert(m, `expected "label: N (P%)" in the slice title, got ${JSON.stringify(s.title)}`);
+      const [, n, pct] = m;
+      assert(Math.abs(Number(n) / totalMoves * C - Number(s.dash.split(/\s+/)[0])) < 0.05,
+        `slice length must be proportional to its moves: ${JSON.stringify(s)}`);
+      assert(Number(pct) === Math.round(Number(n) / totalMoves * 100),
+        `slice percentage must match its share: ${JSON.stringify(s.title)}`);
+    }
+    assert(bucketRing.center === String(totalMoves) && /moves/i.test(bucketRing.caption),
+      `expected the ring's centre to name the whole it is a share of: ${JSON.stringify(bucketRing)}`);
+    ok(`Review Forecast: donut slices tile the ring exactly and are proportional (${bucketRing.segs.length} slices)`);
+  } catch(e){ bad('Review Forecast: donut share arithmetic', e); }
+
+  // 283. The ladder ring ramps light-to-dark up the rungs rather than
+  //      reusing the bars' single colour -- seven identical blues would make
+  //      a ring you cannot read at all, and "how much has climbed" is the
+  //      whole reading it offers.
+  try {
+    const donuts = await rfDonuts();
+    assert(donuts.length === 2, `expected both rings once something is memorized, got ${donuts.length}`);
+    const ladderRing = donuts[1];
+    const strokes = ladderRing.segs.map(s => s.stroke);
+    assert(new Set(strokes).size === strokes.length,
+      `expected a distinct colour per rung, got ${JSON.stringify(strokes)}`);
+    assert(/memorized/i.test(ladderRing.caption),
+      `the ladder ring is a share of the MEMORIZED moves, not of everything: ${JSON.stringify(ladderRing.caption)}`);
+    await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
+    ok('Review Forecast: the ladder ring ramps by rung and is a share of what is memorized');
+  } catch(e){ bad('Review Forecast: ladder ring', e); }
 } finally {
   await appEF.close();
 }

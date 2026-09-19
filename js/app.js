@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-405';
+const BUILD_TAG = '-406';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8332,6 +8332,44 @@ function rfPacingHtml(f){
     <p class="rf-pacing">${pacing}${wall}</p>`;
 }
 
+/* ---------- the donut (Phase 4) ----------
+
+   It is NOT a second way of reading the bars beside it. The bars are scaled
+   to the largest row in their section, deliberately, so the shape of the week
+   is legible -- and that scaling throws away "what share of the whole is
+   this?". The donut is exactly that share. The two are complementary by
+   construction, which is why they sit side by side rather than on a toggle.
+
+   Drawn as dash-offset circle segments rather than arc paths: no trig, no
+   large-arc-flag edge cases, and a single 100% slice renders as a full ring
+   instead of collapsing to a zero-length arc, which is the classic way the
+   path approach fails on exactly the input you least want it to (a fresh
+   repertoire, where everything is one colour). */
+function rfDonutHtml(slices, centerTop, centerBottom, ariaLabel){
+  const drawn = slices.filter(s => s.value > 0);
+  const total = drawn.reduce((s, x) => s + x.value, 0);
+  if(!total) return '';
+  const R = 50, C = 2 * Math.PI * R;
+  let offset = 0;
+  const segs = drawn.map(s => {
+    const len = s.value / total * C;
+    const pct = Math.round(s.value / total * 100);
+    const el = `<circle class="rf-seg" cx="60" cy="60" r="${R}" fill="none" stroke="${s.color}" stroke-width="17"
+      stroke-dasharray="${len.toFixed(3)} ${(C - len).toFixed(3)}" stroke-dashoffset="${(-offset).toFixed(3)}"
+      ><title>${escapeHtml(s.label)}: ${s.value} (${pct}%)</title></circle>`;
+    offset += len;
+    return el;
+  }).join('');
+  return `
+    <div class="rf-donut">
+      <svg viewBox="0 0 120 120" role="img" aria-label="${escapeHtml(ariaLabel || '')}">
+        <g transform="rotate(-90 60 60)">${segs}</g>
+        <text class="rf-donut-top" x="60" y="59">${escapeHtml(String(centerTop))}</text>
+        <text class="rf-donut-bottom" x="60" y="73">${escapeHtml(String(centerBottom))}</text>
+      </svg>
+    </div>`;
+}
+
 function renderReviewForecast(f){
   const body = $('reviewForecastBody');
   if(!f.castles){
@@ -8353,20 +8391,43 @@ function renderReviewForecast(f){
        a day after it was memorized, so an older castle can read as entirely overdue.</p>`
     : '';
 
+  /* The ladder's rungs share one colour in the bar list (they are one
+     quantity, not seven categories), which would make a single-colour donut.
+     So the donut ramps them light-to-dark up the ladder: the reading it
+     offers is "how much of this castle has climbed", and a ramp shows that
+     where seven identical blues would not. */
+  const LADDER_RAMP = ['#bbdefb', '#90caf9', '#64b5f6', '#42a5f5', '#1e88e5', '#1565c0', '#0d47a1'];
+
   body.innerHTML = callout + rfPacingHtml(f) + `
     <div class="rf-section">
       <h3>Coming due</h3>
       <p class="rf-section-note">By when each room actually falls due — not by how long its interval is.
-        Bars are scaled to the biggest bucket.</p>
-      ${REVIEW_FORECAST_BUCKETS.map(b =>
-        rfRow(b.label, b.color, f.buckets[b.id].moves, f.buckets[b.id].rooms, bucketMax)).join('')}
+        Bars are scaled to the biggest bucket; the ring is each bucket's share of the whole.</p>
+      <div class="rf-chart">
+        ${rfDonutHtml(
+          REVIEW_FORECAST_BUCKETS.map(b => ({ label: b.label, color: b.color, value: f.buckets[b.id].moves })),
+          f.totals.moves, 'MOVES',
+          `Share of ${f.totals.moves} moves by when they fall due`)}
+        <div class="rf-chart-rows">
+          ${REVIEW_FORECAST_BUCKETS.map(b =>
+            rfRow(b.label, b.color, f.buckets[b.id].moves, f.buckets[b.id].rooms, bucketMax)).join('')}
+        </div>
+      </div>
     </div>
     <div class="rf-section">
       <h3>How well learned</h3>
       <p class="rf-section-note">Where the memorized rooms sit on the interval ladder. Rooms climb a rung
         each time you grade one A, so a repertoire you keep passing piles up at the bottom of this list.</p>
-      ${f.ladder.map(r =>
-        rfRow(`every ${r.days} day${r.days === 1 ? '' : 's'}`, '#1565c0', r.moves, r.rooms, ladderMax)).join('')}
+      <div class="rf-chart">
+        ${rfDonutHtml(
+          f.ladder.map((r, i) => ({ label: `every ${r.days} days`, color: LADDER_RAMP[i] || '#0d47a1', value: r.moves })),
+          f.totals.memorizedMoves, 'MEMORIZED',
+          `Share of ${f.totals.memorizedMoves} memorized moves by review interval`)}
+        <div class="rf-chart-rows">
+          ${f.ladder.map((r, i) =>
+            rfRow(`every ${r.days} day${r.days === 1 ? '' : 's'}`, LADDER_RAMP[i] || '#0d47a1', r.moves, r.rooms, ladderMax)).join('')}
+        </div>
+      </div>
     </div>
     <div class="rf-section">
       <h3>Totals</h3>
