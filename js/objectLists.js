@@ -203,13 +203,12 @@ function buildShell(){
       <div class="assets-editor" id="objlistQuiz" style="display:none"></div>
     </div>
     <div id="objlistPickOverlay" class="objlist-pick-overlay" style="display:none">
-      <div class="objlist-pick-modal">
+      <div class="objlist-pick-modal modal">
+        ${modalBarHtml({ title: 'Pick an image asset', prefix: 'objlistPick' })}
         <div class="objlist-pick-head">
-          <strong>Pick an image asset</strong>
           <input type="text" id="objlistPickFilter" class="assets-search" placeholder="Search assets…">
           <button id="objlistPickNewAsset"><i class="fa-solid fa-plus"></i> New Asset…</button>
           <button id="objlistPickNone">Use word only (no image)</button>
-          <button id="objlistPickCancel">Cancel</button>
         </div>
         <div class="assets-grid" id="objlistPickGrid"></div>
       </div>
@@ -220,7 +219,7 @@ function buildShell(){
   $('objlistImportBtn').onclick = () => $('objlistImportFile').click();
   $('objlistCastleQuizBtn').onclick = () => openCastleQuizPicker();
   $('objlistImportFile').addEventListener('change', onImportFile);
-  $('objlistPickCancel').onclick = () => closePicker(undefined);
+  wirePickerBar();
   $('objlistPickNone').onclick = () => closePicker(null);
   $('objlistPickFilter').oninput = () => renderPickGrid($('objlistPickFilter').value.trim().toLowerCase());
   // "escape out" to the full New Asset editor without leaving the list
@@ -910,7 +909,32 @@ function olGrabPointerUp(){
   if(targetIndex != null) reorderItems(name, targetIndex);
 }
 
-/* ---------- asset picker (sub-overlay) ---------- */
+/* ---------- asset picker (sub-overlay) ----------
+
+   IMMEDIATE, exactly like the colour swatch picker in assets.js: clicking an
+   asset card commits that pick and closes on the spot, so nothing is ever
+   staged and the bar is a bare `Done`. Its old `Cancel` was already the wrong
+   word by the vocabulary -- you leave this without losing anything.
+
+   `Use word only (no image)` stays in the body because it is a PICK, not a
+   way out: it commits "no image" the same way a card commits an asset. Same
+   call as the swatch picker's `Remove color`, which the spec names
+   explicitly. `New Asset…` likewise -- it opens a nested modal and feeds the
+   result straight back in.
+
+   Scoped to containerEl rather than $(): the manager's shell and the
+   standalone New List overlay each carry their own copy of this markup, so
+   getElementById would find whichever landed in the document first. The
+   picker's modal also takes the `modal` class so wireModalBar's
+   closest('.modal') finds the PICKER -- without it, in the manager's case,
+   the Escape handler would bind to the manager's own modal and clobber the
+   one its bar already installed there. */
+function wirePickerBar(){
+  const bar = containerEl && containerEl.querySelector('#objlistPickOverlay .modal-bar');
+  if(!bar) return;
+  wireModalBar(bar, { onLeave: () => closePicker(undefined) });
+}
+
 function openPicker(itemIndex){
   PICK_CB = (assetId) => {
     if(assetId !== undefined){ EDIT.items[itemIndex].assetId = assetId; renderItems(); }
@@ -1037,13 +1061,12 @@ export async function openNewObjectListModal(){
         <div class="modal-body"><div id="objlistEditor" class="assets-editor"></div></div>
       </div>
       <div id="objlistPickOverlay" class="objlist-pick-overlay" style="display:none">
-        <div class="objlist-pick-modal">
+        <div class="objlist-pick-modal modal">
+          ${modalBarHtml({ title: 'Pick an image asset', prefix: 'objlistPick' })}
           <div class="objlist-pick-head">
-            <strong>Pick an image asset</strong>
             <input type="text" id="objlistPickFilter" class="assets-search" placeholder="Search assets…">
             <button id="objlistPickNewAsset"><i class="fa-solid fa-plus"></i> New Asset…</button>
             <button id="objlistPickNone">Use word only (no image)</button>
-            <button id="objlistPickCancel">Cancel</button>
           </div>
           <div class="assets-grid" id="objlistPickGrid"></div>
         </div>
@@ -1051,7 +1074,7 @@ export async function openNewObjectListModal(){
     ov.style.display = 'flex';
     containerEl = ov;
 
-    $('objlistPickCancel').onclick = () => closePicker(undefined);
+    wirePickerBar();
     $('objlistPickNone').onclick = () => closePicker(null);
     $('objlistPickFilter').oninput = () => renderPickGrid($('objlistPickFilter').value.trim().toLowerCase());
     $('objlistPickNewAsset').onclick = async () => {

@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and twenty-four modals are
+**Status: the mechanism is built (`js/modalBar.js`) and twenty-five modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -518,13 +518,36 @@ Order, worst first:
       conversion — not the bar, not the import. The bar contract is now
       tested; **the import flow itself still is not.**
 
+- [x] **Object-list asset picker** (`#objlistPickOverlay`) — **Immediate**,
+      the same shape as the colour swatch picker: clicking an asset card
+      commits that pick and closes, so nothing is staged and the bar is a
+      bare `Done`. Its old `Cancel` was already the wrong word. `Use word
+      only (no image)` and `New Asset…` stay in the body — both are *picks*,
+      not ways out; the first commits "no image" exactly as a card commits an
+      asset.
+
+      **The rollout's most deeply nested bar, and the one structural lesson
+      here:** this is a sub-overlay living *inside* the manager's own modal,
+      so its `.objlist-pick-modal` had to take the `modal` class as well.
+      Without it, `wireModalBar`'s `closest('.modal')` walks straight past the
+      picker and binds Escape onto the **manager's** modal — silently
+      clobbering the handler the manager's own bar installed there, because
+      that binding is an `onkeydown` assignment rather than a listener.
+      Adding the class is safe only because `.objlist-pick-modal` overrides
+      every property `.modal` sets and comes later in source order; check
+      that before doing the same elsewhere.
+
+      Its markup exists **twice** — once in the manager's shell, once in the
+      standalone New List overlay — so the bar is wired through a shared
+      `wirePickerBar()` scoped to `containerEl`, not `getElementById`, which
+      would find whichever copy landed in the document first.
+
 - [ ] **Perfect Opening** (`#perfectOpeningOverlay`) and its progress panel
-      (`#perfectOpeningProgressOverlay`), **object-list pick**
-      (`#objlistPickOverlay`). Added late: these existed in the app but were
-      missing from this list, which made the remaining work look smaller than
-      it is. Categorise each against the pre-filled-vs-must-fill test rather
-      than by its label — that test has now caught three modals this list had
-      filed wrong.
+      (`#perfectOpeningProgressOverlay`). Added late: these existed in the app
+      but were missing from this list, which made the remaining work look
+      smaller than it is. Categorise each against the pre-filled-vs-must-fill
+      test rather than by its label — that test has now caught three modals
+      this list had filed wrong.
 
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.

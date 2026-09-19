@@ -12343,6 +12343,38 @@ try {
       btn.click();
     });
     await appAY3.page.waitForSelector('#objlistPickOverlay', { state: 'visible', timeout: 5000 });
+
+    /* --- the picker's own bar. Immediate, like the colour swatch picker:
+       clicking a card (below) commits that pick and closes, so nothing is
+       staged and there is no Save. It is also the rollout's most deeply
+       NESTED bar -- a sub-overlay living inside the manager's own modal,
+       which is why its modal carries the `modal` class: without it
+       wireModalBar's closest('.modal') would walk past the picker and bind
+       Escape onto the MANAGER's modal, clobbering the handler the manager's
+       own bar installed there. --- */
+    const pb = await modalBarState(appAY3.page, 'objlistPickOverlay');
+    assert(pb && pb.title === 'Pick an image asset',
+      `expected the picker's own bar, got ${JSON.stringify(pb && pb.title)}`);
+    assert(pb.leave.text === 'Done' && pb.save === null,
+      `a picker stages nothing, so Done and no Save: ${JSON.stringify(pb)}`);
+    assert(pb.strayIds.length === 0,
+      `expected no stray close/save buttons in the picker: ${JSON.stringify(pb.strayIds)}`);
+    const picksInBody = await appAY3.page.evaluate(() =>
+      ['objlistPickNone', 'objlistPickNewAsset'].every(id => {
+        const el = document.getElementById(id);
+        return !!el && !el.closest('.modal-bar');
+      }));
+    assert(picksInBody,
+      '"Use word only" and "New Asset…" are picks, not ways out — they stay in the body');
+    // the bar must belong to the PICKER, not be the manager's bar found by a
+    // selector that escaped its overlay (the mistake the spec warns about)
+    const ownBar = await appAY3.page.evaluate(() => {
+      const bar = document.querySelector('#objlistPickOverlay .modal-bar');
+      return !!bar && bar.closest('.objlist-pick-modal') !== null;
+    });
+    assert(ownBar, 'expected the bar inside the picker modal itself');
+    ok('modal bar: the asset picker is immediate — its own nested bar, Done only, picks left in the body');
+
     await appAY3.page.fill('#objlistPickFilter', 'evilAsset');
     await appAY3.page.waitForFunction(() => document.querySelectorAll('#objlistPickGrid .asset-card').length === 1, { timeout: 5000 });
     await appAY3.page.evaluate(() => document.querySelector('#objlistPickGrid .asset-card').click());
@@ -12449,7 +12481,7 @@ try {
     // modal (only that inner modal was cancelled) -- close it first so it
     // doesn't intercept clicks meant for the grid/editor below.
     await appAY3.page.evaluate(() => {
-      document.getElementById('objlistPickCancel')?.click();
+      document.querySelector('#objlistPickOverlay .modal-bar .mb-leave')?.click();
       document.querySelector('#objectListsOverlay .modal-bar .mb-leave')?.click();
     });
     await appAY3.page.evaluate(() => document.getElementById('menuObjectLists').click());
