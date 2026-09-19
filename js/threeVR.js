@@ -1897,6 +1897,28 @@ function slotXformFor(roomKey, slotId){
   const r = LAYOUT[roomKey];
   return (r && r.slotXform && r.slotXform[slotId]) || null;
 }
+/* The asset a slot's built accessory is actually MADE of, resolved the way
+   buildRoom resolves it -- which for a move-object is not just the per-slot
+   override slotAssetFor returns.
+
+   A move-object's image can arrive three ways: a per-slot override, a manual
+   word (no image at all), or the wall list assigned to its bucket. Only the
+   first lives in LAYOUT.slots, so slotAssetFor sees null for a list-driven
+   image -- and every caller that used it to ask "is this an image prop?" read
+   a perfectly ordinary picture as a word-only plaque. In setSlotXformLive
+   that meant a live nudge re-scaled the image mesh to the PLAQUE's sprite
+   scale (1.1 x 0.55): the picture kept roughly its width and lost half its
+   height, and stayed squashed until the next full rebuild (leaving edit mode)
+   put it back. Resolution order mirrors buildRoom's own, including that a
+   manual word beats the list. */
+function slotAccessoryAsset(roomKey, slot){
+  const override = slotAssetFor(roomKey, slot.id);
+  if(override) return override;
+  if(slot.kind !== 'moveObject') return null;
+  if(slotWordFor(roomKey, slot.id)) return null;   // an explicit word plaque, image or no image
+  const resolved = moveObjectListResolved(roomKey, slot);
+  return (resolved && resolved.asset) || null;
+}
 // Transform-only edit (nudge/scale/rotate): persist the new xform and move the
 // existing object in place, skipping the full applyEdit -> buildRoom rebuild
 // that would tear down and reload every mesh/texture in the room (the cause of
@@ -1934,7 +1956,7 @@ function setSlotXformLive(roomKey, slotId, xform){
     obj.userData.userScale = xform.scale || 1;
     applySpriteContentScale(obj);
   } else {
-    const asset = slotAssetFor(roomKey, slotId);
+    const asset = slotAccessoryAsset(roomKey, slot);
     if(asset){
       applyAccessoryTransform(obj, room, slot, asset, xform);
     } else {
@@ -7592,7 +7614,12 @@ const ROT_STEP = Math.PI / 12;   // 15 degrees per press
 function rotateSelected(dir){
   if(!selectedProp || (selectedProp.kind !== 'floor' && selectedProp.kind !== 'moveObject')) return;
   const { roomKey, slotId } = selectedProp;
-  const asset = selectedProp.doorObj ? selectedProp.asset : slotAssetFor(roomKey, slotId);
+  // slotAccessoryAsset, not slotAssetFor: a list-driven extruded move-object
+  // has no per-slot override, so asking the narrow way made rotation a silent
+  // no-op on exactly the props the wall lists fill in. Same root cause as the
+  // squashed-on-nudge bug -- see slotAccessoryAsset's own comment.
+  const slot = selectedProp.doorObj ? null : slotById(mergedRoom(roomKey), roomKey, slotId);
+  const asset = selectedProp.doorObj ? selectedProp.asset : (slot && slotAccessoryAsset(roomKey, slot));
   if(!asset || asset.type !== 'extruded') return;
   const xform = Object.assign({}, slotXformFor(roomKey, slotId));
   xform.dYaw = (xform.dYaw || 0) - dir * ROT_STEP;   // clockwise from above = negative yaw
@@ -9811,6 +9838,23 @@ export async function openThreeTest(containerEl, opts){
         let found = null;
         scene.traverse(o => { if(!found && o.userData && o.userData.subtitleFor === slotId) found = o; });
         return found ? { transparent: found.material.transparent, depthWrite: found.material.depthWrite, depthTest: found.material.depthTest } : null;
+      },
+      // a slot's built accessory: its local scale and world bounding-box size.
+      // A live nudge MOVES a prop and must never resize it, which is exactly
+      // what setSlotXformLive used to do to a list-driven image -- it read the
+      // picture as a word-only plaque (see slotAccessoryAsset) and re-scaled
+      // it to the plaque's 1.1 x 0.55 sprite scale, halving the height while
+      // the width looked about right. Scale is the robust half of the check:
+      // an extruded asset's real geometry arrives asynchronously (so its box
+      // can legitimately be empty), but applyAccessoryTransform sets the
+      // scale, uniformly, either way.
+      accessoryRenderInfo: (slotId) => {
+        const obj = findAccessoryObject(slotId);
+        if(!obj) return null;
+        const size = new THREE.Vector3();
+        new THREE.Box3().setFromObject(obj).getSize(size);
+        return { scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+                 size: { x: size.x, y: size.y, z: size.z } };
       },
       // a room's own resolved exits, incl. the fromSide/fromOrder tagging
       // (which member each door originates from) that continuationListItem

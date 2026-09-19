@@ -5332,6 +5332,97 @@ try {
 
 } catch(e){ bad('Phase AC2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AC3: regression -- nudging a WALL-LIST-DRIVEN move object in edit
+//     mode used to squash it. setSlotXformLive asked slotAssetFor "is this an
+//     image prop?", and that only ever sees a per-slot override, so a picture
+//     that came from the bucket's assigned list read as a word-only plaque
+//     and got re-scaled to the plaque's 1.1 x 0.55 sprite scale: roughly the
+//     right width, half the height, and stuck that way until the next full
+//     rebuild (leaving edit mode) quietly put it back. Uses a cylindrical
+//     billboard rather than the extruded asset Phase AC2 uses, because
+//     buildBillboardAsset makes its PlaneGeometry synchronously -- so the
+//     world bounding box is real here even though the fixture's image never
+//     decodes. ---
+if(shouldRunPhase(['vr-decorating'])){
+try {
+const appAC3 = await launchApp();
+try {
+  await seedBackup(appAC3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2 Qe7', white: 'a', black: 'b', result: '*' }],
+    assets: [{ id: 'billboardProp', name: 'billboardProp', type: 'billboard-cylindrical', image: 'data:image/png;base64,iVBORw0KGgo=', size: { w: 0.8, h: 1.6 } }],
+    objectLists: [
+      { id: 'picture_list', name: 'Picture List', roomName: '', category: '',
+        orderingType: 'procedural', orderingRule: '',
+        items: [{ name: 'PictureWord', assetId: 'billboardProp' }],
+        mnemonic: { type: 'generated_phrase', initialism: '', phrase: '', source: '' } },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appAC3.page);
+  const roomKey = await appAC3.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appAC3.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+  await appAC3.page.waitForTimeout(300);
+  const slotIds = await appAC3.page.evaluate((k) => window.__threeTestEdit.moveObjectSlotIds(k), roomKey);
+  const slotId = slotIds.filter(id => id !== 'obj-C1').sort()[0];
+  await appAC3.page.evaluate((k) => window.__threeTestEdit.setWallList(k, 'all', 'picture_list'), roomKey);
+  await appAC3.page.waitForTimeout(300);
+
+  // 85d. A list-driven image keeps its size through a live nudge: the prop
+  //      moves, its scale stays uniform, and its bounding-box height is the
+  //      one the asset declares (1.6m), not the plaque's half-height.
+  try {
+    const before = await appAC3.page.evaluate((sid) => window.__threeTestEdit.accessoryRenderInfo(sid), slotId);
+    assert(before, `test setup issue: expected an accessory mesh for slot ${slotId} once the wall list is assigned, got null`);
+    assert(Math.abs(before.size.y - 1.6) < 0.05,
+      `test setup issue: expected the list-driven billboard built at its declared 1.6m height, got ${JSON.stringify(before.size)}`);
+
+    await appAC3.page.evaluate(() => window.__threeTestEdit.toggle());   // edit mode on
+    await appAC3.page.evaluate((sid) => window.__threeTestEdit.target({ kind: 'accessory', slotId: sid }), slotId);
+    const selected = await appAC3.page.evaluate(() => window.__threeTestEdit.selected());
+    assert(selected && selected.slotId === slotId, `expected the list-driven object selectable, got ${JSON.stringify(selected)}`);
+    await appAC3.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' })));
+    await appAC3.page.waitForTimeout(150);
+
+    const after = await appAC3.page.evaluate((sid) => window.__threeTestEdit.accessoryRenderInfo(sid), slotId);
+    assert(after, 'expected the accessory still in the scene after a nudge');
+    assert(Math.abs(after.scale.x - after.scale.y) < 1e-6,
+      `expected the nudge to leave the prop's scale uniform, got ${JSON.stringify(after.scale)}`);
+    assert(Math.abs(after.scale.y - before.scale.y) < 1e-6,
+      `a nudge moves a prop, it must not resize it: scale.y went ${before.scale.y} -> ${after.scale.y}`);
+    assert(Math.abs(after.size.y - before.size.y) < 0.02,
+      `expected the nudged prop to keep its 1.6m height, got ${JSON.stringify({ before: before.size, after: after.size })}`);
+    ok('a wall-list-driven move object keeps its full height through a live nudge (not squashed to the word-plaque scale)');
+  } catch(e){ bad('live nudge: list-driven image keeps its size', e); }
+
+  // 85e. ...and the underlying resolver is what makes that work: a
+  //      list-driven slot with no per-slot override still resolves to the
+  //      list item's asset, which is what tells the live path "this is an
+  //      image, transform it like one" rather than "this is a plaque".
+  try {
+    const word = await appAC3.page.evaluate((args) => window.__threeTestEdit.slotListWord(args.k, args.sid),
+      { k: roomKey, sid: slotId });
+    assert(word === 'PictureWord', `expected the slot to resolve to the list item, got ${JSON.stringify(word)}`);
+    const layout = await appAC3.page.evaluate(() => window.__threeTestEdit.layoutSnapshot());
+    const overrides = (layout[roomKey] && layout[roomKey].slots) || {};
+    assert(!overrides[slotId],
+      `the regression only bites when there is NO per-slot override -- this fixture must not have one, got ${JSON.stringify(overrides)}`);
+    ok('live nudge regression: the fixture really is list-driven with no per-slot asset override');
+  } catch(e){ bad('live nudge: list-driven fixture has no per-slot override', e); }
+} finally {
+  await appAC3.close();
+}
+
+} catch(e){ bad('Phase AC3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AD: "fully decorated" -- the door-naming half of the check
 //     (only for a door whose target is NOT empty/locked -- see isRoomEmpty
 //     and the locked-doors feature), and the vacuous-true case. ---
