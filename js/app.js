@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-404';
+const BUILD_TAG = '-405';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8188,10 +8188,54 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
     }
   }
 
+  const perDay = [...perDayMap.values()].sort((a, b) => a.due - b.due);
+
+  /* CUMULATIVE load windows -- the pacing answer, and the reason this feature
+     exists. Each one includes everything before it, because that is how the
+     work actually arrives: if you sit down tomorrow you face what is overdue,
+     plus what was due today, plus tomorrow's own. A per-bucket reading makes
+     you add three numbers in your head to get the one you wanted.
+
+     Overdue counts. It is work still in front of you, not work that has
+     expired, so leaving it out would understate the load exactly when it is
+     worst. */
+  const WINDOWS = {
+    now:      ['overdue', 'due'],
+    tomorrow: ['overdue', 'due', 'tomorrow'],
+    week:     ['overdue', 'due', 'tomorrow', 'week'],
+  };
+  const load = {};
+  for(const [name, ids] of Object.entries(WINDOWS)){
+    load[name] = ids.reduce((acc, id) =>
+      ({ moves: acc.moves + buckets[id].moves, rooms: acc.rooms + buckets[id].rooms }), { moves: 0, rooms: 0 });
+  }
+
+  /* What is already scheduled for tomorrow ALONE (not cumulative) -- the
+     number a "should I memorize a new room today?" decision is actually made
+     against, because a room memorized today first falls due tomorrow
+     (bootstrapRoomReview dates it from the memorized timestamp + one day).
+     So this is literally the pile the new room would land on. */
+  const tomorrowOnly = { moves: buckets.tomorrow.moves, rooms: buckets.tomorrow.rooms };
+
+  /* The heaviest single day in the next 30 -- "is there a wall coming?",
+     which is the other half of pacing. The scheduler's fuzz deliberately does
+     nothing below about a week (see ROOM_REVIEW_FUZZ), so short-interval
+     pile-ups are real and this is the first thing that can show one. Only
+     future days: a past due date is already counted as overdue, and a
+     "heaviest day" in the past is not a thing anyone can act on. */
+  const today = startOfLocalDay(now);
+  const horizon = today + 30 * 86400000;
+  let busiestDay = null;
+  for(const d of perDay){
+    if(d.due < today || d.due > horizon) continue;
+    if(!busiestDay || d.moves > busiestDay.moves) busiestDay = d;
+  }
+
   return {
     buckets, ladder, totals, neverReviewed, locked,
+    load, tomorrowOnly, busiestDay,
     castles: castleCount,
-    perDay: [...perDayMap.values()].sort((a, b) => a.due - b.due),
+    perDay,
     generatedAt: now,
   };
 }
@@ -8238,6 +8282,56 @@ function rfRow(label, color, moves, rooms, max){
     </div>`;
 }
 
+/* ---------- the pacing block (Phase 3) ----------
+   The three cumulative windows, then the one sentence the whole feature is
+   for. Everything here is read straight off the aggregation -- if it needed a
+   rule it would belong in buildReviewForecast. */
+function rfLoadCard(when, v, lead){
+  return `
+    <div class="rf-load-card${lead ? ' rf-load-lead' : ''}">
+      <div class="rf-load-when">${escapeHtml(when)}</div>
+      <div class="rf-load-moves">${v.moves} move${v.moves === 1 ? '' : 's'}</div>
+      <div class="rf-load-rooms">${v.rooms} room${v.rooms === 1 ? '' : 's'} to walk</div>
+    </div>`;
+}
+function rfPacingHtml(f){
+  const { load, tomorrowOnly, busiestDay } = f;
+  if(!f.totals.memorizedRooms){
+    return `<p class="rf-pacing">Nothing is on the review schedule in this scope yet — memorize a room in VR
+      and it joins the ladder, first due the next day.</p>`;
+  }
+
+  /* The pacing sentence. A room you memorize today first falls due TOMORROW
+     (bootstrapRoomReview: memorized timestamp + one day), so tomorrow's own
+     pile -- not the cumulative week -- is what a new room actually lands on.
+     That is the decision, stated as the fact it is.
+
+     Deliberately NOT a recommendation. Nothing here knows how much you can
+     actually get through in a sitting; that needs a record of completed
+     sessions, which nothing writes today (see the phasing plan's open item).
+     Inventing a "that's too much" threshold would be dressing a guess up as
+     advice. */
+  const t = tomorrowOnly;
+  const pacing = t.moves
+    ? `A room you memorize today first comes due <b>tomorrow</b>, on top of the
+       <b>${t.moves} move${t.moves === 1 ? '' : 's'}</b> (${t.rooms} room${t.rooms === 1 ? '' : 's'}) already scheduled then.`
+    : `Nothing is scheduled for tomorrow yet, so a room you memorize today would have it to itself.`;
+
+  const wall = busiestDay && busiestDay.moves > 0
+    ? ` Heaviest day in the next month: <b>${new Date(busiestDay.due).toLocaleDateString(undefined,
+        { weekday: 'short', day: 'numeric', month: 'short' })}</b>,
+       ${busiestDay.moves} move${busiestDay.moves === 1 ? '' : 's'} across ${busiestDay.rooms} room${busiestDay.rooms === 1 ? '' : 's'}.`
+    : '';
+
+  return `
+    <div class="rf-load">
+      ${rfLoadCard('Due now', load.now)}
+      ${rfLoadCard('By tomorrow', load.tomorrow)}
+      ${rfLoadCard('Next 7 days', load.week, true)}
+    </div>
+    <p class="rf-pacing">${pacing}${wall}</p>`;
+}
+
 function renderReviewForecast(f){
   const body = $('reviewForecastBody');
   if(!f.castles){
@@ -8259,7 +8353,7 @@ function renderReviewForecast(f){
        a day after it was memorized, so an older castle can read as entirely overdue.</p>`
     : '';
 
-  body.innerHTML = callout + `
+  body.innerHTML = callout + rfPacingHtml(f) + `
     <div class="rf-section">
       <h3>Coming due</h3>
       <p class="rf-section-note">By when each room actually falls due — not by how long its interval is.
