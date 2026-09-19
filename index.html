@@ -1096,8 +1096,14 @@
 
 <!-- import games modal -->
 <div id="downloadOverlay" class="overlay">
+  <!-- Confirm: every field arrives pre-filled from localStorage (that is the
+       point of it remembering your handles), so the normal use is to press
+       Import Now unchanged -- which the editor rule would make impossible.
+       A first-time user with no handle saved still gets a live button and the
+       existing press-time "enter a username" message in the body, same as
+       Preview Castle's street-number check. -->
   <div class="modal">
-    <h2>Import Games</h2>
+    <div id="downloadBar" class="modal-bar-host"></div>
 
     <h3 class="modal-h3">Lichess.org</h3>
     <div class="field">
@@ -1120,10 +1126,6 @@
     </div>
 
     <div id="downloadProgress"></div>
-    <div class="modal-actions">
-      <button id="downloadCancelBtn">Cancel</button>
-      <button id="dlBtn">IMPORT NOW</button>
-    </div>
   </div>
 </div>
 
@@ -2005,6 +2007,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-409"></script>
+<script type="module" src="js/app.js?v=20260804-410"></script>
 </body>
 </html>

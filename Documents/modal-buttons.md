@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and twenty-two modals are
+**Status: the mechanism is built (`js/modalBar.js`) and twenty-three modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -486,14 +486,34 @@ Order, worst first:
       loses a score rather than unsaved work (the opening quiz writes its
       grades as it goes, which is what its own undo list is for).
 - [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm.
-- [ ] **Download** (`#downloadOverlay`), **Import Move Images**
-      (`#importMoveImagesOverlay`), **Perfect Opening**
-      (`#perfectOpeningOverlay`) and its progress panel
+- [x] **Import Games** (`#downloadOverlay`) — **Confirm**, by the pre-filled
+      test above: every field is restored from localStorage on open, which is
+      the whole point of it remembering your handles, so the normal use is to
+      press `Import Now` unchanged. A first-time user with nothing remembered
+      still gets a live primary and the existing press-time "enter a
+      username" message in the body.
+
+      It is also **the first converted modal whose action is genuinely
+      long-running** — a network fetch per platform plus an indexing pass —
+      and the busy state earns its keep there. The old `Cancel` merely hid
+      the overlay while the import carried on invisibly, with `logDl` writing
+      progress into a hidden element; the bar disables Leave for the
+      duration, so you watch it finish. `busyLabel: 'Importing…'` rather than
+      the default `Saving…`, which over a minutes-long fetch is the
+      difference between a label and an explanation.
+
+      Its auto-import checkbox writes through on tick, which needs no special
+      handling here: a Confirm dirty-tracks nothing, so a body control that
+      takes effect at once is simply a body control.
+
+- [ ] **Import Move Images** (`#importMoveImagesOverlay`), **Perfect
+      Opening** (`#perfectOpeningOverlay`) and its progress panel
       (`#perfectOpeningProgressOverlay`), **object-list pick**
       (`#objlistPickOverlay`). Added late: these existed in the app but were
       missing from this list, which made the remaining work look smaller than
-      it is. Categorise each when its turn comes — Perfect Opening's config
-      panel in particular looks like an Editor, not an Immediate.
+      it is. Categorise each against the pre-filled-vs-must-fill test rather
+      than by its label — that test has now caught three modals this list had
+      filed wrong.
 
 `#threeTestOverlay` (the VR walk) is **out of scope**: it is a full-screen
 canvas with its own in-world toolbar, not a modal in this sense.

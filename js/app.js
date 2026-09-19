@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-409';
+const BUILD_TAG = '-410';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -6819,7 +6819,26 @@ const IMPORT_PLATFORMS = [
   { source: 'lichess',  userField: 'userIdLichess',  userKey: LS_ID,          sizeField: 'maxGames',   sizeKey: LS_MAX,     sizeDefault: 300 },
   { source: 'chesscom', userField: 'userIdChesscom', userKey: LS_ID_CHESSCOM, sizeField: 'monthsBack', sizeKey: LS_MONTHS,  sizeDefault: 12 },
 ];
-$('dlBtn').onclick = async ()=>{
+/* Confirm, and the first one whose action is genuinely long-running -- a
+   network fetch per platform plus an indexing pass. Two things fall out of
+   that which the old buttons did not give:
+
+   Leave is disabled while it runs. The old Cancel only hid the overlay; the
+   import carried on invisibly and logDl kept writing progress into a hidden
+   element. Now you watch it finish, and the handler hides the modal itself on
+   success exactly as before.
+
+   busyLabel says "Importing…", not "Saving…", which for a minutes-long fetch
+   is the difference between a label and an explanation. */
+wireModalBar(
+  mountBarHtml('downloadBar', { title: 'Import Games', save: true, saveLabel: 'Import Now', prefix: 'download' }),
+  {
+    kind: 'confirm',
+    busyLabel: 'Importing…',
+    onLeave: ()=>{ $('downloadOverlay').style.display='none'; },
+    onSave: ()=> runGameImport(),
+  });
+async function runGameImport(){
   const platforms = IMPORT_PLATFORMS
     .map(p => ({ ...p, username: $(p.userField).value.trim().toLowerCase() }))
     .filter(p => p.username);
@@ -6854,8 +6873,8 @@ $('dlBtn').onclick = async ()=>{
     // silently discarding whatever variation the user had focused.
     if(CURRENT_LINE) renderTreeBody(CURRENT_LINE);
     else await renderHome();
-  }catch(e){ console.error('[dlBtn] import failed',e); logDl(e.message,true); }
-};
+  }catch(e){ console.error('[import games] failed',e); logDl(e.message,true); }
+}
 
 // Recover from any restore an earlier (now-closed/crashed) session never
 // finished confirming, before the first Home render -- see
@@ -7009,7 +7028,9 @@ $('menuDownload').onclick = ()=>{
   $('autoImportCheckbox').checked = localStorage.getItem(LS_AUTO_IMPORT) === '1';
   $('downloadOverlay').style.display='flex';
 };
-$('downloadCancelBtn').onclick = ()=>{ $('downloadOverlay').style.display='none'; };
+// the auto-import checkbox writes through the moment you tick it, which is
+// fine under Confirm: nothing here is dirty-tracked, so a body control that
+// takes effect at once needs no special handling
 $('autoImportCheckbox').onchange = ()=>{
   localStorage.setItem(LS_AUTO_IMPORT, $('autoImportCheckbox').checked ? '1' : '0');
 };

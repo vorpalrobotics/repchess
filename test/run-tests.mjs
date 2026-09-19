@@ -16450,7 +16450,7 @@ try {
 }
 
 // --- Phase CP: auto-import Phase 3 (continued) + Phase 4 -- the manual
-//     "Import Now" button (dlBtn), refactored to call
+//     "Import Now" button (now the bar primary), refactored to call
 //     importGamesFromPlatform, driven through the REAL modal UI end to end
 //     against mocked Lichess/chess.com responses; and the redesigned
 //     download modal itself, now showing BOTH platforms' fields at once
@@ -16464,16 +16464,30 @@ try {
     { id: 'rf2', moves: 'd4 d5', createdAt: 2000, players: { white: { user: { name: 'realflow' } }, black: { user: { name: 'opp2' } } } },
   ]);
 
-  // 242. Filling in the download modal and clicking "Import Now" (dlBtn)
-  //      fetches from the (mocked) real Lichess endpoint, remembers the
+  // 242. Filling in the download modal and pressing "Import Now" (the bar's
+  //      primary) fetches from the (mocked) real Lichess endpoint, remembers the
   //      username, reports the correct imported/total count, and closes
   //      the modal on success -- the same outward behavior as before the
   //      importGamesFromPlatform extraction.
   try {
     await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
+
+    /* Confirm: every field arrives pre-filled from localStorage, so Import
+       Now is live before anything is typed -- checked here, BEFORE the fill
+       below, or a live primary would prove nothing. A first-time user with
+       nothing remembered still gets a live button and the press-time "enter
+       a username" message in the body. */
+    const db = await modalBarState(appCP.page, 'downloadOverlay');
+    assert(db && db.title === 'Import Games', `expected the shared bar, got ${JSON.stringify(db && db.title)}`);
+    assert(db.save && db.save.text === 'Import Now' && !db.save.disabled,
+      `expected Import Now live on an untouched confirm: ${JSON.stringify(db.save)}`);
+    assert(db.leave.text === 'Cancel' && db.barIsFirst && db.strayIds.length === 0,
+      `expected a confirm bar, first, with nothing stray: ${JSON.stringify(db)}`);
+    ok('modal bar: Import Games is a confirm — live on the remembered handles');
+
     await appCP.page.fill('#userIdLichess', 'realflow');
-    await appCP.page.click('#dlBtn');
+    await appCP.page.click('#downloadOverlay .modal-bar .mb-save');
     await appCP.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 10000 });
 
     const progressText = await appCP.page.evaluate(() => document.getElementById('downloadProgress').textContent);
@@ -16505,7 +16519,7 @@ try {
     assert(state.sourceDropdown === null, 'expected the old single-source dropdown to be gone entirely, not just hidden');
     assert(state.autoImportChecked === true, `expected the auto-import checkbox to reflect the persisted enabled flag, got ${state.autoImportChecked}`);
     ok('auto-import: the download modal shows both platforms\' fields at once, each independently pre-filled, plus the auto-import checkbox state');
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
   } catch(e){ bad('auto-import: combined modal renders both platforms + checkbox state', e); }
 
   // 244. Toggling the checkbox persists immediately (not just on a later
@@ -16517,11 +16531,11 @@ try {
     const persistedOff = await appCP.page.evaluate((keys) => localStorage.getItem(keys.autoImport), await appCP.page.evaluate(() => window.__autoImportTestHooks.keys));
     assert(persistedOff === '0', `expected unchecking to immediately persist "0", got "${persistedOff}"`);
 
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
     await appCP.page.evaluate(() => document.getElementById('menuDownload').click());
     const checkedOnReopen = await appCP.page.evaluate(() => document.getElementById('autoImportCheckbox').checked);
     assert(checkedOnReopen === false, `expected the unchecked state to survive closing and reopening the modal, got ${checkedOnReopen}`);
-    await appCP.page.evaluate(() => document.getElementById('downloadCancelBtn').click());
+    await appCP.page.evaluate(() => document.querySelector('#downloadOverlay .modal-bar .mb-leave').click());
     ok('auto-import: the auto-import checkbox persists immediately and survives modal reopen');
   } catch(e){ bad('auto-import: auto-import checkbox persistence', e); }
 } finally {
@@ -16558,7 +16572,7 @@ try {
     await appCQ.page.waitForSelector('#downloadOverlay', { state: 'visible', timeout: 5000 });
     await appCQ.page.fill('#userIdLichess', 'bothlichess');
     await appCQ.page.fill('#userIdChesscom', 'bothchesscom');
-    await appCQ.page.click('#dlBtn');
+    await appCQ.page.click('#downloadOverlay .modal-bar .mb-save');
     await appCQ.page.waitForSelector('#downloadOverlay', { state: 'hidden', timeout: 15000 });
 
     const progressText = await appCQ.page.evaluate(() => document.getElementById('downloadProgress').textContent);
