@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and seventeen modals are
+**Status: the mechanism is built (`js/modalBar.js`) and nineteen modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -438,8 +438,29 @@ Order, worst first:
       The graph also lost its old header row: `Reset Layout` and
       `Show Castle` are view controls, not lifecycle, so they moved down to
       join the `View` / `Coverage` row in the body.
-- [ ] **Quizzes** (`#quizOverlay`, `#openingQuizOverlay`) — Flow; bar gets
-      `Done` only, all the test-flow buttons stay in the body.
+- [x] **Quizzes** (`#quizOverlay`, `#openingQuizOverlay`) — Flow; bar gets
+      `Done` only, all the test-flow buttons stay in the body. The first
+      modals where the bar is the same across **every** sub-view, so one bar
+      mounted once covers setup, play and summary — unlike the Object Lists
+      and Assets managers, whose views want different bars.
+
+      What this batch turned up: **each quiz had TWO ways out that did
+      different teardown.** The header's `Close` was the full version; the
+      summary's own `Close` / `Exit test mode` were subsets — the mnemonics
+      one never cleared the running clock's interval, and the opening one
+      skipped `disableMoveInput` and `oqClearHighlights`. Consolidating on
+      one bar Leave running the superset closes that gap rather than
+      preserving two exits that left different state behind.
+
+      **Generalise it:** when a modal has more than one way out, they are
+      worth diffing before you pick which becomes the bar's Leave. The bar
+      enforces one exit, which is only an improvement if it is the *complete*
+      one. Neither quiz's discrepancy was a reported bug; both were found by
+      reading the two handlers side by side during the conversion.
+
+      No discard confirm: a Flow has no dirty concept, and leaving mid-quiz
+      loses a score rather than unsaved work (the opening quiz writes its
+      grades as it goes, which is what its own undo list is for).
 - [ ] **Reset-to-factory warn/confirm**, **Default content** — Confirm.
 - [ ] **Download** (`#downloadOverlay`), **Import Move Images**
       (`#importMoveImagesOverlay`), **Perfect Opening**

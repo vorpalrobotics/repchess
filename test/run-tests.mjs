@@ -1396,6 +1396,55 @@ try {
     await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 5000 });
   } catch(e){ bad('quiz setup opened', e); }
 
+  // 11b. The quiz is a FLOW under Documents/modal-buttons.md: three sub-views
+  //      (setup, play, summary) that the bar is the same across, so one bare
+  //      Done for all of them and every step button left in the body where it
+  //      acts. START / GIVE UP / Quiz Again are exactly the buttons the spec
+  //      names as staying put.
+  try {
+    await assertInfoBar(app7.page, 'quizOverlay', 'Quiz Mnemonics');
+    const inBody = await app7.page.evaluate(() =>
+      ['quizStartBtn', 'quizGiveUpBtn', 'quizAgainBtn', 'quizCustomAll', 'quizCustomNone']
+        .every(id => { const el = document.getElementById(id); return !!el && !el.closest('.modal-bar'); }));
+    assert(inBody, 'expected every quiz step button to stay in the body');
+    ok('modal bar: the mnemonics quiz is a flow — one Done across its views, step buttons in the body');
+  } catch(e){ bad('modal bar: mnemonics quiz', e); }
+
+  // 11c. Done does the FULL teardown from any view. The summary used to carry
+  //      its own Close which never cleared the running clock's interval; now
+  //      there is one way out and it is the complete one. Tested through the
+  //      clock itself rather than an internal: start a quiz, let it tick,
+  //      leave, and confirm it has actually stopped.
+  try {
+    await app7.page.evaluate(() => document.getElementById('quizStartBtn').click());
+    await app7.page.waitForSelector('#quizPlay', { state: 'visible', timeout: 5000 });
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizClock').textContent.trim() !== '0:00', { timeout: 5000 });
+
+    await app7.page.evaluate(() => document.querySelector('#quizOverlay .modal-bar .mb-leave').click());
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizOverlay').style.display === 'none', { timeout: 5000 });
+    const stopped = await app7.page.evaluate(async () => {
+      const read = () => document.getElementById('quizClock').textContent.trim();
+      const before = read();
+      await new Promise(r => setTimeout(r, 1600));
+      return { before, after: read() };
+    });
+    assert(stopped.before === stopped.after,
+      `leaving must clear the quiz clock's interval, but it kept ticking: ${JSON.stringify(stopped)}`);
+
+    /* Put the modal back on SETUP before handing over. Leaving hides the
+       overlay but not the play view inside it, so the next test's
+       "#quizPlay is not shown" assertion would read THIS quiz's leftover
+       display:block and fail -- which is exactly what happened the first
+       time round. Reopening runs quizOpenSetup, which resets the views. */
+    await app7.page.evaluate(() => document.getElementById('menuQuiz').click());
+    await app7.page.waitForSelector('#quizSetup', { state: 'visible', timeout: 5000 });
+    await app7.page.waitForFunction(
+      () => document.getElementById('quizPlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: leaving the quiz stops its clock — the full teardown runs from every view');
+  } catch(e){ bad('modal bar: quiz teardown on leave', e); }
+
   // 12. The coverage select is broken out into per-system optgroups with a
   //     "(whole system)" option plus one "↳ <castle>" option per castle --
   //     the same structure Manage Mnemonics already uses.
@@ -1803,6 +1852,35 @@ try {
     assert(!setupVisible, 'setup screen should not show when the chessboard library failed to load');
     ok('Test > Chessboard reaches the real feature (degrades gracefully without cm-chessboard)');
   } catch(e){ bad('chessboard test menu wiring', e); }
+
+  // 23b. The opening quiz is a Flow too. Its play and summary views can't be
+  //      reached here (cm-chessboard is null in the harness, as the test
+  //      above establishes), but the bar is mounted with the overlay and its
+  //      contract holds regardless of which view is showing -- which is the
+  //      point of a Flow having ONE bar rather than one per view.
+  //
+  //      The summary's old "Exit test mode" is gone: it skipped
+  //      disableMoveInput and oqClearHighlights, so it left different state
+  //      behind than the header's Close did. Consolidating closes that gap,
+  //      and strayIds proves nothing else in the modal still closes it.
+  try {
+    await app11.page.evaluate(() => { document.getElementById('openingQuizOverlay').style.display = 'flex'; });
+    await assertInfoBar(app11.page, 'openingQuizOverlay', 'Opening Quiz');
+    const inBody = await app11.page.evaluate(() =>
+      ['oqStartBtn', 'oqUnsureBtn', 'oqGiveUpBtn', 'oqUndoBtn', 'oqAgainSameBtn', 'oqAgainNewBtn']
+        .every(id => { const el = document.getElementById(id); return !!el && !el.closest('.modal-bar'); }));
+    assert(inBody, 'expected every test-flow button to stay in the body');
+    const goneForGood = await app11.page.evaluate(() => ({
+      exit: !!document.getElementById('oqExitBtn'),
+      close: !!document.getElementById('oqCloseBtn'),
+    }));
+    assert(!goneForGood.exit && !goneForGood.close,
+      `expected the two old exits replaced by the bar, got ${JSON.stringify(goneForGood)}`);
+    await app11.page.evaluate(() => document.querySelector('#openingQuizOverlay .modal-bar .mb-leave').click());
+    await app11.page.waitForFunction(
+      () => document.getElementById('openingQuizOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: the opening quiz is a flow — one Done, test-flow buttons in the body, both old exits gone');
+  } catch(e){ bad('modal bar: opening quiz', e); }
 
   // 24. oqCoverageEligible: before a castle's root sequence is reached there is
   //     only ever one move that stays on the path to it (forced); at/past the

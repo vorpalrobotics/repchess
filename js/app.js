@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-407';
+const BUILD_TAG = '-408';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -10249,11 +10249,18 @@ $('quizCustomAll').onclick = ()=>{
 };
 $('quizCustomNone').onclick = ()=>{ QUIZ_CUSTOM.clear(); quizBuildCustomGrid(); };
 $('quizStartBtn').onclick = ()=> quizStart();
-$('quizCloseBtn').onclick = ()=>{
+/* Flow: one bare Done across all three sub-views (setup, play, summary).
+   Leaving mid-quiz loses a score and nothing persistent, so there is no
+   discard confirm -- a Flow has no dirty concept by the spec's own table.
+
+   This is the FULL teardown, the one the header's Close used to do. The
+   summary's own Close did strictly less (it never cleared the timer), and
+   running the superset from every view is both simpler and slightly more
+   correct than keeping two exits that behaved differently. */
+mountInfoBar('quizBar', 'Quiz Mnemonics', ()=>{
   if(QUIZ) clearInterval(QUIZ.timerInterval);
   $('quizOverlay').style.display='none';
-};
-$('quizDoneBtn').onclick = ()=>{ $('quizOverlay').style.display='none'; };
+});
 $('quizAgainBtn').onclick = ()=>{ quizOpenSetup(); };
 $('quizGiveUpBtn').onclick = quizGiveUp;
 
@@ -11196,17 +11203,19 @@ function oqRestorePrefsIfSwapped(){
     OQ.savedPrefs = null;
   }
 }
-$('oqCloseBtn').onclick = ()=>{
+/* Flow, same shape as the mnemonics quiz. Also the full teardown: the
+   summary's old "Exit test mode" skipped disableMoveInput and
+   oqClearHighlights, so consolidating on this one closes that gap instead of
+   preserving two ways out that left different state behind. Safe from every
+   view -- oqRestorePrefsIfSwapped nulls savedPrefs so it is idempotent, and
+   the rest are no-ops once the board is done. */
+mountInfoBar('oqBar', 'Opening Quiz', ()=>{
   if(oqBoard) oqBoard.disableMoveInput();
   if(OQ) OQ.finished = true;
   oqRestorePrefsIfSwapped();
   oqClearHighlights();
   $('openingQuizOverlay').style.display='none';
-};
-$('oqExitBtn').onclick = ()=>{
-  oqRestorePrefsIfSwapped();
-  $('openingQuizOverlay').style.display='none';
-};
+});
 $('oqUnsureBtn').onclick = ()=> oqToggleUnsure();
 $('oqGiveUpBtn').onclick = ()=> oqGiveUp();
 $('oqUndoBtn').onclick = ()=> oqUndoChanges();

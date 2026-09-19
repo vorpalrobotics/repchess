@@ -848,8 +848,6 @@
   .mnem-square.mnem-unused .mnem-cell-empty{opacity:.35}
 
   #quizOverlay .modal{min-width:24em;text-align:center}
-  .quiz-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
-  .quiz-header h2{margin:0}
   #quizClock{font-family:'Courier New',monospace;font-size:1.1rem;font-weight:700}
   #quizTrialNum{font-size:.85rem;color:#666;margin-bottom:.5rem}
   #quizPromptArea{border:2px solid #ccc;border-radius:6px;padding:1.4rem 1rem;margin-bottom:.8rem;transition:background-color .15s,border-color .15s}
@@ -1758,10 +1756,10 @@
 <!-- quiz mnemonics modal -->
 <div id="quizOverlay" class="overlay">
   <div class="modal">
-    <div class="quiz-header">
-      <h2>Quiz Mnemonics</h2>
-      <button id="quizCloseBtn">Close</button>
-    </div>
+    <!-- Flow (Documents/modal-buttons.md): three sub-views (setup, play,
+         summary) that the bar is the same across, so one bare Done for all of
+         them and every step button left in the body where it acts. -->
+    <div id="quizBar" class="modal-bar-host"></div>
 
     <div id="quizEmpty">Add some mnemonics first (Manage Mnemonics) before quizzing.</div>
 
@@ -1829,9 +1827,11 @@
     <div id="quizSummary">
       <div class="quiz-score" id="quizScorePct"></div>
       <div id="quizScoreTime"></div>
+      <!-- the summary's own "Close" is gone: it did strictly LESS teardown
+           than the header's did (it never cleared the timer), and the bar's
+           Done now runs the full version from every view. -->
       <div class="modal-actions">
         <button id="quizAgainBtn">Quiz Again</button>
-        <button id="quizDoneBtn">Close</button>
       </div>
     </div>
   </div>
@@ -1840,10 +1840,8 @@
 <!-- opening quiz modal (play the line from a chosen node) -->
 <div id="openingQuizOverlay" class="overlay">
   <div class="modal">
-    <div class="quiz-header">
-      <h2>Opening Quiz</h2>
-      <button id="oqCloseBtn">Close</button>
-    </div>
+    <!-- Flow, same as the mnemonics quiz above. -->
+    <div id="oqBar" class="modal-bar-host"></div>
     <div id="oqSetup">
       <div class="quiz-setup-row">
         <label for="oqNumQuestions">Number of questions</label>
@@ -1894,10 +1892,14 @@
           title="Put every room listed above back on the schedule it had before this session">Undo these changes</button>
         <div id="oqUndoNote"></div>
       </div>
+      <!-- "Exit test mode" is gone for the same reason the mnemonics quiz's
+           Close was: it did strictly LESS teardown than the header's Close
+           (it skipped disableMoveInput and oqClearHighlights), so
+           consolidating on the bar's Done closes that gap rather than
+           preserving two ways out that behave differently. -->
       <div class="modal-actions oq-summary-actions">
         <button id="oqAgainSameBtn">Test again (same choices)</button>
         <button id="oqAgainNewBtn">Test with new choices</button>
-        <button id="oqExitBtn">Exit test mode</button>
       </div>
     </div>
   </div>
@@ -2004,6 +2006,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-407"></script>
+<script type="module" src="js/app.js?v=20260804-408"></script>
 </body>
 </html>
