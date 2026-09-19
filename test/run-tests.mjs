@@ -17358,12 +17358,12 @@ try {
   //       available" option once a multi-threaded build is faked in,
   //       defaulting to "Max available" (0) rather than any specific count.
   try {
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     const hiddenWhileSingleThreaded = await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click())
       .then(() => appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 }))
       .then(() => appCW.page.evaluate(() => document.getElementById('poThreadsField').style.display === 'none'));
     assert(hiddenWhileSingleThreaded, 'expected the Threads field hidden on a single-threaded build (the harness\'s real default)');
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
 
     await appCW.page.evaluate(() => {
       const { engine } = window.__aqTestHooks;
@@ -17405,7 +17405,7 @@ try {
     await appCW.page.fill('#poHashMB', '1024');
     await appCW.page.selectOption('#poThreadsSelect', '3');
     await appCW.page.check('#poEnabledCheckbox');
-    await appCW.page.click('#poSaveBtn');
+    await appCW.page.click('#poSave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
@@ -17432,7 +17432,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poDepth1', '99');
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
 
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
@@ -17442,29 +17442,44 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const reopenedDepth = await appCW.page.evaluate(() => document.getElementById('poDepth1').value);
     assert(reopenedDepth === '50', `expected reopening to show the last saved value (50), not the cancelled edit, got ${reopenedDepth}`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: Cancel discards unsaved edits, reopening shows the last saved state');
   } catch(e){ bad('Perfect Opening: Cancel discards edits', e); }
 
-  // 264. Save validates: a non-positive value in a required-positive field
-  //      (e.g. move-1 max lines set to 0) is rejected with a visible error,
-  //      and nothing gets persisted.
+  // 264. Validation holds Save back: a non-positive value in a
+  //      required-positive field (e.g. move-1 max lines set to 0) disables
+  //      the primary with the reason in its tooltip AND in the body, so the
+  //      bad value can never be committed. Since the bar's conversion this
+  //      is the spec's "Invalid" state rather than a rejection discovered
+  //      on the way out -- the modal stays open because Save was never
+  //      clickable, and clearing the bad field brings it back to life.
   try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poMaxLines1', '0');
     await appCW.page.fill('#poDepth1', '99');   // an otherwise-valid change, to prove NOTHING saves when one field fails
-    await appCW.page.click('#poSaveBtn');
 
+    const invalid = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(invalid.save.disabled, `expected Save disabled while a field is out of range, got ${JSON.stringify(invalid.save)}`);
     const errorVisible = await appCW.page.evaluate(() => document.getElementById('poError').style.display !== 'none' && document.getElementById('poError').textContent.length > 0);
     assert(errorVisible, 'expected a visible validation error for a non-positive max-lines field');
     const stillOpen = await appCW.page.evaluate(() => document.getElementById('perfectOpeningOverlay').style.display === 'flex');
     assert(stillOpen, 'expected the modal to stay open on a validation failure, not silently close');
 
+    // fixing the one bad field revives Save -- an Invalid state you can't get
+    // out of would be worse than the old save-time rejection, not better
+    await appCW.page.fill('#poMaxLines1', '12');
+    const fixed = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(!fixed.save.disabled && fixed.save.primary,
+      `expected Save live again once the out-of-range field is fixed, got ${JSON.stringify(fixed.save)}`);
+    const errorCleared = await appCW.page.evaluate(() => document.getElementById('poError').style.display === 'none');
+    assert(errorCleared, 'expected the body error to clear once the field is back in range');
+
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
-    assert(config.depth[1] === 50, `expected NOTHING to save when validation fails (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
-    await appCW.page.click('#poCancelBtn');
-    ok('Perfect Opening: Save rejects a non-positive required field, persisting nothing');
+    assert(config.depth[1] === 50, `expected NOTHING to have saved while validation failed (move-1 depth should still be 50, not the attempted 99), got ${config.depth[1]}`);
+    await appCW.page.click('#poLeave');   // still dirty -- the harness accepts the discard prompt
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: a non-positive required field disables Save with the reason shown, and fixing it revives Save');
   } catch(e){ bad('Perfect Opening: Save validation rejects bad input', e); }
 
   // 265. Tolerance specifically allows exactly 0 (a valid, if extreme,
@@ -17474,7 +17489,7 @@ try {
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appCW.page.fill('#poTolerance', '0');
-    await appCW.page.click('#poSaveBtn');
+    await appCW.page.click('#poSave');
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     assert(config.toleranceCp === 0, `expected a tolerance of exactly 0 to be accepted, got ${config.toleranceCp}`);
@@ -17489,7 +17504,7 @@ try {
     appCW.page.once('dialog', d => { confirmMsg = d.message(); });   // read-only -- harness's own listener still accepts it
     await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    await appCW.page.click('#poResetBtn');
+    await appCW.page.click('#poDestroy');
     await appCW.page.waitForFunction(() => document.getElementById('poDepth1').value === '20', { timeout: 5000 });
 
     assert(confirmMsg && /permanently|delete|cannot be undone/i.test(confirmMsg), `expected a clear destructive-action warning, got ${JSON.stringify(confirmMsg)}`);
@@ -17498,7 +17513,7 @@ try {
     const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     const defaults = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.defaultConfig());
     assert(JSON.stringify(config) === JSON.stringify(defaults), `expected Reset to restore full defaults, got ${JSON.stringify(config)}`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: Reset confirms with a clear warning, then wipes to defaults and refreshes the open panel');
   } catch(e){ bad('Perfect Opening: Reset confirms and wipes', e); }
 
@@ -17510,7 +17525,7 @@ try {
       appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 })).then(() =>
       appCW.page.evaluate(() => document.getElementById('poStatus').textContent));
     assert(/not started/i.test(notStarted), `expected a "not started" status with no line yet, got "${notStarted}"`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
 
     const line = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.seedLine({ name: 'Perfect White Opening', color: 'white', openingMoves: ['e4'] }));
     await appCW.page.evaluate((lineId) => window.__perfectOpeningTestHooks.getConfig().then(cfg => {
@@ -17522,9 +17537,78 @@ try {
     await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     const withProgress = await appCW.page.evaluate(() => document.getElementById('poStatus').textContent);
     assert(withProgress.includes('42'), `expected the status line to report the 42 generated variations, got "${withProgress}"`);
-    await appCW.page.click('#poCancelBtn');
+    await appCW.page.click('#poLeave');
     ok('Perfect Opening: status line reports real progress once a line/variation count exist, "not started" otherwise');
   } catch(e){ bad('Perfect Opening: status line reflects progress', e); }
+
+  // 267b. The control panel is on the shared button bar as an EDITOR
+  //       (Documents/modal-buttons.md): clean on open despite arriving
+  //       pre-filled, Save gated on an actual edit, Reset in the destructive
+  //       slot, and nothing left in the body that still closes or commits.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+
+    const clean = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(clean, 'expected the shared button bar on the Perfect Opening panel');
+    assert(clean.title === 'Perfect Opening Project', `expected the bar titled "Perfect Opening Project", got ${JSON.stringify(clean.title)}`);
+    assert(clean.barIsFirst, 'expected the bar to be the modal\'s first child');
+    assert(clean.visibleWhenScrolled !== false, 'expected the bar to stay pinned when the settings body scrolls');
+    assert(clean.strayIds.length === 0, `expected no close/save buttons left in the body, got ${JSON.stringify(clean.strayIds)}`);
+    // the fields arrive pre-filled from saved config -- that must NOT read as
+    // unsaved work, which is the whole reason the baseline is taken on open
+    assert(clean.leave.text === 'Done' && !clean.leave.disabled, `expected an enabled "Done" on a freshly-opened panel, got ${JSON.stringify(clean.leave)}`);
+    assert(clean.save && clean.save.disabled, `expected Save disabled until something is actually edited, got ${JSON.stringify(clean.save)}`);
+    assert(clean.state === '', `expected no unsaved-changes text on open, got ${JSON.stringify(clean.state)}`);
+    assert(clean.destructive && /^Reset Perfect Opening…$/.test(clean.destructive.text),
+      `expected Reset in the destructive slot, ellipsised because it confirms, got ${JSON.stringify(clean.destructive)}`);
+
+    // read the loaded value rather than assuming one, so undoing the edit
+    // below really does restore the exact state the baseline was taken from
+    const loadedHash = await appCW.page.evaluate(() => document.getElementById('poHashMB').value);
+    await appCW.page.fill('#poHashMB', String(+loadedHash + 512));
+    const dirty = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(dirty.leave.text === 'Cancel', `expected Leave to become "Cancel" once edited, got ${JSON.stringify(dirty.leave)}`);
+    assert(!dirty.save.disabled && dirty.save.primary, `expected Save live and primary once edited, got ${JSON.stringify(dirty.save)}`);
+    assert(dirty.state === 'Unsaved changes', `expected the unsaved-changes marker, got ${JSON.stringify(dirty.state)}`);
+
+    // typing a value back to what it was reads clean again -- dirtiness is a
+    // snapshot comparison, never a "you touched something" flag
+    await appCW.page.fill('#poHashMB', loadedHash);
+    const undone = await modalBarState(appCW.page, 'perfectOpeningOverlay');
+    assert(undone.leave.text === 'Done' && undone.save.disabled && undone.state === '',
+      `expected the bar back to clean after undoing the edit by hand, got ${JSON.stringify(undone)}`);
+
+    await appCW.page.click('#poLeave');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: the control panel is an Editor on the shared bar (clean on open, Save gated, Reset destructive)');
+  } catch(e){ bad('Perfect Opening: control panel button bar', e); }
+
+  // 267c. ...and leaving it dirty warns before throwing the edit away.
+  try {
+    let discardMsg = null;
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
+    await appCW.page.fill('#poTolerance', '17');
+    appCW.page.once('dialog', d => { discardMsg = d.message(); });   // read-only -- harness's own listener accepts it
+    await appCW.page.click('#poLeave');
+    await appCW.page.waitForSelector('#perfectOpeningOverlay', { state: 'hidden', timeout: 5000 });
+    assert(discardMsg && /discard/i.test(discardMsg), `expected a discard warning when leaving with an unsaved edit, got ${JSON.stringify(discardMsg)}`);
+    const config = await appCW.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
+    assert(config.toleranceCp !== 17, `expected the discarded tolerance edit not to have been persisted, got ${config.toleranceCp}`);
+    ok('Perfect Opening: leaving the control panel with an unsaved edit warns first');
+  } catch(e){ bad('Perfect Opening: control panel discard warning', e); }
+
+  // 267d. The Progress panel stages nothing, so it gets the informational
+  //       bar -- a bare "Done", no Save that would sit disabled forever.
+  try {
+    await appCW.page.evaluate(() => document.getElementById('menuPerfectOpeningProgress').click());
+    await appCW.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appCW.page, 'perfectOpeningProgressOverlay', 'Perfect Opening Progress');
+    await appCW.page.click('#poProgressLeave');
+    await appCW.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'hidden', timeout: 5000 });
+    ok('Perfect Opening: the Progress panel is informational -- a bare Done on the shared bar');
+  } catch(e){ bad('Perfect Opening: Progress panel button bar', e); }
 } finally {
   await appCW.close();
 }
@@ -17998,7 +18082,7 @@ try {
     ]));
     const status = await openPanel();
     assert(status.includes('3') && /2 positions queued for expansion/.test(status), `expected the queue depth reported alongside the variation count, got "${status}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: reports the number of positions queued for expansion');
   } catch(e){ bad('Perfect Opening status: queue depth', e); }
 
@@ -18008,14 +18092,14 @@ try {
     await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.clearQueueStore());
     const status = await openPanel();
     assert(/caught up/i.test(status), `expected a "caught up" status with an empty queue while enabled, got "${status}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
 
     const config = await appCZ.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());
     config.enabled = false;
     await appCZ.page.evaluate((cfg) => window.__perfectOpeningTestHooks.setConfig(cfg), config);
     const pausedStatus = await openPanel();
     assert(/paused/i.test(pausedStatus), `expected a "paused" status with the project disabled, got "${pausedStatus}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: distinguishes "caught up" (enabled, empty queue) from "paused" (disabled)');
   } catch(e){ bad('Perfect Opening status: caught-up vs. paused wording', e); }
 
@@ -18042,7 +18126,7 @@ try {
     });
     const after = await appCZ.page.evaluate(() => document.getElementById('poStatus').textContent);
     assert(/caught up/i.test(after), `expected the OPEN panel's status to refresh to "caught up" once the scheduler drained the queue, got "${after}"`);
-    await appCZ.page.click('#poCancelBtn');
+    await appCZ.page.click('#poLeave');
     ok('Perfect Opening status: a panel left open refreshes live as the scheduler processes jobs');
   } catch(e){ bad('Perfect Opening status: live refresh while open', e); }
 
@@ -18126,7 +18210,7 @@ try {
     await appDA.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDA.page.click('#poEnabledCheckbox');
-    await appDA.page.click('#poSaveBtn');
+    await appDA.page.click('#poSave');
     await appDA.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
 
     const queue = await appDA.page.evaluate(() => window.__perfectOpeningTestHooks.getQueue());
@@ -18176,14 +18260,14 @@ try {
     await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningManage');
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
-    await appDA.page.click('#poCancelBtn');
+    await appDA.page.click('#poLeave');
 
     await appDA.page.click('#menuBtn');
     await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
     await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningProgress');
     await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: the hamburger submenu opens both Manage and Progress');
   } catch(e){ bad('Perfect Opening: hamburger submenu (Manage/Progress)', e); }
 
@@ -18230,7 +18314,7 @@ try {
     assert(rows['Moves fully explored'] === '2', `expected "Moves fully explored" to show 2, got ${JSON.stringify(rows)}`);
     assert(rows['Variations generated'] === '2', `expected "Variations generated" to show 2, got ${JSON.stringify(rows)}`);
     assert(rows['Positions queued for expansion'] === '1', `expected "Positions queued for expansion" to show 1, got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: Progress tracks "moves fully explored" and reports Paused when disabled despite a leftover queued job');
   } catch(e){ bad('Perfect Opening: Progress stats (deepestCompleteMove + status)', e); }
 
@@ -18279,7 +18363,7 @@ try {
     ));
     assert(rows[`Estimated time to complete move ${target}`] === expectedEta,
       `expected the ETA row to match the app's own recomputation ("${expectedEta}"), got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: avgJobMs tracks real elapsed time, and Progress shows a matching ETA for the current move');
   } catch(e){ bad('Perfect Opening: avgJobMs + ETA display', e); }
 
@@ -18315,7 +18399,7 @@ try {
         row => [row.querySelector('.po-progress-label').textContent, row.querySelector('.po-progress-value').textContent])
     ));
     assert(rows['Search speed'] === '1.4m evals/sec', `expected the Progress row to show "1.4m evals/sec", got ${JSON.stringify(rows)}`);
-    await appDA.page.click('#poProgressCloseBtn');
+    await appDA.page.click('#poProgressLeave');
     ok('Perfect Opening: avgNps tracks the engine\'s own reported search speed, shown on Progress with k/m shorthand');
   } catch(e){ bad('Perfect Opening: avgNps + evals/sec display', e); }
 
@@ -18404,7 +18488,7 @@ try {
     await appDB.page.evaluate(() => document.getElementById('menuPerfectOpeningManage').click());
     await appDB.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDB.page.click('#poEnabledCheckbox');
-    await appDB.page.click('#poSaveBtn');
+    await appDB.page.click('#poSave');
     await appDB.page.waitForFunction(() => document.getElementById('perfectOpeningOverlay').style.display === 'none');
 
     const config = await appDB.page.evaluate(() => window.__perfectOpeningTestHooks.getConfig());

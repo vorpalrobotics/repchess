@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-413';
+const BUILD_TAG = '-414';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -12344,6 +12344,66 @@ function populatePoThreadsSelect(config){
   sel.value = String(config.threads || 0);
   $('poThreadsField').style.display = '';
 }
+
+/* ---------- the control panel's button bar (Documents/modal-buttons.md) ----
+   An Editor: the snapshot is every field's raw string value, so dirtiness is
+   exactly "what's on screen differs from what was loaded", and typing a digit
+   and deleting it again reads clean. */
+function poFieldSnapshot(){
+  const val = id => $(id).value;
+  return {
+    enabled: $('poEnabledCheckbox').checked,
+    tolerance: val('poTolerance'),
+    maxVariations: val('poMaxVariations'),
+    depth: ['poDepth1','poDepth2','poDepth3','poDepth4','poDepthDefault'].map(val),
+    maxLines: ['poMaxLines1','poMaxLines2','poMaxLines3','poMaxLines4','poMaxLinesDefault'].map(val),
+    hashMB: val('poHashMB'),
+    // hidden on a single-threaded build, but still snapshotted: it's the same
+    // stable value every time there, so it can never read as a spurious edit
+    threads: $('poThreadsSelect').value,
+  };
+}
+/* The single source of truth for "are these settings usable?", returning the
+   first problem or null. Cheap enough for the bar's validate() contract (a
+   dozen Number.isFinite checks, no IDB and no engine), so a bad value
+   disables Save as you type rather than being discovered on the way out. */
+function poValidationError(){
+  const num = id => +$(id).value;
+  const positiveFields = {
+    'total variation cap': num('poMaxVariations'), 'hash (MB)': num('poHashMB'),
+    'move 1 depth': num('poDepth1'), 'move 2 depth': num('poDepth2'), 'move 3 depth': num('poDepth3'),
+    'move 4 depth': num('poDepth4'), 'beyond-move-4 depth': num('poDepthDefault'),
+    'move 1 max lines': num('poMaxLines1'), 'move 2 max lines': num('poMaxLines2'),
+    'move 3 max lines': num('poMaxLines3'), 'move 4 max lines': num('poMaxLines4'),
+    'beyond-move-4 max lines': num('poMaxLinesDefault') };
+  for(const [label, v] of Object.entries(positiveFields)){
+    if(!Number.isFinite(v) || v < 1) return `"${label}" must be a positive number.`;
+  }
+  // tolerance alone allows exactly 0 -- "only the single best move survives"
+  const tol = num('poTolerance');
+  if(!Number.isFinite(tol) || tol < 0) return 'Pruning tolerance must be zero or a positive number.';
+  return null;
+}
+const poBarCtl = wireModalBar(
+  mountBarHtml('poBar', { title: 'Perfect Opening Project', save: true,
+                          destructive: 'Reset Perfect Opening…', prefix: 'po' }),
+  {
+    snapshot: poFieldSnapshot,
+    watch: $('perfectOpeningOverlay'),
+    validate: () => {
+      const msg = poValidationError();
+      // the reason goes in the body as well as the Save tooltip -- a disabled
+      // button with only a tooltip just looks broken (same as Set Attributes)
+      $('poError').textContent = msg || '';
+      $('poError').style.display = msg ? '' : 'none';
+      return msg;
+    },
+    thing: 'these Perfect Opening settings',
+    onLeave: () => { $('perfectOpeningOverlay').style.display = 'none'; },
+    onSave: savePerfectOpeningSettings,
+    onDestructive: resetPerfectOpeningFromPanel,
+  });
+
 async function openPerfectOpeningPanel(){
   $('menuList').style.display = 'none';
   const config = await getPerfectOpeningConfig();
@@ -12362,12 +12422,14 @@ async function openPerfectOpeningPanel(){
   $('poMaxLinesDefault').value = config.maxLines.default;
   $('poHashMB').value = config.hashMB;
   populatePoThreadsSelect(config);
-  $('poError').style.display = 'none';
+  // re-baseline to the settings as they now stand, so the freshly-loaded
+  // values don't read as unsaved edits -- and repaint, which clears #poError
+  // through validate(). Also how Reset leaves a clean panel behind.
+  poBarCtl.markClean();
   $('perfectOpeningOverlay').style.display = 'flex';
   await renderPerfectOpeningStatus(config);
 }
 $('menuPerfectOpeningManage').onclick = openPerfectOpeningPanel;
-$('poCancelBtn').onclick = () => { $('perfectOpeningOverlay').style.display = 'none'; };
 
 function poProgressRow(label, value){
   return `<div class="po-progress-row"><span class="po-progress-label">${escapeHtml(label)}</span><span class="po-progress-value">${escapeHtml(String(value))}</span></div>`;
@@ -12436,9 +12498,10 @@ async function openPerfectOpeningProgressPanel(){
   await renderPerfectOpeningProgress(config);
 }
 $('menuPerfectOpeningProgress').onclick = openPerfectOpeningProgressPanel;
-$('poProgressCloseBtn').onclick = () => { $('perfectOpeningProgressOverlay').style.display = 'none'; };
+mountInfoBar('poProgressModalBar', 'Perfect Opening Progress',
+  () => { $('perfectOpeningProgressOverlay').style.display = 'none'; }, { prefix: 'poProgress' });
 
-$('poSaveBtn').onclick = async () => {
+async function savePerfectOpeningSettings(){
   const depth1 = +$('poDepth1').value;
   const depth2 = +$('poDepth2').value;
   const depth3 = +$('poDepth3').value;
@@ -12457,16 +12520,9 @@ $('poSaveBtn').onclick = async () => {
   // previously-saved value with 0 just because the field wasn't shown.
   const threads = $('poThreadsField').style.display === 'none' ? undefined : +$('poThreadsSelect').value;
 
-  const showError = (msg) => { $('poError').textContent = msg; $('poError').style.display = ''; };
-  const positiveFields = { 'total variation cap': maxTotalVariations, 'hash (MB)': hashMB,
-    'move 1 depth': depth1, 'move 2 depth': depth2, 'move 3 depth': depth3, 'move 4 depth': depth4, 'beyond-move-4 depth': depthDefault,
-    'move 1 max lines': maxLines1, 'move 2 max lines': maxLines2, 'move 3 max lines': maxLines3,
-    'move 4 max lines': maxLines4, 'beyond-move-4 max lines': maxLinesDefault };
-  for(const [label, v] of Object.entries(positiveFields)){
-    if(!Number.isFinite(v) || v < 1){ showError(`"${label}" must be a positive number.`); return; }
-  }
-  if(!Number.isFinite(toleranceCp) || toleranceCp < 0){ showError('Pruning tolerance must be zero or a positive number.'); return; }
-
+  // No validation here: poValidationError() runs on every repaint and holds
+  // Save disabled (with the reason in #poError) while anything is out of
+  // range, so nothing invalid can reach this point.
   const config = await getPerfectOpeningConfig();
   config.enabled = $('poEnabledCheckbox').checked;
   config.depth = { 1: depth1, 2: depth2, 3: depth3, 4: depth4, default: depthDefault };
@@ -12497,15 +12553,16 @@ $('poSaveBtn').onclick = async () => {
     const queue = await getPerfectOpeningQueue();
     if(!queue.length) await addPerfectOpeningQueueItems([{ id: poJobId('root'), kind: 'white', seq: [], createdAt: Date.now() }]);
   }
+  poBarCtl.markClean();   // committed -- the bar must not still read "Unsaved changes"
   $('perfectOpeningOverlay').style.display = 'none';
   maybeResumePerfectOpening();
-};
+}
 
-$('poResetBtn').onclick = async () => {
+async function resetPerfectOpeningFromPanel(){
   if(!confirm('This permanently deletes the generated "Perfect White Opening" line and all progress, and turns the project back off. This cannot be undone. Continue?')) return;
   await resetPerfectOpening();
   await openPerfectOpeningPanel();   // refreshes every field back to defaults, keeps the modal open
-};
+}
 
 /* ---------- Perfect Opening project: core expansion logic (Phase 3) ----------
    processPerfectOpeningJob(job, config) does the actual work for ONE pending

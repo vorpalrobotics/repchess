@@ -1638,8 +1638,16 @@
      running only when the real analysis queue above is idle. See db.js's
      "Perfect Opening project" section for the data model. -->
 <div id="perfectOpeningOverlay" class="overlay">
-  <div class="modal" style="width:min(32em,92vw)">
-    <h2>Perfect Opening Project</h2>
+  <div class="modal" style="width:min(32em,92vw);max-height:88vh;display:flex;flex-direction:column">
+    <!-- shared button bar; see Documents/modal-buttons.md. EDITOR, not
+         Immediate or Confirm: the fields arrive pre-filled, but they are
+         settings you tune and then commit, not parameters you glance at and
+         accept -- nobody opens this panel just to press the primary. So Save
+         is gated on dirtiness as usual, and Reset takes the destructive slot.
+         The body scrolls (max-height + .modal-body) so a short viewport can't
+         push Save off the bottom, which is the whole point of the bar. -->
+    <div id="poBar" class="modal-bar-host"></div>
+    <div class="modal-body">
     <p class="objlist-hint" style="margin-top:0">Deep-searches the objectively best line for White: one best move each ply, every Black reply within the tolerance band explored as its own branch. Runs in the background, only when the Analysis Queue above is empty.</p>
 
     <div class="field" id="poEnabledField">
@@ -1685,23 +1693,17 @@
     <p id="poStatus" class="objlist-hint"></p>
     <p id="poError" class="objlist-hint" style="color:#c62828;display:none"></p>
 
-    <div class="modal-actions" style="display:flex;justify-content:space-between">
-      <button id="poResetBtn" style="color:#c62828">Reset Perfect Opening…</button>
-      <span>
-        <button id="poCancelBtn">Cancel</button>
-        <button id="poSaveBtn">Save</button>
-      </span>
-    </div>
+    </div><!-- /.modal-body -- Reset/Cancel/Save moved to the bar above -->
   </div>
 </div>
 
 <div id="perfectOpeningProgressOverlay" class="overlay">
   <div class="modal" style="width:min(28em,92vw)">
-    <h2 style="margin-top:0">Perfect Opening Progress</h2>
+    <!-- Informational: a read-only progress report with nothing staged, so a
+         bare Done. No .modal-body -- the report is half a dozen rows and
+         never scrolls. -->
+    <div id="poProgressModalBar" class="modal-bar-host"></div>
     <div id="poProgressBody"></div>
-    <div class="modal-actions" style="justify-content:flex-end">
-      <button id="poProgressCloseBtn">Close</button>
-    </div>
   </div>
 </div>
 
@@ -2009,6 +2011,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-413"></script>
+<script type="module" src="js/app.js?v=20260804-414"></script>
 </body>
 </html>
