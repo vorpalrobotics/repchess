@@ -1934,8 +1934,13 @@
 
 <!-- bulk move-image import modal -->
 <div id="importMoveImagesOverlay" class="overlay">
+  <!-- Immediate: dropping or choosing files files each one into its square's
+       mnemonic on the spot, so there is nothing to commit and a bare Done.
+       The drop zone IS the action and stays in the body; no .modal-body
+       wrapper, because the results list already caps itself at 240px and
+       scrolls on its own, so the modal cannot grow past the viewport. -->
   <div class="modal">
-    <h2>Import Move Images</h2>
+    <div id="importMoveImagesBar" class="modal-bar-host"></div>
     <p class="asset-hint">Drop image files named for the move they belong to — piece letter
       (N/B/R/Q/K) plus the destination square, e.g. <code>Nf6.png</code> or <code>Bc4.jpg</code>.
       Pawn moves use just the square, e.g. <code>a1.png</code>. Each file is filed into the
@@ -1947,9 +1952,6 @@
       <input id="importMoveImagesFile" type="file" accept="image/*" multiple style="display:none">
     </div>
     <div id="importMoveImagesResults" class="import-move-images-results"></div>
-    <div class="modal-actions">
-      <button id="importMoveImagesCloseBtn">Close</button>
-    </div>
   </div>
 </div>
 
@@ -2007,6 +2009,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-410"></script>
+<script type="module" src="js/app.js?v=20260804-411"></script>
 </body>
 </html>

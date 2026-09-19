@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-410';
+const BUILD_TAG = '-411';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9862,7 +9862,8 @@ $('menuImportMoveImages').onclick = ()=>{
   $('importMoveImagesResults').innerHTML = '';
   $('importMoveImagesOverlay').style.display='flex';
 };
-$('importMoveImagesCloseBtn').onclick = ()=>{ $('importMoveImagesOverlay').style.display='none'; };
+mountInfoBar('importMoveImagesBar', 'Import Move Images',
+  ()=>{ $('importMoveImagesOverlay').style.display='none'; });
 const importMoveImagesDrop = $('importMoveImagesDrop');
 importMoveImagesDrop.addEventListener('click', ()=> $('importMoveImagesFile').click());
 $('importMoveImagesFile').addEventListener('change', e=>{

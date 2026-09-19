@@ -1,6 +1,6 @@
 # Modal Button Bar — specification
 
-**Status: the mechanism is built (`js/modalBar.js`) and twenty-three modals are
+**Status: the mechanism is built (`js/modalBar.js`) and twenty-four modals are
 converted.** Everything below is the contract; the rollout checklist at the
 end tracks which modals actually follow it yet. Update it as each one lands.
 
@@ -506,8 +506,19 @@ Order, worst first:
       handling here: a Confirm dirty-tracks nothing, so a body control that
       takes effect at once is simply a body control.
 
-- [ ] **Import Move Images** (`#importMoveImagesOverlay`), **Perfect
-      Opening** (`#perfectOpeningOverlay`) and its progress panel
+- [x] **Import Move Images** (`#importMoveImagesOverlay`) — **Immediate**,
+      and the simplest conversion in the whole rollout: dropping or choosing
+      files files each one into its square's mnemonic on the spot, so there
+      is nothing to commit and a bare `Done`. The drop zone *is* the action
+      and stays in the body. No `.modal-body` wrapper either — its results
+      list already caps itself at 240px and scrolls on its own, so the modal
+      cannot grow past the viewport and the bar cannot scroll away.
+
+      Worth recording: this modal had **no test coverage at all** before the
+      conversion — not the bar, not the import. The bar contract is now
+      tested; **the import flow itself still is not.**
+
+- [ ] **Perfect Opening** (`#perfectOpeningOverlay`) and its progress panel
       (`#perfectOpeningProgressOverlay`), **object-list pick**
       (`#objlistPickOverlay`). Added late: these existed in the app but were
       missing from this list, which made the remaining work look smaller than

@@ -9394,6 +9394,29 @@ try {
       `expected the locally-stored original to stay at 512px, got ${storedDims.w}x${storedDims.h}`);
     ok('mnemonics export downscales images to the export cap without touching the stored originals');
   } catch(e){ bad('mnemonics export image downscale', e); }
+
+  // 80b. Import Move Images on the shared button bar. Immediate: dropping or
+  //      choosing files files each one into its square's mnemonic on the
+  //      spot, so there is nothing to commit and a bare Done. The drop zone
+  //      IS the action and stays in the body.
+  //
+  //      This modal had NO test coverage at all before now -- not the bar,
+  //      not the import. The bar contract is what this conversion is
+  //      responsible for; the import flow itself remains untested.
+  try {
+    await appBE.page.evaluate(() => document.getElementById('menuImportMoveImages').click());
+    await appBE.page.waitForSelector('#importMoveImagesOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appBE.page, 'importMoveImagesOverlay', 'Import Move Images');
+    const dropInBody = await appBE.page.evaluate(() => {
+      const el = document.getElementById('importMoveImagesDrop');
+      return !!el && !el.closest('.modal-bar');
+    });
+    assert(dropInBody, 'expected the drop zone to stay in the body — it is the action, not the lifecycle');
+    await appBE.page.evaluate(() => document.querySelector('#importMoveImagesOverlay .modal-bar .mb-leave').click());
+    await appBE.page.waitForFunction(
+      () => document.getElementById('importMoveImagesOverlay').style.display === 'none', { timeout: 5000 });
+    ok('modal bar: Import Move Images is immediate — Done only, drop zone left in the body');
+  } catch(e){ bad('modal bar: Import Move Images', e); }
 } finally {
   await appBE.close();
 }
