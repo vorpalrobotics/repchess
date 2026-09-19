@@ -7838,6 +7838,36 @@ try {
   await appAR3.page.evaluate(() => document.getElementById('menuAssets').click());
   await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
 
+  // 91b. Regression, reported from real use: the manager's FIRST open after a
+  //      page load had no bar at all -- no Done, and no Escape either (the bar
+  //      is what installs that handler), on an overlay with no backdrop-close.
+  //      The only way out was reloading. openAssetManager never called
+  //      renderBar(); every other call sat on an editor transition, so opening
+  //      any asset once populated the bar and it stayed populated for the rest
+  //      of the session -- which is exactly why the bar tests below (94b on)
+  //      never saw it: test 92 opens the editor first.
+  //
+  //      This runs before anything else touches the editor, and asserts a
+  //      usable Done rather than merely a present one: the earlier shape of
+  //      this bug would also be satisfied by a button wired to nothing.
+  try {
+    const bar = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(bar, 'expected the shared button bar on the asset manager\'s very first open, found none');
+    assert(bar.leave && bar.leave.text === 'Done' && !bar.leave.disabled,
+      `expected an enabled "Done" on a freshly-opened manager, got ${JSON.stringify(bar.leave)}`);
+    await appAR3.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave').click());
+    await appAR3.page.waitForSelector('#assetsOverlay', { state: 'hidden', timeout: 5000 });
+
+    // ...and it is still there on the next open, now that the bar is rendered
+    // per open rather than left behind by whatever the last view happened to be
+    await appAR3.page.evaluate(() => document.getElementById('menuAssets').click());
+    await appAR3.page.waitForSelector('#assetsGrid .asset-card', { timeout: 5000 });
+    const again = await modalBarState(appAR3.page, 'assetsOverlay');
+    assert(again && again.leave.text === 'Done' && again.save === null,
+      `expected the grid bar again on a reopen, got ${JSON.stringify(again)}`);
+    ok('asset manager: the button bar is there on the first open, and the way out actually closes it');
+  } catch(e){ bad('asset manager: no way out on first open (regression)', e); }
+
   // 92. A brand-new asset defaults to "Billboard (cylindrical)", not
   //     "Extruded" -- and "Billboard (sprite)" is no longer offered at all.
   try {

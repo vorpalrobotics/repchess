@@ -182,6 +182,23 @@ export async function openAssetManager(container, opts = {}){
   }
   EDIT_ID = null;
   showList();
+  // Render the bar on EVERY open. (objectLists.js never had this bug because
+  // its equivalent of showList(), showIndex(), renders the bar itself -- worth
+  // knowing before assuming the two managers are symmetrical here. It isn't
+  // moved into showList() to match, because showList() is also called in the
+  // grid-less standalone New Asset context, where BAR_HOST points at that
+  // modal's own separately-wired bar.)
+  //
+  // Without this the manager's first open after
+  // a page load left #assetsBar empty -- no Done, and (since wireModalBar was
+  // never called) no Escape handler either, on an overlay that has no
+  // backdrop-close: the only way out was reloading the page. It only looked
+  // fine because every other renderBar() call sits on an editor transition,
+  // so opening an asset once populated the bar and it stayed populated for
+  // the rest of the session. This also resets a bar left showing the EDITOR's
+  // Save/Delete when the manager was closed from outside (the VR close path)
+  // mid-edit, which showList() has already undone in the body.
+  renderBar();
   await refreshGrid();
 }
 

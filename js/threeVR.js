@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-87';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-63';
+import { openAssetPicker } from './assets.js?v=20260804-88';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-64';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let THREE = null;
