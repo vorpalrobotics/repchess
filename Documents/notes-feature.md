@@ -284,9 +284,30 @@ use, so they layer above the VR modal regardless of which container hosts the
 canvas. `setForeignModalOpen(true)` while either is open, so VR key handling
 does not read keystrokes meant for the editor.
 
-Being *on* `document.body` is only half of it: with one shared `z-index`, DOM
-order decides which of the two is on top, so both re-append themselves on every
-open. See Phase 3.
+Being *on* `document.body` is only half of it, and the other half was **wrong
+in -430 and had to be fixed after the user found it**. Placement keeps an
+overlay clear of any stacking context the canvas's container might create — it
+does not raise it. The VR walk is itself `#threeTestOverlay` at **z-index 25**,
+and `.overlay`'s default is 20, so the position/notes modal opened from inside
+the walk rendered *underneath* it: correct in every respect except being
+visible.
+
+The precedent this was supposedly copied from says so plainly —
+`openRoomGeomDialog` sets `ov.style.zIndex = '70'` on the line right after its
+`document.body.appendChild`. The appendChild was copied and the z-index was
+not.
+
+Current numbers, inline at each creation site and listed in `index.html`'s own
+z-index band comment: the position/notes modal **70** (the VR-internal dialog
+band, with room geometry and the asset picker), the Markdown editor **75**,
+above the modal whose pencil opens it. Both still re-append on every open,
+which now only settles ties rather than deciding the stack.
+
+**No test caught this**, and the reason is worth keeping: every assertion in
+these phases reads `style.display` or `textContent`, and a modal buried under
+the walk satisfies both. `topmostAt` (test 428, 438) asks
+`document.elementFromPoint` at the modal's own centre instead — the only
+assertion here that asks what the user would actually see.
 
 ---
 

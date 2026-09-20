@@ -141,6 +141,11 @@ function buildOverlay(title){
         <div class="modal-bar-host"></div>
         <div class="note-editor-host"></div>
       </div>`;
+    /* Above the position/notes modal that can open it (70), which is itself
+       above the VR walk (25) -- see index.html's z-index band comment. From
+       the Attributes modal (a plain .overlay at 20) any of these would do;
+       from inside the walk, nothing below 25 is visible at all. */
+    ov.style.zIndex = '75';
   }
   /* Appended on EVERY open, not just the first. appendChild on an element that
      is already a child moves it to the end, and every .overlay in this app

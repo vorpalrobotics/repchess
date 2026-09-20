@@ -634,7 +634,16 @@
      so the asset-editing band it can in turn reach ("+ New Asset" and
      everything opened from inside it: color pick/swatch/crop/generate) had
      to move up out of its way too; see assets.js's openNewAssetModal for
-     that band's own current numbers (162-230). */
+     that band's own current numbers (162-230).
+
+     The notes feature adds two more, both built on document.body in JS and so
+     carrying their numbers inline rather than here: the position/notes modal
+     the VR's pair icons and dead-end scrolls open (app.js, 70 -- the same band
+     as room geometry, and for the same reason), and the Markdown editor its
+     pencil opens on top of that (notes.js, 75). Being on document.body is NOT
+     enough on its own: it keeps them clear of any stacking context, but
+     .overlay's default 20 is still below the walk, which is exactly how -430
+     shipped a modal that opened correctly and invisibly. */
   #threeTestOverlay{padding:0;z-index:25}
   #threeTestOverlay .modal{width:100vw;height:100vh;max-width:none;padding:0;border-radius:0;
     background:#222;display:flex;flex-direction:column;box-shadow:none}
@@ -2058,6 +2067,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-430"></script>
+<script type="module" src="js/app.js?v=20260804-431"></script>
 </body>
 </html>

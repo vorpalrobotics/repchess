@@ -5,7 +5,7 @@ import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, 
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
-import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-3';
+import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-430';
+const BUILD_TAG = '-431';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4046,6 +4046,13 @@ function buildPositionNoteOverlay(){
           </div>
         </div>
       </div>`;
+    /* Above the VR walk (#threeTestOverlay is z-index 25), in the same band as
+       the VR's own dialogs -- openRoomGeomDialog uses exactly this number on
+       exactly this line. Being on document.body is only half of it: it keeps
+       the overlay out of any stacking context the canvas's container might
+       make, but .overlay's default 20 still puts it UNDER the walk, which is
+       how this shipped in -430 -- the modal opened, correctly, invisibly. */
+    ov.style.zIndex = '70';
     ov.querySelector('#positionNoteEditBtn').onclick = editPositionNote;
   }
   // moved to the end of body on every open, not just the first: every .overlay

@@ -24386,6 +24386,31 @@ try {
 } catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+/* Is this overlay actually the thing a user would hit at its own centre --
+   on top, not merely display:flex?
+
+   Every other assertion in the notes phases reads style.display or
+   textContent, and a modal buried under the VR walk satisfies both perfectly:
+   -430 shipped the position/notes modal opening correctly and invisibly,
+   with a green suite, because .overlay's default z-index (20) is below
+   #threeTestOverlay's 25. elementFromPoint is the only one of these that
+   asks what the user would actually see. */
+const topmostAt = (page, overlaySel) => page.evaluate((o) => {
+  const ov = document.querySelector(o);
+  if(!ov) return { error: `no overlay ${o}` };
+  const el = ov.querySelector('.modal') || ov;
+  const r = el.getBoundingClientRect();
+  if(!r.width || !r.height) return { error: `${o} has no box`, rect: r.toJSON() };
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  return {
+    onTop: !!(hit && hit.closest(o)),
+    z: getComputedStyle(ov).zIndex,
+    // what IS on top instead, so a failure names the thing covering it
+    hit: hit ? (hit.id || hit.className || hit.tagName) : null,
+    coveredBy: hit && hit.closest('.overlay') ? (hit.closest('.overlay').id || null) : null,
+  };
+}, overlaySel);
+
 // --- Phase EN4: notes, phase 4 -- the in-world move-pair note icon
 //     (Documents/notes-feature.md). Proximity/facing gating, the note-exists
 //     glyph, and the click ordered AHEAD of walk mode's greedy door-trigger
@@ -24586,9 +24611,39 @@ try {
     assert(opened && /to move/.test(opened), `expected the position modal to open on that pair, got ${JSON.stringify(opened)}`);
     assert((await appEN4.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
       'expected clicking the icon not to move the player');
-    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
-    ok('Notes: clicking a pair icon opens the position modal');
+    /* ...and it is actually ON TOP of the walk. The VR is itself a full-screen
+       overlay at z-index 25, so a modal at .overlay's default 20 opens
+       perfectly and is seen by nobody -- which is how -430 shipped. Every
+       other assertion here (display, caption, board) passes in that state. */
+    const stack = await topmostAt(appEN4.page, '#positionNoteOverlay');
+    assert(stack.onTop,
+      `expected the position modal above the VR walk, got ${JSON.stringify(stack)}`);
+    ok('Notes: clicking a pair icon opens the position modal, on top of the walk');
   } catch(e){ bad('Notes: pair icon click', e); }
+
+  // 438. ...and the pencil's editor opens on top of THAT. The Phase 3 pencil
+  //      test drives this from the move table, where the only overlay in play
+  //      is a plain one -- from inside the walk there are two layers below it,
+  //      and that path had no test at all.
+  try {
+    assert(await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteOpen()),
+      'test setup issue: expected the position modal still open from 428');
+    await appEN4.page.evaluate(() => window.__notesTestHooks.editPositionNote());
+    await appEN4.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN4.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+
+    const stack = await topmostAt(appEN4.page, '#noteEditorOverlay');
+    assert(stack.onTop,
+      `expected the note editor above both the position modal and the walk, got ${JSON.stringify(stack)}`);
+
+    await appEN4.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());
+    await appEN4.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    // leaving the editor must drop back to a position modal that is still usable
+    const back = await topmostAt(appEN4.page, '#positionNoteOverlay');
+    assert(back.onTop, `expected the position modal back on top once the editor closes, got ${JSON.stringify(back)}`);
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the editor opened from inside the walk layers above the modal that opened it');
+  } catch(e){ bad('Notes: note editor layering inside the walk', e); }
 
   // 429. Edit mode owns clicks on props, and the icons sit in front of the
   //      very sprites you would be trying to select -- so they stay out of it
