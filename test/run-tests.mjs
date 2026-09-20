@@ -23664,6 +23664,126 @@ try {
 } catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EM: notes, phase 1 -- the move-pair billboards carry the sequence
+//     they represent (Documents/notes-feature.md). Nothing reads it yet; this
+//     is the plumbing everything else in that feature needs, and the one
+//     assertion worth making early is that the VR and the move table agree on
+//     WHICH note a transposed position has. A note describes a position, not a
+//     path, so reaching it by a different move order must not produce a second
+//     note. ---
+if(shouldRunPhase(['vr-castle','digraph'])){
+try {
+const appEM = await launchApp();
+try {
+  /* Two move orders converging on one position: 1.d4 Nf6 2.c4 e6 3.Nc3 b6 and
+     1.d4 Nf6 2.c4 b6 3.Nc3 e6 reach the identical board. Both final black
+     moves are SINGLE pawn pushes, so neither leaves an en-passant target --
+     positionKey strips the phantom one anyway (see its own comment), but a
+     fixture that does not depend on that is a fixture testing one thing. */
+  await seedBackup(appEM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6'], reply: 'e3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // open the line so CURRENT_LINE is set -- canonicalRoomSeq reads it
+  await appEM.page.click('.line-row');
+  await appEM.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const viaE6 = ['d4','Nf6','c4','e6','Nc3','b6'];
+  const viaB6 = ['d4','Nf6','c4','b6','Nc3','e6'];
+
+  // 410. The two orders really do transpose, and the move table resolves both
+  //      to ONE pref key. Setup for the VR half, and worth asserting on its
+  //      own: if this ever stopped holding, the VR test below would be
+  //      comparing a note against itself.
+  try {
+    const canon = await appEM.page.evaluate(([a, b]) => ({
+      a: window.__notesTestHooks.canonicalSeq(a),
+      b: window.__notesTestHooks.canonicalSeq(b),
+    }), [viaE6, viaB6]);
+    assert(JSON.stringify(canon.a) === JSON.stringify(canon.b),
+      `expected both move orders to canonicalise to one key, got ${JSON.stringify(canon)}`);
+    assert(JSON.stringify(canon.a) === JSON.stringify(viaE6) || JSON.stringify(canon.a) === JSON.stringify(viaB6),
+      `expected the canonical key to be one of the two real paths, got ${JSON.stringify(canon.a)}`);
+    ok('Notes: two transposing move orders resolve to one note key in the move table');
+  } catch(e){ bad('Notes: transposition canonicalises to one key', e); }
+
+  // 411. A wall billboard carries the sequence it represents, all the way into
+  //      the scene -- the layout and the built sprite are checked separately
+  //      because they fail differently.
+  try {
+    const roomKey = await appEM.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await openVR(appEM.page);
+    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appEM.page.waitForTimeout(300);
+
+    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), roomKey);
+    assert(pairs.length, `test setup issue: expected the root room to hold move pairs, got ${JSON.stringify(pairs)}`);
+    assert(pairs.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
+      `expected every pair to carry its sequence, got ${JSON.stringify(pairs)}`);
+    // the root room's own pair is the castle root move itself
+    const anchor = pairs.find(p => p.side === 'center') || pairs[0];
+    assert(JSON.stringify(anchor.seq) === JSON.stringify(['d4','Nf6','c4']),
+      `expected the anchor pair's seq to end in OUR reply, got ${JSON.stringify(anchor.seq)}`);
+
+    const inScene = await appEM.page.evaluate((id) => window.__threeTestEdit.scenePairSeq(id), anchor.id);
+    assert(JSON.stringify(inScene) === JSON.stringify(anchor.seq),
+      `expected the seq to survive onto the built sprite, got ${JSON.stringify(inScene)}`);
+    ok('Notes: a wall billboard carries its move-pair sequence into the scene');
+  } catch(e){ bad('Notes: pair sequence reaches the sprite', e); }
+
+  // 412. The payoff. A note set through the MOVE TABLE's own key is found by a
+  //      DIRECT lookup with the seq the VR carries -- no canonicalRoomSeq on
+  //      the VR side, because the castle graph already handed it the canonical
+  //      seq. That is what makes one note per position true rather than
+  //      merely intended, and it holds whichever of the two orders the graph
+  //      happened to walk first.
+  try {
+    const canonical = await appEM.page.evaluate((a) => window.__notesTestHooks.canonicalSeq(a), viaE6);
+    await appEM.page.evaluate(([seq, note]) => window.__notesTestHooks.setNote(seq, note),
+      [canonical, 'Both sides fianchetto; watch the c4 pawn.']);
+
+    // the room the two orders converge on: after our e3
+    const convergedKey = await appEM.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    });
+    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
+    await appEM.page.waitForTimeout(300);
+
+    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), convergedKey);
+    const anchor = pairs.find(p => p.side === 'center') || pairs[0];
+    assert(anchor && Array.isArray(anchor.seq),
+      `expected the converged room to hold a pair with a seq, got ${JSON.stringify(pairs)}`);
+
+    const noteKey = anchor.seq.slice(0, -1);
+    assert(JSON.stringify(noteKey) === JSON.stringify(canonical),
+      `expected the VR pair's own key to BE the move table's canonical key, got ${JSON.stringify(noteKey)} against ${JSON.stringify(canonical)}`);
+    const found = await appEM.page.evaluate((k) => window.__notesTestHooks.noteAt(k), noteKey);
+    assert(found === 'Both sides fianchetto; watch the c4 pawn.',
+      `expected a direct lookup with the VR's own seq to find the note, got ${JSON.stringify(found)}`);
+    ok('Notes: the VR resolves the same note as the move table, without re-canonicalising');
+  } catch(e){ bad('Notes: VR and move table agree on a transposed note', e); }
+} finally {
+  await appEM.close();
+}
+} catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase EL: a jump lands you at a door INTO the room, not inside it.
 //     Reviewing a room means standing at its door and recalling what's in
 //     there before walking in to check; landing in the middle puts the

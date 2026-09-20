@@ -1,6 +1,6 @@
 # Notes — design and phasing plan
 
-**Status: designed, nothing built. Phase 1 is the enabling change.**
+**Status: Phase 1 built (the sequence is threaded). Phases 2-5 designed.**
 
 ## What it is for
 
@@ -130,14 +130,13 @@ does.
 
 ## 1. The move-pair billboard does not know which move it is
 
-`pairFor` (`js/app.js`) has `node.seq` in hand and **drops it** — the pair
-carries only rendered move text (`opponent`, `response`, quality, disambig).
-`pairFromSeq` does the same for edge-specific pairs. So today a VR sprite cannot
-resolve to a pref at all.
+`pairFor` (`js/app.js`) had `node.seq` in hand and **dropped it** — the pair
+carried only rendered move text (`opponent`, `response`, quality, disambig), so
+a VR sprite could not resolve to a pref at all.
 
-This is the same shape of gap `moveCount` was before the grade log: the
-information exists at build time and is discarded on the way out. Threading it
-is Phase 1, and everything else depends on it.
+The same shape of gap `moveCount` was before the grade log: the information
+exists at build time and was discarded on the way out. Fixed in Phase 1;
+everything else here depends on it.
 
 ## 2. The billboard is a camera-facing Sprite
 
@@ -187,9 +186,14 @@ A new **`Notes…`** item in the three-dot menu, opening the editor directly.
 
 The row's meta strip currently renders the note escaped, inline, on one line —
 in **two** renderers (`refreshMeta`, twice). Multi-line Markdown breaks that, so
-it becomes a truncated first line plus a note glyph that opens the editor. This
-is a consequence of going multi-line that is easy to overlook until it looks
-wrong.
+the text comes out of the strip entirely and is replaced by **a note glyph on
+the row**: there is a note here, click to read or edit it.
+
+Showing a truncated first line was the other option and is worse. A truncation
+length is a number nobody can pick correctly, the first line of a Markdown
+document is often a heading rather than a summary, and a half-sentence invites
+reading the strip instead of the note. A glyph says the one thing the strip can
+usefully say.
 
 ## The VR pair icon
 
@@ -234,19 +238,38 @@ does not read keystrokes meant for the editor.
 Each phase is independently useful and independently testable. The riskiest 3D
 work lands last, after the modal it opens already works.
 
-## Phase 1 — thread the sequence
+## Phase 1 — thread the sequence ✅ BUILT
 
-`pairFor` and `pairFromSeq` carry the pair's `seq` through `genRooms[].pairs[]`
-→ `DEMO_MNEMONICS[roomKey].pairs` → `mnemPairLayout` → the sprite's `userData`.
+`pairFor` carries the pair's `seq` through `genRooms[].pairs[]` →
+`DEMO_MNEMONICS[roomKey].pairs` → `mnemPairLayout` → `sprite.userData.pairSeq`.
 No UI.
 
-Tests: a pair's seq survives the trip into the scene, and — the one that matters
-— **a transposing row resolves to the same note in the VR as in the move table**,
-through `canonicalRoomSeq`. That is the decision above, pinned rather than
-assumed.
+**`pairFromSeq` deliberately does not.** Its seq is edge-specific — that is the
+point of it, so transposition doors each show their own last move — which makes
+it unusable as a note key: two doors into one room would resolve to two prefs
+for a position that has one note. A door pair needing a note must resolve
+through its destination room's own pair.
 
-Independently useful beyond notes: any future per-pair feature needs this, and
-the grade and quiz logs could reference specific pairs with it.
+The thing that made this cheap: **the seq `pairFor` already has is the canonical
+one.** `node` is a castle-graph room, the graph dedupes by position, and
+`canonicalRoomSeq` resolves to exactly that value through a `buildCastleGraph`
+call with the same arguments. So the VR gets the move table's key for free —
+which matters twice, because `canonicalRoomSeq` builds a whole castle graph per
+call (far too expensive per pair) and reads the `CURRENT_LINE` global, which is
+the move table's open line rather than whichever line the VR is walking.
+
+Three tests (phase EM): the two move orders really do transpose to one key; a
+billboard's seq survives into the scene (checked at the layout AND on the built
+sprite, since those fail differently); and the payoff — **a note written under
+the move table's key is found by a DIRECT lookup with the seq the VR carries**,
+no re-canonicalising, whichever order the graph happened to walk first.
+
+One cost worth knowing: `pairs` ride in `builtCastlesCacheV2`, so every pair now
+stores its sequence there. The cache is derived, excluded from backups, and
+stamped with `BUILD_TAG`, so the bump that ships this invalidates it — no stale
+shape to migrate.
+
+Independently useful beyond notes: any future per-pair feature needs this.
 
 ## Phase 2 — the editor, and the move-table surfaces
 
@@ -286,15 +309,17 @@ lane's own last pair.
   tested in Phase 1.
 - **The Attributes textarea goes away**, replaced by a preview and a launcher.
   One editor over one field.
+- **The pair icon appears whenever the pair appears.** It follows its
+  billboard, which means it is absent with hints off — self-test mode hides the
+  move billboards, so there is nothing for it to anchor to and nothing it could
+  usefully label. The dead-end scroll is unaffected: it hangs on a wall, not on
+  a hidden sprite.
+- **The move table shows a note GLYPH, not truncated text.** See the move-table
+  surface above.
 
 # Open questions
 
 - **Truncation length** in the meta strip, and whether it renders inline
   Markdown (bold, code) or strips to plain text. Plain is simpler and probably
   right for one line.
-- **Whether the pair icon should appear with hints off.** Hints off is
-  self-test mode, where the move billboards themselves are hidden
-  (`placeMnemonicSlot` is gated on `hintsOn`) — so there may be nothing to
-  anchor the icon to. Likely answer: the pair icon follows its billboard and
-  disappears, while the dead-end scroll stays, since it is on a wall rather
-  than on a hidden sprite.
+(none outstanding)

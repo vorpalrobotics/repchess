@@ -4142,6 +4142,12 @@ function placeMnemonicSlot(roomKey, slot){
   const sprite = buildMnemPairSprite(slot.pair, xform.scale || 1);
   sprite.userData.kind = 'accessory';
   sprite.userData.slotId = slot.id;
+  /* Which move pair this billboard IS (Documents/notes-feature.md). The seq
+     ends in our reply, so the pref holding this pair's note is
+     pairSeq.slice(0,-1) -- the same row the move table edits, already
+     canonicalised by the castle graph (see app.js's pairFor). Null for the
+     hard-coded demo room, whose pairs belong to no line. */
+  sprite.userData.pairSeq = (slot.pair && slot.pair.seq) || null;
   sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
   return sprite;
 }
@@ -9995,6 +10001,17 @@ export async function openThreeTest(containerEl, opts){
       // e.g. "obj-L1") -- for testing Part A's "fully decorated" slot check
       // without scraping placeholder sprites out of the scene by hand.
       moveObjectSlotIds: (roomKey) => moveObjectSlots(roomKey).map(s => s.id),
+      /* The move-pair sequence each wall billboard carries -- from the layout
+         (pairSeqs) and off the BUILT scene object (scenePairSeq). Both, because
+         they fail differently: the layout can be right while the trip into the
+         scene drops it, which is the half that breaks silently. */
+      pairSeqs: (roomKeyArg) => mnemPairLayout(roomKeyArg || currentRoomKey)
+        .map(L => ({ id: `mnem-${L.tag}`, tag: L.tag, side: L.side, order: L.order,
+                     seq: (L.pair && L.pair.seq) || null })),
+      scenePairSeq: (slotId) => {
+        const o = findAccessoryObject(slotId);
+        return o ? (o.userData.pairSeq || null) : null;
+      },
       // a room's move count as the VR side sees it -- so the grade-log test
       // can check the value that was threaded through rather than hard-coding
       // a number the castle generator owns

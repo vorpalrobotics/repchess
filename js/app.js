@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-300';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-301';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-422';
+const BUILD_TAG = '-423';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1934,7 +1934,22 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     const resp = lastMoveInfo(node.seq);
     const opp = lastMoveInfo(node.seq.slice(0, -1));
     if(!resp || !opp) return null;
-    const p = { side, order, opponent: CONV(opp, node.seq.length - 1), response: CONV(resp, node.seq.length) };
+    /* `seq` ends in OUR reply, so the pref carrying this pair's note (and its
+       name, mnemonic, moveQuality) is seq.slice(0,-1) -- the same row the move
+       table's three-dot menu edits.
+
+       It is ALREADY CANONICAL, which is the whole point of carrying it. `node`
+       is a room of the castle graph, and the graph dedupes by position
+       (getRoom), so two move orders transposing into one position share one
+       room and therefore one seq. canonicalRoomSeq() resolves a row's seq to
+       exactly this value, through a buildCastleGraph() call with the same
+       arguments -- so the VR and the move table agree on one note per position
+       without the VR re-deriving anything. That matters twice over:
+       canonicalRoomSeq builds a whole castle graph per call (far too expensive
+       per pair), and it reads the CURRENT_LINE global, which is the move
+       table's open line rather than whichever line the VR is walking. */
+    const p = { side, order, seq: node.seq.slice(),
+                opponent: CONV(opp, node.seq.length - 1), response: CONV(resp, node.seq.length) };
     const q = PREFS[prefKey(line.id, node.seq.slice(0, -1))]?.moveQuality;
     if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(node.seq);
@@ -1945,6 +1960,12 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   // that edge (ends in our reply). Unlike pairFor (which reads a room's canonical
   // seq) this is edge-specific, so transposition doors into one room each show
   // their own last move. Returns { opponent, response } or null.
+  //
+  // Deliberately does NOT carry `seq` the way pairFor does. Being edge-specific
+  // is exactly what makes it unusable as a note key: two doors into one room
+  // would resolve to two different prefs for a position that has one note. A
+  // door pair that ever needs one must resolve through its DESTINATION room's
+  // own pair instead.
   const pairFromSeq = (seq) => {
     if(!seq || seq.length < 2) return null;
     const resp = lastMoveInfo(seq);
@@ -13609,6 +13630,18 @@ if(localStorage.getItem('threeTestDebug')){
     assetsOfferedKey: ASSETS_DEFAULT_OFFERED_KEY,
     getMnemOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
     getAssetsOffered: () => getMeta(ASSETS_DEFAULT_OFFERED_KEY),
+  };
+}
+
+/* test-only hooks for notes (Documents/notes-feature.md). The move table reads
+   AND writes a note under canonicalRoomSeq(row seq), so a test can ask for the
+   same key the UI would use without driving the Attributes modal. CURRENT_LINE
+   must be open -- canonicalRoomSeq reads it. */
+if(localStorage.getItem('threeTestDebug')){
+  window.__notesTestHooks = {
+    canonicalSeq: (seq) => canonicalRoomSeq(seq),
+    noteAt: (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.note ?? null,
+    setNote: (seq, note) => savePrefField(seq, 'note', note),
   };
 }
 
