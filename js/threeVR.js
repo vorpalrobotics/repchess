@@ -4344,6 +4344,10 @@ function updatePairIcons(){
    Two-track rooms dead-end PER LANE and get two signs, so each lane resolves
    its own last pair. A single-scroll implementation looks correct until the
    first divided room. */
+// the two things the notes feature hangs in the world that are SHOWN per frame
+// rather than built per room -- handleWalkClick drops them from its hit list
+// when they are hidden (see its own comment)
+const NOTE_AFFORDANCE_KINDS = new Set(['note-scroll', 'pair-icon']);
 const SCROLL_SIZE = 0.55;
 const SCROLL_GAP = 0.25;                        // between the sign's edge and the scroll
 let noteScrollMat = null;
@@ -8023,7 +8027,13 @@ function handleWalkClick(e){
     }
   }
 
-  const hits = raycaster.intersectObjects(scene.children, true);
+  /* A HIDDEN note affordance is not there at all. three.js does not check
+     `.visible` when intersecting, so without this filter a scroll whose pair
+     has no note -- or an icon hidden by distance or facing -- would still be
+     the nearest hit, swallowing the click and, worse, handing its own world
+     point to the greedy door fallback below. */
+  const hits = raycaster.intersectObjects(scene.children, true)
+    .filter(h => h.object.visible || !NOTE_AFFORDANCE_KINDS.has(h.object.userData && h.object.userData.kind));
   const hit = hits[0];
   if(!hit) return;
   if(hit.uv && hit.object.userData && hit.object.userData.kind === 'elevator-panel'){
@@ -10416,6 +10426,27 @@ export async function openThreeTest(containerEl, opts){
       // the last pair a lane teaches, as the scroll resolves it -- so a test
       // can check the two-track split without scraping meshes out of the scene
       lastPairSeq: (roomKey, track) => lastPairSeqForLane(roomKey || currentRoomKey, track || null),
+      /* what a click at this SCREEN point would actually land on, and whether
+         the point is even on the canvas. A test that dispatches a real click
+         and gets nothing has two quite different failure modes -- aimed off
+         the canvas, or aimed at something else -- and this tells them apart
+         without a second run. */
+      pickAt: (clientX, clientY) => {
+        if(!renderer) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const onCanvas = clientX >= rect.left && clientX <= rect.right
+                      && clientY >= rect.top && clientY <= rect.bottom;
+        const p = new THREE.Vector2(
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          -((clientY - rect.top) / rect.height) * 2 + 1);
+        const rc = new THREE.Raycaster();
+        rc.setFromCamera(p, camera);
+        const h = rc.intersectObjects(scene.children, true)[0];
+        return { onCanvas, rect: { w: rect.width, h: rect.height, left: rect.left, top: rect.top },
+                 ndc: { x: p.x, y: p.y },
+                 hit: h ? { kind: (h.object.userData && h.object.userData.kind) || null,
+                            visible: h.object.visible, dist: h.distance } : null };
+      },
       // a room's move count as the VR side sees it -- so the grade-log test
       // can check the value that was threaded through rather than hard-coding
       // a number the castle generator owns

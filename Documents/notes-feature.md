@@ -455,6 +455,12 @@ lane's last move pair has a note, opening that same pair's modal.
   two-track room's two lanes *share* the north wall, and a trigger box is
   padded by a metre, so a scroll near the divider can sit inside the
   neighbouring lane's box.
+- **A hidden note affordance is dropped from the hit list entirely.** three.js
+  does not check `.visible` when intersecting, so a scroll whose pair has no
+  note would still be the nearest hit — swallowing the click and, worse,
+  handing its own world point to the greedy fallback. Phase 4 filtered only
+  the pair icons' own pre-check list and left the same hole in the main one;
+  `NOTE_AFFORDANCE_KINDS` now closes both.
 
 Six tests (phases EN5 and EN5b, 430–435): the scroll exists beside the sign and
 resolves the room's last pair; it appears and disappears with the note; it opens

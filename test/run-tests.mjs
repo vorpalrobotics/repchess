@@ -24486,6 +24486,25 @@ try {
 } catch(e){ bad('Phase EN4: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+/* Stand in front of scroll `i` and return the screen point to click.
+   The stand-back distance is tried rather than assumed: 2m behind a scroll
+   near a side wall can park the camera INSIDE that wall's move-object props
+   (a real run found one 0.15m from the eye), and then the click lands on the
+   prop rather than the scroll. pickAt says which, so the test can step in
+   closer instead of failing as a bare timeout. */
+const aimAtScroll = async (page, i, pos) => {
+  for(const back of [1.1, 1.5, 2.0, 2.6, 3.2]){
+    await page.evaluate(([p, b]) => window.__threeTestEdit.setPlayerPos(p.x, p.z + b, 0), [pos, back]);
+    await page.waitForTimeout(150);
+    const pt = await page.evaluate((n) => window.__threeTestEdit.noteScrollScreenPoint(n), i);
+    if(!pt) continue;
+    const aim = await page.evaluate((q) => window.__threeTestEdit.pickAt(q.x, q.y), pt);
+    if(aim && aim.onCanvas && aim.hit && aim.hit.kind === 'note-scroll') return { pt, aim, back };
+    if(back === 3.2) return { pt, aim, back };     // give the failure something to say
+  }
+  return null;
+};
+
 // --- Phase EN5: notes, phase 5 -- the dead-end scroll
 //     (Documents/notes-feature.md). A scroll on the wall beside the "no
 //     continuation" sign when the lane's LAST move pair has a note, opening
@@ -24512,9 +24531,14 @@ try {
   await appEN5.page.click('.line-row');
   await appEN5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
+  /* The castle ROOT's key. This fixture is one unbranched chain, so every node
+     from the root down is a single-child node and the whole thing merges into
+     ONE corridor whose head is the root -- there is no separate room at the
+     e3 position to enter. (An earlier version of this test asked for one and
+     got `undefined`, which was the generator telling the truth.) */
   const deadEndKey = await appEN5.page.evaluate(() => {
     const c = new Chess();
-    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
     return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
   });
 
@@ -24576,11 +24600,10 @@ try {
     const s = (await scrolls())[0];
     assert(s.visible, 'test setup issue: expected the scroll visible (431 left a note in place)');
     // stand back from the dead-end wall, looking at it (yaw 0 faces -z)
-    await appEN5.page.evaluate((p) => window.__threeTestEdit.setPlayerPos(p.x, p.z + 2, 0), s.pos);
-    await appEN5.page.waitForTimeout(200);
-
-    const pt = await appEN5.page.evaluate(() => window.__threeTestEdit.noteScrollScreenPoint(0));
-    assert(pt, 'expected a visible scroll to report a screen point');
+    const shot = await aimAtScroll(appEN5.page, 0, s.pos);
+    assert(shot && shot.aim && shot.aim.hit && shot.aim.hit.kind === 'note-scroll',
+      `expected the scroll under the click point, got ${JSON.stringify(shot && shot.aim)}`);
+    const pt = shot.pt;
     const roomBefore = await appEN5.page.evaluate(() => window.__threeTestState.room);
 
     await appEN5.page.mouse.click(pt.x, pt.y);
@@ -24697,11 +24720,10 @@ try {
     assert(live.filter(s => s.visible).length === 1,
       `expected the OTHER lane's scroll to stay hidden, got ${JSON.stringify(live.map(s => s.visible))}`);
 
-    await appEN5b.page.evaluate((p) => window.__threeTestEdit.setPlayerPos(p.x, p.z + 2, 0), target.pos);
-    await appEN5b.page.waitForTimeout(200);
-    const pt = await appEN5b.page.evaluate((i) => window.__threeTestEdit.noteScrollScreenPoint(i), idx);
-    assert(pt, 'expected the visible scroll to report a screen point');
-    await appEN5b.page.mouse.click(pt.x, pt.y);
+    const shot = await aimAtScroll(appEN5b.page, idx, target.pos);
+    assert(shot && shot.aim && shot.aim.hit && shot.aim.hit.kind === 'note-scroll',
+      `expected this lane's scroll under the click point, got ${JSON.stringify(shot && shot.aim)} (scroll at ${JSON.stringify(target.pos)})`);
+    await appEN5b.page.mouse.click(shot.pt.x, shot.pt.y);
     await appEN5b.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
     const text = await appEN5b.page.evaluate(() => window.__notesTestHooks.positionNoteText());
     assert(/The big centre/.test(text || ''),
