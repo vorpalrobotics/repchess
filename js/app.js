@@ -5,7 +5,7 @@ import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, 
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
-import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-1';
+import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-2';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-424';
+const BUILD_TAG = '-425';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 

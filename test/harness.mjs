@@ -30,16 +30,10 @@ const CDN_MAP = [
   // both mini boards) -- only this one static asset is vendored, not the whole
   // cm-chessboard JS widget, which stays un-mocked/aborted like other non-core CDNs.
   { re: /cm-chessboard@.*\/pieces\/standard\.svg/, file: 'cm-chessboard-standard.svg', type: 'image/svg+xml' },
-  // Markdown notes (js/notes.js), loaded lazily -- the viewer to render a note,
-  // the full editor only once the pencil is clicked. Both are vendored so the
-  // tests exercise the real editor rather than only the textarea fallback: an
-  // untested primary path is how the asset manager shipped with no way out.
-  // Viewer patterns first -- "toastui-editor.js" is a substring of nothing
-  // else, but the viewer URLs contain "toastui-editor" too, so order matters.
-  { re: /toastui-editor-viewer\.js/,  file: 'toastui-editor-viewer.js', type: 'application/javascript' },
-  { re: /toastui-editor-viewer\.css/, file: 'toastui-editor-viewer.css', type: 'text/css' },
-  { re: /toastui-editor\.js/,         file: 'toastui-editor.js', type: 'application/javascript' },
-  { re: /toastui-editor\.css/,        file: 'toastui-editor.css', type: 'text/css' },
+  // No entry for the Markdown editor: js/notes.js loads it from OUR OWN ORIGIN
+  // (js/vendor/), so the static server below already serves it and the tested
+  // path is byte-for-byte the shipped one. See notes.js's own header for the
+  // three findings that made self-hosting the right call.
 ];
 
 const MIME = {

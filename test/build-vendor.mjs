@@ -11,9 +11,13 @@
 //   cdnjs …/chess.js/…                 index.html <script>
 //   unpkg …/cm-chessboard@…/pieces/…   js/app.js PIECES_FILE (only the piece
 //                                      sprite is vendored, not the JS widget)
-//   unpkg …/@toast-ui/editor@…/dist/…  js/notes.js, lazily (Markdown notes)
+//
+// It ALSO builds the one library the app self-hosts rather than fetching from
+// a CDN: @toast-ui/editor, into ../js/vendor/. See js/notes.js's header for
+// why -- its published dist is not a working browser bundle, and its only
+// standalone build lives on a CDN the test sandbox cannot reach.
 import { execSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -25,11 +29,7 @@ const VERSIONS = {
   dagre: '0.8.5',        // cytoscape-dagre's peer dep, bundled in
   'chess.js': '0.10.3',
   'cm-chessboard': '8',  // only assets/pieces/standard.svg is used from this
-  // Markdown notes. Both bundles are vendored because the app loads whichever
-  // it needs: the viewer (433KB) to render a note, the full editor (940KB)
-  // only once you click the pencil. Serving one for both would mean the tests
-  // exercising a bundle production never loads.
-  '@toast-ui/editor': '3.2.2',
+  '@toast-ui/editor': '3.2.2',   // self-hosted; see the note above
 };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VENDOR = path.join(HERE, 'vendor');
@@ -59,12 +59,18 @@ try {
   // cm-chessboard: just the piece sprite SVG (static asset, no bundling needed)
   copyFileSync(path.join(work, 'node_modules/cm-chessboard/assets/pieces/standard.svg'),
                path.join(VENDOR, 'cm-chessboard-standard.svg'));
-  // toast-ui editor: prebuilt UMD browser bundles + their stylesheets, copied
-  // as-is (they are already browser-ready, nothing to bundle)
-  for(const f of ['toastui-editor-viewer.js', 'toastui-editor-viewer.css',
-                  'toastui-editor.js', 'toastui-editor.css']){
-    copyFileSync(path.join(work, 'node_modules/@toast-ui/editor/dist', f), path.join(VENDOR, f));
-  }
+  /* toast-ui editor -> ../js/vendor/, the app's own origin. Bundled here
+     rather than copied: the package's dist/toastui-editor.js hands `undefined`
+     to all eight of its externals on the browser path, so ProseMirror is
+     missing and it dies on PluginKey without defining its global. esbuild
+     inlines the dependencies and gives a clean ESM default export. */
+  const APP_VENDOR = path.join(HERE, '..', 'js', 'vendor');
+  mkdirSync(APP_VENDOR, { recursive: true });
+  writeFileSync(path.join(work, 'toast.mjs'), "import Editor from '@toast-ui/editor';export default Editor;");
+  execSync(`${esbuild} toast.mjs --bundle --format=esm --outfile="${path.join(APP_VENDOR, 'toastui-editor.mjs')}"`,
+           { cwd: work, stdio: 'inherit' });
+  copyFileSync(path.join(work, 'node_modules/@toast-ui/editor/dist/toastui-editor.css'),
+               path.join(APP_VENDOR, 'toastui-editor.css'));
 
   console.log('\nvendor rebuilt in', VENDOR);
 } finally {

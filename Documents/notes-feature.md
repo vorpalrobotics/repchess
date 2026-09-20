@@ -1,6 +1,6 @@
 # Notes — design and phasing plan
 
-**Status: Phase 1 built (the sequence is threaded). Phases 2-5 designed.**
+**Status: Phases 1-2 built. Phases 3-5 designed.**
 
 ## What it is for
 
@@ -94,32 +94,62 @@ the discard prompt keep working unchanged.
 
 ---
 
-# Toast UI Editor: split the viewer from the editor
+# Toast UI Editor is SELF-HOSTED, unlike every other library here
 
-The honest cost, stated up front: **it is roughly 1MB, and it is a new CDN
-dependency.** `test/build-vendor.mjs` vendors every CDN library so the offline
-harness can boot, so it has to be added to that `VERSIONS` map and vendored, or
-the whole test suite stops working.
+This is the one dependency the app serves from its own origin (`js/vendor/`,
+built by `test/build-vendor.mjs`). That was not the plan — the plan was a CDN
+with a vendored copy for tests, like everything else. **Three findings forced
+it, each costing a test run**, and they are worth recording because the next
+person to add a browser library here will hit at least the first:
 
-Two things make that acceptable rather than merely survivable:
+1. **`@toast-ui/editor`'s npm `dist/toastui-editor.js` is not a browser
+   bundle.** Its UMD browser path passes `root[undefined]` for all eight of its
+   externals, so ProseMirror arrives `undefined` and the script dies on
+   `PluginKey` without ever defining its global. `<script src=…>` can never
+   work. The symptom is maximally unhelpful: the script's `onload` fires
+   normally and the global is simply missing.
+2. **The viewer and editor dist files publish different shapes under the same
+   `toastui.Editor` global.** The editor class has a static `.factory()`; the
+   viewer global *is* the Viewer class and has none. Code written against one
+   fails against the other with `T.factory is not a function`.
+3. **Toast's working standalone build (`toastui-editor-all`) is not in the npm
+   package at all.** It exists only on their own CDN, which the test sandbox
+   cannot reach — so it could not have been vendored even if we wanted it.
 
-**Ship the viewer and the editor separately.** Rendering is needed on every
-surface — the move table's preview, the VR note panel — but *editing* is needed
-only after the pencil is clicked. Toast publishes `toastui-editor-viewer` as its
-own, much smaller bundle. Load the viewer with the app; load the editor lazily,
-on first pencil click.
+Vendoring a self-built bundle for tests while production loaded a *different*
+artifact from a CDN would mean the tested path and the shipped path were never
+the same file. That is the exact gap that let the asset manager ship with no
+way out. Serving one bundle from our own origin makes them identical, removes
+the CDN as a failure mode, and needs no harness interception at all.
 
-**Lazy loading means this degrades where the existing CDN deps do not.** three.js
-and cytoscape failing to load stops the app booting. A failed editor load can
-fall back to a plain textarea over the raw Markdown — the feature gets worse, and
-nothing breaks. That is a strictly better posture than the app's current one.
+It is built with esbuild from the package's ESM entry, which inlines the
+dependencies and gives a clean default export — the same treatment
+`build-vendor.mjs` already applies to `cytoscape-dagre`.
+
+## One bundle, not two
+
+The original plan split the viewer (433KB) from the editor (940KB) to keep the
+render-only path light. That is gone. Finding 2 was a direct consequence of
+running two artifacts, and with the row showing a **glyph** rather than
+rendered text, nothing on the default path renders a note anyway — so the
+split was buying a saving on a path that does not exist. `Editor.factory({viewer:true})`
+serves both roles from one ~1.1MB file.
+
+**Still lazy**: dynamically imported on first use, never at boot.
+
+## The fallback stays
+
+A self-hosted file should always load, so the textarea fallback is now
+belt-and-braces rather than load-bearing. It costs three lines and it means a
+feature that degrades instead of breaking. Keep it.
 
 ## Sanitize, always
 
 Rendering a note means generating HTML from user text. Toast's viewer sanitizes
 (DOMPurify) by default. **Rely on that; never hand raw converted output to
-`innerHTML`.** Notes are local and single-user, but a note can arrive from a
-restored backup, which is not necessarily a file this browser wrote.
+`innerHTML`.** The plain-text fallback uses `textContent` for the same reason.
+Notes are local and single-user, but a note can arrive from a restored backup,
+which is not necessarily a file this browser wrote.
 
 ---
 

@@ -13,20 +13,42 @@
    construction, and matches the promise-returning sub-modal shape assets.js
    and objectLists.js already use.
 
-   Toast UI is loaded LAZILY, in two pieces, and neither is fetched at boot:
-   the viewer (433KB) only when a note is actually rendered, the full editor
-   (940KB) only once the pencil is clicked. Nothing on the default path needs
-   either -- the move table shows a glyph, not rendered text.
+   ---------- why Toast is SELF-HOSTED, unlike every other library here ------
 
-   That laziness also buys a failure mode the app's other CDN dependencies
-   don't have. three.js or cytoscape failing to load stops the app booting; a
-   failed Toast load degrades to plain text and a plain textarea, so the
-   feature gets worse and nothing breaks. */
+   This is the one dependency the app serves from its own origin (js/vendor/,
+   built by test/build-vendor.mjs). Three findings forced it, each costing a
+   test run:
+
+   1. @toast-ui/editor's npm dist/toastui-editor.js is NOT a browser bundle.
+      Its UMD browser path passes `root[undefined]` for all eight externals,
+      so ProseMirror arrives undefined and the script dies on `PluginKey`
+      without ever defining its global. It cannot work from a <script> tag.
+   2. The dist viewer and editor files publish DIFFERENT shapes under the same
+      `toastui.Editor` global -- the editor class has a static .factory(), the
+      viewer global IS the Viewer class and has none.
+   3. Toast's working standalone build (toastui-editor-all) is not in the npm
+      package at all; it exists only on their own CDN, which is unreachable
+      from the test sandbox.
+
+   Vendoring a self-built bundle for tests while production loaded a different
+   artifact from a CDN would mean the tested path and the shipped path were
+   never the same file -- the exact gap that let the asset manager ship with
+   no way out. Serving one bundle from our own origin makes them identical,
+   removes the CDN as a failure mode, and needs no harness interception.
+
+   It is still LAZY: ~1.1MB, imported on first use and never at boot. Nothing
+   on the default path renders a note -- the move table shows a glyph. One
+   bundle now serves both roles (Editor.factory({viewer:true})); the separate
+   433KB viewer build is gone along with the two-shapes problem it caused.
+
+   The textarea fallback stays. A self-hosted file should always load, but a
+   feature that degrades instead of breaking costs three lines. */
 
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
-const TOAST_VERSION = '3.2.2';
-const TOAST_CDN = `https://unpkg.com/@toast-ui/editor@${TOAST_VERSION}/dist`;
+// served from our own origin; the ?v= is the usual cache-buster discipline
+const TOAST_MJS = './vendor/toastui-editor.mjs?v=20260804-1';
+const TOAST_CSS = 'js/vendor/toastui-editor.css?v=20260804-1';
 
 /* GFM line breaks, i.e. `breaks: true`. Toast has no such option -- it follows
    CommonMark, where a single newline is a SOFT break rendered as a space. That
@@ -40,54 +62,31 @@ const MD_RENDERER = {
   softbreak(){ return { type: 'html', content: '<br>\n' }; },
 };
 
-/* One promise per bundle: concurrent callers share a single load, and a
-   failure is remembered rather than re-attempted on every render. */
-const bundles = new Map();
-// set once the FULL editor is in, so a session that has already paid for it
-// never also fetches the viewer -- the editor can render too (viewer: true)
-let EditorCtor = null;
-
-function injectScript(src){
-  return new Promise((resolve, reject) => {
-    const el = document.createElement('script');
-    el.src = src;
-    el.onload = () => resolve();
-    el.onerror = () => reject(new Error(`could not load ${src}`));
-    document.head.appendChild(el);
-  });
-}
-/* A missing stylesheet is ugly, not fatal, so it never rejects -- holding the
-   whole feature back because a CSS file 404'd would turn a cosmetic failure
-   into a functional one. */
+/* One promise, shared by every caller, so concurrent opens load once and a
+   failure is remembered rather than retried on each keystroke. */
+let toastLoad = null;
+/* A missing stylesheet is ugly, not fatal, so this never rejects -- holding
+   the whole feature back because a CSS file 404'd would turn a cosmetic
+   failure into a functional one. */
 function injectStyle(href){
-  return new Promise((resolve) => {
-    const el = document.createElement('link');
-    el.rel = 'stylesheet';
-    el.href = href;
-    el.onload = el.onerror = () => resolve();
-    document.head.appendChild(el);
-  });
+  if(document.querySelector(`link[data-notes-css]`)) return;
+  const el = document.createElement('link');
+  el.rel = 'stylesheet';
+  el.href = href;
+  el.setAttribute('data-notes-css', '1');
+  document.head.appendChild(el);
 }
-
-function loadBundle(base){
-  if(!bundles.has(base)){
-    bundles.set(base, (async () => {
-      await Promise.all([injectStyle(`${TOAST_CDN}/${base}.css`), injectScript(`${TOAST_CDN}/${base}.js`)]);
-      const T = window.toastui && window.toastui.Editor;
-      if(!T) throw new Error('toastui.Editor missing after load');
+function ensureToast(){
+  if(!toastLoad){
+    toastLoad = (async () => {
+      injectStyle(TOAST_CSS);
+      const m = await import(TOAST_MJS);
+      const T = m.default || m.Editor;
+      if(!T || typeof T.factory !== 'function') throw new Error('toast bundle loaded but exports no Editor');
       return T;
-    })());
+    })();
   }
-  return bundles.get(base);
-}
-async function ensureEditor(){
-  const T = await loadBundle('toastui-editor');
-  EditorCtor = T;
-  return T;
-}
-function ensureViewer(){
-  if(EditorCtor) return Promise.resolve(EditorCtor);
-  return loadBundle('toastui-editor-viewer');
+  return toastLoad;
 }
 
 /* Common options for every Toast instance.
@@ -105,28 +104,14 @@ const TOAST_COMMON = { usageStatistics: false, customHTMLRenderer: MD_RENDERER }
    own sanitizer. The fallback uses textContent rather than innerHTML for the
    same reason: a note is local data, but a restored backup is not necessarily
    a file this browser wrote. */
-/* The two bundles expose DIFFERENT shapes under the same `toastui.Editor`
-   global, which is not something their docs make obvious and cost a test run
-   to find:
-
-     toastui-editor.js         the Editor class, WITH a static .factory()
-     toastui-editor-viewer.js  the Viewer class itself, with no .factory at all
-
-   So construction has to branch on which one is in memory. Detecting the
-   static rather than tracking which bundle loaded keeps the two callers below
-   from having to know. */
-function newToast(T, opts){
-  return (typeof T.factory === 'function') ? T.factory(opts) : new T(opts);
-}
-
 let lastRenderError = null;
 export async function renderNoteInto(el, md){
   if(!el) return null;
   const text = md || '';
   try {
-    const T = await ensureViewer();
+    const T = await ensureToast();
     el.innerHTML = '';
-    const v = newToast(T, { el, viewer: true, initialValue: text, ...TOAST_COMMON });
+    const v = T.factory({ el, viewer: true, initialValue: text, ...TOAST_COMMON });
     lastRenderError = null;
     return v;
   } catch(err){
@@ -171,9 +156,9 @@ function buildOverlay(title){
 let lastMountError = null;
 async function mountEditor(host, initial, onChange){
   try {
-    const T = await ensureEditor();
+    const T = await ensureToast();
     host.innerHTML = '';
-    const ed = newToast(T, {
+    const ed = T.factory({
       el: host,
       viewer: false,
       height: '100%',
@@ -265,28 +250,27 @@ if(typeof localStorage !== 'undefined' && localStorage.getItem('threeTestDebug')
   window.__notesEditorTestHooks = {
     forceFallback: (on) => {
       if(on){
-        bundles.set('toastui-editor', Promise.reject(new Error('forced by test')));
-        bundles.get('toastui-editor').catch(() => {});   // no unhandled rejection
-        EditorCtor = null;
+        toastLoad = Promise.reject(new Error('forced by test'));
+        toastLoad.catch(() => {});   // no unhandled rejection
       } else {
-        bundles.delete('toastui-editor');
+        toastLoad = null;
       }
     },
-    loadedBundles: () => [...bundles.keys()],
+    isLoaded: () => !!toastLoad,
     /* Sets the open editor's content. Toast's editing surface is a ProseMirror
        contenteditable, so typing into it from a test is a fight with an
        implementation detail; what is worth testing is OUR plumbing -- that a
        value put in comes back out through Save. Routes to the textarea in
        fallback mode, so one test body covers both surfaces. */
     setValue: (md) => { if(liveSetValue) liveSetValue(md); return !!liveSetValue; },
-    // what the open editor currently holds -- for asserting that reopening on
-    // an existing note really loads it rather than starting blank
-    // the editing surface is mounted and writable. The first open of a session
-    // downloads ~940KB, so the bar appears well before the editor does; a test
-    // that setValue()s on the bar's arrival writes into nothing.
+    /* The editing surface is mounted and writable. The first open of a session
+       imports ~1.1MB, so the bar appears well before the editor does; a test
+       that setValue()s on the bar's arrival writes into nothing. */
     isReady: () => !!liveSetValue,
     lastRenderError: () => (lastRenderError && (lastRenderError.message || String(lastRenderError))) || null,
     lastMountError: () => (lastMountError && (lastMountError.message || String(lastMountError))) || null,
+    // what the open editor currently holds -- for asserting that reopening on
+    // an existing note really loads it rather than starting blank
     getValue: () => {
       if(liveEditor) return liveEditor.getMarkdown();
       const ta = document.getElementById('noteFallbackInput');
