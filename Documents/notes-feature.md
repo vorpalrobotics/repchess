@@ -1,6 +1,6 @@
 # Notes — design and phasing plan
 
-**Status: Phases 1-4 built. Phase 5 designed.**
+**Status: all five phases built.**
 
 ## What it is for
 
@@ -431,10 +431,36 @@ a shared texture would therefore have taken that texture down on the first room
 rebuild, and every icon after that would have drawn nothing. Two tagged
 materials, swapped by reference — the arrangement `gearMat` already uses.
 
-## Phase 5 — the dead-end scroll
+## Phase 5 — the dead-end scroll ✅ BUILT
 
-Wall-mounted beside the no-continuation sign, two-track aware, resolving each
-lane's own last pair.
+A drawn scroll Mesh beside the no-continuation sign, shown only when that
+lane's last move pair has a note, opening that same pair's modal.
+
+- **`lastPairSeqForLane(roomKey, track)`.** Without a track the whole room is
+  one lane and the last pair is the last in **walk order** — centre, then left
+  by order, then right — the same `SIDE_WALK_RANK` ordering the move-object
+  chain and the list buckets already use. With one, only that side's pairs are
+  considered. Two-track rooms dead-end per lane and get a sign each, so a
+  single scroll per room would have looked right until the first divided room
+  and then pointed both signs at whichever lane sorted last.
+- **Built once per room, shown per frame**, the same arrangement the pair icon
+  uses and for the same reason: a note written in the move table has to change
+  the wall with no rebuild behind it.
+- **Not hint-gated.** Self-test hides the move billboards, so a pair icon
+  anchored to one has nothing to label — but the scroll hangs on a wall, and
+  "there is something written about the end of this line" gives away no move.
+  It is hidden in edit mode, where the sign's own marker is the click target.
+- **Hit-tested before the door fallback**, like the pair icons. Not obviously
+  necessary — the sign sits on a solid wall with no doorway cut — but a
+  two-track room's two lanes *share* the north wall, and a trigger box is
+  padded by a metre, so a scroll near the divider can sit inside the
+  neighbouring lane's box.
+
+Six tests (phases EN5 and EN5b, 430–435): the scroll exists beside the sign and
+resolves the room's last pair; it appears and disappears with the note; it opens
+that pair's own modal; it survives hints off while the pair icons do not; a
+two-track room gets one per dead lane keyed to its own lane; and clicking one
+lane's scroll opens that lane's note and not the other's.
 
 ---
 

@@ -4329,6 +4329,113 @@ function updatePairIcons(){
   }
 }
 
+/* ---------- the dead-end scroll (Documents/notes-feature.md) ----------
+
+   A scroll on the wall beside a room's "no continuation" sign, shown only when
+   the lane's LAST move pair has a note, and opening that same pair's
+   position/notes modal.
+
+   It is a discoverability affordance, not a second datum: "there is something
+   to read at the end of this line", readable from across the room, where the
+   pair's own chessboard icon only appears once you are within two metres of
+   the billboard -- and where, in a one-member room, the pair in question is
+   not even in the room (its billboard is on the door leading in).
+
+   Two-track rooms dead-end PER LANE and get two signs, so each lane resolves
+   its own last pair. A single-scroll implementation looks correct until the
+   first divided room. */
+const SCROLL_SIZE = 0.55;
+const SCROLL_GAP = 0.25;                        // between the sign's edge and the scroll
+let noteScrollMat = null;
+let noteScrolls = [];                           // [{ mesh, seq, lineId }] for the current room
+
+function noteScrollMaterial(){
+  if(!noteScrollMat){
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    // a rolled parchment: a page with a curled top and bottom edge
+    ctx.fillStyle = '#f7ecc9';
+    ctx.beginPath(); ctx.roundRect(12, 6, 40, 52, 4); ctx.fill();
+    ctx.strokeStyle = '#7a5c22'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = '#d8c28a';
+    ctx.beginPath(); ctx.ellipse(32, 8, 20, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(32, 56, 20, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#7a5c22'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.ellipse(32, 8, 20, 6, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(32, 56, 20, 6, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = '#6b5636'; ctx.lineWidth = 2.5;
+    for(let i = 0; i < 4; i++){
+      ctx.beginPath(); ctx.moveTo(19, 20 + i*8); ctx.lineTo(45, 20 + i*8); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    noteScrollMat = tagShared(new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
+  }
+  return noteScrollMat;
+}
+
+/* The seq of the last pair a lane teaches -- what a note "at the end of this
+   line" belongs to.
+
+   `track` is a two-track room's lane ('left'/'right'); without it the whole
+   room is one lane and the last pair is the last in WALK order (centre, then
+   left by order, then right), the same ordering the move-object chain and the
+   list buckets use. Returns the room seq, ending in our reply, exactly as the
+   billboards carry it. */
+function lastPairSeqForLane(roomKey, track){
+  const layout = mnemPairLayout(roomKey).filter(L => L.pair && L.pair.seq);
+  const lane = track ? layout.filter(L => L.side === track) : layout;
+  if(!lane.length) return null;
+  const rank = L => (SIDE_WALK_RANK[L.side] ?? 3) * 1000 + (L.order || 0);
+  let last = lane[0];
+  for(const L of lane) if(rank(L) > rank(last)) last = L;
+  return last.pair.seq.slice();
+}
+
+/* Hangs the scroll beside a dead-end sign. `wall`/`offset` are the sign's own,
+   so this mirrors buildNoContinuationIcon's placement and shifts along the
+   wall's run axis.
+
+   Placed to the RIGHT as you face the wall, and clamped inside the wall's own
+   half-span so a sign already near a corner does not push it through the
+   adjoining wall. */
+function buildNoteScroll(roomKey, size, wall, offset, seq, lineId){
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(SCROLL_SIZE, SCROLL_SIZE), noteScrollMaterial());
+  mesh.userData = { kind: 'note-scroll', roomKey, seq, lineId };
+  const { fixed, half } = wallSpan(size, wall);
+  const y = DOOR_H / 2;
+  // just clear of the sign's own 1.4m face, and never within half a scroll of
+  // the corner. DOOR_SKIN_FORWARD_OFFSET*2 keeps it in front of the sign
+  // rather than z-fighting with it where the two faces meet.
+  const shift = 1.4/2 + SCROLL_GAP + SCROLL_SIZE/2;
+  const limit = half - SCROLL_SIZE/2 - 0.1;
+  // "right as you face it" runs +along on north and east, -along on south and
+  // west -- the walls face into the room from opposite sides
+  const dir = (wall === 'north' || wall === 'east') ? 1 : -1;
+  const along = Math.max(-limit, Math.min(limit, offset + dir * shift));
+  const f = WALL_THICK/2 + DOOR_SKIN_FORWARD_OFFSET * 2;
+  if(wall === 'north'){ mesh.position.set(along, y, fixed + f); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(along, y, fixed - f); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + f, y, along); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - f, y, along); mesh.rotation.y = -Math.PI/2; }
+  mesh.visible = false;                         // updateNoteScrolls decides, from the first frame
+  noteScrolls.push({ mesh, seq, lineId });
+  return mesh;
+}
+
+/* Built once per room, shown per frame -- the same liveness the pair icons
+   have, and for the same reason: a note written in the move table (or in this
+   walk) must change what the world shows without a rebuild behind it.
+   Hidden in edit mode, where the dead-end sign's own marker is the click
+   target and a scroll in front of it would just be in the way. */
+function updateNoteScrolls(){
+  for(const s of noteScrolls){
+    s.mesh.visible = !editMode
+      && !!(threeOpts.hasNote && threeOpts.hasNote(s.lineId, s.seq.slice(0, -1)));
+  }
+}
+
 function makeLabelMesh(text){
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 256;
@@ -6529,6 +6636,7 @@ function buildRoom(roomKey){
   billboards = [];
   floorLabels = [];
   pairIcons = [];
+  noteScrolls = [];
   doorSignLog = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
@@ -6611,6 +6719,14 @@ function buildRoom(roomKey){
     const deadEndAsset = deadEndAssetFor(roomKey);
     scene.add(deadEndAsset ? buildDoorPanel(room.size, deadEndWall, 0, deadEndAsset) : buildNoContinuationIcon(room.size, deadEndWall, 0));
     if(editMode) scene.add(buildDeadEndMarker(room.size, deadEndWall, 0, roomKey));
+    // ...and, beside it, the note scroll for the last pair this room teaches
+    // (Documents/notes-feature.md). Built unconditionally and SHOWN per frame
+    // by updateNoteScrolls, so a note added later needs no rebuild. Not
+    // hint-gated: it hangs on a wall rather than on a hidden billboard, and
+    // "there is something written about the end of this line" is not a hint
+    // about the move itself.
+    const deadEndSeq = lastPairSeqForLane(roomKey, null);
+    if(deadEndSeq) scene.add(buildNoteScroll(roomKey, room.size, deadEndWall, 0, deadEndSeq, room.lineId || ''));
   }
   // a two-track room's two lanes dead-end independently -- each gets its OWN
   // sign, centered in its own half of the north wall (the same quarter-width
@@ -6627,6 +6743,11 @@ function buildRoom(roomKey){
       const deadEndAsset = deadEndAssetFor(roomKey, track);
       scene.add(deadEndAsset ? buildDoorPanel(room.size, 'north', offset, deadEndAsset) : buildNoContinuationIcon(room.size, 'north', offset));
       if(editMode) scene.add(buildDeadEndMarker(room.size, 'north', offset, roomKey, track));
+      // each lane resolves its OWN last pair -- a single scroll for the room
+      // would look right until the first divided room, then quietly point both
+      // signs at whichever lane happened to sort last
+      const laneSeq = lastPairSeqForLane(roomKey, track);
+      if(laneSeq) scene.add(buildNoteScroll(roomKey, room.size, 'north', offset, laneSeq, room.lineId || ''));
     }
   }
 
@@ -7234,6 +7355,7 @@ function tick(){
   // move-pair note icons: same screen-relative corner math as the gear above,
   // but per pair and gated on proximity/facing (see updatePairIcons)
   updatePairIcons();
+  updateNoteScrolls();
 
   // Doors (and elevators) teleport in edit mode too -- staying blocked there
   // just confused users with no way to reach the next room short of exiting
@@ -7906,6 +8028,16 @@ function handleWalkClick(e){
   if(!hit) return;
   if(hit.uv && hit.object.userData && hit.object.userData.kind === 'elevator-panel'){
     selectElevatorFloor(hit.object.userData, hit.uv);
+    return;
+  }
+  /* The dead-end scroll, for the same reason the pair icons go first: it hangs
+     on a wall a NEIGHBOURING lane's door trigger box can reach (a two-track
+     room's two lanes share the north wall, and a trigger box is padded by a
+     metre), so without this the greedy fallback below could teleport you out
+     of a click that meant "read this". */
+  if(hit.object.userData && hit.object.userData.kind === 'note-scroll'){
+    const ud = hit.object.userData;
+    if(threeOpts.onPairNote) threeOpts.onPairNote(ud.lineId, ud.seq);
     return;
   }
   // tapping a door (its skin, frame, name plaque, or locked-door icon --
@@ -10264,6 +10396,26 @@ export async function openThreeTest(containerEl, opts){
       // which line a room belongs to -- the value the note affordances hand
       // back out through onPairNote, threaded in at registerOneCastle
       roomLineId: (roomKey) => (ROOMS[roomKey || currentRoomKey] || {}).lineId ?? null,
+      /* the dead-end note scrolls in the current room, as updateNoteScrolls
+         has most recently left them. One per dead-end sign, so a two-track
+         room with two dead lanes reports two -- each resolving its own lane's
+         last pair rather than the room's. */
+      noteScrolls: () => noteScrolls.map(s => ({
+        visible: s.mesh.visible,
+        seq: s.seq.slice(),
+        lineId: s.lineId,
+        pos: { x: s.mesh.position.x, y: s.mesh.position.y, z: s.mesh.position.z },
+      })),
+      noteScrollScreenPoint: (i) => {
+        const s = noteScrolls[i || 0];
+        if(!s || !s.mesh.visible || !renderer) return null;
+        const v = s.mesh.position.clone().project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+      },
+      // the last pair a lane teaches, as the scroll resolves it -- so a test
+      // can check the two-track split without scraping meshes out of the scene
+      lastPairSeq: (roomKey, track) => lastPairSeqForLane(roomKey || currentRoomKey, track || null),
       // a room's move count as the VR side sees it -- so the grade-log test
       // can check the value that was threaded through rather than hard-coding
       // a number the castle generator owns
@@ -10533,6 +10685,7 @@ export function closeThreeTest(){
   billboards = [];
   floorLabels = [];
   pairIcons = [];
+  noteScrolls = [];
   selectedProp = null;
   selectionOutline = null;
   selectionGear = null;

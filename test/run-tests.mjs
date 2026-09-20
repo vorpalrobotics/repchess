@@ -24486,6 +24486,235 @@ try {
 } catch(e){ bad('Phase EN4: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EN5: notes, phase 5 -- the dead-end scroll
+//     (Documents/notes-feature.md). A scroll on the wall beside the "no
+//     continuation" sign when the lane's LAST move pair has a note, opening
+//     that same pair's modal. It is a discoverability affordance: the pair's
+//     own chessboard icon only appears within two metres of its billboard,
+//     and in a one-member room that billboard is not even in the room. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN5 = await launchApp();
+try {
+  // the EN4 corridor: a linear tail that genuinely runs out at cxd5, so the
+  // room has no forward exit and gets a dead-end sign
+  await seedBackup(appEN5.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN5.page.click('.line-row');
+  await appEN5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const deadEndKey = await appEN5.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  await openVR(appEN5.page);
+  await appEN5.page.evaluate((k) => window.__threeTestEdit.enter(k), deadEndKey);
+  await appEN5.page.waitForTimeout(400);
+
+  const scrolls = () => appEN5.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+  const setNote = (seq, md) => appEN5.page.evaluate(
+    ([s, m]) => window.__notesTestHooks.setNote(s, m), [seq, md]);
+
+  // 430. The room grows exactly one scroll, on the dead-end wall beside the
+  //      sign, resolving the LAST pair this room teaches -- not its first and
+  //      not its anchor (which is on the door leading in, not in here at all).
+  try {
+    const sign = await appEN5.page.evaluate(() =>
+      window.__threeTestEdit.meshes().find(m => m.kind === 'no-continuation-icon') || null);
+    assert(sign, 'test setup issue: expected a dead-end sign in a room with no forward exit');
+
+    const list = await scrolls();
+    assert(list.length === 1, `expected exactly one scroll for a single-track dead end, got ${list.length}`);
+    const s = list[0];
+    assert(s.seq[s.seq.length - 1] === 'cxd5',
+      `expected the scroll to resolve the room's LAST pair, got ${JSON.stringify(s.seq)}`);
+    assert(s.lineId === 'L1', `expected the scroll to carry its room's line, got ${JSON.stringify(s.lineId)}`);
+    // beside the sign on the same wall, not on top of it: same height, offset
+    // along the wall by more than half the sign's 1.4m face
+    assert(Math.abs(s.pos.y - sign.y) < 0.01,
+      `expected the scroll at the sign's height, got ${s.pos.y} against ${sign.y}`);
+    assert(Math.abs(s.pos.x - sign.x) > 0.7,
+      `expected the scroll clear of the sign's face, got x ${s.pos.x} against ${sign.x}`);
+    ok('Notes: a dead-end room hangs a scroll beside its sign for the last pair it teaches');
+  } catch(e){ bad('Notes: dead-end scroll exists and resolves the last pair', e); }
+
+  // 431. Hidden until that pair actually has a note, and live either way --
+  //      built once per room but SHOWN per frame, so a note written in the
+  //      move table changes the wall with no rebuild behind it.
+  try {
+    const s = (await scrolls())[0];
+    assert(!s.visible, 'expected the scroll hidden while the last pair has no note');
+
+    await setNote(s.seq.slice(0, -1), 'Black recaptures and the game opens up.');
+    await appEN5.page.waitForTimeout(200);
+    assert((await scrolls())[0].visible, 'expected the scroll to appear once the last pair has a note');
+
+    await setNote(s.seq.slice(0, -1), '');
+    await appEN5.page.waitForTimeout(200);
+    assert(!(await scrolls())[0].visible, 'expected the scroll to go away again when the note is cleared');
+
+    await setNote(s.seq.slice(0, -1), 'Black recaptures and the game opens up.');
+    await appEN5.page.waitForTimeout(200);
+    ok('Notes: the dead-end scroll appears and disappears with the note, without a rebuild');
+  } catch(e){ bad('Notes: dead-end scroll visibility follows the note', e); }
+
+  // 432. Clicking it opens the SAME position/notes modal that pair's own icon
+  //      would -- there is no separate end-of-line note. A real click at the
+  //      scroll's own screen point, so this goes through handleWalkClick.
+  try {
+    const s = (await scrolls())[0];
+    assert(s.visible, 'test setup issue: expected the scroll visible (431 left a note in place)');
+    // stand back from the dead-end wall, looking at it (yaw 0 faces -z)
+    await appEN5.page.evaluate((p) => window.__threeTestEdit.setPlayerPos(p.x, p.z + 2, 0), s.pos);
+    await appEN5.page.waitForTimeout(200);
+
+    const pt = await appEN5.page.evaluate(() => window.__threeTestEdit.noteScrollScreenPoint(0));
+    assert(pt, 'expected a visible scroll to report a screen point');
+    const roomBefore = await appEN5.page.evaluate(() => window.__threeTestState.room);
+
+    await appEN5.page.mouse.click(pt.x, pt.y);
+    await appEN5.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const cap = await appEN5.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(/cxd5/.test(cap || ''),
+      `expected the modal to open on the LAST pair, got ${JSON.stringify(cap)}`);
+    const text = await appEN5.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/recaptures/.test(text || ''),
+      `expected that pair's own note in the modal, got ${JSON.stringify(text)}`);
+    assert((await appEN5.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
+      'expected clicking the scroll not to move the player');
+    await appEN5.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the dead-end scroll opens that pair\'s own note');
+  } catch(e){ bad('Notes: dead-end scroll click', e); }
+
+  // 433. NOT hint-gated, unlike the pair icons. Self-test mode hides the move
+  //      billboards, so an icon anchored to one has nothing to label -- but
+  //      the scroll hangs on a wall, and "there is something written about the
+  //      end of this line" gives away no move.
+  try {
+    await appEN5.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appEN5.page.waitForTimeout(400);
+    const off = await scrolls();
+    assert(off.length === 1 && off[0].visible,
+      `expected the scroll to survive hints off, got ${JSON.stringify(off)}`);
+    assert(!(await appEN5.page.evaluate(() => window.__threeTestEdit.pairIcons())).length,
+      'test setup issue: expected the move billboards (and so their icons) gone with hints off');
+    await appEN5.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appEN5.page.waitForTimeout(400);
+    ok('Notes: the dead-end scroll is not hint-gated, unlike the pair icons');
+  } catch(e){ bad('Notes: dead-end scroll survives hints off', e); }
+} finally {
+  await appEN5.close();
+}
+} catch(e){ bad('Phase EN5: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EN5b: the two-track half. A root branching into two even-depth
+//     single-child chains merges into ONE two-track room whose lanes dead-end
+//     independently and get a sign each -- so each needs its OWN scroll,
+//     resolving its OWN lane's last pair. A single-scroll implementation looks
+//     correct until exactly this room. (Fixture shared with Phase AH3.) ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN5b = await launchApp();
+try {
+  await seedBackup(appEN5b.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEN5b.page.click('.line-row');
+  await appEN5b.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+  await openVR(appEN5b.page);
+  const root = await appEN5b.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appEN5b.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appEN5b.page.waitForTimeout(400);
+
+  // 434. Two dead lanes, two signs, two scrolls -- and each one resolves its
+  //      own lane's last pair rather than the room's.
+  try {
+    const divider = await appEN5b.page.evaluate(() =>
+      window.__threeTestEdit.meshes().some(m => m.kind === 'divider'));
+    assert(divider, 'test setup issue: expected a divider mesh, confirming this really is a two-track room');
+
+    const list = await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+    assert(list.length === 2, `expected one scroll per dead-ending lane, got ${list.length}`);
+    const ends = list.map(s => s.seq[s.seq.length - 1]).sort();
+    assert(JSON.stringify(ends) === JSON.stringify(['Qc2','e4']),
+      `expected each lane's OWN last pair, got ${JSON.stringify(list.map(s => s.seq))}`);
+    // ...and the two signs really are in different halves of the wall, so the
+    // scrolls are not two copies of one lane's affordance sitting together
+    assert(list[0].pos.x * list[1].pos.x < 0,
+      `expected one scroll per half of the north wall, got x ${list[0].pos.x} and ${list[1].pos.x}`);
+
+    const lanes = await appEN5b.page.evaluate((k) => ({
+      left: window.__threeTestEdit.lastPairSeq(k, 'left'),
+      right: window.__threeTestEdit.lastPairSeq(k, 'right'),
+    }), root);
+    assert(lanes.left && lanes.right &&
+           lanes.left[lanes.left.length - 1] !== lanes.right[lanes.right.length - 1],
+      `expected the two lanes to resolve to different last pairs, got ${JSON.stringify(lanes)}`);
+    ok('Notes: a two-track room gets one scroll per dead lane, each on its own lane\'s last pair');
+  } catch(e){ bad('Notes: two-track dead-end scrolls', e); }
+
+  // 435. Each scroll opens ITS lane's note, not the other's -- the assertion
+  //      that a per-lane lookup actually reaches the per-lane modal.
+  try {
+    const list = await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+    const target = list.find(s => s.seq[s.seq.length - 1] === 'e4') || list[0];
+    const idx = list.indexOf(target);
+    await appEN5b.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'The big centre.'),
+      target.seq.slice(0, -1));
+    await appEN5b.page.waitForTimeout(200);
+
+    const live = (await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls()));
+    assert(live[idx].visible, 'expected only the noted lane\'s scroll to appear');
+    assert(live.filter(s => s.visible).length === 1,
+      `expected the OTHER lane's scroll to stay hidden, got ${JSON.stringify(live.map(s => s.visible))}`);
+
+    await appEN5b.page.evaluate((p) => window.__threeTestEdit.setPlayerPos(p.x, p.z + 2, 0), target.pos);
+    await appEN5b.page.waitForTimeout(200);
+    const pt = await appEN5b.page.evaluate((i) => window.__threeTestEdit.noteScrollScreenPoint(i), idx);
+    assert(pt, 'expected the visible scroll to report a screen point');
+    await appEN5b.page.mouse.click(pt.x, pt.y);
+    await appEN5b.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const text = await appEN5b.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/The big centre/.test(text || ''),
+      `expected that lane's own note in the modal, got ${JSON.stringify(text)}`);
+    await appEN5b.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: a lane\'s scroll opens that lane\'s own note');
+  } catch(e){ bad('Notes: two-track scroll opens its own lane', e); }
+} finally {
+  await appEN5b.close();
+}
+} catch(e){ bad('Phase EN5b: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower
