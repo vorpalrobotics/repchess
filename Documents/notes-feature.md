@@ -407,6 +407,32 @@ Clicking it opens the Phase 3 modal. Hidden in edit mode, where the prop picker
 owns clicks and the icons would sit in front of the very sprites you were
 trying to select.
 
+### …and clamped into the frustum, which the corner maths alone does not do
+
+Found by the user in -431, not by a test. A 1.2 m billboard centred at eye
+height puts its corner **0.7 m above the eye**, and walk mode has no look-up
+(`targetPitch` is only ever the automatic down-staircase peek). Against a 35°
+vertical half-FOV that corner leaves the view at about **1.25 m** and is fully
+gone by 1 m — so the icon vanished exactly as you walked up to the thing it
+labels, the one moment you were certain to want it.
+
+Portrait was worse, and no amount of walking on a desktop would have found it:
+the horizontal half-angle falls to ~18°, and the 0.7 m sideways offset puts the
+tile off the right edge **at the full 2 m range**. On a phone the icon would
+essentially never have appeared.
+
+The fix clamps in **NDC**, not by per-axis trig: project where the corner wants
+to be, pull the point back inside the frustum by the tile's own on-screen
+half-size, unproject at the same depth. That is correct for any fov, aspect and
+pitch without restating the projection maths, and beyond ~1.25 m in landscape it
+does not bind at all — the icon is exactly where the spec puts it. Closer in it
+slides along the billboard's edge.
+
+It stays clickable when clamped even if a prop ends up in front of it, because
+`handleWalkClick` hit-tests the visible icons **first, against the icons
+alone** — the same ordering that beats the door fallback — and the tile is
+`depthTest:false`, so it is drawn on top regardless.
+
 The click is hit-tested **before** anything else in `handleWalkClick`, and only
 visible icons are offered to the raycaster (three.js does not check `.visible`
 when intersecting, so a hidden icon would still be clickable through a wall).
