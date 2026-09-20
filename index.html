@@ -1224,6 +1224,12 @@
       <li><b>chess.js</b> — chess move generation and rules engine (BSD License).</li>
       <li><b>cytoscape.js</b> and <b>cytoscape-dagre</b> — network graph rendering and layout (MIT License).</li>
       <li><b>three.js</b> — 3D/WebGL rendering for the VR memory-palace walkthrough (MIT License).</li>
+      <!-- This entry names its own dependencies, unlike the others, because it
+           is the one library REPchess SELF-HOSTS (js/vendor/, built by
+           test/build-vendor.mjs — see js/notes.js for why). Everything else
+           here is fetched from a CDN at run time; this one we redistribute, so
+           what the bundle contains is ours to attribute. -->
+      <li><b>Toast UI Editor</b> &copy; NHN Cloud FE Development Lab — Markdown note editor and viewer (MIT License). The copy served here bundles <b>ProseMirror</b> &copy; Marijn Haverbeke (MIT License) and <b>DOMPurify</b> &copy; Cure53 (Apache License 2.0 / Mozilla Public License 2.0).</li>
       <li><b>Font Awesome Free</b> — icons (icons: CC BY 4.0; fonts: SIL OFL 1.1; code: MIT License).</li>
     </ul>
     <hr style="margin:2em 0 1em;border:none;border-top:1px solid #ddd">
@@ -2052,6 +2058,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-429"></script>
+<script type="module" src="js/app.js?v=20260804-430"></script>
 </body>
 </html>
