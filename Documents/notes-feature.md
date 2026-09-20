@@ -125,8 +125,8 @@ restored backup, which is not necessarily a file this browser wrote.
 
 # What the VR side actually requires
 
-Four findings from the code that shape the implementation more than the spec
-does.
+Five findings from the code that shape the implementation more than the spec
+does. The fourth was found by a failing test, not by reading.
 
 ## 1. The move-pair billboard does not know which move it is
 
@@ -164,7 +164,25 @@ requirement.
 must be hit-tested *before* the door check, not after. This is the single most
 likely bug in the whole feature.
 
-## 4. The dead-end sign already renders in walk mode
+## 4. The ANCHOR pair is on the door, not in the room
+
+Found by a failing test rather than by reading: `buildRoom` skips a room's
+centre/anchor move-pair slot entirely (`slot.side === 'center' && !room.entryNoStreet`).
+That pair lives on the **door leading into the room**, drawn from the parent
+(`buildDoorPair`); only the left/right run pairs line the walls.
+
+This has a consequence for Phase 4 that is easy to miss: the room's *own* move
+pair — the one a note about "this position" most obviously belongs to — is a
+**door billboard**, and door pairs are built by `pairFromSeq`, which
+deliberately carries no seq because its own sequence is edge-specific.
+
+So the pair icon cannot simply ride on `userData.pairSeq` for every pair. Door
+billboards need the **destination room's canonical seq** attached instead, which
+is available where the edge is built (`addEdge` knows `destRoom`) but is not
+threaded today. That is a Phase 4 task, not a Phase 1 one, but it is a second
+threading job rather than a detail — worth knowing before estimating it.
+
+## 5. The dead-end sign already renders in walk mode
 
 `buildNoContinuationIcon` is drawn for a room with no forward exit; only the
 edit-mode `buildDeadEndMarker` is gated on `editMode`. So the scroll beside it
@@ -292,6 +310,10 @@ unit.
 
 Proximity and angle gating, per-frame corner placement, walk-click handling
 **ordered ahead of the door-trigger fallback**, and the note-exists glyph.
+
+Also the second threading job finding 4 describes: door billboards carry their
+DESTINATION room's canonical seq, so the anchor pair — which renders on the door
+rather than on a wall — can carry a note like any other.
 
 Tests drive the camera to known positions and assert icon visibility, the same
 way the gizmo tests already drive the editor.

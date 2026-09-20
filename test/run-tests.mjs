@@ -23688,10 +23688,23 @@ try {
       { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
       { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','b6','Nc3','e6'], reply: 'e3' },
+      /* A linear tail past the convergence, so the converged room merges into a
+         CORRIDOR and gets real side pairs on its walls. Test 411 needs one: a
+         room's centre/anchor pair is not an in-room billboard at all (buildRoom
+         skips it -- it lives on the door leading in), so only left/right run
+         pairs are actually in the scene.
+
+         Written out under BOTH move orders rather than one. The graph walks
+         whichever it reaches first and keys the tail off THAT seq; duplicating
+         it removes a guess about which order wins, at the cost of four lines. */
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
     ]}],
     games: [
-      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3', white: 'a', black: 'b', result: '*' },
-      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3', white: 'a', black: 'b', result: '*' },
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
     ],
   }, { defaultPlayerColor: 'white' });
 
@@ -23701,6 +23714,13 @@ try {
 
   const viaE6 = ['d4','Nf6','c4','e6','Nc3','b6'];
   const viaB6 = ['d4','Nf6','c4','b6','Nc3','e6'];
+  // the room the two orders converge on -- after our e3, and the anchor of the
+  // corridor the linear tail forms
+  const convergedKey = await appEM.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
 
   // 410. The two orders really do transpose, and the move table resolves both
   //      to ONE pref key. Setup for the VR half, and worth asserting on its
@@ -23719,29 +23739,31 @@ try {
   } catch(e){ bad('Notes: transposition canonicalises to one key', e); }
 
   // 411. A wall billboard carries the sequence it represents, all the way into
-  //      the scene -- the layout and the built sprite are checked separately
-  //      because they fail differently.
+  //      the scene -- checked at the layout AND on the built sprite, because
+  //      those fail differently.
+  //
+  //      It must be a SIDE pair. A room's centre/anchor pair is not an in-room
+  //      billboard at all: buildRoom skips it because it lives on the door
+  //      leading into the room, drawn from the parent. An earlier version of
+  //      this test asked the scene for the centre pair and got null -- which
+  //      was the code telling the truth, not a bug.
   try {
-    const roomKey = await appEM.page.evaluate(() => {
-      const c = new Chess();
-      for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
-      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
-    });
     await openVR(appEM.page);
-    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), roomKey);
+    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
     await appEM.page.waitForTimeout(300);
 
-    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), roomKey);
-    assert(pairs.length, `test setup issue: expected the root room to hold move pairs, got ${JSON.stringify(pairs)}`);
+    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), convergedKey);
+    assert(pairs.length, `test setup issue: expected the corridor to hold move pairs, got ${JSON.stringify(pairs)}`);
     assert(pairs.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
       `expected every pair to carry its sequence, got ${JSON.stringify(pairs)}`);
-    // the root room's own pair is the castle root move itself
-    const anchor = pairs.find(p => p.side === 'center') || pairs[0];
-    assert(JSON.stringify(anchor.seq) === JSON.stringify(['d4','Nf6','c4']),
-      `expected the anchor pair's seq to end in OUR reply, got ${JSON.stringify(anchor.seq)}`);
 
-    const inScene = await appEM.page.evaluate((id) => window.__threeTestEdit.scenePairSeq(id), anchor.id);
-    assert(JSON.stringify(inScene) === JSON.stringify(anchor.seq),
+    const side = pairs.find(p => p.side !== 'center');
+    assert(side, `test setup issue: expected the corridor to have wall (non-centre) pairs, got ${JSON.stringify(pairs)}`);
+    assert(side.seq[side.seq.length - 1] === 'Bd3' || side.seq[side.seq.length - 1] === 'cxd5',
+      `expected a wall pair's seq to end in OUR reply for that step, got ${JSON.stringify(side.seq)}`);
+
+    const inScene = await appEM.page.evaluate((id) => window.__threeTestEdit.scenePairSeq(id), side.id);
+    assert(JSON.stringify(inScene) === JSON.stringify(side.seq),
       `expected the seq to survive onto the built sprite, got ${JSON.stringify(inScene)}`);
     ok('Notes: a wall billboard carries its move-pair sequence into the scene');
   } catch(e){ bad('Notes: pair sequence reaches the sprite', e); }
@@ -23757,12 +23779,6 @@ try {
     await appEM.page.evaluate(([seq, note]) => window.__notesTestHooks.setNote(seq, note),
       [canonical, 'Both sides fianchetto; watch the c4 pawn.']);
 
-    // the room the two orders converge on: after our e3
-    const convergedKey = await appEM.page.evaluate(() => {
-      const c = new Chess();
-      for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
-      return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
-    });
     await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
     await appEM.page.waitForTimeout(300);
 
