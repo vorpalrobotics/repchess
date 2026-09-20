@@ -1,6 +1,7 @@
 # Review Forecast — design and phasing plan
 
-**Status: Phases 1-5 built. Phase 6 is whatever real use turns up.**
+**Status: Phases 1-5 built. The ripple projection (below) is the live
+follow-on; its step 1, collecting per-rung grade statistics, is built.**
 
 **In the UI it is called "VR Schedule"** — that is the hamburger item and the
 modal's title. The code, the ids (`reviewForecast*`) and this document keep
@@ -335,3 +336,134 @@ Making the scope dropdown's first entry **"All castles"** costs almost nothing
 once Phase 1 takes a scope argument — but it changes what the default view
 means, so it is a decision rather than an implementation detail. Recommendation:
 include it from Phase 2 and default to it, with per-castle a click away.
+
+---
+
+# The ripple projection
+
+## The problem
+
+The forecast shows each room's **next** review and nothing after it. That is
+not a conservative estimate, it is a **non-uniformly wrong** one: the error is
+zero on day 0 and grows with the horizon, so the part of the calendar that
+looks emptiest is the part that is least trustworthy.
+
+A room on rung 0 graded successfully every time falls due on day 1, day 4
+(1+3), day 11 (4+7), then day 32. That is **three appearances inside the
+30-day window; the calendar shows one.** A room on rung 3 (21 days) appears
+once and then not again until day 81 — there the snapshot is exactly right.
+
+So the understatement is concentrated in low-rung rooms, which is precisely
+the population the pacing decision is made against, and it makes days 2-7 —
+the window that decision actually looks at — read far freer than they are.
+
+## Why 50% is the wrong fallback
+
+At p=0.5 half of every review resets to rung 0 and a 1-day interval, and
+almost nothing ever climbs to rung 5. That contradicts the observed behaviour
+of a real repertoire, where rooms do climb. It would print a frightening
+number, and the natural response to a frightening number is to stop
+memorizing — wrong in the expensive direction.
+
+The fallback should be **~0.85, blended rather than switched**:
+
+    p(rung) = (A_seen + k · 0.85) / (n_seen + k)          with k ≈ 5
+
+which gives the prior on day one and slides to measured data as evidence
+arrives, with no "not enough data yet" cliff and no threshold to argue about.
+
+## B is the modelling problem, not C
+
+The obvious two-state model — succeed and advance, fail and come back
+tomorrow — is wrong for this ladder, and wrong in both directions at once.
+
+B **holds** the rung (two consecutive B's demote one), and B is probably the
+*modal* grade: "90 percent right" on a room holding fourteen move-pairs is a
+B, not an A. A two-state model would miss that most reviews neither advance
+nor reset, and would treat every non-A as a reset to a 1-day interval.
+
+So the projection models all three grades, which costs one extra probability
+and carrying `lastGrade` through the simulation.
+
+## Compute it exactly, not by sampling
+
+No Monte Carlo. Each room starts as probability mass 1.0 at
+`(due_day, rung, lastGrade)`; at each due day the mass splits three ways into
+future cells; sum across rooms weighted by `moveCount`. That is the exact
+expected load per day, linear in rooms × horizon × rungs.
+
+The reason to insist: it is **deterministic**, so the tests are
+hand-verifiable numbers rather than tolerance bands around sampled noise.
+
+## Present it as a layer, not a mode
+
+A checkbox that *replaces* the numbers creates a mode you can forget you are
+in, and conflates fact with estimate — the scheduled counts are real due
+dates, the ripple is a guess. Show the calendar cell as scheduled (solid) plus
+projected (hatched), and scope the ripple to the **calendar and the pacing
+lines only**. The donut and the ladder table are snapshot-shaped concepts
+(bucket by current due date) and rippling them muddies what they mean.
+
+## Two assumptions to state rather than model
+
+- **Overdue work happens today.** A projection has to assume when the backlog
+  gets cleared. Modelling a drain rate is a rabbit hole; the honest one-liner
+  next to the number is worth more: *"projects what happens if you review each
+  room on the day it comes due."*
+- **Fuzz is ignored.** Nominal intervals artificially sharpen distant peaks,
+  but `ROOM_REVIEW_FUZZ` does nothing below a week by design and the ripple's
+  value is near-term. Smearing each arrival over its ±15% window at rungs ≥ 7
+  days is a later refinement.
+
+Neither is a reason to wait; both are reasons to say what the number means
+next to the number.
+
+## Steps
+
+**Step 1 — collect the statistics. BUILT.** `db.js`'s
+`REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}` tally
+folded by `tallyReviewGrade` and written by `recordReviewGrade`. No UI reads
+it yet, deliberately: the data is worthless until it has been accumulating,
+so shipping collection first means the projection arrives with real numbers
+instead of pure prior. Every day it is not shipped is a day of data that
+cannot be recovered.
+
+Three rules it is worth not re-deriving later:
+
+- **Attributed to the rung the review was ON**, never the one it moved to. The
+  grade judges the interval just completed, so an A at rung 2 is evidence
+  about the 7-day rung. Filing it forward measures the wrong interval, and in
+  the flattering direction.
+- **Grades only.** `demoteRoomReview` (a structural change or a board-quiz
+  miss) changes a schedule without being a verdict on the interval, and
+  `softenRoomReview` is about timing rather than recall. Folding either in
+  would bias the rates with evidence about something else.
+- **A correction replaces.** Re-grading within one visit replaces rather than
+  compounds (`threeVR.js`'s `preGradeRecord`), so the tally un-counts what the
+  visit already contributed — otherwise a fumbled grade menu inflates the very
+  statistics this exists to measure.
+
+It travels in the backup (v8's `reviewGradeStats`). Unlike a review schedule
+there is nothing to reconstruct it from, so a restore that dropped it would
+reset months of measurement to zero silently.
+
+**Step 2 — the projection.** The pure expectation-propagation function and the
+calendar layer, same shape as `buildReviewForecast`: all the risk in one
+testable function, a thin renderer over it.
+
+**Step 3 — surface the rates.** Show the measured per-rung success rates, which
+makes the projection's assumptions inspectable rather than magic — and is
+independently interesting: a 95% success rate at the 21-day rung says the
+ladder is too conservative there, 50% at 7 days says it is too aggressive.
+Same data could eventually tune the ladder itself.
+
+## A cheaper answer to the same question
+
+The ripple answers "what does the next month look like?". The actual question
+is "can I afford another room?", and there is a single number for that. Given
+per-rung success rates each room has an expected long-run review rate, and the
+sum across the repertoire is a **maintenance cost in moves/day at
+equilibrium** — a mature room at 180 days costs almost nothing, a room stuck
+at rung 0 costs a review every day. One line ("your repertoire costs ~34
+moves/day to maintain") may drive the memorize-or-not decision better than any
+calendar, and it falls out of the same machinery.

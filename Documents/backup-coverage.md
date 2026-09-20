@@ -31,6 +31,7 @@ has none.
 | Mnemonics + notes + disambiguator | `mnemonics`, `meta` | `mnemonics`, `mnemonicsNotes`, `moveDisambiguator` |
 | VR layout, memorized, decorated | `meta` | `threeLayout`, `memorizedRooms`, `decoratedRooms` |
 | **Spaced-repetition review history** | `meta` (`threeRoomReviews`) | `roomReviews` |
+| **Per-rung grade statistics** (v8) | `meta` (`threeReviewGradeStats`) | `reviewGradeStats` |
 | Memorized room-shape snapshots | `meta` | `memorizedShapes` |
 | Digraph node positions | `meta` | `graphLayout` |
 | **Perfect Opening settings** (v7) | `meta` | `perfectOpeningConfig` |
