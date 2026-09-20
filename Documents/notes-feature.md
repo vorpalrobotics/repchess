@@ -1,6 +1,6 @@
 # Notes — design and phasing plan
 
-**Status: Phases 1-3 built. Phases 4-5 designed.**
+**Status: Phases 1-4 built. Phase 5 designed.**
 
 ## What it is for
 
@@ -355,10 +355,12 @@ Three things it settled that the design had left open:
   `seq.slice(0,-1)` — the move table row's own key.
 - **`lineId` and `flip` are parameters, not globals.** The main world walks
   every line's castles at once, so a note opened from someone else's castle
-  must be written onto *that* line. `savePrefField` grew a lineId-explicit form
-  (`savePrefFieldOn`) for exactly this; the old spelling is a one-line wrapper
-  and no existing call site moved. Both parameters default to the move table's
-  open line, which is right for every non-VR caller.
+  must be read and written on *that* line. Both parameters default to the move
+  table's open line, which is right for every non-VR caller.
+
+  Phase 3 first did this with a lineId-explicit `savePrefField`, which was
+  **wrong** — see "PREFS is the open line only" below. Phase 4 replaced it with
+  `readNoteFor` / `writeNoteFor`.
 - **Overlay stacking is DOM order, not z-index.** Every `.overlay` in this app
   is `z-index:20`, so two overlays built lazily on `document.body` stack by
   whichever was *created* first — which is not the same as whichever was
@@ -374,17 +376,60 @@ table's own note** for that position; the pencil commits directly (no enclosing
 Save) and the modal repaints in place; a position with no note still opens and
 says so; and the orientation really is a parameter.
 
-## Phase 4 — the in-world pair icon
+## Phase 4 — the in-world pair icon ✅ BUILT
 
-Proximity and angle gating, per-frame corner placement, walk-click handling
-**ordered ahead of the door-trigger fallback**, and the note-exists glyph.
+A small drawn chessboard tile in the billboard's upper-right corner, shown
+within **2 m** and **30°**, repositioned every frame from the camera's right
+vector (the billboard is a camera-facing Sprite, so that corner is
+screen-relative — same math, same reason, as the editor's selection gear).
+Clicking it opens the Phase 3 modal. Hidden in edit mode, where the prop picker
+owns clicks and the icons would sit in front of the very sprites you were
+trying to select.
 
-Also the second threading job finding 4 describes: door billboards carry their
-DESTINATION room's canonical seq, so the anchor pair — which renders on the door
-rather than on a wall — can carry a note like any other.
+The click is hit-tested **before** anything else in `handleWalkClick`, and only
+visible icons are offered to the raycaster (three.js does not check `.visible`
+when intersecting, so a hidden icon would still be clickable through a wall).
+Test 428 proves the ordering non-vacuously: it first confirms the clicked
+icon's own world point is inside a door's trigger box, so the greedy fallback
+really would have teleported you from there.
 
-Tests drive the camera to known positions and assert icon visibility, the same
-way the gizmo tests already drive the editor.
+Finding 4's second threading job is done: a door billboard takes the
+**destination room's centre-pair seq** (`destRoomPairSeq`), and the
+destination's `lineId`, since a redirect door can cross into another opening
+system's castle entirely.
+
+### PREFS is the open line only
+
+The finding that cost the most here, and it invalidated a line of Phase 3's
+reasoning. `PREFS` holds **only the line the move table has open**.
+`withLinePrefs` swaps another line's in for the duration of one synchronous
+castle build and swaps it straight back, so outside that window
+`PREFS[prefKey(someOtherLine, seq)]` is simply *absent* — not empty, absent.
+
+The VR world walks every line at once. Reading a note through `PREFS` there
+would report "no note" for a note that exists, and **saving over that answer
+would destroy it**. `readNoteFor` / `writeNoteFor` route the open line through
+`PREFS` (so the move table sees an edit immediately) and every other line
+through IDB.
+
+### The note-exists glyph reads an index, every frame
+
+`VR_NOTE_INDEX`: `Map<lineId, Set<seqKey>>`, built when the walk opens (one
+indexed read per line) and patched by `savePrefField` on every note write. The
+icon re-asks on each frame, so a note written in the move table — or in the
+walk itself — changes the glyph with no room rebuild behind it.
+
+Baking `hasNote` into the pair at castle-build time was the cheaper option and
+is wrong: that cache survives a reload and is only invalidated by repertoire
+edits, so a note added from the table would never have appeared in the world.
+
+### Two shared materials, not one per icon
+
+`disposeSceneContents` keys "leave this alone" off the **material's** shared
+tag and disposes a material's textures along with it. A per-icon material with
+a shared texture would therefore have taken that texture down on the first room
+rebuild, and every icon after that would have drawn nothing. Two tagged
+materials, swapped by reference — the arrangement `gearMat` already uses.
 
 ## Phase 5 — the dead-end scroll
 

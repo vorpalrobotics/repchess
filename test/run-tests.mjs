@@ -24257,6 +24257,210 @@ try {
 } catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EN4: notes, phase 4 -- the in-world move-pair note icon
+//     (Documents/notes-feature.md). Proximity/facing gating, the note-exists
+//     glyph, and the click ordered AHEAD of walk mode's greedy door-trigger
+//     fallback, which is the single most likely bug in the whole feature. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN4 = await launchApp();
+try {
+  // the Phase EM fixture: two orders transposing into one room, with a linear
+  // tail past the convergence so it merges into a CORRIDOR and gets real wall
+  // pairs (a room's centre pair is not an in-room billboard -- it lives on the
+  // door leading in, which is the other half of what this phase covers).
+  await seedBackup(appEN4.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEN4.page.click('.line-row');
+  await appEN4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const convergedKey = await appEN4.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  await openVR(appEN4.page);
+  await appEN4.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
+  await appEN4.page.waitForTimeout(400);
+
+  const iconsNow = () => appEN4.page.evaluate(() => window.__threeTestEdit.pairIcons());
+  const iconNow = (slotId) => appEN4.page.evaluate(
+    (s) => window.__threeTestEdit.pairIcons().find(p => p.slotId === s) || null, slotId);
+  /* Stand `dz` metres south of a billboard, facing `yaw`. yaw 0 looks along
+     -z (see tick()'s own forward vector), so dz +1 / yaw 0 is "one metre away,
+     looking straight at it". setPlayerPos writes pos directly, which is what
+     we want -- no walking, no clamping, just the geometry under test. */
+  const standNear = async (pairPos, dx, dz, yaw) => {
+    await appEN4.page.evaluate(([x, z, y]) => window.__threeTestEdit.setPlayerPos(x, z, y),
+      [pairPos.x + dx, pairPos.z + dz, yaw]);
+    await appEN4.page.waitForTimeout(150);      // let at least one frame run
+  };
+
+  // 424. Every move-pair billboard in the room has an icon, and each one knows
+  //      which pref it stands for. The door billboards are the interesting
+  //      half: their own pair is edge-specific and carries no seq on purpose,
+  //      so they have to resolve through the DESTINATION room's centre pair
+  //      instead (notes-feature.md, finding 4).
+  try {
+    const icons = await iconsNow();
+    assert(icons.length, `expected the corridor's move pairs to carry note icons, got ${JSON.stringify(icons)}`);
+    assert(icons.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
+      `expected every icon to carry its pair's sequence, got ${JSON.stringify(icons.map(p => p.seq))}`);
+    assert(icons.every(p => p.lineId === 'L1'),
+      `expected every icon to carry its room's line, got ${JSON.stringify(icons.map(p => p.lineId))}`);
+
+    const doors = await appEN4.page.evaluate(() => window.__threeTestEdit.pairIcons()
+      .filter(p => p.doorBill)
+      .map(p => {
+        const target = p.slotId.replace(/^dbb-/, '');
+        const centre = window.__threeTestEdit.pairSeqs(target).find(x => x.side === 'center');
+        return { slotId: p.slotId, target, iconSeq: p.seq, centreSeq: centre ? centre.seq : null };
+      }));
+    assert(doors.length, 'test setup issue: expected at least one forward door with a pair billboard');
+    for(const d of doors){
+      assert(JSON.stringify(d.iconSeq) === JSON.stringify(d.centreSeq),
+        `expected the door icon to resolve to its DESTINATION room's canonical seq, got ${JSON.stringify(d)}`);
+    }
+    ok(`Notes: every move pair carries a note icon, doors keyed to the room beyond (${icons.length} icon(s), ${doors.length} door(s))`);
+  } catch(e){ bad('Notes: pair icons exist and carry the right key', e); }
+
+  // 425. It appears only when you are close AND looking at it. The 45-degree
+  //      case matters more than the 180-degree one: a gate that only rejected
+  //      "facing the other way" would light up every pair in the room at once.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    assert(wall, 'test setup issue: expected a wall (non-door) pair in the corridor');
+
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert((await iconNow(wall.slotId)).visible, 'expected the icon to show from 1m, looking straight at it');
+
+    await standNear(wall.pairPos, 0, 5, 0);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2m range');
+
+    await standNear(wall.pairPos, 0, 1, Math.PI);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden when facing away from it');
+
+    // 1m south and 1m east of the pair, still looking down -z: 45 degrees off,
+    // so outside the 30-degree cone even though it is well within range
+    await standNear(wall.pairPos, 1, 1, 0);
+    assert(!(await iconNow(wall.slotId)).visible,
+      'expected the icon hidden at 45 degrees off the look direction, inside the 30-degree gate');
+    ok('Notes: the pair icon is gated on both proximity and facing');
+  } catch(e){ bad('Notes: pair icon proximity/facing gate', e); }
+
+  // 426. A distinct glyph when a note exists, and it follows a note written
+  //      elsewhere with no room rebuild -- which is the whole reason the icon
+  //      re-asks every frame instead of baking the answer into the world.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected no note glyph before a note exists');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'Watch the c4 pawn.'),
+      wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert((await iconNow(wall.slotId)).hasNote,
+      'expected the icon to pick up a note written through the move table, without a rebuild');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, ''), wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected the glyph to go away again when the note is cleared');
+    ok('Notes: the icon shows a distinct glyph when a note exists, live');
+  } catch(e){ bad('Notes: note-exists glyph', e); }
+
+  // 427. Clicking it opens the position/notes modal -- a REAL click at the
+  //      icon's own screen point, so this exercises handleWalkClick's raycast
+  //      rather than calling the callback directly.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+    assert(pt, 'expected a visible icon to report a screen point');
+    const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
+
+    await appEN4.page.mouse.click(pt.x, pt.y);
+    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const opened = await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(opened && /to move/.test(opened), `expected the position modal to open on that pair, got ${JSON.stringify(opened)}`);
+    assert((await appEN4.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
+      'expected clicking the icon not to move the player');
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: clicking a pair icon opens the position modal');
+  } catch(e){ bad('Notes: pair icon click', e); }
+
+  // 428. ...and it wins against the door-trigger fallback. That fallback is
+  //      deliberately greedy -- any click whose world point lands in a door's
+  //      trigger box teleports you, with no facing requirement -- and a door
+  //      billboard's icon hangs right beside the doorway it belongs to. Proven
+  //      non-vacuously: the icon's own point is first confirmed to be inside a
+  //      trigger box, so the fallback really would have fired from there.
+  try {
+    let found = null;
+    for(const d of (await iconsNow()).filter(p => p.doorBill)){
+      await standNear(d.pairPos, 0, 1, 0);
+      const live = await iconNow(d.slotId);
+      if(!live || !live.visible) continue;
+      const trigger = await appEN4.page.evaluate(
+        (p) => window.__threeTestEdit.doorTriggerAt(p.x, p.z), live.iconPos);
+      if(trigger){ found = { ...live, trigger }; break; }
+    }
+    if(!found){
+      ok('Notes: no door icon in this fixture lands inside a door trigger box (skipped)');
+    } else {
+      const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), found.slotId);
+      const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
+      await appEN4.page.mouse.click(pt.x, pt.y);
+      await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+      const roomAfter = await appEN4.page.evaluate(() => window.__threeTestState.room);
+      assert(roomAfter === roomBefore,
+        `expected the icon to win over the door fallback, but the click teleported to ${roomAfter} (trigger: ${found.trigger})`);
+      await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+      ok('Notes: a pair icon inside a door trigger box opens its note instead of walking you through the door');
+    }
+  } catch(e){ bad('Notes: pair icon beats the door-trigger fallback', e); }
+
+  // 429. Edit mode owns clicks on props, and the icons sit in front of the
+  //      very sprites you would be trying to select -- so they stay out of it
+  //      entirely rather than competing with the prop picker.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert((await iconNow(wall.slotId)).visible, 'test setup issue: expected the icon visible before entering edit mode');
+
+    await appEN4.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appEN4.page.waitForTimeout(200);
+    const inEdit = await iconsNow();
+    assert(inEdit.length && inEdit.every(p => !p.visible),
+      `expected every pair icon hidden in edit mode, got ${JSON.stringify(inEdit.map(p => p.visible))}`);
+
+    await appEN4.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appEN4.page.waitForTimeout(200);
+    assert((await iconNow(wall.slotId)).visible, 'expected the icon back on leaving edit mode');
+    ok('Notes: pair icons stay out of edit mode');
+  } catch(e){ bad('Notes: pair icons in edit mode', e); }
+} finally {
+  await appEN4.close();
+}
+} catch(e){ bad('Phase EN4: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower

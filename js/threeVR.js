@@ -589,6 +589,13 @@ function registerOneCastle(castle, instanceId, opts = {}){
       : null;
     ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack, deadTracks,
+      /* which opening line this castle belongs to. Needed only by the note
+         affordances (Documents/notes-feature.md): a note is a pref, prefs are
+         keyed by line, and this world walks every line's castles at once -- so
+         a pair's note cannot be resolved from "whichever line is open". The VR
+         does nothing with it but hand it back out through threeOpts.hasNote /
+         threeOpts.onPairNote. */
+      lineId: opts.lineId || '',
       // the node's "Room Name" attribute (r.name), the same value edited in the
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
@@ -3212,7 +3219,11 @@ function buildSlots(room, roomKey, slots){
     // and object-list indexing are unchanged.)
     if((slot.kind === 'mnemonic' || slot.kind === 'moveObject') && slot.side === 'center' && !room.entryNoStreet) continue;
     if(slot.kind === 'mnemonic'){
-      if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
+      if(hintsOn){                                // hidden during self-test
+        const bb = placeMnemonicSlot(roomKey, slot);
+        scene.add(bb);
+        registerPairIcon(bb, (ROOMS[roomKey] || {}).lineId);
+      }
       continue;
     }
     if(slot.kind === 'moveObject'){
@@ -4152,6 +4163,172 @@ function placeMnemonicSlot(roomKey, slot){
   return sprite;
 }
 
+/* ---------- the move-pair note icon (Documents/notes-feature.md) ----------
+
+   A small chessboard tile that appears in the upper-right corner of a move-pair
+   billboard when you are close to it and looking at it; clicking it opens the
+   position/notes modal for that pair. A distinct glyph when a note already
+   exists -- without one you would have to click every pair to find out which
+   ones have anything to read, and notes that cannot be found do not get read.
+
+   Three things about the billboards force the shape of this:
+
+   1. They are camera-facing Sprites, so "the upper-right corner of the
+      rectangle" is SCREEN-relative, not world-relative -- the icon's position
+      has to be recomputed every frame from the camera's right vector. It
+      cannot be a static child of the sprite. Same trick, same reason, as the
+      editor's selection gear just above tick()'s own corner math.
+   2. They only exist when hints are on. Self-test mode hides them, and an icon
+      anchored to a hidden billboard would be labelling nothing.
+   3. Edit mode owns clicks on props, so the icons stay out of it entirely --
+      they would otherwise sit in front of the very sprite you are trying to
+      select. */
+const PAIR_ICON_RANGE = 2.0;                    // metres: show within this distance...
+const PAIR_ICON_COS = Math.cos(30 * Math.PI/180);   // ...and within 30 degrees of the look direction
+const PAIR_ICON_SIZE = 0.26;                    // world size of the tile
+const PAIR_ICON_MARGIN = 0.1;                   // gap between the billboard's corner and the tile
+// [{ sprite, icon, seq, lineId, hasNote }] for the CURRENT room; rebuilt by
+// buildRoom like `billboards`, and walked once per frame by updatePairIcons
+let pairIcons = [];
+let pairIconTex = { plain: null, note: null };
+
+/* The tile: a rounded dark chip with a small board on it, plus -- when this
+   position has a note -- a gold dog-eared page over the lower-right corner and
+   a gold rim. Drawn rather than loaded so it needs no asset and no network;
+   the whole file's other in-world glyphs (the gear, the EXIT sign) are drawn
+   the same way. */
+function pairIconTexture(hasNote){
+  const which = hasNote ? 'note' : 'plain';
+  if(pairIconTex[which]) return pairIconTex[which];
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(20,20,20,0.88)';
+  ctx.beginPath(); ctx.roundRect(1, 1, 62, 62, 10); ctx.fill();
+  ctx.strokeStyle = hasNote ? '#ffd400' : 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = hasNote ? 4 : 2;
+  ctx.beginPath(); ctx.roundRect(2, 2, 60, 60, 9); ctx.stroke();
+  // 4x4 board rather than 8x8: at ~0.26m across, 8 files render as mush
+  const pad = 13, cell = (64 - pad*2) / 4;
+  for(let r = 0; r < 4; r++) for(let f = 0; f < 4; f++){
+    ctx.fillStyle = (r + f) % 2 === 0 ? '#e8ddc7' : '#9a7b53';
+    ctx.fillRect(pad + f*cell, pad + r*cell, cell, cell);
+  }
+  if(hasNote){
+    // a small scroll/page with a folded corner, sitting over the board's
+    // bottom-right -- the same "there is something written here" glyph the
+    // move table's row uses, at 20 pixels
+    ctx.fillStyle = '#fffbe6';
+    ctx.beginPath();
+    ctx.moveTo(34, 36); ctx.lineTo(54, 36); ctx.lineTo(54, 50); ctx.lineTo(48, 56); ctx.lineTo(34, 56);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#8a6d1a'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(54, 50); ctx.lineTo(48, 50); ctx.lineTo(48, 56); ctx.stroke();
+    ctx.strokeStyle = '#8a6d1a'; ctx.lineWidth = 1.5;
+    for(let i = 0; i < 2; i++){
+      ctx.beginPath(); ctx.moveTo(38, 42 + i*5); ctx.lineTo(50, 42 + i*5); ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  pairIconTex[which] = tex;
+  return tex;
+}
+/* Two SHARED materials, one per glyph, swapped by reference when a note
+   appears or goes away -- rather than one material per icon with its `map`
+   reassigned. disposeSceneContents keys "leave this alone" off the MATERIAL's
+   shared tag, disposing a material's textures with it, so a per-icon material
+   would take the shared texture down with it on the first room rebuild and
+   every icon after that would draw nothing. Same arrangement, same reason, as
+   gearMat.
+
+   depthTest:false so the tile is never swallowed by the billboard it sits
+   beside (they are near-coplanar from most angles), with renderOrder to match
+   -- the selection outline needs both for the same reason. */
+const pairIconMats = { plain: null, note: null };
+function pairIconMat(hasNote){
+  const which = hasNote ? 'note' : 'plain';
+  if(!pairIconMats[which]){
+    pairIconMats[which] = tagShared(new THREE.SpriteMaterial({
+      map: pairIconTexture(hasNote), transparent: true, depthTest: false }));
+  }
+  return pairIconMats[which];
+}
+function buildPairIconSprite(hasNote){
+  const s = new THREE.Sprite(pairIconMat(hasNote));
+  s.scale.set(PAIR_ICON_SIZE, PAIR_ICON_SIZE, 1);
+  s.renderOrder = 998;
+  s.visible = false;      // updatePairIcons decides, from the first frame on
+  return s;
+}
+
+/* Gives one move-pair billboard its note icon. `lineId` is the line that owns
+   the pref -- for a door billboard that is the DESTINATION room's line, not
+   the room the door is drawn in, since a redirect door can cross lines. */
+function registerPairIcon(sprite, lineId){
+  const seq = sprite.userData.pairSeq;
+  // no seq, no pref: the hard-coded demo room's pairs belong to no line, and a
+  // door whose destination has no centre pair has nothing to resolve
+  if(!seq || seq.length < 2 || !lineId) return;
+  const icon = buildPairIconSprite(false);
+  icon.userData = { kind: 'pair-icon', seq, lineId };
+  scene.add(icon);
+  pairIcons.push({ sprite, icon, seq, lineId, hasNote: false });
+}
+
+/* The destination room's OWN canonical seq, for a billboard hanging on the door
+   that leads into it.
+
+   The door's own pair (ex.pair, from app.js's pairFromSeq) deliberately carries
+   no seq: it is edge-specific, so two transposition doors into one room would
+   resolve to two prefs for a position that has one note. The room's centre pair
+   is the canonical one -- and it is exactly the pair that no longer renders
+   in-room, because it moved out here onto the door. */
+function destRoomPairSeq(target){
+  const pairs = DEMO_MNEMONICS[target] && DEMO_MNEMONICS[target].pairs;
+  const centre = pairs && pairs.find(p => p.side === 'center');
+  return (centre && centre.seq) || null;
+}
+
+/* Per frame: which icons are showing, and where. A room holds at most a handful
+   of pairs, so this is a distance check, a dot product and a Set lookup per
+   pair -- negligible beside what the rest of tick() already does. */
+function updatePairIcons(){
+  if(!pairIcons.length) return;
+  const fwd = cameraForwardVec();
+  const right = cameraRightVec();
+  for(const p of pairIcons){
+    const sp = p.sprite;
+    if(editMode || !sp.parent){ p.icon.visible = false; continue; }
+    const dx = sp.position.x - camera.position.x;
+    const dy = sp.position.y - camera.position.y;
+    const dz = sp.position.z - camera.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if(dist > PAIR_ICON_RANGE || dist < 1e-4){ p.icon.visible = false; continue; }
+    // the facing test is on the GROUND plane, matching how the player actually
+    // turns (yaw only; pitch is eased and near zero in walk mode) -- a 3D angle
+    // would hide the icon for a tall billboard you are standing right under
+    const flat = Math.hypot(dx, dz) || 1e-4;
+    if((dx/flat) * fwd.x + (dz/flat) * fwd.z < PAIR_ICON_COS){ p.icon.visible = false; continue; }
+    p.icon.visible = true;
+    const halfW = sp.scale.x/2, halfH = sp.scale.y/2;
+    p.icon.position.set(
+      sp.position.x + right.x * (halfW + PAIR_ICON_MARGIN),
+      sp.position.y + halfH + PAIR_ICON_MARGIN,
+      sp.position.z + right.z * (halfW + PAIR_ICON_MARGIN)
+    );
+    /* Re-asked every frame rather than baked in at build time: a note written
+       in the move table, or in this very walk, changes the answer with no room
+       rebuild behind it. It is a Set lookup in app.js (see buildVrNoteIndex),
+       and the texture only changes when the answer does. */
+    const has = !!(threeOpts.hasNote && threeOpts.hasNote(p.lineId, p.seq.slice(0, -1)));
+    if(has !== p.hasNote){
+      p.hasNote = has;
+      p.icon.material = pairIconMat(has);
+    }
+  }
+}
+
 function makeLabelMesh(text){
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 256;
@@ -4660,8 +4837,15 @@ function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallba
     bb.userData.doorBill = true;
     bb.userData.roomKey = roomKey;
     bb.userData.base = { x, y: MNEM_EYE_Y, z };
+    /* The note this door billboard carries belongs to the room BEYOND it, not
+       to the edge (Documents/notes-feature.md, finding 4): that room's own
+       centre pair is what moved out here, and its seq is the canonical one.
+       The line is the destination's too -- a redirect door can lead into
+       another opening system's castle entirely. */
+    bb.userData.pairSeq = destRoomPairSeq(target);
     bb.position.set(x + (xf.dx || 0), MNEM_EYE_Y + (xf.dy || 0), z + (xf.dz || 0));
     group.add(bb);
+    registerPairIcon(bb, (ROOMS[target] || {}).lineId);
   }
   const doorId = 'dobj-' + target;                        // per-door transform key in this room
   // empty slot: a clickable stand-in that assigns the shared image (on the target)
@@ -6344,6 +6528,7 @@ function buildRoom(roomKey){
   scene.clear();
   billboards = [];
   floorLabels = [];
+  pairIcons = [];
   doorSignLog = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
@@ -7046,6 +7231,10 @@ function tick(){
     );
   }
 
+  // move-pair note icons: same screen-relative corner math as the gear above,
+  // but per pair and gated on proximity/facing (see updatePairIcons)
+  updatePairIcons();
+
   // Doors (and elevators) teleport in edit mode too -- staying blocked there
   // just confused users with no way to reach the next room short of exiting
   // edit mode first. Standing in a doorway to edit the wall beside it is
@@ -7688,6 +7877,30 @@ function handleWalkClick(e){
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+
+  /* Move-pair note icons FIRST, before anything else in this handler.
+
+     The door-trigger fallback at the bottom is deliberately greedy: ANY click
+     whose world point lands inside a door's trigger box teleports you, with no
+     facing requirement. A door billboard's icon hangs right beside the doorway
+     it belongs to, squarely inside that box -- so ordered the other way round,
+     clicking the icon would walk you through the door instead, and the icon
+     would look broken exactly where it is most useful. This ordering is the
+     feature, not a micro-optimisation.
+
+     Only VISIBLE icons are offered to the raycaster: three.js does not check
+     `.visible` when intersecting, so an icon hidden by distance or facing
+     would still be clickable through a wall. */
+  const liveIcons = pairIcons.filter(p => p.icon.visible).map(p => p.icon);
+  if(liveIcons.length){
+    const iconHit = raycaster.intersectObjects(liveIcons, false)[0];
+    if(iconHit){
+      const ud = iconHit.object.userData;
+      if(threeOpts.onPairNote) threeOpts.onPairNote(ud.lineId, ud.seq);
+      return;
+    }
+  }
+
   const hits = raycaster.intersectObjects(scene.children, true);
   const hit = hits[0];
   if(!hit) return;
@@ -9381,7 +9594,7 @@ export async function openThreeTest(containerEl, opts){
   clearGeneratedCastle();
   const streetCastles = [];
   for(const c of (threeOpts.castles || [])){
-    const reg = registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { backToStreet: true });
+    const reg = registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { backToStreet: true, lineId: c.lineId });
     if(reg) streetCastles.push({ ...c, entryKey: reg.entryKey });
   }
   generateMainStreet(OPENING_SYSTEMS, streetCastles);   // Main Street + one side street per opening system
@@ -9470,12 +9683,12 @@ export async function openThreeTest(containerEl, opts){
   // No street/back-door wiring (they're not on a street in preview mode);
   // Close remains the way out once you've walked into one.
   for(const c of (threeOpts.linkedCastles || [])){
-    registerOneCastle({ genRooms: c.genRooms }, c.instanceId, {});
+    registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { lineId: threeOpts.castleLineId || '' });
   }
   // a single generated castle (the report's Walk in VR): register its rooms and
   // spawn straight into the entry; otherwise start on Main Street as usual.
   const cas = threeOpts.castle
-    ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, {})
+    ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, { lineId: threeOpts.castleLineId || '' })
     : null;
   // an explicit start room (e.g. "Jump to VR" from the digraph) wins over both
   // -- it lands the freshly-opened world directly on the target room instead
@@ -10012,6 +10225,45 @@ export async function openThreeTest(containerEl, opts){
         const o = findAccessoryObject(slotId);
         return o ? (o.userData.pairSeq || null) : null;
       },
+      /* the move-pair note icons in the current room, as updatePairIcons has
+         most recently left them -- one entry per pair that HAS a note key
+         (a demo-room pair or an unresolvable door carries none and gets no
+         icon at all, which is itself worth being able to assert). */
+      pairIcons: () => pairIcons.map(p => ({
+        slotId: p.sprite.userData.slotId,
+        doorBill: !!p.sprite.userData.doorBill,
+        visible: p.icon.visible,
+        hasNote: p.hasNote,
+        seq: p.seq.slice(),
+        lineId: p.lineId,
+        // the billboard's own spot (where to stand to see the icon) and the
+        // icon's current one (what a click would land on)
+        pairPos: { x: p.sprite.position.x, y: p.sprite.position.y, z: p.sprite.position.z },
+        iconPos: { x: p.icon.position.x, y: p.icon.position.y, z: p.icon.position.z },
+      })),
+      /* which door, if any, a world point falls inside the trigger box of --
+         the exact question handleWalkClick's greedy fallback asks. A test uses
+         it to prove the icon-click test is not vacuous: the fallback really
+         WOULD have teleported you from that point, so the icon winning is the
+         ordering doing its job rather than the two never competing. */
+      doorTriggerAt: (x, z) => {
+        const m = findDoorTrigger(x, z, null);
+        return m ? (m.target || null) : null;
+      },
+      /* where an icon currently sits on screen, so a test can dispatch a REAL
+         click at that point and exercise handleWalkClick's own raycast and its
+         ordering against the door fallback -- rather than bypassing both with
+         a hook that calls onPairNote directly. Mirrors gizmoArrowScreenPoint. */
+      pairIconScreenPoint: (slotId) => {
+        const p = pairIcons.find(p => p.sprite.userData.slotId === slotId);
+        if(!p || !p.icon.visible || !renderer) return null;
+        const v = p.icon.position.clone().project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+      },
+      // which line a room belongs to -- the value the note affordances hand
+      // back out through onPairNote, threaded in at registerOneCastle
+      roomLineId: (roomKey) => (ROOMS[roomKey || currentRoomKey] || {}).lineId ?? null,
       // a room's move count as the VR side sees it -- so the grade-log test
       // can check the value that was threaded through rather than hard-coding
       // a number the castle generator owns
@@ -10280,6 +10532,7 @@ export function closeThreeTest(){
   editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   billboards = [];
   floorLabels = [];
+  pairIcons = [];
   selectedProp = null;
   selectionOutline = null;
   selectionGear = null;

@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-301';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-302';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-426';
+const BUILD_TAG = '-427';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3853,13 +3853,20 @@ $('castleWalkBtn').onclick = async () => {
     { lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms },
     ...linkedCastles.map(c => ({ lineId: CURRENT_LINE?.id, instanceId: c.instanceId, genRooms: c.genRooms }))
   ]);
+  VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+  await buildVrNoteIndex(lines);
   enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
+    // every castle in this preview belongs to the open line (its own, plus any
+    // it redirects into -- gatherLinkedCastles resolves those under CURRENT_LINE)
+    castleLineId: CURRENT_LINE?.id,
     castleInstanceId: instanceId,
     linkedCastles,
     piecesFile: PIECES_FILE,
+    hasNote: vrHasNote,
+    onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -4057,7 +4064,8 @@ async function renderPositionNoteBody(){
   const token = positionNoteToken;
   const el = $('positionNoteView');
   if(!el) return;
-  const md = PREFS[prefKey(st.lineId, st.seq.slice(0, -1))]?.note || '';
+  const md = await readNoteFor(st.lineId, st.seq.slice(0, -1));
+  if(token !== positionNoteToken) return;   // closed or moved on while IDB answered
   el.classList.toggle('is-empty', !md);
   if(!md){ el.textContent = 'No note yet.'; return; }
   await renderNoteInto(el, md);
@@ -4075,10 +4083,10 @@ async function editPositionNote(){
   const st = positionNoteState;
   if(!st) return;
   const key = st.seq.slice(0, -1);
-  const current = PREFS[prefKey(st.lineId, key)]?.note || '';
+  const current = await readNoteFor(st.lineId, key);
   const next = await openNoteEditor(current, { title: 'Note' });
   if(next === null) return;
-  await savePrefFieldOn(st.lineId, key, 'note', next.trim());
+  await writeNoteFor(st.lineId, key, next.trim());
   renderPositionNoteBody();
 }
 
@@ -4091,7 +4099,7 @@ function closePositionNote(){
 }
 
 /* seq: the pair's room seq (ends in our reply). opts.lineId / opts.flip default
-   to the move table's open line -- Phase 4 passes the walked room's own line,
+   to the move table's open line; the VR passes the walked room's own line,
    since the main world spans all of them. */
 function openPositionNote(seq, opts = {}){
   if(!seq || seq.length < 2) return;
@@ -4100,7 +4108,9 @@ function openPositionNote(seq, opts = {}){
   positionNoteState = {
     seq: seq.slice(),
     lineId,
-    flip: opts.flip !== undefined ? opts.flip : CURRENT_LINE?.color === 'black',
+    flip: opts.flip !== undefined ? opts.flip
+        : lineId === CURRENT_LINE?.id ? CURRENT_LINE.color === 'black'
+        : vrFlipFor(lineId),
   };
   positionNoteToken++;
 
@@ -9489,6 +9499,12 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     systems = await systemsForWalk(lines);
     if(forceRebuild) invalidateBuiltCastlesCache();
     castles = await gatherBuiltCastles(lines);
+    // which line each castle belongs to, and which positions have a note --
+    // both spanning every line, since this world walks all of them at once.
+    // Inside the spinner because the note index is one indexed IDB read per
+    // line (see buildVrNoteIndex).
+    VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+    await buildVrNoteIndex(lines);
   } finally {
     hideSpinner(spinner);
   }
@@ -9499,6 +9515,8 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     castles,
     piecesFile: PIECES_FILE,
     startRoomKey,
+    hasNote: vrHasNote,
+    onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -12196,21 +12214,83 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
   refreshEvalSpan(evalSpan, evalObj, (evalLines || currentSaved()?.evalLines)?.length);
 }
 
-/* The lineId-explicit form. Almost everything in this file edits whichever
-   line the move table has open, and savePrefField below keeps that spelling --
-   but the VR world walks EVERY line's castles at once, so a note opened from a
-   pair standing in some other line's castle must be written onto THAT line
-   rather than onto whichever one CURRENT_LINE happens to point at. PREFS is
-   already keyed by lineId and already spans lines (buildGeneratedCastle reads
-   it that way), so this is a parameter, not a new store. */
-function savePrefFieldOn(lineId,seq,field,value){
-  const key = prefKey(lineId,seq);
-  (PREFS[key] ??= {key,lineId,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
-  return setPref(lineId,seq,{[field]:value});
-}
 function savePrefField(seq,field,value){
-  return savePrefFieldOn(CURRENT_LINE.id,seq,field,value);
+  const key = prefKey(CURRENT_LINE.id,seq);
+  (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+  // every open-line note write funnels through here -- the three-dot Notes…
+  // item, the Attributes modal's Save, and the position modal's pencil -- so
+  // it is the one place the VR's note-exists index has to be kept current
+  if(field === 'note') vrNoteIndexSet(CURRENT_LINE.id, seq, !!(value && value.trim()));
+  return setPref(CURRENT_LINE.id,seq,{[field]:value});
 }
+
+/* ---------- reading/writing ONE note on a line that may not be the open one
+   (Documents/notes-feature.md) ----------
+
+   PREFS holds only the OPEN line's prefs. withLinePrefs swaps another line's
+   in for the duration of one synchronous castle build and swaps it straight
+   back out, so outside that window `PREFS[prefKey(someOtherLine, seq)]` is
+   simply absent -- not empty, absent. The VR world walks every line's castles
+   at once, so a note opened from a pair standing in another line's castle
+   cannot go through PREFS: the read would report "no note" for a note that
+   exists, and saving over that answer would destroy it. IDB is the only
+   correct source there.
+
+   The open line still goes through PREFS so an edit made here is visible to
+   the move table immediately rather than after a reload -- savePrefField
+   keeps both in step, which is the whole reason it exists. */
+async function readNoteFor(lineId, seq){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return PREFS[prefKey(lineId, seq)]?.note || '';
+  return (await getPref(lineId, seq))?.note || '';
+}
+function writeNoteFor(lineId, seq, md){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return savePrefField(seq, 'note', md);
+  vrNoteIndexSet(lineId, seq, !!(md && md.trim()));
+  return setPref(lineId, seq, { note: md });
+}
+
+/* ---------- which positions have a note, per line ----------
+   The in-world glyph asks this for every visible move pair on every frame, so
+   it has to be a synchronous Set lookup -- an IDB read per pair per frame is
+   not a thing that can exist. Built when the walk opens (one indexed read per
+   line) and patched in place on every note write, so the glyph follows a save
+   immediately instead of waiting for the next world rebuild.
+
+   Reading it every frame rather than baking `hasNote` into the castle cache is
+   deliberate: that cache survives a reload and is only invalidated by
+   repertoire edits, so a note added from the move table would not have shown
+   up in the world at all. */
+let VR_NOTE_INDEX = null;                       // Map<lineId, Set<seqKey>>
+const noteIndexKey = seq => (seq || []).join('\x1f');
+async function buildVrNoteIndex(lines){
+  const idx = new Map();
+  for(const l of lines){
+    const prefs = (CURRENT_LINE && l.id === CURRENT_LINE.id) ? PREFS : await getAllPrefs(l.id);
+    const set = new Set();
+    for(const k in prefs){
+      const p = prefs[k];
+      if(p && typeof p.note === 'string' && p.note.trim()) set.add(noteIndexKey(p.seq));
+    }
+    idx.set(l.id, set);
+  }
+  VR_NOTE_INDEX = idx;
+  return idx;
+}
+function vrHasNote(lineId, seq){
+  const set = VR_NOTE_INDEX && VR_NOTE_INDEX.get(lineId);
+  return !!set && set.has(noteIndexKey(seq));
+}
+function vrNoteIndexSet(lineId, seq, has){
+  if(!VR_NOTE_INDEX) return;                    // no walk has been opened yet
+  let set = VR_NOTE_INDEX.get(lineId);
+  if(!set){ set = new Set(); VR_NOTE_INDEX.set(lineId, set); }
+  if(has) set.add(noteIndexKey(seq)); else set.delete(noteIndexKey(seq));
+}
+/* lineId -> 'white'|'black', captured when the walk opens. The board's
+   orientation is app.js's decision, not the VR's -- threeVR hands out a room's
+   lineId and a pair's seq and knows nothing about which way a board faces. */
+let VR_LINE_COLORS = null;
+const vrFlipFor = lineId => (VR_LINE_COLORS && VR_LINE_COLORS.get(lineId)) === 'black';
 
 /* manually-recorded opponent replies for the position `seq`, kept alongside
    that position's own prefs so a theoretical try can be added before any
