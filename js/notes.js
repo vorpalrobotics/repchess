@@ -105,14 +105,18 @@ const TOAST_COMMON = { usageStatistics: false, customHTMLRenderer: MD_RENDERER }
    own sanitizer. The fallback uses textContent rather than innerHTML for the
    same reason: a note is local data, but a restored backup is not necessarily
    a file this browser wrote. */
+let lastRenderError = null;
 export async function renderNoteInto(el, md){
   if(!el) return null;
   const text = md || '';
   try {
     const T = await ensureViewer();
     el.innerHTML = '';
-    return T.factory({ el, viewer: true, initialValue: text, ...TOAST_COMMON });
+    const v = T.factory({ el, viewer: true, initialValue: text, ...TOAST_COMMON });
+    lastRenderError = null;
+    return v;
   } catch(err){
+    lastRenderError = err;
     console.warn('[notes] Markdown viewer unavailable — showing the note as plain text', err);
     el.textContent = text;
     return null;
@@ -260,6 +264,11 @@ if(typeof localStorage !== 'undefined' && localStorage.getItem('threeTestDebug')
     setValue: (md) => { if(liveSetValue) liveSetValue(md); return !!liveSetValue; },
     // what the open editor currently holds -- for asserting that reopening on
     // an existing note really loads it rather than starting blank
+    // the editing surface is mounted and writable. The first open of a session
+    // downloads ~940KB, so the bar appears well before the editor does; a test
+    // that setValue()s on the bar's arrival writes into nothing.
+    isReady: () => !!liveSetValue,
+    lastRenderError: () => (lastRenderError && (lastRenderError.message || String(lastRenderError))) || null,
     getValue: () => {
       if(liveEditor) return liveEditor.getMarkdown();
       const ta = document.getElementById('noteFallbackInput');

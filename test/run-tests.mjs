@@ -13867,6 +13867,7 @@ try {
     await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
     await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
     await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appBV.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
     await appBV.page.evaluate(() => window.__notesEditorTestHooks.setValue('watch the e6 setup'));
     await appBV.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
@@ -13887,6 +13888,7 @@ try {
   try {
     await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note-glyph`).click(), rowSel);
     await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appBV.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
     const loaded = await appBV.page.evaluate(() => window.__notesEditorTestHooks.getValue());
     assert(/watch the e6 setup/.test(loaded || ''),
       `expected the editor to open on the saved note, got ${JSON.stringify(loaded)}`);
@@ -23709,6 +23711,9 @@ try {
     await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
     await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
     await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    // ...and for the editor itself. The bar renders synchronously; the first
+    // open of a session is still downloading ~940KB behind it.
+    await appEN2.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
   };
   const noteNow = () => appEN2.page.evaluate(() =>
     window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
@@ -23788,8 +23793,10 @@ try {
     await appEN2.page.waitForFunction(
       () => /second line/.test(document.getElementById('attrNotePreview').innerHTML), { timeout: 10000 });
     const html = await appEN2.page.evaluate(() => document.getElementById('attrNotePreview').innerHTML);
+    const renderErr = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.lastRenderError());
     assert(/<br\s*\/?>/i.test(html),
-      `expected a single newline to render as a line break, got ${JSON.stringify(html)}`);
+      `expected a single newline to render as a line break, got ${JSON.stringify(html)}` +
+      (renderErr ? ` (the viewer fell back: ${renderErr})` : ''));
     ok('Notes: a single newline renders as a line break, so old plain-text notes keep their shape');
   } catch(e){ bad('Notes: GFM line breaks', e); }
 
@@ -23802,6 +23809,7 @@ try {
     // the modal is still open from 416
     await appEN2.page.evaluate(() => document.getElementById('attrNoteEditBtn').click());
     await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN2.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
     await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('staged, not committed'));
     await appEN2.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });

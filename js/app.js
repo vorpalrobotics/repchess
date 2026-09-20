@@ -4029,7 +4029,7 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   $('attrCastleName').value = saved?.castleName || '';
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
-  setAttrNote(saved?.note || '');
+  attrNoteStaged = saved?.note || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -4037,6 +4037,9 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attributesModalSave = onSave;
   mountAttributesBar();
   $('attributesOverlay').style.display='flex';
+  // AFTER the overlay is shown: the Markdown viewer measures its host element,
+  // and rendering into a display:none subtree is a question not worth asking
+  setAttrNote(attrNoteStaged);
 }
 
 /* The Attributes modal's own button bar (Documents/modal-buttons.md).
