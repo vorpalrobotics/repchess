@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-297';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-298';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-64';
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-418';
+const BUILD_TAG = '-419';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7144,6 +7144,10 @@ async function buildBackupData(){
        from anything else -- a restore that dropped it would silently reset
        the measurement to zero and nothing on screen would say so. */
     reviewGradeStats: await getMeta(REVIEW_GRADE_STATS_KEY),
+    /* ...and the per-review event log behind them (rung, room size, actual
+       elapsed days, grade). The tally is derivable from this and not the
+       reverse, so of the two it is the one that must survive a restore. */
+    reviewGradeLog: await getMeta(REVIEW_GRADE_LOG_KEY),
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     /* Perfect Opening's SETTINGS -- the per-move max-lines and depth
@@ -7306,6 +7310,7 @@ async function applyBackupData(data, onMnemProgress){
     // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.reviewGradeStats === 'string') await setMeta(REVIEW_GRADE_STATS_KEY, data.reviewGradeStats);
+    if(typeof data.reviewGradeLog === 'string') await setMeta(REVIEW_GRADE_LOG_KEY, data.reviewGradeLog);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     // v7 fields. Absent in any older backup, and guarded like every field
@@ -13404,6 +13409,12 @@ if(localStorage.getItem('threeTestDebug')){
     getGradeStats: () => getReviewGradeStats(),
     setGradeStats: (stats) => setReviewGradeStats(stats),
     rawGradeStatsMeta: () => getMeta(REVIEW_GRADE_STATS_KEY),
+    // ...and the event log beside them: the pure append (replacement + cap)
+    // separately from the store, same split as the tally above
+    appendGradeEvent: (log, event, replacePrev) => appendGradeEvent(log, event, replacePrev),
+    gradeLogCap: () => REVIEW_GRADE_LOG_CAP,
+    getGradeLog: () => getReviewGradeLog(),
+    setGradeLog: (log) => setReviewGradeLog(log),
   };
 }
 

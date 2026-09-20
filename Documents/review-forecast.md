@@ -420,13 +420,39 @@ next to the number.
 
 ## Steps
 
-**Step 1 — collect the statistics. BUILT.** `db.js`'s
-`REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}` tally
-folded by `tallyReviewGrade` and written by `recordReviewGrade`. No UI reads
-it yet, deliberately: the data is worthless until it has been accumulating,
-so shipping collection first means the projection arrives with real numbers
-instead of pure prior. Every day it is not shipped is a day of data that
-cannot be recovered.
+**Step 1 — collect the statistics. BUILT.** Two stores, deliberately:
+
+- `REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}`
+  tally folded by `tallyReviewGrade`. Lifetime totals, never forgets.
+- `REVIEW_GRADE_LOG_KEY` (`threeReviewGradeLog`), one `{t, r, n, d, g}` row
+  per graded review, capped at 20k (~1MB, roughly a decade). Both are written
+  by `recordReviewGrade` under one serialized queue.
+
+No UI reads either yet, deliberately: the data is worthless until it has been
+accumulating, so shipping collection first means the projection arrives with
+real numbers instead of pure prior. Every day it is not shipped is a day of
+data that cannot be recovered.
+
+**The log exists because the tally has two blind spots, and both are
+unrecoverable after the fact** -- the first version of this shipped with only
+the tally and had to be widened before the thin data became months of it:
+
+- **Room size.** The tally cannot answer "do big rooms grade worse", and the
+  answer cannot be reconstructed later: `moveCount` is recomputed from the
+  CURRENT repertoire on every render, so how big a room was when it was graded
+  in March is not something the app keeps. Rooms grow as replies are added,
+  and they split. `n` records it at the moment of grading (threaded through
+  `ROOMS[key].moveCount`, added for this).
+- **The interval that actually ran.** The tally files a grade under its
+  NOMINAL rung, but a rung-2 room reviewed 25 days late is evidence about 25
+  days, not 7. Late reviews fail more, and charging those failures to an
+  interval that was never tested makes the rung look worse than it is --
+  worst for someone working through an overdue backlog, i.e. exactly when the
+  report is most wanted. `d` records the real elapsed days.
+
+The tally is derivable from the log and not the reverse, so of the two the log
+is the one that had to exist before the data started arriving. Both are kept
+because they lose different things: the tally survives the log's rollover.
 
 Three rules it is worth not re-deriving later:
 

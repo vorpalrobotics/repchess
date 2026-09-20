@@ -1189,18 +1189,83 @@ async function getReviewGradeStats(){
 async function setReviewGradeStats(stats){
   return setMeta(REVIEW_GRADE_STATS_KEY, JSON.stringify(stats || {}));
 }
-/* SERIALIZED read-modify-write. The keyboard grade path does not await
-   gradeCurrentRoom (threeVR.js's onKeyDown fires and forgets), so pressing 1
-   then 2 to correct a mis-press can overlap: without a queue the second write
-   can be computed from a read taken before the first one landed, and one of
-   them is silently lost. A tally meant to accumulate over months should not
-   depend on how fast somebody changes their mind. */
+/* ---------- the grade event log ----------
+
+   One row per graded review: { t, r, n, d, g } -- when, the rung it was
+   reviewed AT, how many moves the room held at that moment, how many days had
+   actually elapsed, and the grade.
+
+   Why a log as well as the tally above. The tally answers "how does rung 3
+   perform" and nothing else. It cannot answer "do big rooms grade worse",
+   because room size is not in it and CANNOT BE ADDED AFTERWARDS: moveCount is
+   recomputed from the current repertoire on every render, so how big a room
+   was when you graded it in March is not something the app can reconstruct.
+   Rooms grow as replies are added, and they split.
+
+   `d` exists for the same reason, and fixes a bias in the tally: a grade is
+   filed under its NOMINAL rung, but a rung-2 room reviewed 25 days late is
+   evidence about 25 days, not 7. Late reviews fail more, and charging those
+   failures to an interval that was never actually tested makes the rung look
+   worse than it is -- worst for someone working through an overdue backlog,
+   which is exactly when the report is most wanted.
+
+   Both are kept because they lose different things: the tally holds LIFETIME
+   totals and never forgets, the log holds the joint distribution for as far
+   back as the cap allows. The tally is derivable from the log and not the
+   reverse, which is why the log had to exist before the data started arriving
+   rather than after. */
+const REVIEW_GRADE_LOG_KEY = 'threeReviewGradeLog';
+// ~50 bytes an event, so ~1MB when full. A few hundred mature rooms generate
+// maybe 1-2k events a year, making this about a decade of detail; the tally
+// above carries the lifetime totals past the rollover.
+const REVIEW_GRADE_LOG_CAP = 20000;
+
+/* Appends one event, returning a NEW array. `replacePrev` drops the entry this
+   same review already wrote -- the log follows the same "a correction replaces"
+   rule as tallyReviewGrade, or a re-graded room lands in the data twice.
+
+   Popping the tail is safe because this log has exactly one writer and every
+   write goes through recordReviewGrade's queue below, so "the last entry" is
+   unambiguous. The rung check is a cheap guard against that ceasing to be
+   true: a mismatch means something else appended in between, and dropping a
+   stranger's row would be worse than leaving a duplicate. */
+function appendGradeEvent(log, event, replacePrev = false){
+  const out = Array.isArray(log) ? log.slice() : [];
+  if(replacePrev && out.length && out[out.length - 1].r === event.r) out.pop();
+  out.push(event);
+  return out.length > REVIEW_GRADE_LOG_CAP ? out.slice(out.length - REVIEW_GRADE_LOG_CAP) : out;
+}
+
+async function getReviewGradeLog(){
+  const raw = await getMeta(REVIEW_GRADE_LOG_KEY);
+  try { const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+async function setReviewGradeLog(log){
+  return setMeta(REVIEW_GRADE_LOG_KEY, JSON.stringify(Array.isArray(log) ? log : []));
+}
+
+/* SERIALIZED read-modify-write, for both the tally and the log. The keyboard
+   grade path does not await gradeCurrentRoom (threeVR.js's onKeyDown fires and
+   forgets), so pressing 1 then 2 to correct a mis-press can overlap: without a
+   queue the second write can be computed from a read taken before the first
+   one landed, and one of them is silently lost. A record meant to accumulate
+   over months should not depend on how fast somebody changes their mind.
+
+   opts: { replacing, moves, elapsedDays, now } -- `replacing` is the grade this
+   same review already contributed (see tallyReviewGrade), `moves` the room's
+   size at this moment, `elapsedDays` how long the interval actually ran. */
 let gradeStatsQueue = Promise.resolve();
-function recordReviewGrade(step, grade, replacing = null){
+function recordReviewGrade(step, grade, opts = {}){
+  const { replacing = null, moves = 0, elapsedDays = null, now = Date.now() } = opts;
   const next = gradeStatsQueue.then(async () => {
-    const stats = tallyReviewGrade(await getReviewGradeStats(), step, grade, replacing);
-    await setReviewGradeStats(stats);
-    return stats;
+    const [prevStats, prevLog] = await Promise.all([getReviewGradeStats(), getReviewGradeLog()]);
+    const stats = tallyReviewGrade(prevStats, step, grade, replacing);
+    const rung = Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, Math.trunc(Number(step)) || 0));
+    const log = appendGradeEvent(prevLog,
+      { t: now, r: rung, n: moves || 0, d: elapsedDays, g: grade }, !!replacing);
+    await Promise.all([setReviewGradeStats(stats), setReviewGradeLog(log)]);
+    return { stats, log };
   });
   // the chain survives a failed write rather than poisoning every later grade
   // with the same rejection

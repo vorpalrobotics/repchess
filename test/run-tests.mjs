@@ -21944,6 +21944,37 @@ try {
     ok('Grade statistics: counted at the rung given, a correction un-counted, input never mutated');
   } catch(e){ bad('Grade statistics: the fold', e); }
 
+  // 369bb. The event log's own two rules: a correction replaces the entry the
+  //        same review already wrote (or a re-graded room lands in the data
+  //        twice), and the log is capped from the FRONT so the newest events
+  //        are the ones kept.
+  try {
+    const ev = (r, g, n = 1) => ({ t: 1, r, n, d: r, g });
+    const l1 = await H('appendGradeEvent', [], ev(2, 'A'));
+    assert(l1.length === 1 && l1[0].g === 'A', `expected the event appended, got ${JSON.stringify(l1)}`);
+
+    const l2 = await H('appendGradeEvent', l1, ev(2, 'C'), true);
+    assert(l2.length === 1 && l2[0].g === 'C',
+      `expected a correction to replace rather than append, got ${JSON.stringify(l2)}`);
+
+    // ...but only when the tail really is this review's own row. A mismatched
+    // rung means something else appended in between, and dropping a stranger's
+    // event would be worse than leaving a duplicate.
+    const l3 = await H('appendGradeEvent', [ev(4, 'A')], ev(2, 'B'), true);
+    assert(l3.length === 2, `expected a mismatched tail left alone, got ${JSON.stringify(l3)}`);
+
+    const cap = await H('gradeLogCap');
+    const capped = await appEF.page.evaluate((c) => {
+      const full = Array.from({ length: c }, (_, i) => ({ t: i, r: 0, n: 1, d: 1, g: 'A' }));
+      const out = window.__reviewTestHooks.appendGradeEvent(full, { t: 999999, r: 0, n: 1, d: 1, g: 'C' });
+      return { len: out.length, firstT: out[0].t, lastG: out[out.length - 1].g };
+    }, cap);
+    assert(capped.len === cap, `expected the log held at its cap of ${cap}, got ${capped.len}`);
+    assert(capped.firstT === 1 && capped.lastG === 'C',
+      `expected the OLDEST event dropped and the newest kept, got ${JSON.stringify(capped)}`);
+    ok('Grade log: a correction replaces the same review\'s entry, and the cap drops the oldest');
+  } catch(e){ bad('Grade log: append rules', e); }
+
   // 369c. The tally persists and survives a real Full Backup round trip.
   //       Unlike a review schedule there is nothing to reconstruct it from --
   //       a restore that dropped it would reset months of measurement to zero
@@ -21951,26 +21982,37 @@ try {
   try {
     await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeStats(
       { '0': { A: 9, B: 2, C: 1 }, '3': { A: 4, B: 0, C: 0 } }));
+    await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeLog(
+      [{ t: 1700000000000, r: 3, n: 11, d: 25, g: 'B' }]));
     const stored = await H('getGradeStats');
     assert(stored['0'].A === 9 && stored['3'].A === 4,
       `expected the tally to persist, got ${JSON.stringify(stored)}`);
+    const storedLog = await H('getGradeLog');
+    assert(storedLog.length === 1 && storedLog[0].n === 11,
+      `expected the event log to persist, got ${JSON.stringify(storedLog)}`);
 
     const exported = await appEF.page.evaluate(() => window.__backupTestHooks.buildBackupData());
     assert(typeof exported.reviewGradeStats === 'string' && /"A":9/.test(exported.reviewGradeStats),
       `expected the tally carried in the backup, got ${JSON.stringify(exported.reviewGradeStats)}`);
+    assert(typeof exported.reviewGradeLog === 'string' && /"n":11/.test(exported.reviewGradeLog),
+      `expected the event log carried in the backup, got ${JSON.stringify(exported.reviewGradeLog)}`);
     assert(exported.version >= 8,
-      `expected the backup version bumped for the new field, got ${exported.version}`);
+      `expected the backup version bumped for the new fields, got ${exported.version}`);
 
     // out and back in through a REAL restore, which clears the meta store
     // first -- so this proves the round trip, not just that the field is written
     await seedBackup(appEF.page, {
       version: 8, user: 'tester', lines: [], games: [],
       reviewGradeStats: exported.reviewGradeStats,
+      reviewGradeLog: exported.reviewGradeLog,
     });
     const restored = await H('getGradeStats');
     assert(restored['0'].A === 9 && restored['0'].C === 1 && restored['3'].A === 4,
       `expected the tally to survive a full restore, got ${JSON.stringify(restored)}`);
-    ok('Grade statistics: the tally persists and survives a Full Backup round trip');
+    const restoredLog = await H('getGradeLog');
+    assert(restoredLog.length === 1 && restoredLog[0].n === 11 && restoredLog[0].d === 25,
+      `expected the event log to survive a full restore -- the tally is derivable from it and not the reverse, so this is the one that must not be lost: ${JSON.stringify(restoredLog)}`);
+    ok('Grade statistics: the tally and the event log persist and survive a Full Backup round trip');
   } catch(e){ bad('Grade statistics: persistence and backup', e); }
 
   /* --- Review Forecast, Phase 1 (Documents/review-forecast.md). The whole
@@ -23438,11 +23480,16 @@ try {
   //       wrong interval, and in the flattering direction.
   try {
     const now = Date.now();
-    await appEJ.page.evaluate(() => window.__reviewTestHooks.setGradeStats({}));
+    await appEJ.page.evaluate(() => {
+      window.__reviewTestHooks.setGradeStats({});
+      return window.__reviewTestHooks.setGradeLog([]);
+    });
     // the dirtySeen ledger is carried through so no structural demotion can
     // move the rung out from under this (it only runs on VR open today, but
     // the test shouldn't depend on that staying true)
     const held = await record();
+    // last review 10 days ago on rung 2, whose NOMINAL interval is 7 -- the
+    // mismatch is deliberate, see the elapsed-days assertion below
     await seedRecord({ ...held, last: now - 10 * DAY, due: now - DAY, step: 2, lastGrade: 'A' });
     await E('enter', keys.alpha);                    // clears preGradeRecord: a fresh visit
     await appEJ.page.waitForTimeout(150);
@@ -23469,6 +23516,30 @@ try {
       `expected one review to count once however many times it was graded, got ${total} in ${JSON.stringify(after)}`);
     ok('Grade statistics: the live path tallies against the rung reviewed, and a correction replaces it');
   } catch(e){ bad('Grade statistics: live grading path', e); }
+
+  // 389c. The event log captures the two things the tally cannot, and neither
+  //       is recoverable later: how big the room was at that moment (moveCount
+  //       is recomputed from the current repertoire on every render), and how
+  //       long the interval ACTUALLY ran. The second is the one that matters
+  //       for a backlog -- this review sat 10 days on a rung whose nominal
+  //       interval is 7, and filing it as evidence about 7 days would blame
+  //       the rung for a lateness it never caused.
+  try {
+    const log = await appEJ.page.evaluate(() => window.__reviewTestHooks.getGradeLog());
+    assert(log.length === 1,
+      `expected one logged event for one review, however many times it was graded: ${JSON.stringify(log)}`);
+    const e0 = log[0];
+    assert(e0.g === 'C' && e0.r === 2,
+      `expected the corrected grade at the rung reviewed, got ${JSON.stringify(e0)}`);
+    assert(e0.d === 10,
+      `expected the ACTUAL 10 days elapsed, not the rung's nominal ${LADDER[2]}, got ${JSON.stringify(e0)}`);
+
+    const size = await E('roomMoveCount', keys.alpha);
+    assert(size > 0, `test setup issue: expected the room to teach at least one move, got ${size}`);
+    assert(e0.n === size,
+      `expected the room's move count threaded through to the log, got ${e0.n} against ${size}`);
+    ok('Grade log: records the room\'s size and the interval that actually ran, not the nominal one');
+  } catch(e){ bad('Grade log: room size and actual elapsed interval', e); }
 
   // 390. A room memorized but never graded is already at the bottom of the
   //      ladder -- there's nothing to demote, and no reason to invent a
