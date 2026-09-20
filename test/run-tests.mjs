@@ -9906,6 +9906,135 @@ try {
 } catch(e){ bad('Phase BGx: uncaught error outside a numbered test', e); }
 }
 
+/* --- Phase ATTR: the open-source ATTRIBUTION audit. A source-level test like
+       Phase BGx above, no browser: it reads test/build-vendor.mjs, js/vendor/
+       and index.html, and fails when the libraries the app actually ships
+       drift apart from the ones the About box credits.
+
+       Nothing else forces the list to keep up. A library can be added, or
+       pulled into the self-hosted bundle as a transitive dependency, without
+       anything breaking or looking wrong -- the app works fine, and the only
+       symptom is an attribution list that quietly understates what is being
+       distributed. That is a licence-compliance problem rather than a bug,
+       which is exactly the kind that survives every functional test there is.
+
+       Deliberately one-directional: every shipped library must be credited,
+       but the list may name things build-vendor.mjs does not (Font Awesome is
+       a stylesheet link, never vendored). Extra credit is harmless; missing
+       credit is not. --- */
+if(shouldRunPhase(['core'])){
+try {
+  const ROOT = path.join(process.cwd(), '..');
+  const indexHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const vendorSrc = fs.readFileSync(path.join(process.cwd(), 'build-vendor.mjs'), 'utf8');
+
+  // the About box's attribution list, from its heading to the end of the <ul>
+  const attrList = (() => {
+    const at = indexHtml.indexOf('Open Source Attributions');
+    if(at < 0) return '';
+    const ul = indexHtml.indexOf('<ul', at);
+    const end = indexHtml.indexOf('</ul>', ul);
+    return (ul < 0 || end < 0) ? '' : indexHtml.slice(ul, end);
+  })();
+
+  /* What each npm package is CALLED in the list. A package with no entry here
+     fails rather than being skipped: the mapping is the one line you have to
+     write when you add a library, and it is what makes forgetting the About
+     box impossible rather than merely unlikely. A value may name another
+     entry, for a dependency credited through the package that bundles it. */
+  const ATTRIBUTED_AS = {
+    'three': 'three.js',
+    'cytoscape': 'cytoscape.js',
+    'cytoscape-dagre': 'cytoscape-dagre',
+    'dagre': 'cytoscape-dagre',          // cytoscape-dagre's own dep, credited with it
+    'chess.js': 'chess.js',
+    'cm-chessboard': 'cm-chessboard',
+    '@toast-ui/editor': 'Toast UI Editor',
+    // bundled into the self-hosted editor, so we redistribute them (see 437)
+    'prosemirror': 'ProseMirror',
+    'DOMPurify': 'DOMPurify',
+  };
+
+  // 436. Every library build-vendor.mjs knows about is credited. Its VERSIONS
+  //      table mirrors the CDN URLs in index.html / js/app.js / js/threeVR.js
+  //      (its own header says so), which makes it the closest thing this repo
+  //      has to a manifest of what the app loads.
+  try {
+    const block = (vendorSrc.match(/const\s+VERSIONS\s*=\s*\{([\s\S]*?)\n\};/) || [, ''])[1];
+    const pkgs = [...block.matchAll(/^\s*'?([@\w./-]+?)'?\s*:\s*'/gm)].map(m => m[1]);
+    assert(pkgs.length >= 6, `sanity: expected build-vendor's VERSIONS table, got ${JSON.stringify(pkgs)}`);
+    assert(pkgs.includes('@toast-ui/editor'),
+      `sanity: expected the self-hosted editor among them, got ${JSON.stringify(pkgs)}`);
+    assert(attrList.length > 200, 'sanity: could not read the About box attribution list from index.html');
+
+    const unmapped = pkgs.filter(p => !ATTRIBUTED_AS[p]);
+    assert(unmapped.length === 0,
+      `these libraries are in build-vendor.mjs's VERSIONS but this test does not know what they are called ` +
+      `in the About box -- add them to ATTRIBUTED_AS (and to the About box): ${JSON.stringify(unmapped)}`);
+
+    const missing = pkgs.filter(p => !attrList.includes(ATTRIBUTED_AS[p]));
+    assert(missing.length === 0,
+      `these libraries are shipped by the app but not credited in the About box's Open Source Attributions ` +
+      `list: ${JSON.stringify(missing.map(p => `${p} (expected "${ATTRIBUTED_AS[p]}")`))}`);
+    ok(`attribution: all ${pkgs.length} vendored libraries are credited in the About box`);
+  } catch(e){ bad('attribution: vendored libraries', e); }
+
+  /* 437. The SELF-HOSTED bundle, which is the case that actually carries a
+          licence obligation rather than just courtesy: everything else is
+          fetched from a CDN at run time, but js/vendor/ is served from our own
+          origin, so its contents are redistributed by us.
+
+          Checked both ways. A dependency named in the bundle's own
+          esbuild legal-comment block must be credited; and a dependency we
+          credit must still BE in the bundle, so a future `node
+          build-vendor.mjs` that drops or replaces one leaves a stale claim
+          that fails here rather than sitting in the About box forever. */
+  try {
+    const VENDOR_DIR = path.join(ROOT, 'js', 'vendor');
+    const shipped = fs.readdirSync(VENDOR_DIR).filter(f => f.endsWith('.mjs'));
+    // a NEW self-hosted bundle is a new redistribution -- it does not get to
+    // appear here silently
+    assert(JSON.stringify(shipped.sort()) === JSON.stringify(['toastui-editor.mjs']),
+      `js/vendor holds a self-hosted bundle this test does not know about; every file served from our own ` +
+      `origin is redistributed and needs attribution: ${JSON.stringify(shipped)}`);
+
+    const bundle = fs.readFileSync(path.join(VENDOR_DIR, 'toastui-editor.mjs'), 'utf8');
+    const legal = (bundle.match(/\/\*! Bundled license information:([\s\S]*?)\*\//) || [, ''])[1];
+    assert(legal.length > 100, "sanity: could not read the bundle's own legal-comment block");
+
+    const named = new Set([
+      // `@toast-ui/editor/dist/esm/index.js:` -- esbuild's per-package heading
+      ...[...legal.matchAll(/^(@[\w.-]+\/[\w.-]+|[\w.-]+)\/[^\s:]*:\s*$/gm)].map(m => m[1]),
+      // `@license DOMPurify 2.3.3 | ...`
+      ...[...legal.matchAll(/@license\s+([A-Za-z][\w.-]*)/g)].map(m => m[1]),
+    ]);
+    /* Dependencies with no licence banner of their own, so esbuild's block
+       cannot see them. ProseMirror is MIT and is most of what the editor IS,
+       which makes leaving it uncredited the least defensible omission
+       available -- listed by hand, and checked against the bundle below. */
+    const UNBANNERED = ['prosemirror'];
+    for(const dep of UNBANNERED){
+      assert(new RegExp(dep, 'i').test(bundle),
+        `the About box credits ${ATTRIBUTED_AS[dep]}, but it is no longer in the self-hosted bundle -- ` +
+        `the credit is stale, or build-vendor.mjs changed what it builds`);
+      named.add(dep);
+    }
+    assert(named.has('@toast-ui/editor') && named.has('DOMPurify'),
+      `sanity: expected the editor and its sanitizer among the bundle's own licence notices, got ${JSON.stringify([...named])}`);
+
+    const missing = [...named].filter(n => {
+      const as = ATTRIBUTED_AS[n] || n;
+      return !attrList.includes(as);
+    });
+    assert(missing.length === 0,
+      `these are bundled into the self-hosted file REPchess serves from its own origin but are not credited ` +
+      `in the About box -- we redistribute them, so their notices are our responsibility: ${JSON.stringify(missing)}`);
+    ok(`attribution: all ${named.size} libraries inside the self-hosted bundle are credited`);
+  } catch(e){ bad('attribution: the self-hosted bundle', e); }
+} catch(e){ bad('Phase ATTR: uncaught error outside a numbered test', e); }
+}
+
+
 if(shouldRunPhase(['import-export'])){
 try {
 const appBH = await launchApp();
