@@ -13853,34 +13853,48 @@ try {
     ok('Set Move Quality: picking a glyph through the new toggle still annotates the move');
   } catch(e){ bad('Set Move Quality: pick glyph via new toggle', e); }
 
-  // 168. "Add Note" is gone from the row menu; notes are set via "Set
-  //      Attributes" instead and still show as a meta-row badge, same as
-  //      before.
+  // 168. Notes have their own menu item and their own editor now
+  //      (Documents/notes-feature.md). The old standalone "Add Note" item is
+  //      still gone, and Set Attributes no longer owns a note field at all --
+  //      one editor over one field is what keeps its single-Save contract
+  //      honest.
   try {
     const noteItemGone = await appBV.page.evaluate(s => !document.querySelector(`${s} [data-act="note"]`), rowSel);
-    assert(noteItemGone, 'expected the standalone "Add Note" menu item to be removed');
-    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
-    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
-    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appBV.page.fill('#attrNote', 'watch the e6 setup');
-    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
-    await appBV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
-    await appBV.page.waitForSelector(`${rowSel} + tr.meta-row .meta-note`, { timeout: 5000 });
-    const noteText = (await appBV.page.textContent(`${rowSel} + tr.meta-row .meta-note`)).trim();
-    assert(noteText === 'watch the e6 setup', `expected the note badge to show the saved note, got "${noteText}"`);
-    ok('Notes folded into Set Attributes: saving a note there shows the meta-row badge');
-  } catch(e){ bad('Notes folded into Set Attributes: save + badge', e); }
+    assert(noteItemGone, 'expected the old standalone "Add Note" menu item to stay removed');
+    const textareaGone = await appBV.page.evaluate(() => !document.getElementById('attrNote'));
+    assert(textareaGone, 'expected Set Attributes to have no note textarea of its own');
 
-  // 169. Reopening Set Attributes -- via the meta-row note badge itself --
-  //      shows the previously-saved note pre-filled.
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
+    await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appBV.page.evaluate(() => window.__notesEditorTestHooks.setValue('watch the e6 setup'));
+    await appBV.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appBV.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appBV.page.waitForFunction(
+      () => document.getElementById('noteEditorOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appBV.page.waitForFunction(s => !!document.querySelector(`${s} + tr.meta-row .meta-note-glyph`),
+      rowSel, { timeout: 5000 });
+    const badgeText = await appBV.page.evaluate(s =>
+      document.querySelector(`${s} + tr.meta-row .meta-note-glyph`).textContent.trim(), rowSel);
+    assert(badgeText === '', `expected a glyph rather than the note text on the row, got ${JSON.stringify(badgeText)}`);
+    ok('Notes: the row menu\'s own editor saves a note and the row shows a glyph');
+  } catch(e){ bad('Notes: row-menu editor save + glyph', e); }
+
+  // 169. Clicking that glyph reopens the editor on the saved note -- the
+  //      badge is the way back IN, not just an indicator.
   try {
-    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note`).click(), rowSel);
-    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    const prefilled = await appBV.page.inputValue('#attrNote');
-    assert(prefilled === 'watch the e6 setup', `expected attrNote pre-filled with the saved note, got "${prefilled}"`);
-    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
-    ok('Notes folded into Set Attributes: clicking the meta-row badge reopens Attributes with the note pre-filled');
-  } catch(e){ bad('Notes folded into Set Attributes: badge reopens pre-filled', e); }
+    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note-glyph`).click(), rowSel);
+    await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    const loaded = await appBV.page.evaluate(() => window.__notesEditorTestHooks.getValue());
+    assert(/watch the e6 setup/.test(loaded || ''),
+      `expected the editor to open on the saved note, got ${JSON.stringify(loaded)}`);
+    await appBV.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());
+    await appBV.page.waitForFunction(
+      () => document.getElementById('noteEditorOverlay').style.display === 'none', { timeout: 5000 });
+    ok('Notes: the row glyph reopens the editor on the saved note');
+  } catch(e){ bad('Notes: glyph reopens the editor', e); }
 
   // 170. renderBlackRoot regression: the black-root row's menu now has a
   //      matching "Compare Games" button for its (previously dangling)
@@ -19857,7 +19871,10 @@ try {
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
     await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appDL.page.fill('#attrNote', 'just a note, not a redirect change');
+    // the room NAME as the unrelated edit: the note is no longer an inline
+    // field here (it opens its own editor now), and any field in the same
+    // snapshot serves the purpose
+    await appDL.page.fill('#attrRoomName', 'just a rename, not a redirect change');
     await appDL.page.evaluate(() => { document.getElementById('progress').textContent = ''; });   // clear -- a stray re-port would show up here
     await appDL.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
@@ -20138,7 +20155,8 @@ try {
     await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
     await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
     await appDO.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appDO.page.fill('#attrNote', 'an unrelated note, not a redirect or new reply');
+    // see the note in test 314 on why this is the room name and not the note
+    await appDO.page.fill('#attrRoomName', 'an unrelated rename, not a redirect or new reply');
     await appDO.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDO.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
@@ -23683,9 +23701,13 @@ try {
   await appEN2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
   const rowSel = 'tr.data-row[data-opp="Nf6"]';
+  /* Click through evaluate, not page.click: the ⋮ and its menu items are icon
+     buttons with zero size here (Font Awesome is CDN-blocked), so Playwright
+     deems them invisible while the real handlers still fire -- the same
+     workaround the rest of this suite uses. */
   const openNotesMenu = async () => {
-    await appEN2.page.click(`${rowSel} .rowMenuBtn`);
-    await appEN2.page.click(`${rowSel} [data-act="notes"]`);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
     await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
   };
   const noteNow = () => appEN2.page.evaluate(() =>
@@ -23707,7 +23729,7 @@ try {
     await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('## Plan\n\nTrade the bad bishop.'));
     await appEN2.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
-    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
     await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
 
     const saved = await noteNow();
@@ -23722,7 +23744,8 @@ try {
   //      first line is usually a heading rather than a summary, so a truncated
   //      strip would invite reading the strip instead of the note.
   try {
-    await appEN2.page.waitForSelector(`${rowSel} + tr .meta-note-glyph, .meta-note-glyph`, { timeout: 5000 });
+    // existence, not visibility: a zero-size icon is never "visible" here
+    await appEN2.page.waitForFunction(() => !!document.querySelector('.meta-note-glyph'), { timeout: 5000 });
     const strip = await appEN2.page.evaluate(() => {
       const el = document.querySelector('.meta-note-glyph');
       return el ? { html: el.innerHTML, text: el.textContent } : null;
@@ -23741,7 +23764,7 @@ try {
     await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('scribbled and abandoned'));
     await appEN2.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
-    await appEN2.page.click('#noteEditorOverlay .mb-leave');   // dirty: the harness accepts the discard prompt
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());   // dirty: the harness accepts the discard prompt
     await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
     const after = await noteNow();
     assert(after === before, `expected leaving to write nothing, got ${JSON.stringify(after)}`);
@@ -23759,8 +23782,8 @@ try {
       const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
       return window.__notesTestHooks.setNote(k, 'first line\nsecond line');
     });
-    await appEN2.page.click(`${rowSel} .rowMenuBtn`);
-    await appEN2.page.click(`${rowSel} [data-act="attributes"]`);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
     await appEN2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
     await appEN2.page.waitForFunction(
       () => /second line/.test(document.getElementById('attrNotePreview').innerHTML), { timeout: 10000 });
@@ -23777,12 +23800,12 @@ try {
   try {
     const before = await noteNow();
     // the modal is still open from 416
-    await appEN2.page.click('#attrNoteEditBtn');
+    await appEN2.page.evaluate(() => document.getElementById('attrNoteEditBtn').click());
     await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
     await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('staged, not committed'));
     await appEN2.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
-    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
     await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
 
     // saving the NOTE editor must not have written anything yet...
@@ -23794,7 +23817,7 @@ try {
     assert(attrBar.save && !attrBar.save.disabled,
       `expected the staged note to make Attributes dirty, got ${JSON.stringify(attrBar.save)}`);
 
-    await appEN2.page.click('#attributesOverlay .mb-save');
+    await appEN2.page.evaluate(() => document.querySelector('#attributesOverlay .mb-save').click());
     await appEN2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
     const after = await noteNow();
     assert(after === 'staged, not committed',
@@ -23818,7 +23841,7 @@ try {
     await appEN2.page.fill('#noteFallbackInput', 'typed into the fallback');
     await appEN2.page.waitForFunction(
       () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
-    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
     await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
     assert((await noteNow()) === 'typed into the fallback',
       'expected the fallback to round-trip through Save exactly as the real editor does');

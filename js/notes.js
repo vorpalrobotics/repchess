@@ -258,6 +258,13 @@ if(typeof localStorage !== 'undefined' && localStorage.getItem('threeTestDebug')
        value put in comes back out through Save. Routes to the textarea in
        fallback mode, so one test body covers both surfaces. */
     setValue: (md) => { if(liveSetValue) liveSetValue(md); return !!liveSetValue; },
+    // what the open editor currently holds -- for asserting that reopening on
+    // an existing note really loads it rather than starting blank
+    getValue: () => {
+      if(liveEditor) return liveEditor.getMarkdown();
+      const ta = document.getElementById('noteFallbackInput');
+      return ta ? ta.value : null;
+    },
     isFallback: () => !liveEditor && !!document.getElementById('noteFallbackInput'),
   };
 }
