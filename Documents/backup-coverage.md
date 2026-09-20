@@ -33,6 +33,7 @@ has none.
 | **Spaced-repetition review history** | `meta` (`threeRoomReviews`) | `roomReviews` |
 | **Per-rung grade statistics** (v8) | `meta` (`threeReviewGradeStats`) | `reviewGradeStats` |
 | **Grade event log** (v8) | `meta` (`threeReviewGradeLog`) | `reviewGradeLog` |
+| **Quiz step log** (v8) | `meta` (`threeQuizLog`) | `quizLog` |
 | Memorized room-shape snapshots | `meta` | `memorizedShapes` |
 | Digraph node positions | `meta` | `graphLayout` |
 | **Perfect Opening settings** (v7) | `meta` | `perfectOpeningConfig` |
@@ -63,8 +64,9 @@ has none.
 
 ## The `version` field
 
-`7` as of the Perfect Opening addition (v5 added `threeLayout`, v6
-`objectLists`). It says what a file **contains** — it is **not** a
+`8` as of the review-statistics additions — the grade tally, the grade event
+log and the quiz step log (v5 added `threeLayout`, v6 `objectLists`, v7
+Perfect Opening's config). It says what a file **contains** — it is **not** a
 compatibility gate. Every field in `applyBackupData()` is read behind a
 `typeof` guard, so an older backup restores into a newer build unchanged, with
 the newer fields simply left at their defaults. There is a test for exactly

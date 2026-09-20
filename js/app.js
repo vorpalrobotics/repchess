@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-419';
+const BUILD_TAG = '-420';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7148,6 +7148,11 @@ async function buildBackupData(){
        elapsed days, grade). The tally is derivable from this and not the
        reverse, so of the two it is the one that must survive a restore. */
     reviewGradeLog: await getMeta(REVIEW_GRADE_LOG_KEY),
+    /* ...and the board quiz's own per-move log. A different instrument from
+       the grade log -- objectively scored and cued one move at a time, the
+       way a real game tests you -- and the only one carrying a room key, so
+       it is what any later room-shaped analysis has to join through. */
+    quizLog: await getMeta(QUIZ_LOG_KEY),
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     /* Perfect Opening's SETTINGS -- the per-move max-lines and depth
@@ -7311,6 +7316,7 @@ async function applyBackupData(data, onMnemProgress){
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.reviewGradeStats === 'string') await setMeta(REVIEW_GRADE_STATS_KEY, data.reviewGradeStats);
     if(typeof data.reviewGradeLog === 'string') await setMeta(REVIEW_GRADE_LOG_KEY, data.reviewGradeLog);
+    if(typeof data.quizLog === 'string') await setMeta(QUIZ_LOG_KEY, data.quizLog);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     // v7 fields. Absent in any older backup, and guarded like every field
@@ -10446,6 +10452,55 @@ function oqMissedRoomSeq(){
   const s = (OQ.seq || []).slice(0, -1);
   return s.length ? s : null;
 }
+
+/* ---------- quiz step logging (db.js's QUIZ_LOG_KEY) ----------
+
+   One row per move asked, written when the step RESOLVES -- so a wrong answer
+   followed by a correct retry is one `miss`, not a miss plus a hit. Called
+   from oqInputHandler's correct branch and from oqGiveUp, the only two places
+   a step ends; the wrong-answer branch deliberately logs nothing, because the
+   player is still being asked.
+
+   Rides oqReviewWrites, the same serialized queue the demotions use, for the
+   same reasons: it is fire-and-forget from the move handler, and the room
+   lookup it needs is an async build nothing on screen should wait for.
+
+   The harness has no cm-chessboard, so the move handler itself cannot be
+   driven end to end (see __oqTestHooks) -- the hook exposes this function so
+   the logging is still exercised against real IDB. */
+function oqLogQuizStep(outcome){
+  const roomSeq = oqMissedRoomSeq();
+  if(!roomSeq) return oqReviewWrites;
+  const at = Date.now();
+  const ply = (OQ.seq || []).length;
+  oqReviewWrites = oqReviewWrites
+    .then(() => oqBuildQuizStep(roomSeq, outcome, ply, at))
+    .catch(err => console.error('[quiz] could not log a step', err));
+  return oqReviewWrites;
+}
+async function oqBuildQuizStep(roomSeq, outcome, ply, at){
+  const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
+  if(!castle) return null;
+  // lazily built, exactly as oqDemoteMissedRoom does -- and shared with it, so
+  // a session pays for a cold gatherBuiltCastles at most once
+  if(!OQ.roomAnchors || !OQ.roomNames) Object.assign(OQ, await oqRoomIndexes());
+  const key = roomKeyForPosKey(OQ.roomAnchors, castleInstanceId(OQ.line.id, castle),
+                               positionKey(fenForSeq(roomSeq)));
+  if(!key) return null;
+  /* effectiveRoomReview, not the raw record: a room memorized but never graded
+     is on the schedule at rung 0 (bootstrapRoomReview), and filing its steps
+     as "no schedule" would drop exactly the rooms most worth watching. A room
+     that was never memorized at all really does have no rung, and reads null.
+     Same elapsed-days rule as the VR grade path: from the last real review,
+     else from the memorized timestamp. */
+  const rec = effectiveRoomReview(await getRoomReviews(), MEMORIZED_ROOMS, key);
+  const since = (rec && rec.last) || MEMORIZED_ROOMS[key] || null;
+  return recordQuizStep({
+    t: at, k: key, o: outcome, p: ply,
+    r: rec ? (rec.step || 0) : null,
+    d: since == null ? null : Math.max(0, Math.round((at - since) / DAY_MS)),
+  });
+}
 /* Serialized, because each demotion is a read-modify-write of one shared
    IDB record and two misses in quick succession would otherwise race and
    lose one. Fire-and-forget from the move handler -- nothing on screen waits
@@ -10877,6 +10932,7 @@ function oqGiveUp(){
   OQ.busy = true;
   OQ.unsureThisStep = false;   // a miss is the stronger signal; nothing to add
   oqUpdateGiveUp(); oqUpdateUnsure();
+  oqLogQuizStep('reveal');   // the step ends here -- see oqLogQuizStep
   const answer = OQ.expected;
   const sq = oqMoveSquares([...OQ.seq, answer]);
   oqClearHighlights();
@@ -10942,6 +10998,10 @@ function oqInputHandler(event){
     oqUpdateScore();
     OQ.busy = true;
     oqUpdateGiveUp(); oqUpdateUnsure();
+    // the step resolves here. A wrong attempt earlier in this same step
+    // outranks the unsure flag: having actually produced the wrong move is
+    // harder evidence than having felt shaky about the right one.
+    oqLogQuizStep(OQ.missedThisStep ? 'miss' : (guessed ? 'unsure' : 'hit'));
     oqHighlight(event.squareTo, 'to');   // mark our TO square olive (FROM already marked)
     oqSetStatus(guessed ? 'Correct — but you were guessing' : 'Correct', guessed ? '' : 'oq-hit');
     setTimeout(oqAfterCorrect, 200);   // run after this validate handler returns & the move settles
@@ -11306,6 +11366,16 @@ if(localStorage.getItem('threeTestDebug')){
     // The harness has no cm-chessboard, so the real move handler can't be
     // driven end to end -- these are the same calls it makes.
     missedRoomSeq: () => oqMissedRoomSeq(),
+    /* the per-move step log. logStep drives the same call the real move
+       handler makes -- the harness has no cm-chessboard, so that handler
+       cannot be driven end to end, and this is how the logging itself gets
+       exercised against real IDB. It returns the queue so a test can await
+       the write instead of polling for it. */
+    logStep: (outcome) => oqLogQuizStep(outcome),
+    getQuizLog: () => getQuizLog(),
+    setQuizLog: (log) => setQuizLog(log),
+    appendQuizEvent: (log, event) => appendQuizEvent(log, event),
+    quizLogCap: () => QUIZ_LOG_CAP,
     demoteMissedRoom: (roomSeq) => oqDemoteMissedRoom(roomSeq),
     demotedRooms: () => JSON.parse(JSON.stringify((OQ && OQ.demoted) || {})),
     roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),

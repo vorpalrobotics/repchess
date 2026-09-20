@@ -1245,6 +1245,68 @@ async function setReviewGradeLog(log){
   return setMeta(REVIEW_GRADE_LOG_KEY, JSON.stringify(Array.isArray(log) ? log : []));
 }
 
+/* ---------- the quiz step log ----------
+
+   One row per move ASKED by the board quiz: { t, k, o, p, r, d } -- when, the
+   room the move lives in, the outcome, how deep into the line it sat, and the
+   room's ladder rung and actual elapsed days at that moment.
+
+   Why this exists ALONGSIDE the grade log rather than inside it. The VR grade
+   is self-assessed, room-level, and taken with the move objects in view; the
+   quiz is objectively scored, move-level, and cues you one move at a time --
+   which is also how a real game tests you. For CALIBRATION the quiz is the
+   better instrument, and deliberately not folded into the grade tally, which
+   measures how you GRADE and would be corrupted by mixing in a different
+   instrument's verdicts (the same reason demoteRoomReview is excluded there).
+
+   `k` is the room key, which the grade log does not carry -- so this is the
+   log that can be joined against anything room-shaped later: occurrence
+   frequency, castle, how much new material was memorized during the interval.
+
+   Outcomes are one per step, mutually exclusive, written when the step
+   resolves rather than when it is attempted:
+     hit     correct first try
+     unsure  correct, but flagged as guessing before committing
+     miss    wrong at least once, then eventually produced
+     reveal  gave up and was shown the move */
+const QUIZ_LOG_KEY = 'threeQuizLog';
+// rows here carry a room key, so they run ~145 bytes rather than the grade
+// log's ~50 -- half the cap for a similar footprint (~1.5MB full)
+const QUIZ_LOG_CAP = 10000;
+const QUIZ_OUTCOMES = ['hit', 'unsure', 'miss', 'reveal'];
+
+/* Appends one step, returning a NEW array. No replacement rule, unlike the
+   grade log: a quiz step resolves exactly once and there is no correcting it
+   afterwards, so every call is a fresh row. */
+function appendQuizEvent(log, event){
+  if(!event || !QUIZ_OUTCOMES.includes(event.o)) return Array.isArray(log) ? log.slice() : [];
+  const out = Array.isArray(log) ? log.slice() : [];
+  out.push(event);
+  return out.length > QUIZ_LOG_CAP ? out.slice(out.length - QUIZ_LOG_CAP) : out;
+}
+
+async function getQuizLog(){
+  const raw = await getMeta(QUIZ_LOG_KEY);
+  try { const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+async function setQuizLog(log){
+  return setMeta(QUIZ_LOG_KEY, JSON.stringify(Array.isArray(log) ? log : []));
+}
+/* Serialized for the same reason the grade log is: the quiz's own writes are
+   fire-and-forget from the move handler, and a fast session can resolve two
+   steps inside one read-modify-write. */
+let quizLogQueue = Promise.resolve();
+function recordQuizStep(event){
+  const next = quizLogQueue.then(async () => {
+    const log = appendQuizEvent(await getQuizLog(), event);
+    await setQuizLog(log);
+    return log;
+  });
+  quizLogQueue = next.catch(() => {});
+  return next;
+}
+
 /* SERIALIZED read-modify-write, for both the tally and the log. The keyboard
    grade path does not await gradeCurrentRoom (threeVR.js's onKeyDown fires and
    forgets), so pressing 1 then 2 to correct a mis-press can overlap: without a

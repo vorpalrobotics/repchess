@@ -454,6 +454,41 @@ The tally is derivable from the log and not the reverse, so of the two the log
 is the one that had to exist before the data started arriving. Both are kept
 because they lose different things: the tally survives the log's rollover.
 
+**A third store: the quiz step log** (`QUIZ_LOG_KEY`, `threeQuizLog`), one
+`{t, k, o, p, r, d}` row per move the board quiz asks, capped at 10k (rows
+carry a room key, so they run ~145 bytes against the grade log's ~50).
+
+It is a different INSTRUMENT, not more of the same data, and the difference
+matters for calibration:
+
+| | VR grade | Quiz step |
+|---|---|---|
+| Scored by | you | the app |
+| Granularity | the whole room | one move |
+| Cue | the move objects, all at once | the position, then one move at a time |
+| Matches a real game | loosely | closely |
+
+Self-graded recall is vulnerable to mistaking recognition for recall — with
+the object in view it is easy to feel "yes, I knew that". The quiz cannot make
+that mistake, which makes it the better instrument for asking what your real
+retention is, even though the grade remains what drives the schedule.
+
+It is deliberately NOT folded into the grade tally. That tally measures how
+you GRADE, and mixing a second instrument's verdicts into it would corrupt
+exactly the distribution the projection reads — the same reason
+`demoteRoomReview` is excluded from it.
+
+`k` (the room key) is here and not in the grade log, so this is the store any
+later room-shaped analysis has to join through: occurrence frequency, castle,
+room size, or how much new material was memorized during the interval.
+
+Outcomes are one per step, written when the step RESOLVES rather than when it
+is attempted, so a wrong answer followed by a correct retry is one `miss`
+rather than a miss plus a hit: `hit`, `unsure` (correct but flagged as
+guessing), `miss`, `reveal` (gave up). A wrong attempt outranks the unsure
+flag — producing the wrong move is harder evidence than feeling shaky about
+the right one.
+
 Three rules it is worth not re-deriving later:
 
 - **Attributed to the rung the review was ON**, never the one it moved to. The

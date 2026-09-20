@@ -21984,6 +21984,8 @@ try {
       { '0': { A: 9, B: 2, C: 1 }, '3': { A: 4, B: 0, C: 0 } }));
     await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeLog(
       [{ t: 1700000000000, r: 3, n: 11, d: 25, g: 'B' }]));
+    await appEF.page.evaluate(() => window.__oqTestHooks.setQuizLog(
+      [{ t: 1700000000000, k: 'cas:L1_X:abc', o: 'miss', p: 6, r: 2, d: 14 }]));
     const stored = await H('getGradeStats');
     assert(stored['0'].A === 9 && stored['3'].A === 4,
       `expected the tally to persist, got ${JSON.stringify(stored)}`);
@@ -21996,6 +21998,8 @@ try {
       `expected the tally carried in the backup, got ${JSON.stringify(exported.reviewGradeStats)}`);
     assert(typeof exported.reviewGradeLog === 'string' && /"n":11/.test(exported.reviewGradeLog),
       `expected the event log carried in the backup, got ${JSON.stringify(exported.reviewGradeLog)}`);
+    assert(typeof exported.quizLog === 'string' && /"o":"miss"/.test(exported.quizLog),
+      `expected the quiz step log carried in the backup, got ${JSON.stringify(exported.quizLog)}`);
     assert(exported.version >= 8,
       `expected the backup version bumped for the new fields, got ${exported.version}`);
 
@@ -22005,6 +22009,7 @@ try {
       version: 8, user: 'tester', lines: [], games: [],
       reviewGradeStats: exported.reviewGradeStats,
       reviewGradeLog: exported.reviewGradeLog,
+      quizLog: exported.quizLog,
     });
     const restored = await H('getGradeStats');
     assert(restored['0'].A === 9 && restored['0'].C === 1 && restored['3'].A === 4,
@@ -22012,7 +22017,10 @@ try {
     const restoredLog = await H('getGradeLog');
     assert(restoredLog.length === 1 && restoredLog[0].n === 11 && restoredLog[0].d === 25,
       `expected the event log to survive a full restore -- the tally is derivable from it and not the reverse, so this is the one that must not be lost: ${JSON.stringify(restoredLog)}`);
-    ok('Grade statistics: the tally and the event log persist and survive a Full Backup round trip');
+    const restoredQuiz = await appEF.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(restoredQuiz.length === 1 && restoredQuiz[0].o === 'miss' && restoredQuiz[0].d === 14,
+      `expected the quiz step log to survive a full restore too, got ${JSON.stringify(restoredQuiz)}`);
+    ok('Grade statistics: the tally and both logs persist and survive a Full Backup round trip');
   } catch(e){ bad('Grade statistics: persistence and backup', e); }
 
   /* --- Review Forecast, Phase 1 (Documents/review-forecast.md). The whole
@@ -23987,6 +23995,79 @@ try {
     assert(rec.step === 2, `expected the corridor's own record demoted, got ${JSON.stringify(rec)}`);
     ok("Quiz miss: a miss inside a corridor blames the whole corridor, by name, not a room that doesn't exist");
   } catch(e){ bad('Quiz miss: corridor member attribution', e); }
+
+  /* --- the per-move quiz step log (db.js's QUIZ_LOG_KEY). The objective
+     counterpart to the self-graded VR walk: scored rather than self-assessed,
+     move-level rather than room-level, and cued one move at a time the way a
+     real game tests you. Deliberately NOT folded into the grade tally, which
+     measures how you grade. --- */
+
+  // 407b. The pure append: one row per step, an unrecognised outcome adds
+  //       nothing rather than a row nobody can interpret, and the cap drops
+  //       the oldest.
+  try {
+    const one = await appEN.page.evaluate(() =>
+      window.__oqTestHooks.appendQuizEvent([], { t: 1, k: 'r', o: 'hit', p: 2, r: 0, d: 1 }));
+    assert(one.length === 1 && one[0].o === 'hit', `expected the step appended, got ${JSON.stringify(one)}`);
+
+    const bad1 = await appEN.page.evaluate(() =>
+      window.__oqTestHooks.appendQuizEvent([{ t: 1, k: 'r', o: 'hit', p: 2, r: 0, d: 1 }], { t: 2, k: 'r', o: 'wat' }));
+    assert(bad1.length === 1, `expected an unrecognised outcome to add no row, got ${JSON.stringify(bad1)}`);
+
+    const cap = await appEN.page.evaluate(() => window.__oqTestHooks.quizLogCap());
+    const capped = await appEN.page.evaluate((c) => {
+      const full = Array.from({ length: c }, (_, i) => ({ t: i, k: 'r', o: 'hit', p: 1, r: 0, d: 1 }));
+      const out = window.__oqTestHooks.appendQuizEvent(full, { t: 999999, k: 'r', o: 'reveal', p: 1, r: 0, d: 1 });
+      return { len: out.length, firstT: out[0].t, lastO: out[out.length - 1].o };
+    }, cap);
+    assert(capped.len === cap && capped.firstT === 1 && capped.lastO === 'reveal',
+      `expected the log held at ${cap} with the oldest dropped, got ${JSON.stringify(capped)}`);
+    ok('Quiz log: one row per step, unknown outcomes ignored, the cap drops the oldest');
+  } catch(e){ bad('Quiz log: append rules', e); }
+
+  // 407c. A logged step carries what the grade log cannot: WHICH room (the
+  //       grade log has no room key at all), and the room's rung and ACTUAL
+  //       elapsed days at that moment. The elapsed figure is the point --
+  //       this room sits on rung 3, whose nominal interval is 21 days, and
+  //       was last reviewed 9 days ago.
+  try {
+    await appEN.page.evaluate(() => window.__oqTestHooks.setQuizLog([]));
+    const last = Date.now() - 9 * DAY;
+    await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    const seq = [...seqs.r0, 'e6'];
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }), seq);
+    await appEN.page.evaluate(() => window.__oqTestHooks.logStep('miss'));
+
+    const log = await appEN.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(log.length === 1, `expected exactly one logged step, got ${JSON.stringify(log)}`);
+    const e0 = log[0];
+    assert(e0.k === r0Key, `expected the step attributed to the room holding the door, got ${JSON.stringify(e0.k)}`);
+    assert(e0.o === 'miss', `expected the outcome recorded, got ${JSON.stringify(e0.o)}`);
+    assert(e0.r === 3, `expected the room's rung at the time, got ${JSON.stringify(e0.r)}`);
+    assert(e0.d === 9, `expected the ACTUAL 9 days elapsed, not rung 3's nominal 21, got ${JSON.stringify(e0.d)}`);
+    assert(e0.p === seq.length, `expected the ply depth of the asked move, got ${e0.p} against ${seq.length}`);
+    ok('Quiz log: records the room, its rung, and the interval that actually ran');
+  } catch(e){ bad('Quiz log: step contents', e); }
+
+  // 407d. A room memorized but never graded is ON the schedule at rung 0
+  //       (bootstrapRoomReview), and its steps must read that way rather than
+  //       as "no schedule" -- those are the rooms most worth watching, and
+  //       filing them as unscheduled would drop them from every rate.
+  try {
+    await appEN.page.evaluate(() => window.__oqTestHooks.setQuizLog([]));
+    await appEN.page.evaluate(async (k) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      delete m[k]; await window.__reviewTestHooks.setReviews(m);
+    }, r0Key);
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }), [...seqs.r0, 'e6']);
+    await appEN.page.evaluate(() => window.__oqTestHooks.logStep('hit'));
+
+    const log = await appEN.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(log.length === 1 && log[0].o === 'hit', `expected the hit logged, got ${JSON.stringify(log)}`);
+    assert(log[0].r === 0,
+      `a memorized-but-ungraded room is at the bottom of the ladder, not off it: got ${JSON.stringify(log[0])}`);
+    ok('Quiz log: a memorized-but-never-graded room logs at rung 0, not as unscheduled');
+  } catch(e){ bad('Quiz log: bootstrapped rooms', e); }
 
   // 408b. Give up on a move: reveals it, scores it once, shortens the room,
   //       and carries on down the line rather than abandoning the question.
