@@ -1189,18 +1189,184 @@ async function getReviewGradeStats(){
 async function setReviewGradeStats(stats){
   return setMeta(REVIEW_GRADE_STATS_KEY, JSON.stringify(stats || {}));
 }
-/* SERIALIZED read-modify-write. The keyboard grade path does not await
-   gradeCurrentRoom (threeVR.js's onKeyDown fires and forgets), so pressing 1
-   then 2 to correct a mis-press can overlap: without a queue the second write
-   can be computed from a read taken before the first one landed, and one of
-   them is silently lost. A tally meant to accumulate over months should not
-   depend on how fast somebody changes their mind. */
+/* ---------- the grade event log ----------
+
+   One row per graded review: { t, r, n, d, g } -- when, the rung it was
+   reviewed AT, how many moves the room held at that moment, how many days had
+   actually elapsed, and the grade.
+
+   Why a log as well as the tally above. The tally answers "how does rung 3
+   perform" and nothing else. It cannot answer "do big rooms grade worse",
+   because room size is not in it and CANNOT BE ADDED AFTERWARDS: moveCount is
+   recomputed from the current repertoire on every render, so how big a room
+   was when you graded it in March is not something the app can reconstruct.
+   Rooms grow as replies are added, and they split.
+
+   `d` exists for the same reason, and fixes a bias in the tally: a grade is
+   filed under its NOMINAL rung, but a rung-2 room reviewed 25 days late is
+   evidence about 25 days, not 7. Late reviews fail more, and charging those
+   failures to an interval that was never actually tested makes the rung look
+   worse than it is -- worst for someone working through an overdue backlog,
+   which is exactly when the report is most wanted.
+
+   Both are kept because they lose different things: the tally holds LIFETIME
+   totals and never forgets, the log holds the joint distribution for as far
+   back as the cap allows. The tally is derivable from the log and not the
+   reverse, which is why the log had to exist before the data started arriving
+   rather than after. */
+const REVIEW_GRADE_LOG_KEY = 'threeReviewGradeLog';
+// ~50 bytes an event, so ~1MB when full. A few hundred mature rooms generate
+// maybe 1-2k events a year, making this about a decade of detail; the tally
+// above carries the lifetime totals past the rollover.
+const REVIEW_GRADE_LOG_CAP = 20000;
+
+/* Appends one event, returning a NEW array. `replacePrev` drops the entry this
+   same review already wrote -- the log follows the same "a correction replaces"
+   rule as tallyReviewGrade, or a re-graded room lands in the data twice.
+
+   Popping the tail is safe because this log has exactly one writer and every
+   write goes through recordReviewGrade's queue below, so "the last entry" is
+   unambiguous. The rung check is a cheap guard against that ceasing to be
+   true: a mismatch means something else appended in between, and dropping a
+   stranger's row would be worse than leaving a duplicate. */
+function appendGradeEvent(log, event, replacePrev = false){
+  const out = Array.isArray(log) ? log.slice() : [];
+  if(replacePrev && out.length && out[out.length - 1].r === event.r) out.pop();
+  out.push(event);
+  return out.length > REVIEW_GRADE_LOG_CAP ? out.slice(out.length - REVIEW_GRADE_LOG_CAP) : out;
+}
+
+async function getReviewGradeLog(){
+  const raw = await getMeta(REVIEW_GRADE_LOG_KEY);
+  try { const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+async function setReviewGradeLog(log){
+  return setMeta(REVIEW_GRADE_LOG_KEY, JSON.stringify(Array.isArray(log) ? log : []));
+}
+
+/* ---------- the quiz step log ----------
+
+   One row per move ASKED by the board quiz: { t, k, o, p, r, d } -- when, the
+   room the move lives in, the outcome, how deep into the line it sat, and the
+   room's ladder rung and actual elapsed days at that moment.
+
+   Why this exists ALONGSIDE the grade log rather than inside it. The VR grade
+   is self-assessed, room-level, and taken with the move objects in view; the
+   quiz is objectively scored, move-level, and cues you one move at a time --
+   which is also how a real game tests you. For CALIBRATION the quiz is the
+   better instrument, and deliberately not folded into the grade tally, which
+   measures how you GRADE and would be corrupted by mixing in a different
+   instrument's verdicts (the same reason demoteRoomReview is excluded there).
+
+   `k` is the room key, which the grade log does not carry -- so this is the
+   log that can be joined against anything room-shaped later: occurrence
+   frequency, castle, how much new material was memorized during the interval.
+
+   Outcomes are one per step, mutually exclusive, written when the step
+   resolves rather than when it is attempted:
+     hit     correct first try
+     unsure  correct, but flagged as guessing before committing
+     miss    wrong at least once, then eventually produced
+     reveal  gave up and was shown the move */
+const QUIZ_LOG_KEY = 'threeQuizLog';
+
+/* THREE quizzes write here, and they are not three versions of the same test
+   -- they are three LAYERS, which is why one log rather than three:
+
+     mnem     square+piece <-> word/image   the alphabet every room is built on
+     list     an object list's items        the wall content rooms are filled with
+     opening  position -> move              the repertoire itself
+
+   A miss in the opening quiz has at least three causes: you don't know the
+   line, you don't reliably know what (say) knight-on-e4 looks like, or you
+   know both and the wrong image surfaced. Those need completely different
+   fixes, and only a log that spans the layers -- in one time order -- can tell
+   them apart. Both lower-layer failures are ones the user has actually hit.
+
+   `k` is the subject tested, typed by `q`: a room key, a "square|piece", or an
+   item name. The rest are kind-specific and simply absent where they have no
+   meaning (JSON omits them), so a row costs only what it carries. */
+const QUIZ_KINDS = ['opening', 'mnem', 'list'];
+/* PER-KIND caps, not one shared budget -- the part that would otherwise bite.
+   A mnemonics drill runs a few hundred trials in a sitting where an opening
+   session runs a few dozen, so under one cap the alphabet layer would steadily
+   evict the repertoire layer, which is the most valuable of the three. Rows
+   carrying a room key run ~145 bytes; the shorter kinds about 90. */
+const QUIZ_LOG_CAPS = { opening: 10000, mnem: 10000, list: 5000 };
+// a kind added later is still BOUNDED rather than dropped: silently discarding
+// real answers would be a worse failure than an oddly-sized bucket
+const QUIZ_LOG_CAP_DEFAULT = 5000;
+const QUIZ_OUTCOMES = ['hit', 'unsure', 'miss', 'reveal'];
+// 'reveal' covers the mnemonics quiz's Give up and the list quiz's Skip alike:
+// both mean "I stopped and was shown it", which is one fact, not two.
+function quizEventKind(e){ return (e && e.q) || 'opening'; }
+
+/* Appends one step, returning a NEW array. No replacement rule, unlike the
+   grade log: a quiz step resolves exactly once and there is no correcting it
+   afterwards, so every call is a fresh row.
+
+   Trimming is within the event's own kind, so a long drill of one kind can
+   never shorten another's history. */
+function appendQuizEvent(log, event){
+  if(!event || !QUIZ_OUTCOMES.includes(event.o)) return Array.isArray(log) ? log.slice() : [];
+  const out = (Array.isArray(log) ? log : []).slice();
+  out.push(event);
+  const kind = quizEventKind(event);
+  const cap = QUIZ_LOG_CAPS[kind] || QUIZ_LOG_CAP_DEFAULT;
+  let over = out.reduce((n, e) => n + (quizEventKind(e) === kind ? 1 : 0), 0) - cap;
+  if(over <= 0) return out;
+  const kept = [];
+  for(const e of out){
+    if(over > 0 && quizEventKind(e) === kind){ over--; continue; }   // oldest of THIS kind
+    kept.push(e);
+  }
+  return kept;
+}
+
+async function getQuizLog(){
+  const raw = await getMeta(QUIZ_LOG_KEY);
+  try { const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+async function setQuizLog(log){
+  return setMeta(QUIZ_LOG_KEY, JSON.stringify(Array.isArray(log) ? log : []));
+}
+/* Serialized for the same reason the grade log is: the quiz's own writes are
+   fire-and-forget from the move handler, and a fast session can resolve two
+   steps inside one read-modify-write. */
+let quizLogQueue = Promise.resolve();
+function recordQuizStep(event){
+  const next = quizLogQueue.then(async () => {
+    const log = appendQuizEvent(await getQuizLog(), event);
+    await setQuizLog(log);
+    return log;
+  });
+  quizLogQueue = next.catch(() => {});
+  return next;
+}
+
+/* SERIALIZED read-modify-write, for both the tally and the log. The keyboard
+   grade path does not await gradeCurrentRoom (threeVR.js's onKeyDown fires and
+   forgets), so pressing 1 then 2 to correct a mis-press can overlap: without a
+   queue the second write can be computed from a read taken before the first
+   one landed, and one of them is silently lost. A record meant to accumulate
+   over months should not depend on how fast somebody changes their mind.
+
+   opts: { replacing, moves, elapsedDays, now } -- `replacing` is the grade this
+   same review already contributed (see tallyReviewGrade), `moves` the room's
+   size at this moment, `elapsedDays` how long the interval actually ran. */
 let gradeStatsQueue = Promise.resolve();
-function recordReviewGrade(step, grade, replacing = null){
+function recordReviewGrade(step, grade, opts = {}){
+  const { replacing = null, moves = 0, elapsedDays = null, now = Date.now() } = opts;
   const next = gradeStatsQueue.then(async () => {
-    const stats = tallyReviewGrade(await getReviewGradeStats(), step, grade, replacing);
-    await setReviewGradeStats(stats);
-    return stats;
+    const [prevStats, prevLog] = await Promise.all([getReviewGradeStats(), getReviewGradeLog()]);
+    const stats = tallyReviewGrade(prevStats, step, grade, replacing);
+    const rung = Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, Math.trunc(Number(step)) || 0));
+    const log = appendGradeEvent(prevLog,
+      { t: now, r: rung, n: moves || 0, d: elapsedDays, g: grade }, !!replacing);
+    await Promise.all([setReviewGradeStats(stats), setReviewGradeLog(log)]);
+    return { stats, log };
   });
   // the chain survives a failed write rather than poisoning every later grade
   // with the same rejection

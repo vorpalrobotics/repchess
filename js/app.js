@@ -1,10 +1,10 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-297';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-299';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-64';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-418';
+const BUILD_TAG = '-421';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7144,6 +7144,15 @@ async function buildBackupData(){
        from anything else -- a restore that dropped it would silently reset
        the measurement to zero and nothing on screen would say so. */
     reviewGradeStats: await getMeta(REVIEW_GRADE_STATS_KEY),
+    /* ...and the per-review event log behind them (rung, room size, actual
+       elapsed days, grade). The tally is derivable from this and not the
+       reverse, so of the two it is the one that must survive a restore. */
+    reviewGradeLog: await getMeta(REVIEW_GRADE_LOG_KEY),
+    /* ...and the board quiz's own per-move log. A different instrument from
+       the grade log -- objectively scored and cued one move at a time, the
+       way a real game tests you -- and the only one carrying a room key, so
+       it is what any later room-shaped analysis has to join through. */
+    quizLog: await getMeta(QUIZ_LOG_KEY),
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     /* Perfect Opening's SETTINGS -- the per-move max-lines and depth
@@ -7306,6 +7315,8 @@ async function applyBackupData(data, onMnemProgress){
     // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
     if(typeof data.reviewGradeStats === 'string') await setMeta(REVIEW_GRADE_STATS_KEY, data.reviewGradeStats);
+    if(typeof data.reviewGradeLog === 'string') await setMeta(REVIEW_GRADE_LOG_KEY, data.reviewGradeLog);
+    if(typeof data.quizLog === 'string') await setMeta(QUIZ_LOG_KEY, data.quizLog);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     // v7 fields. Absent in any older backup, and guarded like every field
@@ -9368,7 +9379,7 @@ setCastleInfoProvider({
     for(const id of [...listIds].sort()){
       const list = lists.find(l => l.id === id);
       if(!list) continue;
-      list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, posLabel: `${list.name} #${i + 1}` }));
+      list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, listId: id, posLabel: `${list.name} #${i + 1}` }));
     }
     return entries;
   },
@@ -10153,6 +10164,7 @@ function quizLoadTrial(){
   const mode = Math.random() < 0.5 ? 'word' : 'square';
   QUIZ.item = item;
   QUIZ.mode = mode;
+  QUIZ.trialStart = Date.now();   // per-TRIAL clock, for the latency in quizLogTrial
 
   if(mode === 'word'){
     QUIZ.expected = (MNEM_PIECE_LETTER[item.piece] + item.square).toLowerCase();
@@ -10164,6 +10176,35 @@ function quizLoadTrial(){
   $('quizInput').focus();
 }
 
+/* Logs one mnemonics trial to the shared quiz log (db.js's QUIZ_LOG_KEY),
+   layer 1 of three -- see that file's own comment for why the layers live in
+   one store.
+
+   LATENCY is the point here, more than correctness. This quiz is a type-ahead:
+   it scores a hit the instant the typed text matches and there is no
+   wrong-answer submission, so the only way to record a miss is to press Give
+   up -- which people avoid by persevering. Correctness is therefore close to
+   binary by construction and heavily biased toward `hit`, while time-to-answer
+   still separates "knew it" from "dug for it". Retrieval latency is a
+   well-established strength measure, and the session already runs a clock; the
+   only new thing is timing each trial rather than the whole run.
+
+   `ms` includes typing time, not just retrieval -- unavoidable for a
+   type-ahead, and consistent across trials, so it compares fine with itself. */
+function quizLogTrial(outcome){
+  if(!QUIZ || !QUIZ.item) return;
+  const now = Date.now();
+  recordQuizStep({
+    t: now, q: 'mnem', o: outcome,
+    k: `${QUIZ.item.square}|${QUIZ.item.piece}`,
+    // which direction was tested: 'word' shows the word and asks for the
+    // square, 'square' shows the square and asks for the word. Paired-associate
+    // recall is famously asymmetric, so the two are not one measurement.
+    m: QUIZ.mode,
+    ms: Math.max(0, now - (QUIZ.trialStart || now)),
+  }).catch(err => console.error('[quiz] could not log a mnemonics trial', err));
+}
+
 function quizAdvance(){
   QUIZ.idx++;
   if(QUIZ.idx >= QUIZ.trials) quizFinish();
@@ -10173,6 +10214,7 @@ function quizAdvance(){
 function quizGiveUp(){
   if(!QUIZ || QUIZ.finished) return;
   QUIZ.results.push(false);
+  quizLogTrial('reveal');
   $('quizPromptArea').classList.add('quiz-wrong');
   $('quizFeedback').textContent = `Answer: ${QUIZ.mode==='word' ? QUIZ.item.word : QUIZ.expected}`;
   $('quizInput').disabled = true;
@@ -10322,6 +10364,18 @@ mountInfoBar('quizBar', 'Quiz Mnemonics', ()=>{
 $('quizAgainBtn').onclick = ()=>{ quizOpenSetup(); };
 $('quizGiveUpBtn').onclick = quizGiveUp;
 
+/* The current mnemonics trial, for driving the real type-ahead from a test:
+   without the expected string there is no way to exercise the hit path, and
+   the hit path is where the latency measurement lives. */
+if(localStorage.getItem('threeTestDebug')){
+  window.__mnemQuizTestHooks = {
+    trial: () => (QUIZ && QUIZ.item)
+      ? { square: QUIZ.item.square, piece: QUIZ.item.piece, mode: QUIZ.mode, expected: QUIZ.expected }
+      : null,
+    giveUp: () => quizGiveUp(),
+  };
+}
+
 $('quizInput').addEventListener('input', ()=>{
   if(!QUIZ || QUIZ.finished) return;
   const typed = $('quizInput').value.trim().toLowerCase();
@@ -10329,6 +10383,7 @@ $('quizInput').addEventListener('input', ()=>{
     $('quizPromptArea').classList.remove('quiz-wrong');
     if(typed.length>0 && typed === QUIZ.expected){
       QUIZ.results.push(true);
+      quizLogTrial('hit');
       $('quizPromptArea').classList.add('quiz-correct');
       $('quizFeedback').innerHTML = '<i class="fa-solid fa-check"></i>';
       $('quizInput').disabled = true;
@@ -10440,6 +10495,55 @@ async function oqRoomIndexes(lines){
 function oqMissedRoomSeq(){
   const s = (OQ.seq || []).slice(0, -1);
   return s.length ? s : null;
+}
+
+/* ---------- quiz step logging (db.js's QUIZ_LOG_KEY) ----------
+
+   One row per move asked, written when the step RESOLVES -- so a wrong answer
+   followed by a correct retry is one `miss`, not a miss plus a hit. Called
+   from oqInputHandler's correct branch and from oqGiveUp, the only two places
+   a step ends; the wrong-answer branch deliberately logs nothing, because the
+   player is still being asked.
+
+   Rides oqReviewWrites, the same serialized queue the demotions use, for the
+   same reasons: it is fire-and-forget from the move handler, and the room
+   lookup it needs is an async build nothing on screen should wait for.
+
+   The harness has no cm-chessboard, so the move handler itself cannot be
+   driven end to end (see __oqTestHooks) -- the hook exposes this function so
+   the logging is still exercised against real IDB. */
+function oqLogQuizStep(outcome){
+  const roomSeq = oqMissedRoomSeq();
+  if(!roomSeq) return oqReviewWrites;
+  const at = Date.now();
+  const ply = (OQ.seq || []).length;
+  oqReviewWrites = oqReviewWrites
+    .then(() => oqBuildQuizStep(roomSeq, outcome, ply, at))
+    .catch(err => console.error('[quiz] could not log a step', err));
+  return oqReviewWrites;
+}
+async function oqBuildQuizStep(roomSeq, outcome, ply, at){
+  const castle = OQ.castleName || inheritedCastle(roomSeq, OQ.line.id);
+  if(!castle) return null;
+  // lazily built, exactly as oqDemoteMissedRoom does -- and shared with it, so
+  // a session pays for a cold gatherBuiltCastles at most once
+  if(!OQ.roomAnchors || !OQ.roomNames) Object.assign(OQ, await oqRoomIndexes());
+  const key = roomKeyForPosKey(OQ.roomAnchors, castleInstanceId(OQ.line.id, castle),
+                               positionKey(fenForSeq(roomSeq)));
+  if(!key) return null;
+  /* effectiveRoomReview, not the raw record: a room memorized but never graded
+     is on the schedule at rung 0 (bootstrapRoomReview), and filing its steps
+     as "no schedule" would drop exactly the rooms most worth watching. A room
+     that was never memorized at all really does have no rung, and reads null.
+     Same elapsed-days rule as the VR grade path: from the last real review,
+     else from the memorized timestamp. */
+  const rec = effectiveRoomReview(await getRoomReviews(), MEMORIZED_ROOMS, key);
+  const since = (rec && rec.last) || MEMORIZED_ROOMS[key] || null;
+  return recordQuizStep({
+    t: at, q: 'opening', k: key, o: outcome, p: ply,
+    r: rec ? (rec.step || 0) : null,
+    d: since == null ? null : Math.max(0, Math.round((at - since) / DAY_MS)),
+  });
 }
 /* Serialized, because each demotion is a read-modify-write of one shared
    IDB record and two misses in quick succession would otherwise race and
@@ -10872,6 +10976,7 @@ function oqGiveUp(){
   OQ.busy = true;
   OQ.unsureThisStep = false;   // a miss is the stronger signal; nothing to add
   oqUpdateGiveUp(); oqUpdateUnsure();
+  oqLogQuizStep('reveal');   // the step ends here -- see oqLogQuizStep
   const answer = OQ.expected;
   const sq = oqMoveSquares([...OQ.seq, answer]);
   oqClearHighlights();
@@ -10937,6 +11042,10 @@ function oqInputHandler(event){
     oqUpdateScore();
     OQ.busy = true;
     oqUpdateGiveUp(); oqUpdateUnsure();
+    // the step resolves here. A wrong attempt earlier in this same step
+    // outranks the unsure flag: having actually produced the wrong move is
+    // harder evidence than having felt shaky about the right one.
+    oqLogQuizStep(OQ.missedThisStep ? 'miss' : (guessed ? 'unsure' : 'hit'));
     oqHighlight(event.squareTo, 'to');   // mark our TO square olive (FROM already marked)
     oqSetStatus(guessed ? 'Correct — but you were guessing' : 'Correct', guessed ? '' : 'oq-hit');
     setTimeout(oqAfterCorrect, 200);   // run after this validate handler returns & the move settles
@@ -11301,6 +11410,16 @@ if(localStorage.getItem('threeTestDebug')){
     // The harness has no cm-chessboard, so the real move handler can't be
     // driven end to end -- these are the same calls it makes.
     missedRoomSeq: () => oqMissedRoomSeq(),
+    /* the per-move step log. logStep drives the same call the real move
+       handler makes -- the harness has no cm-chessboard, so that handler
+       cannot be driven end to end, and this is how the logging itself gets
+       exercised against real IDB. It returns the queue so a test can await
+       the write instead of polling for it. */
+    logStep: (outcome) => oqLogQuizStep(outcome),
+    getQuizLog: () => getQuizLog(),
+    setQuizLog: (log) => setQuizLog(log),
+    appendQuizEvent: (log, event) => appendQuizEvent(log, event),
+    quizLogCaps: () => ({ ...QUIZ_LOG_CAPS }),
     demoteMissedRoom: (roomSeq) => oqDemoteMissedRoom(roomSeq),
     demotedRooms: () => JSON.parse(JSON.stringify((OQ && OQ.demoted) || {})),
     roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),
@@ -13404,6 +13523,12 @@ if(localStorage.getItem('threeTestDebug')){
     getGradeStats: () => getReviewGradeStats(),
     setGradeStats: (stats) => setReviewGradeStats(stats),
     rawGradeStatsMeta: () => getMeta(REVIEW_GRADE_STATS_KEY),
+    // ...and the event log beside them: the pure append (replacement + cap)
+    // separately from the store, same split as the tally above
+    appendGradeEvent: (log, event, replacePrev) => appendGradeEvent(log, event, replacePrev),
+    gradeLogCap: () => REVIEW_GRADE_LOG_CAP,
+    getGradeLog: () => getReviewGradeLog(),
+    setGradeLog: (log) => setReviewGradeLog(log),
   };
 }
 

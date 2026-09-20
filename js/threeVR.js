@@ -6,7 +6,7 @@
    door instead of just spawning inside it.
 */
 import { openAssetPicker } from './assets.js?v=20260804-88';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-64';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-65';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let THREE = null;
@@ -605,6 +605,12 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // building -- keeps its centre pair in-room (nowhere else to show it).
       entryNoStreet: r === entry && !opts.backToStreet,
       posKey: r.posKey,   // first-4-FEN-fields for this room's position (mini-board icon)
+      /* how many "opponent played X, I reply Y" facts this room teaches
+         (genRoom.moveCount -- every member's out-degree, summed). Carried in
+         so the grade log can record how big a room was AT THE MOMENT it was
+         graded: moveCount is recomputed from the current repertoire on every
+         render, so it cannot be recovered after the fact. */
+      moveCount: r.moveCount || 0,
       // this generation's live shape snapshot (member/exit position keys) --
       // see MEMORIZED_SHAPES for what captures it and why.
       shape: r.shape,
@@ -1642,7 +1648,20 @@ async function gradeCurrentRoom(grade){
   const rung = (before && before.step) || 0;
   const replacing = preGradeRecord.tallied;
   preGradeRecord.tallied = grade;
-  await Promise.all([persistReviews(), recordReviewGrade(rung, grade, replacing)]);
+  /* How long the interval ACTUALLY ran, which is not the rung's nominal length
+     whenever a review lands late. Measured from the last real review, or from
+     the memorized timestamp for a bootstrapped room that has never been graded
+     -- the same date bootstrapRoomReview schedules its first review from. */
+  const now = Date.now();
+  const since = (before && before.last) || MEMORIZED[key] || null;
+  await Promise.all([
+    persistReviews(),
+    recordReviewGrade(rung, grade, {
+      replacing, now,
+      moves: (ROOMS[key] && ROOMS[key].moveCount) || 0,
+      elapsedDays: since == null ? null : Math.max(0, Math.round((now - since) / DAY_MS)),
+    }),
+  ]);
   return rec;
 }
 
@@ -9972,6 +9991,10 @@ export async function openThreeTest(containerEl, opts){
       // e.g. "obj-L1") -- for testing Part A's "fully decorated" slot check
       // without scraping placeholder sprites out of the scene by hand.
       moveObjectSlotIds: (roomKey) => moveObjectSlots(roomKey).map(s => s.id),
+      // a room's move count as the VR side sees it -- so the grade-log test
+      // can check the value that was threaded through rather than hard-coding
+      // a number the castle generator owns
+      roomMoveCount: (roomKey) => (ROOMS[roomKey || currentRoomKey] || {}).moveCount ?? null,
       // full slot geometry (id/side/order/x/z) -- for testing that a new
       // side-door's position (see exits() above) lands near its sibling
       // member's own slot rather than the generic door-hash placement.

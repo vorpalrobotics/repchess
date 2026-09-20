@@ -1495,6 +1495,55 @@ try {
     assert(playShown, 'whole-system coverage failed to start despite covering the d4 mnemonic');
     ok('whole-system coverage still includes the lead-in move a castle subtree excludes');
   } catch(e){ bad('whole-system coverage includes lead-in item', e); }
+
+  // 14b. Each trial is logged (db.js's QUIZ_LOG_KEY, layer 1 of three -- the
+  //      alphabet every room is built on). This is the layer a room-level miss
+  //      can't distinguish itself from: failing to recall a line and failing
+  //      to map a rarely-used move image look identical from the opening quiz,
+  //      and both have happened in real use.
+  //
+  //      LATENCY is the reason this layer is worth logging at all. The quiz is
+  //      a type-ahead -- it scores a hit the moment the text matches and has no
+  //      wrong-answer submission -- so correctness is nearly binary by
+  //      construction and biased toward hits. Time-to-answer is what still
+  //      separates "knew it" from "dug for it".
+  try {
+    const before = await app7.page.evaluate(() => window.__mnemQuizTestHooks.trial());
+    assert(before && before.expected, `test setup issue: expected a live trial, got ${JSON.stringify(before)}`);
+
+    // type the expected answer through the REAL type-ahead, the only path
+    // that scores a hit
+    await app7.page.fill('#quizInput', before.expected);
+    await app7.page.waitForFunction(
+      async () => (await window.__oqTestHooks.getQuizLog()).some(e => e.q === 'mnem'),
+      { timeout: 5000 });
+    const hit = (await app7.page.evaluate(() => window.__oqTestHooks.getQuizLog()))
+      .filter(e => e.q === 'mnem').pop();
+    assert(hit.o === 'hit', `expected a matched type-ahead logged as a hit, got ${JSON.stringify(hit)}`);
+    assert(hit.k === `${before.square}|${before.piece}`,
+      `expected the square+piece as the subject key, got ${JSON.stringify(hit.k)}`);
+    assert(hit.m === before.mode,
+      `expected the retrieval DIRECTION recorded -- word->square and square->word are not one measurement, got ${JSON.stringify(hit.m)}`);
+    assert(typeof hit.ms === 'number' && hit.ms >= 0,
+      `expected a per-trial latency, got ${JSON.stringify(hit.ms)}`);
+
+    // ...and Give up is the only way this quiz can score a failure, so it has
+    // to reach the log too, as the same 'reveal' the list quiz's Skip uses
+    await app7.page.waitForTimeout(900);   // the hit's own advance delay
+    const next = await app7.page.evaluate(() => window.__mnemQuizTestHooks.trial());
+    if(next){
+      await app7.page.evaluate(() => window.__mnemQuizTestHooks.giveUp());
+      await app7.page.waitForFunction(
+        async () => (await window.__oqTestHooks.getQuizLog()).filter(e => e.q === 'mnem').length >= 2,
+        { timeout: 5000 });
+      const gave = (await app7.page.evaluate(() => window.__oqTestHooks.getQuizLog()))
+        .filter(e => e.q === 'mnem').pop();
+      assert(gave.o === 'reveal', `expected Give up logged as a reveal, got ${JSON.stringify(gave)}`);
+      assert(gave.k === `${next.square}|${next.piece}`,
+        `expected the given-up trial's own subject, got ${JSON.stringify(gave.k)}`);
+    }
+    ok('mnemonics quiz: each trial is logged with its square+piece, direction, outcome and latency');
+  } catch(e){ bad('mnemonics quiz: trial logging', e); }
 } finally {
   await app7.close();
 }
@@ -12918,6 +12967,36 @@ try {
     ok('object list quiz: skip counts as a miss, and the summary shows the right hit/miss tally');
   } catch(e){ bad('object list quiz: skip and end-of-quiz summary', e); }
 
+  // 169b. Every step of that run was logged (db.js's QUIZ_LOG_KEY, layer 2 of
+  //       three -- the wall content rooms are filled with). Tests 166-169 just
+  //       drove one of each outcome and both cue types, so this checks the
+  //       whole run in one go rather than re-driving it.
+  //
+  //       Forgetting one item of a list is a failure mode that has actually
+  //       happened in use, and from the opening quiz alone it is
+  //       indistinguishable from not knowing the line -- which is the entire
+  //       reason this layer is logged separately.
+  try {
+    const log = await appQL.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    const rows = log.filter(e => e.q === 'list');
+    assert(rows.length === 3, `expected one row per step of the 3-item run, got ${JSON.stringify(rows)}`);
+    assert(rows.every(e => e.l === 'quiz_list'),
+      `expected every row to name the list it came from, got ${JSON.stringify(rows.map(e => e.l))}`);
+
+    const [oven, sink, fridge] = rows;
+    assert(oven.k === 'Oven' && oven.o === 'miss' && oven.m === 'image',
+      `expected the wrong answer on the illustrated item logged as a miss cued by image, got ${JSON.stringify(oven)}`);
+    assert(sink.k === 'Sink' && sink.o === 'hit' && sink.m === 'slot',
+      `expected the correct answer on the un-illustrated item logged as a hit cued by slot, got ${JSON.stringify(sink)}`);
+    // Skip is a give-up, the same fact as the mnemonics quiz's Give up, so it
+    // shares that outcome rather than inventing a fourth word for it
+    assert(fridge.k === 'Fridge' && fridge.o === 'reveal',
+      `expected Skip logged as a reveal, got ${JSON.stringify(fridge)}`);
+    assert(rows.every(e => typeof e.ms === 'number' && e.ms >= 0),
+      `expected a latency on every row, got ${JSON.stringify(rows.map(e => e.ms))}`);
+    ok('object list quiz: every step is logged with its item, list, cue type and outcome');
+  } catch(e){ bad('object list quiz: step logging', e); }
+
   // 170. "Quiz again" restarts at item 1 with a reset score; "Quit quiz"
   //      mid-run returns to the editor, not the list grid.
   try {
@@ -21944,6 +22023,37 @@ try {
     ok('Grade statistics: counted at the rung given, a correction un-counted, input never mutated');
   } catch(e){ bad('Grade statistics: the fold', e); }
 
+  // 369bb. The event log's own two rules: a correction replaces the entry the
+  //        same review already wrote (or a re-graded room lands in the data
+  //        twice), and the log is capped from the FRONT so the newest events
+  //        are the ones kept.
+  try {
+    const ev = (r, g, n = 1) => ({ t: 1, r, n, d: r, g });
+    const l1 = await H('appendGradeEvent', [], ev(2, 'A'));
+    assert(l1.length === 1 && l1[0].g === 'A', `expected the event appended, got ${JSON.stringify(l1)}`);
+
+    const l2 = await H('appendGradeEvent', l1, ev(2, 'C'), true);
+    assert(l2.length === 1 && l2[0].g === 'C',
+      `expected a correction to replace rather than append, got ${JSON.stringify(l2)}`);
+
+    // ...but only when the tail really is this review's own row. A mismatched
+    // rung means something else appended in between, and dropping a stranger's
+    // event would be worse than leaving a duplicate.
+    const l3 = await H('appendGradeEvent', [ev(4, 'A')], ev(2, 'B'), true);
+    assert(l3.length === 2, `expected a mismatched tail left alone, got ${JSON.stringify(l3)}`);
+
+    const cap = await H('gradeLogCap');
+    const capped = await appEF.page.evaluate((c) => {
+      const full = Array.from({ length: c }, (_, i) => ({ t: i, r: 0, n: 1, d: 1, g: 'A' }));
+      const out = window.__reviewTestHooks.appendGradeEvent(full, { t: 999999, r: 0, n: 1, d: 1, g: 'C' });
+      return { len: out.length, firstT: out[0].t, lastG: out[out.length - 1].g };
+    }, cap);
+    assert(capped.len === cap, `expected the log held at its cap of ${cap}, got ${capped.len}`);
+    assert(capped.firstT === 1 && capped.lastG === 'C',
+      `expected the OLDEST event dropped and the newest kept, got ${JSON.stringify(capped)}`);
+    ok('Grade log: a correction replaces the same review\'s entry, and the cap drops the oldest');
+  } catch(e){ bad('Grade log: append rules', e); }
+
   // 369c. The tally persists and survives a real Full Backup round trip.
   //       Unlike a review schedule there is nothing to reconstruct it from --
   //       a restore that dropped it would reset months of measurement to zero
@@ -21951,26 +22061,45 @@ try {
   try {
     await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeStats(
       { '0': { A: 9, B: 2, C: 1 }, '3': { A: 4, B: 0, C: 0 } }));
+    await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeLog(
+      [{ t: 1700000000000, r: 3, n: 11, d: 25, g: 'B' }]));
+    await appEF.page.evaluate(() => window.__oqTestHooks.setQuizLog(
+      [{ t: 1700000000000, k: 'cas:L1_X:abc', o: 'miss', p: 6, r: 2, d: 14 }]));
     const stored = await H('getGradeStats');
     assert(stored['0'].A === 9 && stored['3'].A === 4,
       `expected the tally to persist, got ${JSON.stringify(stored)}`);
+    const storedLog = await H('getGradeLog');
+    assert(storedLog.length === 1 && storedLog[0].n === 11,
+      `expected the event log to persist, got ${JSON.stringify(storedLog)}`);
 
     const exported = await appEF.page.evaluate(() => window.__backupTestHooks.buildBackupData());
     assert(typeof exported.reviewGradeStats === 'string' && /"A":9/.test(exported.reviewGradeStats),
       `expected the tally carried in the backup, got ${JSON.stringify(exported.reviewGradeStats)}`);
+    assert(typeof exported.reviewGradeLog === 'string' && /"n":11/.test(exported.reviewGradeLog),
+      `expected the event log carried in the backup, got ${JSON.stringify(exported.reviewGradeLog)}`);
+    assert(typeof exported.quizLog === 'string' && /"o":"miss"/.test(exported.quizLog),
+      `expected the quiz step log carried in the backup, got ${JSON.stringify(exported.quizLog)}`);
     assert(exported.version >= 8,
-      `expected the backup version bumped for the new field, got ${exported.version}`);
+      `expected the backup version bumped for the new fields, got ${exported.version}`);
 
     // out and back in through a REAL restore, which clears the meta store
     // first -- so this proves the round trip, not just that the field is written
     await seedBackup(appEF.page, {
       version: 8, user: 'tester', lines: [], games: [],
       reviewGradeStats: exported.reviewGradeStats,
+      reviewGradeLog: exported.reviewGradeLog,
+      quizLog: exported.quizLog,
     });
     const restored = await H('getGradeStats');
     assert(restored['0'].A === 9 && restored['0'].C === 1 && restored['3'].A === 4,
       `expected the tally to survive a full restore, got ${JSON.stringify(restored)}`);
-    ok('Grade statistics: the tally persists and survives a Full Backup round trip');
+    const restoredLog = await H('getGradeLog');
+    assert(restoredLog.length === 1 && restoredLog[0].n === 11 && restoredLog[0].d === 25,
+      `expected the event log to survive a full restore -- the tally is derivable from it and not the reverse, so this is the one that must not be lost: ${JSON.stringify(restoredLog)}`);
+    const restoredQuiz = await appEF.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(restoredQuiz.length === 1 && restoredQuiz[0].o === 'miss' && restoredQuiz[0].d === 14,
+      `expected the quiz step log to survive a full restore too, got ${JSON.stringify(restoredQuiz)}`);
+    ok('Grade statistics: the tally and both logs persist and survive a Full Backup round trip');
   } catch(e){ bad('Grade statistics: persistence and backup', e); }
 
   /* --- Review Forecast, Phase 1 (Documents/review-forecast.md). The whole
@@ -23438,11 +23567,16 @@ try {
   //       wrong interval, and in the flattering direction.
   try {
     const now = Date.now();
-    await appEJ.page.evaluate(() => window.__reviewTestHooks.setGradeStats({}));
+    await appEJ.page.evaluate(() => {
+      window.__reviewTestHooks.setGradeStats({});
+      return window.__reviewTestHooks.setGradeLog([]);
+    });
     // the dirtySeen ledger is carried through so no structural demotion can
     // move the rung out from under this (it only runs on VR open today, but
     // the test shouldn't depend on that staying true)
     const held = await record();
+    // last review 10 days ago on rung 2, whose NOMINAL interval is 7 -- the
+    // mismatch is deliberate, see the elapsed-days assertion below
     await seedRecord({ ...held, last: now - 10 * DAY, due: now - DAY, step: 2, lastGrade: 'A' });
     await E('enter', keys.alpha);                    // clears preGradeRecord: a fresh visit
     await appEJ.page.waitForTimeout(150);
@@ -23469,6 +23603,30 @@ try {
       `expected one review to count once however many times it was graded, got ${total} in ${JSON.stringify(after)}`);
     ok('Grade statistics: the live path tallies against the rung reviewed, and a correction replaces it');
   } catch(e){ bad('Grade statistics: live grading path', e); }
+
+  // 389c. The event log captures the two things the tally cannot, and neither
+  //       is recoverable later: how big the room was at that moment (moveCount
+  //       is recomputed from the current repertoire on every render), and how
+  //       long the interval ACTUALLY ran. The second is the one that matters
+  //       for a backlog -- this review sat 10 days on a rung whose nominal
+  //       interval is 7, and filing it as evidence about 7 days would blame
+  //       the rung for a lateness it never caused.
+  try {
+    const log = await appEJ.page.evaluate(() => window.__reviewTestHooks.getGradeLog());
+    assert(log.length === 1,
+      `expected one logged event for one review, however many times it was graded: ${JSON.stringify(log)}`);
+    const e0 = log[0];
+    assert(e0.g === 'C' && e0.r === 2,
+      `expected the corrected grade at the rung reviewed, got ${JSON.stringify(e0)}`);
+    assert(e0.d === 10,
+      `expected the ACTUAL 10 days elapsed, not the rung's nominal ${LADDER[2]}, got ${JSON.stringify(e0)}`);
+
+    const size = await E('roomMoveCount', keys.alpha);
+    assert(size > 0, `test setup issue: expected the room to teach at least one move, got ${size}`);
+    assert(e0.n === size,
+      `expected the room's move count threaded through to the log, got ${e0.n} against ${size}`);
+    ok('Grade log: records the room\'s size and the interval that actually ran, not the nominal one');
+  } catch(e){ bad('Grade log: room size and actual elapsed interval', e); }
 
   // 390. A room memorized but never graded is already at the bottom of the
   //      ladder -- there's nothing to demote, and no reason to invent a
@@ -23916,6 +24074,110 @@ try {
     assert(rec.step === 2, `expected the corridor's own record demoted, got ${JSON.stringify(rec)}`);
     ok("Quiz miss: a miss inside a corridor blames the whole corridor, by name, not a room that doesn't exist");
   } catch(e){ bad('Quiz miss: corridor member attribution', e); }
+
+  /* --- the per-move quiz step log (db.js's QUIZ_LOG_KEY). The objective
+     counterpart to the self-graded VR walk: scored rather than self-assessed,
+     move-level rather than room-level, and cued one move at a time the way a
+     real game tests you. Deliberately NOT folded into the grade tally, which
+     measures how you grade. --- */
+
+  // 407b. The pure append: one row per step, an unrecognised outcome adds
+  //       nothing rather than a row nobody can interpret, and the cap drops
+  //       the oldest.
+  try {
+    const one = await appEN.page.evaluate(() =>
+      window.__oqTestHooks.appendQuizEvent([], { t: 1, k: 'r', o: 'hit', p: 2, r: 0, d: 1 }));
+    assert(one.length === 1 && one[0].o === 'hit', `expected the step appended, got ${JSON.stringify(one)}`);
+
+    const bad1 = await appEN.page.evaluate(() =>
+      window.__oqTestHooks.appendQuizEvent([{ t: 1, k: 'r', o: 'hit', p: 2, r: 0, d: 1 }], { t: 2, k: 'r', o: 'wat' }));
+    assert(bad1.length === 1, `expected an unrecognised outcome to add no row, got ${JSON.stringify(bad1)}`);
+
+    const caps = await appEN.page.evaluate(() => window.__oqTestHooks.quizLogCaps());
+    const cap = caps.opening;
+    const capped = await appEN.page.evaluate((c) => {
+      const full = Array.from({ length: c }, (_, i) => ({ t: i, q: 'opening', k: 'r', o: 'hit', p: 1, r: 0, d: 1 }));
+      const out = window.__oqTestHooks.appendQuizEvent(full, { t: 999999, q: 'opening', k: 'r', o: 'reveal', p: 1, r: 0, d: 1 });
+      return { len: out.length, firstT: out[0].t, lastO: out[out.length - 1].o };
+    }, cap);
+    assert(capped.len === cap && capped.firstT === 1 && capped.lastO === 'reveal',
+      `expected the log held at ${cap} with the oldest dropped, got ${JSON.stringify(capped)}`);
+    ok('Quiz log: one row per step, unknown outcomes ignored, the cap drops the oldest');
+  } catch(e){ bad('Quiz log: append rules', e); }
+
+  // 407b2. The cap is PER KIND, which is the whole reason the three layers can
+  //        share one store. A mnemonics drill runs a few hundred trials where
+  //        an opening session runs a few dozen; under one shared budget the
+  //        alphabet layer would steadily evict the repertoire layer, which is
+  //        the most valuable of the three and the hardest to re-gather.
+  try {
+    const caps = await appEN.page.evaluate(() => window.__oqTestHooks.quizLogCaps());
+    const out = await appEN.page.evaluate((c) => {
+      // a full mnemonics bucket, plus a handful of precious opening rows
+      const log = Array.from({ length: c.mnem }, (_, i) => ({ t: i, q: 'mnem', k: 'e4|knight', o: 'hit', m: 'word', ms: 900 }));
+      log.push({ t: 1e6, q: 'opening', k: 'room-a', o: 'miss', p: 4, r: 2, d: 9 });
+      log.push({ t: 1e6 + 1, q: 'opening', k: 'room-b', o: 'hit', p: 5, r: 3, d: 20 });
+      // one more mnemonics trial pushes ITS bucket over, and nothing else
+      const next = window.__oqTestHooks.appendQuizEvent(log, { t: 2e6, q: 'mnem', k: 'd5|rook', o: 'reveal', m: 'square', ms: 4000 });
+      const count = (arr, q) => arr.filter(e => e.q === q).length;
+      return {
+        mnem: count(next, 'mnem'), opening: count(next, 'opening'),
+        oldestMnemT: next.find(e => e.q === 'mnem').t,
+        newestMnem: next.filter(e => e.q === 'mnem').pop(),
+      };
+    }, caps);
+    assert(out.mnem === caps.mnem, `expected the mnemonics bucket held at its own cap, got ${out.mnem}`);
+    assert(out.opening === 2,
+      `expected the opening rows untouched by a mnemonics overflow, got ${out.opening} of 2`);
+    assert(out.oldestMnemT === 1, `expected the OLDEST mnemonics row dropped, got t=${out.oldestMnemT}`);
+    assert(out.newestMnem.o === 'reveal' && out.newestMnem.k === 'd5|rook',
+      `expected the new trial kept, got ${JSON.stringify(out.newestMnem)}`);
+    ok('Quiz log: caps are per kind, so a long drill of one layer never evicts another');
+  } catch(e){ bad('Quiz log: per-kind caps', e); }
+
+  // 407c. A logged step carries what the grade log cannot: WHICH room (the
+  //       grade log has no room key at all), and the room's rung and ACTUAL
+  //       elapsed days at that moment. The elapsed figure is the point --
+  //       this room sits on rung 3, whose nominal interval is 21 days, and
+  //       was last reviewed 9 days ago.
+  try {
+    await appEN.page.evaluate(() => window.__oqTestHooks.setQuizLog([]));
+    const last = Date.now() - 9 * DAY;
+    await seedReview(r0Key, { last, due: last + 21 * DAY, step: 3, lapses: 0, lastGrade: 'A' });
+    const seq = [...seqs.r0, 'e6'];
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }), seq);
+    await appEN.page.evaluate(() => window.__oqTestHooks.logStep('miss'));
+
+    const log = await appEN.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(log.length === 1, `expected exactly one logged step, got ${JSON.stringify(log)}`);
+    const e0 = log[0];
+    assert(e0.k === r0Key, `expected the step attributed to the room holding the door, got ${JSON.stringify(e0.k)}`);
+    assert(e0.o === 'miss', `expected the outcome recorded, got ${JSON.stringify(e0.o)}`);
+    assert(e0.r === 3, `expected the room's rung at the time, got ${JSON.stringify(e0.r)}`);
+    assert(e0.d === 9, `expected the ACTUAL 9 days elapsed, not rung 3's nominal 21, got ${JSON.stringify(e0.d)}`);
+    assert(e0.p === seq.length, `expected the ply depth of the asked move, got ${e0.p} against ${seq.length}`);
+    ok('Quiz log: records the room, its rung, and the interval that actually ran');
+  } catch(e){ bad('Quiz log: step contents', e); }
+
+  // 407d. A room memorized but never graded is ON the schedule at rung 0
+  //       (bootstrapRoomReview), and its steps must read that way rather than
+  //       as "no schedule" -- those are the rooms most worth watching, and
+  //       filing them as unscheduled would drop them from every rate.
+  try {
+    await appEN.page.evaluate(() => window.__oqTestHooks.setQuizLog([]));
+    await appEN.page.evaluate(async (k) => {
+      const m = await window.__reviewTestHooks.getReviews();
+      delete m[k]; await window.__reviewTestHooks.setReviews(m);
+    }, r0Key);
+    await appEN.page.evaluate((sq) => window.__oqTestHooks.setOQ({ seq: sq }), [...seqs.r0, 'e6']);
+    await appEN.page.evaluate(() => window.__oqTestHooks.logStep('hit'));
+
+    const log = await appEN.page.evaluate(() => window.__oqTestHooks.getQuizLog());
+    assert(log.length === 1 && log[0].o === 'hit', `expected the hit logged, got ${JSON.stringify(log)}`);
+    assert(log[0].r === 0,
+      `a memorized-but-ungraded room is at the bottom of the ladder, not off it: got ${JSON.stringify(log[0])}`);
+    ok('Quiz log: a memorized-but-never-graded room logs at rung 0, not as unscheduled');
+  } catch(e){ bad('Quiz log: bootstrapped rooms', e); }
 
   // 408b. Give up on a move: reveals it, scores it once, shortens the room,
   //       and carries on down the line rather than abandoning the question.

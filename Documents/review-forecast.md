@@ -420,13 +420,105 @@ next to the number.
 
 ## Steps
 
-**Step 1 — collect the statistics. BUILT.** `db.js`'s
-`REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}` tally
-folded by `tallyReviewGrade` and written by `recordReviewGrade`. No UI reads
-it yet, deliberately: the data is worthless until it has been accumulating,
-so shipping collection first means the projection arrives with real numbers
-instead of pure prior. Every day it is not shipped is a day of data that
-cannot be recovered.
+**Step 1 — collect the statistics. BUILT.** Two stores, deliberately:
+
+- `REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}`
+  tally folded by `tallyReviewGrade`. Lifetime totals, never forgets.
+- `REVIEW_GRADE_LOG_KEY` (`threeReviewGradeLog`), one `{t, r, n, d, g}` row
+  per graded review, capped at 20k (~1MB, roughly a decade). Both are written
+  by `recordReviewGrade` under one serialized queue.
+
+No UI reads either yet, deliberately: the data is worthless until it has been
+accumulating, so shipping collection first means the projection arrives with
+real numbers instead of pure prior. Every day it is not shipped is a day of
+data that cannot be recovered.
+
+**The log exists because the tally has two blind spots, and both are
+unrecoverable after the fact** -- the first version of this shipped with only
+the tally and had to be widened before the thin data became months of it:
+
+- **Room size.** The tally cannot answer "do big rooms grade worse", and the
+  answer cannot be reconstructed later: `moveCount` is recomputed from the
+  CURRENT repertoire on every render, so how big a room was when it was graded
+  in March is not something the app keeps. Rooms grow as replies are added,
+  and they split. `n` records it at the moment of grading (threaded through
+  `ROOMS[key].moveCount`, added for this).
+- **The interval that actually ran.** The tally files a grade under its
+  NOMINAL rung, but a rung-2 room reviewed 25 days late is evidence about 25
+  days, not 7. Late reviews fail more, and charging those failures to an
+  interval that was never tested makes the rung look worse than it is --
+  worst for someone working through an overdue backlog, i.e. exactly when the
+  report is most wanted. `d` records the real elapsed days.
+
+The tally is derivable from the log and not the reverse, so of the two the log
+is the one that had to exist before the data started arriving. Both are kept
+because they lose different things: the tally survives the log's rollover.
+
+**A third store: the quiz log** (`QUIZ_LOG_KEY`, `threeQuizLog`) — one row per
+question asked, across **all three quizzes**, because they are not three
+versions of the same test but three LAYERS:
+
+| `q` | Quiz | Tests | `k` |
+|---|---|---|---|
+| `mnem` | Mnemonics | square+piece ↔ word/image | `e4\|knight` |
+| `list` | Object list | an object list's items | the item name (+ `l`, its list) |
+| `opening` | Opening / board | position → move | the room key |
+
+A miss in the opening quiz has at least three causes: you don't know the line,
+you don't reliably know what knight-on-e4 looks like, or you know both and the
+wrong image surfaced. Those need completely different fixes — more room
+reviews, drilling the alphabet, or making rooms more distinctive — and only a
+log spanning the layers, in one time order, can tell them apart. **Both
+lower-layer failures are ones the user has actually hit**, which is why they
+are logged rather than assumed away.
+
+This also makes the interference question answerable rather than merely
+observable: interference is a layer-1 phenomenon (the shared image alphabet),
+and `mnem` is the only instrument that measures layer 1 directly.
+
+**Caps are PER KIND** (`QUIZ_LOG_CAPS`), which is the part that would otherwise
+bite silently. A mnemonics drill runs a few hundred trials in a sitting where
+an opening session runs a few dozen, so under one shared budget the alphabet
+layer would steadily evict the repertoire layer — the most valuable of the
+three and the hardest to re-gather.
+
+**Latency (`ms`) matters most for `mnem`**, where it is the primary signal
+rather than a covariate. That quiz is a type-ahead: it scores a hit the instant
+the text matches and has no wrong-answer submission, so the only way to record
+a failure is to press Give up, which people avoid by persevering. Correctness
+there is close to binary by construction; time-to-answer is what still
+separates "knew it" from "dug for it".
+
+It is a different INSTRUMENT, not more of the same data, and the difference
+matters for calibration:
+
+| | VR grade | Quiz step |
+|---|---|---|
+| Scored by | you | the app |
+| Granularity | the whole room | one move |
+| Cue | the move objects, all at once | the position, then one move at a time |
+| Matches a real game | loosely | closely |
+
+Self-graded recall is vulnerable to mistaking recognition for recall — with
+the object in view it is easy to feel "yes, I knew that". The quiz cannot make
+that mistake, which makes it the better instrument for asking what your real
+retention is, even though the grade remains what drives the schedule.
+
+It is deliberately NOT folded into the grade tally. That tally measures how
+you GRADE, and mixing a second instrument's verdicts into it would corrupt
+exactly the distribution the projection reads — the same reason
+`demoteRoomReview` is excluded from it.
+
+`k` (the room key) is here and not in the grade log, so this is the store any
+later room-shaped analysis has to join through: occurrence frequency, castle,
+room size, or how much new material was memorized during the interval.
+
+Outcomes are one per step, written when the step RESOLVES rather than when it
+is attempted, so a wrong answer followed by a correct retry is one `miss`
+rather than a miss plus a hit: `hit`, `unsure` (correct but flagged as
+guessing), `miss`, `reveal` (gave up). A wrong attempt outranks the unsure
+flag — producing the wrong move is harder evidence than feeling shaky about
+the right one.
 
 Three rules it is worth not re-deriving later:
 
