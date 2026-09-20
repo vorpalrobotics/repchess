@@ -4191,6 +4191,9 @@ const PAIR_ICON_MARGIN = 0.1;                   // gap between the billboard's c
 // buildRoom like `billboards`, and walked once per frame by updatePairIcons
 let pairIcons = [];
 let pairIconTex = { plain: null, note: null };
+// scratch for updatePairIcons' project/unproject, so a per-frame loop over
+// every visible pair does not allocate a Vector3 per pair per frame
+let _iconPos = null;
 
 /* The tile: a rounded dark chip with a small board on it, plus -- when this
    position has a note -- a gold dog-eared page over the lower-right corner and
@@ -4295,6 +4298,7 @@ function destRoomPairSeq(target){
    pair -- negligible beside what the rest of tick() already does. */
 function updatePairIcons(){
   if(!pairIcons.length) return;
+  if(!_iconPos) _iconPos = new THREE.Vector3();   // THREE is only loaded once the walk opens
   const fwd = cameraForwardVec();
   const right = cameraRightVec();
   for(const p of pairIcons){
@@ -4312,11 +4316,37 @@ function updatePairIcons(){
     if((dx/flat) * fwd.x + (dz/flat) * fwd.z < PAIR_ICON_COS){ p.icon.visible = false; continue; }
     p.icon.visible = true;
     const halfW = sp.scale.x/2, halfH = sp.scale.y/2;
-    p.icon.position.set(
+    const want = _iconPos.set(
       sp.position.x + right.x * (halfW + PAIR_ICON_MARGIN),
       sp.position.y + halfH + PAIR_ICON_MARGIN,
       sp.position.z + right.z * (halfW + PAIR_ICON_MARGIN)
     );
+    /* ...but never off the edge of the screen.
+
+       The corner of a 1.2m billboard whose centre is at eye height sits 0.7m
+       above the eye. Walk mode has no look-up (targetPitch is only ever the
+       automatic down-staircase peek), so at 1m that corner is ~40 degrees up
+       against a 35-degree vertical half-FOV: the icon left the view exactly as
+       you walked up to the thing it labels, which is the one moment you were
+       certain to want it. Worse in portrait, where the HORIZONTAL half-angle
+       falls to ~18 degrees and the 0.7m sideways offset puts it off the right
+       edge at the full 2m range -- i.e. on a phone it would essentially never
+       have appeared at all.
+
+       Clamped in NDC rather than by per-axis trig: project where we want it,
+       pull the point back inside the frustum by its own on-screen half-size,
+       and unproject at the same depth. That is correct for any fov, aspect and
+       pitch without restating the projection maths, and at normal viewing
+       distance it changes nothing -- the clamp simply does not bind. Closer
+       in, the icon slides along the billboard's edge and stays reachable. */
+    const ndc = want.project(camera);
+    const nh = (PAIR_ICON_SIZE/2) / Math.max(1e-4, dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+    const limY = Math.max(0.05, 1 - nh - 0.02);
+    const limX = Math.max(0.05, 1 - nh / Math.max(1e-4, camera.aspect) - 0.02);
+    const cx = Math.max(-limX, Math.min(limX, ndc.x));
+    const cy = Math.max(-limY, Math.min(limY, ndc.y));
+    if(cx !== ndc.x || cy !== ndc.y) ndc.set(cx, cy, ndc.z);
+    p.icon.position.copy(ndc.unproject(camera));
     /* Re-asked every frame rather than baked in at build time: a note written
        in the move table, or in this very walk, changes the answer with no room
        rebuild behind it. It is a Set lookup in app.js (see buildVrNoteIndex),

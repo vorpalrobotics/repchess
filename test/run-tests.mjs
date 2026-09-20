@@ -24645,6 +24645,50 @@ try {
     ok('Notes: the editor opened from inside the walk layers above the modal that opened it');
   } catch(e){ bad('Notes: note editor layering inside the walk', e); }
 
+  /* 439. The icon is on the SCREEN, not merely "shown", at every distance the
+          gate allows -- and clickable there, which is the whole point of it.
+
+          Test 426 above asserts the gating flag, which is the decision rather
+          than the outcome: a tile pushed off the top of the view reports
+          visible:true and fails nobody. That is exactly what -430 shipped.
+          The corner of a billboard whose centre is at eye height sits 0.7m
+          above the eye, walk mode has no look-up, and by 1m that is ~40
+          degrees against a 35-degree vertical half-FOV. */
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    const bad_ = [];
+    for(const back of [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]){
+      await standNear(wall.pairPos, 0, back, 0);
+      const live = await iconNow(wall.slotId);
+      if(!live || !live.visible){ bad_.push({ back, why: 'gate hid it' }); continue; }
+      const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+      if(!pt){ bad_.push({ back, why: 'no screen point' }); continue; }
+      /* onCanvas only. pickAt answers "what is the NEAREST thing along this
+         ray", which is deliberately not the question handleWalkClick asks:
+         it hit-tests the visible icons FIRST, against the icons alone, so an
+         icon with a prop in front of it is still clicked (and still drawn --
+         its material is depthTest:false). An earlier version of this test
+         asserted pickAt's nearest hit and failed at 0.5m against a prop
+         0.7m away, which was the test misdescribing the mechanism rather
+         than the icon being unreachable. The real click is checked below. */
+      const aim = await appEN4.page.evaluate((q) => window.__threeTestEdit.pickAt(q.x, q.y), pt);
+      if(!aim || !aim.onCanvas) bad_.push({ back, why: 'off the canvas', ndc: aim && aim.ndc });
+    }
+    assert(bad_.length === 0,
+      `the pair icon is meant to be on screen anywhere inside its 2m gate, but at these ` +
+      `distances it was not: ${JSON.stringify(bad_)}`);
+
+    // ...and still opens its note from the closest the gate allows, which is
+    // where the clamp is working hardest
+    await standNear(wall.pairPos, 0, 0.5, 0);
+    const near = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+    assert(near, 'expected a screen point at 0.5m');
+    await appEN4.page.mouse.click(near.x, near.y);
+    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the pair icon stays on screen and clickable right up to the billboard');
+  } catch(e){ bad('Notes: pair icon stays on screen at close range', e); }
+
   // 429. Edit mode owns clicks on props, and the icons sit in front of the
   //      very sprites you would be trying to select -- so they stay out of it
   //      entirely rather than competing with the prop picker.
