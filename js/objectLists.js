@@ -640,7 +640,7 @@ function startQuiz(title, entries, shuffled, returnTo){
 // 1-based position in the list, matching the "position N" cue an unillustrated
 // item shows.
 function openListQuiz(list, shuffled=false){
-  const entries = list.items.map((it, i) => ({ name: it.name, assetId: it.assetId, posLabel: '#' + (i + 1) }));
+  const entries = list.items.map((it, i) => ({ name: it.name, assetId: it.assetId, listId: list.id, posLabel: '#' + (i + 1) }));
   startQuiz(list.name, entries, shuffled, () => {
     if(EDIT) $('objlistEditor').style.display = '';
     else showIndex();
@@ -655,10 +655,31 @@ function closeQuiz(){
   renderBar();
 }
 
+/* Logs one list-quiz step to the shared quiz log (db.js's QUIZ_LOG_KEY),
+   layer 2 of three -- the wall content rooms are filled with. Forgetting one
+   item of a list is a failure mode that has actually happened, and from the
+   opening quiz alone it is indistinguishable from not knowing the line.
+
+   `k` is the item's own name, which is the unit of memory here; `l` names the
+   list it came from, so "which lists are weak" and "which objects do I keep
+   losing" are both answerable. `m` records which cue was shown, since naming a
+   picture and recalling what belongs at position 4 are different retrievals. */
+function logListQuizStep(entry, outcome, hasImage){
+  if(!entry) return;
+  const now = Date.now();
+  recordQuizStep({
+    t: now, q: 'list', o: outcome,
+    k: entry.name, l: entry.listId || null,
+    m: hasImage ? 'image' : 'slot',
+    ms: Math.max(0, now - ((QUIZ && QUIZ.stepStart) || now)),
+  }).catch(err => console.error('[objlist] could not log a quiz step', err));
+}
+
 function renderQuizStep(){
   if(QUIZ.idx >= QUIZ.order.length){ renderQuizSummary(); return; }
   const entry = QUIZ.entries[QUIZ.order[QUIZ.idx]];
   const asset = assetById(entry.assetId);
+  QUIZ.stepStart = Date.now();   // per-STEP clock, for the latency in logListQuizStep
   const el = $('objlistQuiz');
   el.innerHTML = `
     <h3 class="objlist-h3">Quiz: ${esc(QUIZ.title)}</h3>
@@ -681,13 +702,18 @@ function renderQuizStep(){
   `;
   const input = $('olq_answer');
   input.focus();
-  $('olq_submit').onclick = () => checkQuizAnswer(entry.name);
-  $('olq_skip').onclick = () => { QUIZ.misses++; revealAnswer(false, entry.name); };
+  const hasImage = !!(asset && asset.image);
+  $('olq_submit').onclick = () => checkQuizAnswer(entry, hasImage);
+  $('olq_skip').onclick = () => {
+    QUIZ.misses++;
+    logListQuizStep(entry, 'reveal', hasImage);   // Skip IS a give-up, same as the mnemonics quiz's
+    revealAnswer(false, entry.name);
+  };
   $('olq_quit').onclick = closeQuiz;
   input.onkeydown = e => {
     if(e.key !== 'Enter') return;
     e.preventDefault();
-    if(QUIZ.revealed) advanceQuiz(); else checkQuizAnswer(entry.name);
+    if(QUIZ.revealed) advanceQuiz(); else checkQuizAnswer(entry, hasImage);
   };
 }
 
@@ -704,10 +730,12 @@ function quizAnswerMatches(input, correctName){
   return val.length >= 3 && correct.startsWith(val);
 }
 
-function checkQuizAnswer(correctName){
+function checkQuizAnswer(entry, hasImage){
+  const correctName = entry.name;
   const val = $('olq_answer').value.trim();
   const correct = quizAnswerMatches(val, correctName);
   if(correct) QUIZ.hits++; else QUIZ.misses++;
+  logListQuizStep(entry, correct ? 'hit' : 'miss', hasImage);
   // a PARTIAL match (e.g. "hamp" for "Hamper") reveals the full name even on
   // a hit, so the user actually sees/confirms the whole word, not just their
   // own shorthand; an exact match already IS the full name, nothing to add.

@@ -454,9 +454,40 @@ The tally is derivable from the log and not the reverse, so of the two the log
 is the one that had to exist before the data started arriving. Both are kept
 because they lose different things: the tally survives the log's rollover.
 
-**A third store: the quiz step log** (`QUIZ_LOG_KEY`, `threeQuizLog`), one
-`{t, k, o, p, r, d}` row per move the board quiz asks, capped at 10k (rows
-carry a room key, so they run ~145 bytes against the grade log's ~50).
+**A third store: the quiz log** (`QUIZ_LOG_KEY`, `threeQuizLog`) — one row per
+question asked, across **all three quizzes**, because they are not three
+versions of the same test but three LAYERS:
+
+| `q` | Quiz | Tests | `k` |
+|---|---|---|---|
+| `mnem` | Mnemonics | square+piece ↔ word/image | `e4\|knight` |
+| `list` | Object list | an object list's items | the item name (+ `l`, its list) |
+| `opening` | Opening / board | position → move | the room key |
+
+A miss in the opening quiz has at least three causes: you don't know the line,
+you don't reliably know what knight-on-e4 looks like, or you know both and the
+wrong image surfaced. Those need completely different fixes — more room
+reviews, drilling the alphabet, or making rooms more distinctive — and only a
+log spanning the layers, in one time order, can tell them apart. **Both
+lower-layer failures are ones the user has actually hit**, which is why they
+are logged rather than assumed away.
+
+This also makes the interference question answerable rather than merely
+observable: interference is a layer-1 phenomenon (the shared image alphabet),
+and `mnem` is the only instrument that measures layer 1 directly.
+
+**Caps are PER KIND** (`QUIZ_LOG_CAPS`), which is the part that would otherwise
+bite silently. A mnemonics drill runs a few hundred trials in a sitting where
+an opening session runs a few dozen, so under one shared budget the alphabet
+layer would steadily evict the repertoire layer — the most valuable of the
+three and the hardest to re-gather.
+
+**Latency (`ms`) matters most for `mnem`**, where it is the primary signal
+rather than a covariate. That quiz is a type-ahead: it scores a hit the instant
+the text matches and has no wrong-answer submission, so the only way to record
+a failure is to press Give up, which people avoid by persevering. Correctness
+there is close to binary by construction; time-to-answer is what still
+separates "knew it" from "dug for it".
 
 It is a different INSTRUMENT, not more of the same data, and the difference
 matters for calibration:

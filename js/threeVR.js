@@ -6,7 +6,7 @@
    door instead of just spawning inside it.
 */
 import { openAssetPicker } from './assets.js?v=20260804-88';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-64';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-65';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let THREE = null;

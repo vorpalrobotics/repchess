@@ -1270,19 +1270,58 @@ async function setReviewGradeLog(log){
      miss    wrong at least once, then eventually produced
      reveal  gave up and was shown the move */
 const QUIZ_LOG_KEY = 'threeQuizLog';
-// rows here carry a room key, so they run ~145 bytes rather than the grade
-// log's ~50 -- half the cap for a similar footprint (~1.5MB full)
-const QUIZ_LOG_CAP = 10000;
+
+/* THREE quizzes write here, and they are not three versions of the same test
+   -- they are three LAYERS, which is why one log rather than three:
+
+     mnem     square+piece <-> word/image   the alphabet every room is built on
+     list     an object list's items        the wall content rooms are filled with
+     opening  position -> move              the repertoire itself
+
+   A miss in the opening quiz has at least three causes: you don't know the
+   line, you don't reliably know what (say) knight-on-e4 looks like, or you
+   know both and the wrong image surfaced. Those need completely different
+   fixes, and only a log that spans the layers -- in one time order -- can tell
+   them apart. Both lower-layer failures are ones the user has actually hit.
+
+   `k` is the subject tested, typed by `q`: a room key, a "square|piece", or an
+   item name. The rest are kind-specific and simply absent where they have no
+   meaning (JSON omits them), so a row costs only what it carries. */
+const QUIZ_KINDS = ['opening', 'mnem', 'list'];
+/* PER-KIND caps, not one shared budget -- the part that would otherwise bite.
+   A mnemonics drill runs a few hundred trials in a sitting where an opening
+   session runs a few dozen, so under one cap the alphabet layer would steadily
+   evict the repertoire layer, which is the most valuable of the three. Rows
+   carrying a room key run ~145 bytes; the shorter kinds about 90. */
+const QUIZ_LOG_CAPS = { opening: 10000, mnem: 10000, list: 5000 };
+// a kind added later is still BOUNDED rather than dropped: silently discarding
+// real answers would be a worse failure than an oddly-sized bucket
+const QUIZ_LOG_CAP_DEFAULT = 5000;
 const QUIZ_OUTCOMES = ['hit', 'unsure', 'miss', 'reveal'];
+// 'reveal' covers the mnemonics quiz's Give up and the list quiz's Skip alike:
+// both mean "I stopped and was shown it", which is one fact, not two.
+function quizEventKind(e){ return (e && e.q) || 'opening'; }
 
 /* Appends one step, returning a NEW array. No replacement rule, unlike the
    grade log: a quiz step resolves exactly once and there is no correcting it
-   afterwards, so every call is a fresh row. */
+   afterwards, so every call is a fresh row.
+
+   Trimming is within the event's own kind, so a long drill of one kind can
+   never shorten another's history. */
 function appendQuizEvent(log, event){
   if(!event || !QUIZ_OUTCOMES.includes(event.o)) return Array.isArray(log) ? log.slice() : [];
-  const out = Array.isArray(log) ? log.slice() : [];
+  const out = (Array.isArray(log) ? log : []).slice();
   out.push(event);
-  return out.length > QUIZ_LOG_CAP ? out.slice(out.length - QUIZ_LOG_CAP) : out;
+  const kind = quizEventKind(event);
+  const cap = QUIZ_LOG_CAPS[kind] || QUIZ_LOG_CAP_DEFAULT;
+  let over = out.reduce((n, e) => n + (quizEventKind(e) === kind ? 1 : 0), 0) - cap;
+  if(over <= 0) return out;
+  const kept = [];
+  for(const e of out){
+    if(over > 0 && quizEventKind(e) === kind){ over--; continue; }   // oldest of THIS kind
+    kept.push(e);
+  }
+  return kept;
 }
 
 async function getQuizLog(){

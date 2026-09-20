@@ -1,10 +1,10 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-298';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-299';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-64';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-420';
+const BUILD_TAG = '-421';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9379,7 +9379,7 @@ setCastleInfoProvider({
     for(const id of [...listIds].sort()){
       const list = lists.find(l => l.id === id);
       if(!list) continue;
-      list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, posLabel: `${list.name} #${i + 1}` }));
+      list.items.forEach((it, i) => entries.push({ name: it.name, assetId: it.assetId, listId: id, posLabel: `${list.name} #${i + 1}` }));
     }
     return entries;
   },
@@ -10164,6 +10164,7 @@ function quizLoadTrial(){
   const mode = Math.random() < 0.5 ? 'word' : 'square';
   QUIZ.item = item;
   QUIZ.mode = mode;
+  QUIZ.trialStart = Date.now();   // per-TRIAL clock, for the latency in quizLogTrial
 
   if(mode === 'word'){
     QUIZ.expected = (MNEM_PIECE_LETTER[item.piece] + item.square).toLowerCase();
@@ -10175,6 +10176,35 @@ function quizLoadTrial(){
   $('quizInput').focus();
 }
 
+/* Logs one mnemonics trial to the shared quiz log (db.js's QUIZ_LOG_KEY),
+   layer 1 of three -- see that file's own comment for why the layers live in
+   one store.
+
+   LATENCY is the point here, more than correctness. This quiz is a type-ahead:
+   it scores a hit the instant the typed text matches and there is no
+   wrong-answer submission, so the only way to record a miss is to press Give
+   up -- which people avoid by persevering. Correctness is therefore close to
+   binary by construction and heavily biased toward `hit`, while time-to-answer
+   still separates "knew it" from "dug for it". Retrieval latency is a
+   well-established strength measure, and the session already runs a clock; the
+   only new thing is timing each trial rather than the whole run.
+
+   `ms` includes typing time, not just retrieval -- unavoidable for a
+   type-ahead, and consistent across trials, so it compares fine with itself. */
+function quizLogTrial(outcome){
+  if(!QUIZ || !QUIZ.item) return;
+  const now = Date.now();
+  recordQuizStep({
+    t: now, q: 'mnem', o: outcome,
+    k: `${QUIZ.item.square}|${QUIZ.item.piece}`,
+    // which direction was tested: 'word' shows the word and asks for the
+    // square, 'square' shows the square and asks for the word. Paired-associate
+    // recall is famously asymmetric, so the two are not one measurement.
+    m: QUIZ.mode,
+    ms: Math.max(0, now - (QUIZ.trialStart || now)),
+  }).catch(err => console.error('[quiz] could not log a mnemonics trial', err));
+}
+
 function quizAdvance(){
   QUIZ.idx++;
   if(QUIZ.idx >= QUIZ.trials) quizFinish();
@@ -10184,6 +10214,7 @@ function quizAdvance(){
 function quizGiveUp(){
   if(!QUIZ || QUIZ.finished) return;
   QUIZ.results.push(false);
+  quizLogTrial('reveal');
   $('quizPromptArea').classList.add('quiz-wrong');
   $('quizFeedback').textContent = `Answer: ${QUIZ.mode==='word' ? QUIZ.item.word : QUIZ.expected}`;
   $('quizInput').disabled = true;
@@ -10333,6 +10364,18 @@ mountInfoBar('quizBar', 'Quiz Mnemonics', ()=>{
 $('quizAgainBtn').onclick = ()=>{ quizOpenSetup(); };
 $('quizGiveUpBtn').onclick = quizGiveUp;
 
+/* The current mnemonics trial, for driving the real type-ahead from a test:
+   without the expected string there is no way to exercise the hit path, and
+   the hit path is where the latency measurement lives. */
+if(localStorage.getItem('threeTestDebug')){
+  window.__mnemQuizTestHooks = {
+    trial: () => (QUIZ && QUIZ.item)
+      ? { square: QUIZ.item.square, piece: QUIZ.item.piece, mode: QUIZ.mode, expected: QUIZ.expected }
+      : null,
+    giveUp: () => quizGiveUp(),
+  };
+}
+
 $('quizInput').addEventListener('input', ()=>{
   if(!QUIZ || QUIZ.finished) return;
   const typed = $('quizInput').value.trim().toLowerCase();
@@ -10340,6 +10383,7 @@ $('quizInput').addEventListener('input', ()=>{
     $('quizPromptArea').classList.remove('quiz-wrong');
     if(typed.length>0 && typed === QUIZ.expected){
       QUIZ.results.push(true);
+      quizLogTrial('hit');
       $('quizPromptArea').classList.add('quiz-correct');
       $('quizFeedback').innerHTML = '<i class="fa-solid fa-check"></i>';
       $('quizInput').disabled = true;
@@ -10496,7 +10540,7 @@ async function oqBuildQuizStep(roomSeq, outcome, ply, at){
   const rec = effectiveRoomReview(await getRoomReviews(), MEMORIZED_ROOMS, key);
   const since = (rec && rec.last) || MEMORIZED_ROOMS[key] || null;
   return recordQuizStep({
-    t: at, k: key, o: outcome, p: ply,
+    t: at, q: 'opening', k: key, o: outcome, p: ply,
     r: rec ? (rec.step || 0) : null,
     d: since == null ? null : Math.max(0, Math.round((at - since) / DAY_MS)),
   });
@@ -11375,7 +11419,7 @@ if(localStorage.getItem('threeTestDebug')){
     getQuizLog: () => getQuizLog(),
     setQuizLog: (log) => setQuizLog(log),
     appendQuizEvent: (log, event) => appendQuizEvent(log, event),
-    quizLogCap: () => QUIZ_LOG_CAP,
+    quizLogCaps: () => ({ ...QUIZ_LOG_CAPS }),
     demoteMissedRoom: (roomSeq) => oqDemoteMissedRoom(roomSeq),
     demotedRooms: () => JSON.parse(JSON.stringify((OQ && OQ.demoted) || {})),
     roomLabel: (roomKey, roomSeq) => oqRoomLabel(roomKey, roomSeq),
