@@ -11,6 +11,7 @@
 //   cdnjs …/chess.js/…                 index.html <script>
 //   unpkg …/cm-chessboard@…/pieces/…   js/app.js PIECES_FILE (only the piece
 //                                      sprite is vendored, not the JS widget)
+//   unpkg …/@toast-ui/editor@…/dist/…  js/notes.js, lazily (Markdown notes)
 import { execSync } from 'node:child_process';
 import { mkdtempSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -24,6 +25,11 @@ const VERSIONS = {
   dagre: '0.8.5',        // cytoscape-dagre's peer dep, bundled in
   'chess.js': '0.10.3',
   'cm-chessboard': '8',  // only assets/pieces/standard.svg is used from this
+  // Markdown notes. Both bundles are vendored because the app loads whichever
+  // it needs: the viewer (433KB) to render a note, the full editor (940KB)
+  // only once you click the pencil. Serving one for both would mean the tests
+  // exercising a bundle production never loads.
+  '@toast-ui/editor': '3.2.2',
 };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VENDOR = path.join(HERE, 'vendor');
@@ -53,6 +59,12 @@ try {
   // cm-chessboard: just the piece sprite SVG (static asset, no bundling needed)
   copyFileSync(path.join(work, 'node_modules/cm-chessboard/assets/pieces/standard.svg'),
                path.join(VENDOR, 'cm-chessboard-standard.svg'));
+  // toast-ui editor: prebuilt UMD browser bundles + their stylesheets, copied
+  // as-is (they are already browser-ready, nothing to bundle)
+  for(const f of ['toastui-editor-viewer.js', 'toastui-editor-viewer.css',
+                  'toastui-editor.js', 'toastui-editor.css']){
+    copyFileSync(path.join(work, 'node_modules/@toast-ui/editor/dist', f), path.join(VENDOR, f));
+  }
 
   console.log('\nvendor rebuilt in', VENDOR);
 } finally {

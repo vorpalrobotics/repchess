@@ -23664,6 +23664,172 @@ try {
 } catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EN2: notes, phase 2 -- the Markdown editor and the move-table
+//     surfaces (Documents/notes-feature.md). The editor is a COMPONENT: it
+//     resolves to a value and commits nothing, which is what keeps the
+//     Attributes modal's single-Save contract intact. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEN2 = await launchApp();
+try {
+  await seedBackup(appEN2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN2.page.click('.line-row');
+  await appEN2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+  const openNotesMenu = async () => {
+    await appEN2.page.click(`${rowSel} .rowMenuBtn`);
+    await appEN2.page.click(`${rowSel} [data-act="notes"]`);
+    await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+  };
+  const noteNow = () => appEN2.page.evaluate(() =>
+    window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+
+  // 413. The real editor loads and round-trips: a value put in comes back out
+  //      through Save and reaches the pref. Driven through setValue rather
+  //      than by typing -- Toast's surface is a ProseMirror contenteditable,
+  //      and what is worth testing is our plumbing, not their key handling.
+  try {
+    await openNotesMenu();
+    const fellBack = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.isFallback());
+    assert(!fellBack, 'expected the REAL editor, not the fallback -- the vendored bundle should have loaded');
+
+    const bar = await modalBarState(appEN2.page, 'noteEditorOverlay');
+    assert(bar && bar.save && bar.save.disabled,
+      `expected Save disabled on an untouched note, got ${JSON.stringify(bar && bar.save)}`);
+
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('## Plan\n\nTrade the bad bishop.'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    const saved = await noteNow();
+    assert(/Trade the bad bishop/.test(saved || ''),
+      `expected the edited Markdown written to the pref, got ${JSON.stringify(saved)}`);
+    assert(/^##\s*Plan/m.test(saved || ''),
+      `expected Markdown structure preserved through the round trip, got ${JSON.stringify(saved)}`);
+    ok('Notes: the Markdown editor round-trips a value through Save into the pref');
+  } catch(e){ bad('Notes: editor round trip', e); }
+
+  // 414. ...and the row grows a glyph, not a preview of the text. A Markdown
+  //      first line is usually a heading rather than a summary, so a truncated
+  //      strip would invite reading the strip instead of the note.
+  try {
+    await appEN2.page.waitForSelector(`${rowSel} + tr .meta-note-glyph, .meta-note-glyph`, { timeout: 5000 });
+    const strip = await appEN2.page.evaluate(() => {
+      const el = document.querySelector('.meta-note-glyph');
+      return el ? { html: el.innerHTML, text: el.textContent } : null;
+    });
+    assert(strip, 'expected a note glyph on the row once a note exists');
+    assert(strip.text.trim() === '', `expected a glyph with no note text beside it, got ${JSON.stringify(strip.text)}`);
+    assert(/fa-scroll/.test(strip.html), `expected the scroll icon, got ${JSON.stringify(strip.html)}`);
+    ok('Notes: a row with a note shows a glyph rather than the note text');
+  } catch(e){ bad('Notes: row glyph', e); }
+
+  // 415. Leaving the editor writes nothing. The whole design rests on it
+  //      returning a value rather than committing one.
+  try {
+    const before = await noteNow();
+    await openNotesMenu();
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('scribbled and abandoned'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.click('#noteEditorOverlay .mb-leave');   // dirty: the harness accepts the discard prompt
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    const after = await noteNow();
+    assert(after === before, `expected leaving to write nothing, got ${JSON.stringify(after)}`);
+    ok('Notes: leaving the editor commits nothing');
+  } catch(e){ bad('Notes: cancel commits nothing', e); }
+
+  // 416. Existing plain-text notes keep their line breaks. Toast follows
+  //      CommonMark, where a single newline is a SOFT break rendered as a
+  //      space -- so without the softbreak override every multi-line note
+  //      written before this feature would silently reflow into one
+  //      paragraph. Checked through the Attributes preview, which is the real
+  //      rendering path.
+  try {
+    await appEN2.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, 'first line\nsecond line');
+    });
+    await appEN2.page.click(`${rowSel} .rowMenuBtn`);
+    await appEN2.page.click(`${rowSel} [data-act="attributes"]`);
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appEN2.page.waitForFunction(
+      () => /second line/.test(document.getElementById('attrNotePreview').innerHTML), { timeout: 10000 });
+    const html = await appEN2.page.evaluate(() => document.getElementById('attrNotePreview').innerHTML);
+    assert(/<br\s*\/?>/i.test(html),
+      `expected a single newline to render as a line break, got ${JSON.stringify(html)}`);
+    ok('Notes: a single newline renders as a line break, so old plain-text notes keep their shape');
+  } catch(e){ bad('Notes: GFM line breaks', e); }
+
+  // 417. The Attributes modal STAGES the note rather than committing it. Its
+  //      snapshot includes the note and its Save commits everything at once,
+  //      so an editor that wrote through would leave that snapshot stale and
+  //      Attributes' own Cancel could revert a note saved elsewhere.
+  try {
+    const before = await noteNow();
+    // the modal is still open from 416
+    await appEN2.page.click('#attrNoteEditBtn');
+    await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('staged, not committed'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    // saving the NOTE editor must not have written anything yet...
+    const midway = await noteNow();
+    assert(midway === before,
+      `expected the note editor's Save to stage only, got ${JSON.stringify(midway)}`);
+    // ...but it must have made Attributes dirty, or its Save would not offer
+    const attrBar = await modalBarState(appEN2.page, 'attributesOverlay');
+    assert(attrBar.save && !attrBar.save.disabled,
+      `expected the staged note to make Attributes dirty, got ${JSON.stringify(attrBar.save)}`);
+
+    await appEN2.page.click('#attributesOverlay .mb-save');
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
+    const after = await noteNow();
+    assert(after === 'staged, not committed',
+      `expected Attributes' own Save to commit the staged note, got ${JSON.stringify(after)}`);
+    ok('Notes: Attributes stages the note and commits it with its own Save');
+  } catch(e){ bad('Notes: Attributes staging', e); }
+
+  // 418. The fallback. A failed editor load degrades to a plain box over the
+  //      raw Markdown -- worse, never broken -- which is the property that
+  //      makes a 940KB CDN dependency acceptable in an app whose other CDN
+  //      deps stop it booting outright.
+  try {
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.forceFallback(true));
+    await openNotesMenu();
+    const isFallback = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.isFallback());
+    assert(isFallback, 'expected the textarea fallback once the editor bundle cannot load');
+    const raw = await appEN2.page.evaluate(() => document.getElementById('noteFallbackInput').value);
+    assert(raw === 'staged, not committed',
+      `expected the fallback to open on the raw Markdown, got ${JSON.stringify(raw)}`);
+
+    await appEN2.page.fill('#noteFallbackInput', 'typed into the fallback');
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.click('#noteEditorOverlay .mb-save');
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    assert((await noteNow()) === 'typed into the fallback',
+      'expected the fallback to round-trip through Save exactly as the real editor does');
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.forceFallback(false));
+    ok('Notes: a failed editor load degrades to a working plain-text box');
+  } catch(e){ bad('Notes: editor fallback', e); }
+} finally {
+  await appEN2.close();
+}
+} catch(e){ bad('Phase EN2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase EM: notes, phase 1 -- the move-pair billboards carry the sequence
 //     they represent (Documents/notes-feature.md). Nothing reads it yet; this
 //     is the plumbing everything else in that feature needs, and the one

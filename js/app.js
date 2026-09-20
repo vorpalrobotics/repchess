@@ -5,6 +5,7 @@ import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, 
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
+import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-1';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-423';
+const BUILD_TAG = '-424';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3963,6 +3964,22 @@ const fieldModalBar = wireModalBar(
     },
   });
 
+/* Edits a row's note in place (Documents/notes-feature.md). Unlike the
+   Attributes launcher above, this one COMMITS -- it is its own editor, with no
+   enclosing modal whose Save it could stage into.
+
+   Keyed by canonicalRoomSeq, the same function the meta strip reads through,
+   so a transposing row edits the one note its position has rather than growing
+   a second one. */
+async function editRowNote(lineSeq, after){
+  const roomSeq = canonicalRoomSeq(lineSeq);
+  const current = PREFS[prefKey(CURRENT_LINE.id, roomSeq)]?.note || '';
+  const next = await openNoteEditor(current, { title: 'Note' });
+  if(next === null) return;
+  await savePrefField(roomSeq, 'note', next.trim());
+  if(after) after();
+}
+
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------
    Most room decoration now happens in the VR walkthrough, so this modal is
    down to the two things the castle generator needs: a Room name (relevant for
@@ -3978,6 +3995,31 @@ let attrModalLineSeq = null;
 // from for the "Redirect to castle" candidate lookup.
 let attrModalRoomSeq = null;
 let attrModalSaved = null;
+/* The note is STAGED here rather than edited here (Documents/notes-feature.md).
+   The modal used to own a plain textarea; it now owns a rendered preview and a
+   launcher, and the one editor lives in js/notes.js. attrSnapshot still reads
+   this value, so dirty tracking and the discard prompt work exactly as before
+   -- the note is part of what this modal's single Save commits, and nothing
+   writes it out from under that. */
+let attrNoteStaged = '';
+function setAttrNote(md){
+  attrNoteStaged = md || '';
+  const prev = $('attrNotePreview');
+  if(!prev) return;
+  prev.classList.toggle('is-empty', !attrNoteStaged);
+  if(!attrNoteStaged){ prev.textContent = 'No note yet.'; return; }
+  renderNoteInto(prev, attrNoteStaged);
+}
+/* The launcher. Wired once at load -- the button is static markup. It STAGES:
+   the returned value goes into attrNoteStaged, and the Attributes modal's own
+   Save is the only thing that ever writes it out. */
+$('attrNoteEditBtn').onclick = async () => {
+  const next = await openNoteEditor(attrNoteStaged, { title: 'Note' });
+  if(next === null) return;              // left without saving
+  setAttrNote(next);
+  if(attrBarCtl) attrBarCtl.refresh();   // the note is part of what Save commits
+};
+
 function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrModalLineSeq = lineSeq;
   attrModalRoomSeq = roomSeq || lineSeq;
@@ -3987,7 +4029,7 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   $('attrCastleName').value = saved?.castleName || '';
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
-  $('attrNote').value = saved?.note || '';
+  setAttrNote(saved?.note || '');
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -4015,7 +4057,7 @@ function attrSnapshot(){
     castleName: $('attrCastleName').value.trim(),
     castleOwner: $('attrCastleOwner').value,
     streetNumber: $('attrStreetNumber').value.trim(),
-    note: $('attrNote').value.trim(),
+    note: attrNoteStaged.trim(),
     redirect: $('attrRedirectTo').value,
   };
 }
@@ -4498,7 +4540,7 @@ function commitAttributes(){
     castleName,
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
-    note: $('attrNote').value.trim(),
+    note: attrNoteStaged.trim(),
     redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
   const cb = attributesModalSave;
@@ -5331,6 +5373,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <hr class="row-menu-sep">
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="notes"><i class="fa-solid fa-scroll"></i>Notes…</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
            </div>
@@ -5402,14 +5445,14 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+        (note ? `<span class="meta-note-glyph" title="Read or edit this note"><i class="fa-solid fa-scroll"></i></span>` : '') +
         pvHtml + actualHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-      const noteEl = metaTd.querySelector('.meta-note');
-      if(noteEl) noteEl.onclick = () => openRoomAttributes();
+      const noteEl = metaTd.querySelector('.meta-note-glyph');
+      if(noteEl) noteEl.onclick = () => editRowNote(lineSeq, refreshMeta);
       const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
       if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
       const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
@@ -5689,6 +5732,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         return {ok:true, value:mv.san};
       });
     };
+    rowMenu.querySelector('[data-act="notes"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      editRowNote(lineSeq, refreshMeta);
+    };
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -5809,6 +5857,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="notes"><i class="fa-solid fa-scroll"></i>Notes…</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
          </div>
@@ -5874,14 +5923,14 @@ function renderBlackRoot(parent,games,trigger){
     if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-      (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+      (note ? `<span class="meta-note-glyph" title="Read or edit this note"><i class="fa-solid fa-scroll"></i></span>` : '') +
       pvHtml + actualHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-    const noteEl = metaTd.querySelector('.meta-note');
-    if(noteEl) noteEl.onclick = () => openRoomAttributes();
+    const noteEl = metaTd.querySelector('.meta-note-glyph');
+    if(noteEl) noteEl.onclick = () => editRowNote(lineSeq, refreshMeta);
     const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
     if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
     const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
@@ -6102,6 +6151,11 @@ function renderBlackRoot(parent,games,trigger){
       if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
       return {ok:true, value:mv.san};
     });
+  };
+  rowMenu.querySelector('[data-act="notes"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    editRowNote(lineSeq, refreshMeta);
   };
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();

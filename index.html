@@ -310,6 +310,26 @@
      child refuses to shrink below its content and the modal grows past the
      viewport instead of scrolling, taking the bar with it. */
   .modal-body{flex:1 1 auto;overflow:auto;min-height:0}
+
+  /* ---------- Markdown notes (Documents/notes-feature.md) ---------- */
+  .note-preview{border:1px solid #ddd;border-radius:4px;padding:.4rem .6rem;margin:.3rem 0;
+    max-height:11em;overflow:auto;font-size:.85rem;background:#fafafa}
+  .note-preview.is-empty{color:#999;font-style:italic}
+  /* the viewer ships its own typography; just stop it running away vertically */
+  .note-preview .toastui-editor-contents{font-size:.85rem}
+  .note-preview .toastui-editor-contents :first-child{margin-top:0}
+  .note-preview .toastui-editor-contents :last-child{margin-bottom:0}
+  .note-editor-modal{width:min(52em,94vw);height:min(38em,88vh);display:flex;flex-direction:column}
+  .note-editor-host{flex:1 1 auto;min-height:0;overflow:hidden}
+  /* the fallback when Toast cannot be loaded at all -- a plain box over the
+     raw Markdown, which is worse but never broken */
+  .note-fallback{width:100%;height:100%;box-sizing:border-box;resize:none;font:inherit;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;line-height:1.4;padding:.5rem}
+  /* the row glyph: a note EXISTS here. Deliberately not a truncated preview --
+     a Markdown first line is usually a heading rather than a summary, and half
+     a sentence invites reading the strip instead of the note. */
+  .meta-note-glyph{cursor:pointer;color:#6a5acd;margin-left:.4em}
+  .meta-note-glyph:hover{color:#483d8b}
   /* a converted modal must be a flex column, and the bar (or the host div a
      module renders it into) must not flex */
   .modal-bar-host{flex:0 0 auto}
@@ -1535,8 +1555,13 @@
       <div id="attrRedirectHint" style="font-size:.72rem;color:#888;margin-top:.2rem"></div>
     </div>
     <div class="field attr-note-field">
-      <label for="attrNote">Notes</label>
-      <textarea id="attrNote" rows="3" placeholder="Any notes about this move or position"></textarea>
+      <label>Notes</label>
+      <!-- A rendered PREVIEW and a launcher, not an editor. The one Markdown
+           editor lives in js/notes.js and returns a value rather than writing
+           one -- see Documents/notes-feature.md for the data-loss path that
+           two editors over this field would open. -->
+      <div id="attrNotePreview" class="note-preview is-empty">No note yet.</div>
+      <button type="button" id="attrNoteEditBtn"><i class="fa-solid fa-pen"></i> Edit note…</button>
     </div>
     <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
@@ -2013,6 +2038,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-423"></script>
+<script type="module" src="js/app.js?v=20260804-424"></script>
 </body>
 </html>
