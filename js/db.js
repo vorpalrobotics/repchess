@@ -1130,3 +1130,80 @@ async function getRoomReviews(){
 async function setRoomReviews(map){
   return setMeta(ROOM_REVIEWS_KEY, JSON.stringify(map || {}));
 }
+
+/* ---------- per-rung grade statistics (Documents/review-forecast.md) ----------
+
+   How each rung of the ladder actually performs for THIS user:
+   { step: {A, B, C} }. Collected now, ahead of any UI that reads it, because
+   the data is worthless until it has been accumulating for a while. What it
+   is for: the forecast currently shows each room's NEXT review only, which
+   understates the near future badly -- a room at step 0 reviewed successfully
+   appears three times in thirty days, and the calendar shows one. Projecting
+   the repeats forward needs a success rate per rung, and a rate invented from
+   nothing would be worse than not projecting at all.
+
+   Keyed by the step the review was ON, never the one it moved to. The grade
+   judges the interval you just finished sitting out, so an A at step 2 is
+   evidence about the 7-day rung -- filing it under the 21-day rung it
+   promotes you to would measure the wrong interval, and would do it in the
+   direction that makes long rungs look better than they are.
+
+   Only self-assessed GRADES count. A structural demotion or a board-quiz miss
+   (demoteRoomReview) changes a schedule without being a verdict on whether
+   the interval was right, and softenRoomReview ("I got it, but I was
+   guessing") is a statement about timing rather than recall. Folding either
+   in would bias the rates with evidence about something else. */
+const REVIEW_GRADE_STATS_KEY = 'threeReviewGradeStats';
+const REVIEW_GRADES = ['A', 'B', 'C'];
+function emptyGradeRow(){ return { A: 0, B: 0, C: 0 }; }
+
+/* Folds one graded review into the tally, returning a NEW object (never
+   mutates the old one, same contract as applyRoomReviewGrade).
+
+   `replacing` un-counts a grade this same review already contributed.
+   Re-grading a room within one visit REPLACES rather than compounds (see
+   threeVR.js's preGradeRecord -- a mis-press is meant to be recoverable), and
+   the tally has to follow that or a fumbled grade menu quietly inflates the
+   very statistics the projection will lean on. The rung is unchanged across a
+   re-grade, since it comes from the visit's frozen pre-grade record, so the
+   decrement always lands in the row the increment does.
+
+   Floored at zero rather than trusted: the caller's memory of what it last
+   wrote is not a strong enough claim to let it drive a counter negative. */
+function tallyReviewGrade(stats, step, grade, replacing = null){
+  const out = {};
+  for(const [k, v] of Object.entries(stats || {})) out[k] = { ...emptyGradeRow(), ...v };
+  const n = Math.trunc(Number(step)) || 0;
+  const rung = String(Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, n)));
+  const row = out[rung] || (out[rung] = emptyGradeRow());
+  if(REVIEW_GRADES.includes(replacing)) row[replacing] = Math.max(0, row[replacing] - 1);
+  if(REVIEW_GRADES.includes(grade)) row[grade] = row[grade] + 1;
+  return out;
+}
+
+async function getReviewGradeStats(){
+  const raw = await getMeta(REVIEW_GRADE_STATS_KEY);
+  try { return raw ? JSON.parse(raw) : {}; }
+  catch { return {}; }
+}
+async function setReviewGradeStats(stats){
+  return setMeta(REVIEW_GRADE_STATS_KEY, JSON.stringify(stats || {}));
+}
+/* SERIALIZED read-modify-write. The keyboard grade path does not await
+   gradeCurrentRoom (threeVR.js's onKeyDown fires and forgets), so pressing 1
+   then 2 to correct a mis-press can overlap: without a queue the second write
+   can be computed from a read taken before the first one landed, and one of
+   them is silently lost. A tally meant to accumulate over months should not
+   depend on how fast somebody changes their mind. */
+let gradeStatsQueue = Promise.resolve();
+function recordReviewGrade(step, grade, replacing = null){
+  const next = gradeStatsQueue.then(async () => {
+    const stats = tallyReviewGrade(await getReviewGradeStats(), step, grade, replacing);
+    await setReviewGradeStats(stats);
+    return stats;
+  });
+  // the chain survives a failed write rather than poisoning every later grade
+  // with the same rejection
+  gradeStatsQueue = next.catch(() => {});
+  return next;
+}

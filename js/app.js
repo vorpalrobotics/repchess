@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-296';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-297';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-64';
@@ -105,7 +105,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-417';
+const BUILD_TAG = '-418';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7095,11 +7095,12 @@ async function buildBackupData(){
   const games = await getGames(LOCAL_USER);
   return {
     // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists;
-    // v7 adds perfectOpeningConfig + recentSurfaceColors. Every field below
-    // is read back through a `typeof` guard in applyBackupData, so an older
-    // backup restores into a newer build unchanged -- the number says what a
-    // file CONTAINS, it is not a compatibility gate.
-    version: 7,
+    // v7 adds perfectOpeningConfig + recentSurfaceColors; v8 adds
+    // reviewGradeStats. Every field below is read back through a `typeof`
+    // guard in applyBackupData, so an older backup restores into a newer build
+    // unchanged -- the number says what a file CONTAINS, it is not a
+    // compatibility gate.
+    version: 8,
     // per-platform handles (independent of each other -- see userColorInGame)
     // so restoring on a fresh browser/profile keeps matching "which color did
     // I play" for BOTH platforms, not just whichever one this app version
@@ -7137,6 +7138,12 @@ async function buildBackupData(){
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
     decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
     roomReviews: await getMeta(ROOM_REVIEWS_KEY),           // VR room progress: spaced-repetition review history
+    /* Per-rung A/B/C tallies (db.js's REVIEW_GRADE_STATS_KEY). Months of
+       accumulated evidence about how each interval actually performs for this
+       user, and unlike a review schedule there is no way to reconstruct it
+       from anything else -- a restore that dropped it would silently reset
+       the measurement to zero and nothing on screen would say so. */
+    reviewGradeStats: await getMeta(REVIEW_GRADE_STATS_KEY),
     memorizedShapes: await getMeta('threeMemorizedShapes'), // frozen room-shape snapshots for memorized rooms (anti-split heuristic)
     graphLayout: await getMeta('graphLayout'),   // manually-dragged node positions in the network/digraph view
     /* Perfect Opening's SETTINGS -- the per-move max-lines and depth
@@ -7298,6 +7305,7 @@ async function applyBackupData(data, onMnemProgress){
     // Every memorized room then re-bootstraps a schedule from its own
     // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
+    if(typeof data.reviewGradeStats === 'string') await setMeta(REVIEW_GRADE_STATS_KEY, data.reviewGradeStats);
     if(typeof data.memorizedShapes === 'string') await setMeta('threeMemorizedShapes', data.memorizedShapes);
     if(typeof data.graphLayout === 'string') await setMeta('graphLayout', data.graphLayout);
     // v7 fields. Absent in any older backup, and guarded like every field
@@ -13388,6 +13396,14 @@ if(localStorage.getItem('threeTestDebug')){
     // the raw meta value, for asserting what a backup actually round-tripped
     rawMeta: () => getMeta(ROOM_REVIEWS_KEY),
     dayMs: () => DAY_MS,
+    /* per-rung grade statistics -- the pure fold, and the stored tally. The
+       fold is exposed separately from the store so its rules (attribute to
+       the rung the review was ON, un-count a replaced grade, floor at zero)
+       can be checked without driving a walk. */
+    tallyGrade: (stats, step, grade, replacing) => tallyReviewGrade(stats, step, grade, replacing),
+    getGradeStats: () => getReviewGradeStats(),
+    setGradeStats: (stats) => setReviewGradeStats(stats),
+    rawGradeStatsMeta: () => getMeta(REVIEW_GRADE_STATS_KEY),
   };
 }
 

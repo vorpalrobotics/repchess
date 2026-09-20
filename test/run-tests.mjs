@@ -9986,7 +9986,11 @@ try {
     assert(restored[1] === recentColors, `expected the recent-colours row to survive the restore, got ${restored[1]}`);
 
     const rebuilt = await appBH.page.evaluate(() => window.__backupTestHooks.buildBackupData());
-    assert(rebuilt.version === 7, `expected a fresh export to declare version 7, got ${JSON.stringify(rebuilt.version)}`);
+    // >= rather than ===: this test is about the two v7 FIELDS surviving a
+    // round trip, and the version number is only evidence that the format
+    // reached v7. Pinning it exactly made every later field addition break a
+    // test about something else, which it did the first time one landed.
+    assert(rebuilt.version >= 7, `expected a fresh export to declare at least version 7, got ${JSON.stringify(rebuilt.version)}`);
     assert(rebuilt.perfectOpeningConfig === poConfig,
       `expected a fresh export to still carry perfectOpeningConfig, got ${rebuilt.perfectOpeningConfig}`);
     assert(rebuilt.recentSurfaceColors === recentColors,
@@ -21890,6 +21894,85 @@ try {
     ok('Review scheduling: records persist and survive a Full Backup round trip');
   } catch(e){ bad('Review scheduling: persistence and backup', e); }
 
+  /* --- Per-rung grade statistics (Documents/review-forecast.md, ripple step 1).
+     { step: {A,B,C} }, collected now and read by nothing yet: the projection
+     that will use it needs a MEASURED success rate per rung, and the data is
+     worthless until it has been accumulating for a while, so collection ships
+     first and alone. --- */
+
+  // 369b. The fold's rules: a grade lands on the rung it is given, a replaced
+  //       grade comes back off, decrements floor at zero, and rungs outside
+  //       the ladder are clamped rather than inventing a column.
+  try {
+    const s1 = await H('tallyGrade', {}, 2, 'A');
+    assert(JSON.stringify(s1['2']) === JSON.stringify({ A: 1, B: 0, C: 0 }),
+      `expected an A counted at rung 2, got ${JSON.stringify(s1)}`);
+
+    const s2 = await H('tallyGrade', s1, 2, 'B');
+    assert(s2['2'].A === 1 && s2['2'].B === 1,
+      `expected a second grade added alongside the first, got ${JSON.stringify(s2)}`);
+
+    // a correction replaces: the earlier A comes back off as the C goes on
+    const s3 = await H('tallyGrade', s2, 2, 'C', 'A');
+    assert(s3['2'].A === 0 && s3['2'].B === 1 && s3['2'].C === 1,
+      `expected the replaced A un-counted, got ${JSON.stringify(s3)}`);
+
+    // ...and never below zero, however confused the caller is about what it
+    // last wrote -- a negative count would poison every rate computed from it
+    const s4 = await H('tallyGrade', { '2': { A: 0, B: 0, C: 0 } }, 2, 'B', 'A');
+    assert(s4['2'].A === 0 && s4['2'].B === 1,
+      `expected the decrement floored at zero, got ${JSON.stringify(s4)}`);
+
+    const s5 = await H('tallyGrade', {}, 99, 'A');
+    assert(s5[String(LADDER.length - 1)].A === 1,
+      `expected an out-of-range rung clamped to the top of the ladder, got ${JSON.stringify(s5)}`);
+    const s6 = await H('tallyGrade', {}, 0, 'Z');
+    assert(JSON.stringify(s6) === JSON.stringify({ '0': { A: 0, B: 0, C: 0 } }),
+      `expected an unknown grade to increment nothing, got ${JSON.stringify(s6)}`);
+
+    /* Purity has to be checked INSIDE the page: an object handed to
+       page.evaluate is serialized, so a mutation there could never show up in
+       a Node-side copy and the obvious version of this assertion would pass
+       no matter what the function did. */
+    const pure = await appEF.page.evaluate(() => {
+      const base = { '1': { A: 5, B: 0, C: 0 } };
+      const out = window.__reviewTestHooks.tallyGrade(base, 1, 'C');
+      return { baseC: base['1'].C, outC: out['1'].C, sameRef: out === base, sameRow: out['1'] === base['1'] };
+    });
+    assert(pure.outC === 1 && pure.baseC === 0 && !pure.sameRef && !pure.sameRow,
+      `expected a new object and an untouched input, got ${JSON.stringify(pure)}`);
+    ok('Grade statistics: counted at the rung given, a correction un-counted, input never mutated');
+  } catch(e){ bad('Grade statistics: the fold', e); }
+
+  // 369c. The tally persists and survives a real Full Backup round trip.
+  //       Unlike a review schedule there is nothing to reconstruct it from --
+  //       a restore that dropped it would reset months of measurement to zero
+  //       with nothing on screen saying so.
+  try {
+    await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeStats(
+      { '0': { A: 9, B: 2, C: 1 }, '3': { A: 4, B: 0, C: 0 } }));
+    const stored = await H('getGradeStats');
+    assert(stored['0'].A === 9 && stored['3'].A === 4,
+      `expected the tally to persist, got ${JSON.stringify(stored)}`);
+
+    const exported = await appEF.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    assert(typeof exported.reviewGradeStats === 'string' && /"A":9/.test(exported.reviewGradeStats),
+      `expected the tally carried in the backup, got ${JSON.stringify(exported.reviewGradeStats)}`);
+    assert(exported.version >= 8,
+      `expected the backup version bumped for the new field, got ${exported.version}`);
+
+    // out and back in through a REAL restore, which clears the meta store
+    // first -- so this proves the round trip, not just that the field is written
+    await seedBackup(appEF.page, {
+      version: 8, user: 'tester', lines: [], games: [],
+      reviewGradeStats: exported.reviewGradeStats,
+    });
+    const restored = await H('getGradeStats');
+    assert(restored['0'].A === 9 && restored['0'].C === 1 && restored['3'].A === 4,
+      `expected the tally to survive a full restore, got ${JSON.stringify(restored)}`);
+    ok('Grade statistics: the tally persists and survives a Full Backup round trip');
+  } catch(e){ bad('Grade statistics: persistence and backup', e); }
+
   /* --- Review Forecast, Phase 1 (Documents/review-forecast.md). The whole
      feature's risk is in this one function -- every later phase is a thin
      renderer over it, so a bug here would be invisible in all of them. Driven
@@ -23346,6 +23429,46 @@ try {
     assert(n === 0, `expected no demotion after grading the room as it now stands, got ${n}`);
     ok('Structural demotion: grading carries the ledger, so the same doors never re-arm');
   } catch(e){ bad('Structural demotion: ledger survives a grade', e); }
+
+  // 389b. The live grading path feeds the per-rung grade tally
+  //       (Documents/review-forecast.md), and files each grade under the rung
+  //       the review was ON rather than the one it moved to. An A at step 2 is
+  //       evidence about the 7-day interval you just sat out, not about the
+  //       21-day one it promotes you to -- filing it forward would measure the
+  //       wrong interval, and in the flattering direction.
+  try {
+    const now = Date.now();
+    await appEJ.page.evaluate(() => window.__reviewTestHooks.setGradeStats({}));
+    // the dirtySeen ledger is carried through so no structural demotion can
+    // move the rung out from under this (it only runs on VR open today, but
+    // the test shouldn't depend on that staying true)
+    const held = await record();
+    await seedRecord({ ...held, last: now - 10 * DAY, due: now - DAY, step: 2, lastGrade: 'A' });
+    await E('enter', keys.alpha);                    // clears preGradeRecord: a fresh visit
+    await appEJ.page.waitForTimeout(150);
+
+    await E('gradeCurrentRoom', 'A');
+    const moved = await record();
+    assert(moved.step === 3, `setup: expected the A to advance 2 -> 3, got ${JSON.stringify(moved)}`);
+    const stats = await appEJ.page.evaluate(() => window.__reviewTestHooks.getGradeStats());
+    assert(stats['2'] && stats['2'].A === 1,
+      `expected the A tallied against rung 2, the interval it judged, got ${JSON.stringify(stats)}`);
+    assert(!stats['3'],
+      `expected nothing filed under the rung it moved TO, got ${JSON.stringify(stats)}`);
+
+    // a corrected grade in the SAME visit replaces rather than compounds. The
+    // record already works this way (preGradeRecord -- a mis-press is meant to
+    // be recoverable), and a tally that didn't follow would inflate exactly
+    // the statistics it is collecting.
+    await E('gradeCurrentRoom', 'C');
+    const after = await appEJ.page.evaluate(() => window.__reviewTestHooks.getGradeStats());
+    assert(after['2'].A === 0 && after['2'].C === 1,
+      `expected the mis-pressed A un-counted by the correction, got ${JSON.stringify(after)}`);
+    const total = Object.values(after).reduce((n, r) => n + r.A + r.B + r.C, 0);
+    assert(total === 1,
+      `expected one review to count once however many times it was graded, got ${total} in ${JSON.stringify(after)}`);
+    ok('Grade statistics: the live path tallies against the rung reviewed, and a correction replaces it');
+  } catch(e){ bad('Grade statistics: live grading path', e); }
 
   // 390. A room memorized but never graded is already at the bottom of the
   //      ladder -- there's nothing to demote, and no reason to invent a

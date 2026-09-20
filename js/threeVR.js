@@ -1597,7 +1597,10 @@ const GRADE_KEY   = { '1': 'A', '2': 'B', '3': 'C' };
    record as it stood BEFORE this visit's first grade is kept and re-used as
    the base each time. Cleared on entering any room, so it's strictly
    per-visit -- come back tomorrow and you're grading afresh. */
-let preGradeRecord = null;      // { roomKey, record } | null
+// { roomKey, record, tallied } | null -- `tallied` is the grade this visit has
+// already counted into the per-rung statistics, so a re-grade can un-count it
+// (see db.js's recordReviewGrade)
+let preGradeRecord = null;
 
 // dueInDays / duePhrase ("tomorrow", "in 7 days") moved to db.js, where
 // app.js can reach them too -- they're globals from the classic script.
@@ -1624,13 +1627,22 @@ async function gradeCurrentRoom(grade){
   if(!GRADE_LABEL[grade]) return null;
   const key = currentRoomKey;
   if(!preGradeRecord || preGradeRecord.roomKey !== key){
-    preGradeRecord = { roomKey: key, record: reviewFor(key) };
+    preGradeRecord = { roomKey: key, record: reviewFor(key), tallied: null };
   }
-  const rec = applyRoomReviewGrade(preGradeRecord.record, grade);
+  const before = preGradeRecord.record;
+  const rec = applyRoomReviewGrade(before, grade);
   REVIEWS[key] = rec;
   updateToolbar();
   showToast(`${GRADE_LABEL[grade]} — next review ${duePhrase(rec)}`);
-  await persistReviews();
+  /* Tally against the rung this review was ON (before's step, not rec's) --
+     the grade judges the interval just completed. A bootstrapped room, never
+     graded, sits at step 0, which is exactly where its first grade belongs.
+     `replacing` hands back whatever an earlier press in THIS visit counted, so
+     a corrected grade replaces rather than adds; see db.js's tallyReviewGrade. */
+  const rung = (before && before.step) || 0;
+  const replacing = preGradeRecord.tallied;
+  preGradeRecord.tallied = grade;
+  await Promise.all([persistReviews(), recordReviewGrade(rung, grade, replacing)]);
   return rec;
 }
 
