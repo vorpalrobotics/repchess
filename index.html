@@ -330,6 +330,20 @@
      a sentence invites reading the strip instead of the note. */
   .meta-note-glyph{cursor:pointer;color:#6a5acd;margin-left:.4em}
   .meta-note-glyph:hover{color:#483d8b}
+  /* the position/notes modal: board on the left, note on the right. Built on
+     document.body by js/app.js (it has to layer above the VR walk), so these
+     rules style markup that never appears in this file. */
+  .position-note-modal{width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column}
+  .position-note-body{display:flex;gap:1rem;align-items:flex-start}
+  .position-note-left{flex:none}
+  .position-note-right{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.5rem;align-items:flex-start}
+  /* taller than the Attributes preview -- here the note is the point of the
+     modal rather than one field among several */
+  .position-note-view{max-height:none;min-height:13em;width:100%;box-sizing:border-box;margin:0;flex:1 1 auto}
+  @media (max-width:640px){
+    .position-note-body{flex-direction:column}
+    .position-note-view{min-height:8em}
+  }
   /* a converted modal must be a flex column, and the bar (or the host div a
      module renders it into) must not flex */
   .modal-bar-host{flex:0 0 auto}
@@ -2038,6 +2052,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-425"></script>
+<script type="module" src="js/app.js?v=20260804-426"></script>
 </body>
 </html>

@@ -141,8 +141,15 @@ function buildOverlay(title){
         <div class="modal-bar-host"></div>
         <div class="note-editor-host"></div>
       </div>`;
-    document.body.appendChild(ov);
   }
+  /* Appended on EVERY open, not just the first. appendChild on an element that
+     is already a child moves it to the end, and every .overlay in this app
+     shares one z-index -- so DOM order is what decides which of two open
+     overlays is on top. The editor is always opened ON TOP of whatever called
+     it (Attributes, or the position/notes modal, which builds its own
+     document.body overlay the same way), and that is only reliably true if it
+     goes last each time. */
+  document.body.appendChild(ov);
   // re-rendered per open so each open wires a fresh controller over fresh
   // buttons -- the same reason assets.js re-mounts its bar per view
   ov.querySelector('.modal-bar-host').innerHTML =

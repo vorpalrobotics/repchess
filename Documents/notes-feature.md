@@ -1,6 +1,6 @@
 # Notes — design and phasing plan
 
-**Status: Phases 1-2 built. Phases 3-5 designed.**
+**Status: Phases 1-3 built. Phases 4-5 designed.**
 
 ## What it is for
 
@@ -66,7 +66,7 @@ commits nothing. The caller decides what to do with the result:
 |---|---|
 | Three-dot **Notes…** | writing the pref directly |
 | **Set Attributes** | staging into the modal, committed by its own Save |
-| VR | a `threeOpts.onNoteSave(seq, md)` callback into `app.js` |
+| VR | the position/notes modal, which lives in `app.js` and commits directly |
 
 **This is the part not to get wrong.** `attrSnapshot` includes the note, and the
 Attributes modal commits everything on one Save (`Documents/modal-buttons.md` —
@@ -81,6 +81,11 @@ codebase: `cropImage`, `openNewAssetModal`, the object-list asset picker.
 VR does **not** touch `PREFS` directly — it does not today, and
 `threeOpts.onRoomRename` is the established pattern for writing a pref back out
 of the walk.
+
+The plan was an `onNoteSave(seq, md)` callback. It turned out not to be needed:
+the **whole position/notes modal** lives in `app.js` (Phase 3), so VR's entire
+share of the feature is handing a pair's seq outward through one `threeOpts`
+callback and letting `app.js` do the rest. Fewer moving parts, same property.
 
 ## The Attributes textarea goes away
 
@@ -279,6 +284,10 @@ use, so they layer above the VR modal regardless of which container hosts the
 canvas. `setForeignModalOpen(true)` while either is open, so VR key handling
 does not read keystrokes meant for the editor.
 
+Being *on* `document.body` is only half of it: with one shared `z-index`, DOM
+order decides which of the two is on top, so both re-append themselves on every
+open. See Phase 3.
+
 ---
 
 # Phasing plan
@@ -329,12 +338,41 @@ truncation.
 **Ships real value with no VR work at all** — this alone gives formatted,
 multi-line notes everywhere they exist today.
 
-## Phase 3 — the position/notes modal
+## Phase 3 — the position/notes modal ✅ BUILT
 
-Board + rendered note + pencil, opened from a **test hook first**, so the modal
-is proven before any in-world affordance exists to open it. Same reasoning that
-put `buildReviewForecast` ahead of its renderer: all the risk in one testable
-unit.
+`openPositionNote(seq, { lineId, flip })` in `js/app.js`: the board at that
+pair's position, the note rendered beside it, a pencil, and a bare `Done`.
+Opened from a **test hook**, so the modal was proven before any in-world
+affordance existed to open it — the same reasoning that put
+`buildReviewForecast` ahead of its renderer: all the risk in one testable unit.
+
+Three things it settled that the design had left open:
+
+- **It takes the pair's own seq and does not re-canonicalise it.** The seq
+  Phase 1 threaded onto the sprite is already canonical (see `pairFor`), and
+  running it back through `canonicalRoomSeq` would rebuild a whole castle graph
+  per open *and* read `CURRENT_LINE`. The note's key is one ply back,
+  `seq.slice(0,-1)` — the move table row's own key.
+- **`lineId` and `flip` are parameters, not globals.** The main world walks
+  every line's castles at once, so a note opened from someone else's castle
+  must be written onto *that* line. `savePrefField` grew a lineId-explicit form
+  (`savePrefFieldOn`) for exactly this; the old spelling is a one-line wrapper
+  and no existing call site moved. Both parameters default to the move table's
+  open line, which is right for every non-VR caller.
+- **Overlay stacking is DOM order, not z-index.** Every `.overlay` in this app
+  is `z-index:20`, so two overlays built lazily on `document.body` stack by
+  whichever was *created* first — which is not the same as whichever was
+  *opened* last. Both this modal and the editor now re-`appendChild` themselves
+  on every open, which makes "the editor opens on top of its caller" true by
+  construction rather than by luck. Without it, opening the editor from
+  Attributes early in a session and the position modal later would have buried
+  the editor.
+
+Five tests (phase EN3, 419–423): the board is the right position the right way
+up and the caption names the pair in notation; the modal renders the **move
+table's own note** for that position; the pencil commits directly (no enclosing
+Save) and the modal repaints in place; a position with no note still opens and
+says so; and the orientation really is a parameter.
 
 ## Phase 4 — the in-world pair icon
 

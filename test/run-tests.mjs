@@ -23863,6 +23863,156 @@ try {
 }
 } catch(e){ bad('Phase EN2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+
+// --- Phase EN3: notes, phase 3 -- the position/notes modal
+//     (Documents/notes-feature.md). Board, rendered note, pencil.
+//
+//     Driven entirely through the test hook, which is the point of the phase:
+//     Phase 4's in-world icon and Phase 5's dead-end scroll will both open
+//     this modal with a pair's own room seq, and the modal is proven BEFORE
+//     either of those 3D affordances exists -- the same reasoning that put
+//     buildReviewForecast ahead of its renderer. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEN3 = await launchApp();
+try {
+  await seedBackup(appEN3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN3.page.click('.line-row');
+  await appEN3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  /* The pair's own seq: the ROOM seq, ending in OUR reply -- exactly what
+     Phase 1 threaded onto the sprite as userData.pairSeq. Its note lives one
+     ply back, on ['d4','Nf6'], which is the move table row's own key. */
+  const pairSeq = ['d4','Nf6','c4'];
+  const open = async (opts) => {
+    await appEN3.page.evaluate(([s, o]) => window.__notesTestHooks.openPositionNote(s, o), [pairSeq, opts || {}]);
+    await appEN3.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+  };
+  const close = () => appEN3.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+  const noteNow = () => appEN3.page.evaluate(() =>
+    window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+
+  // 419. The board really is the position at that pair, right way up, and the
+  //      caption names the pair in notation. This is the half of the modal
+  //      that has no note in it at all, and it has to be right before the note
+  //      half is worth reading.
+  try {
+    await open();
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board.length === 64, `expected a 64-square board, got ${board.length}`);
+    // unflipped: cell 0 is a8. r = 8 - rank, index = r*8 + file
+    assert(board[0] === 'br', `expected Black's rook on a8 at the top-left, got ${JSON.stringify(board[0])}`);
+    assert(board[4 * 8 + 2] === 'wp', `expected White's pawn on c4, got ${JSON.stringify(board[4 * 8 + 2])}`);
+    assert(board[4 * 8 + 3] === 'wp', `expected White's pawn on d4, got ${JSON.stringify(board[4 * 8 + 3])}`);
+    assert(board[2 * 8 + 5] === 'bn', `expected Black's knight on f6, got ${JSON.stringify(board[2 * 8 + 5])}`);
+    assert(board[6 * 8 + 2] === '', `expected c2 empty after the pawn moved, got ${JSON.stringify(board[6 * 8 + 2])}`);
+
+    const cap = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(/1…Nf6/.test(cap) && /2\.c4/.test(cap),
+      `expected the caption to name the pair in notation, got ${JSON.stringify(cap)}`);
+    assert(/Black to move/.test(cap), `expected the caption to say whose move it is, got ${JSON.stringify(cap)}`);
+    ok('Notes: the position modal shows the board at that pair and names the pair');
+  } catch(e){ bad('Notes: position modal board', e); }
+
+  // 420. ...and it shows the SAME note the move table row does, rendered as
+  //      Markdown. Written through the move table's own key and read back
+  //      through the pair's seq: that is the one-note-per-position promise
+  //      arriving at the surface the VR will actually open.
+  try {
+    await close();
+    await appEN3.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, '## Plan\n\nHold the centre.');
+    });
+    await open();
+    await appEN3.page.waitForFunction(
+      () => /Hold the centre/.test(document.getElementById('positionNoteView').innerHTML), { timeout: 20000 });
+    const html = await appEN3.page.evaluate(() => document.getElementById('positionNoteView').innerHTML);
+    assert(!(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteEmpty())),
+      'expected the note pane to drop its empty state once there is a note');
+    assert(/<h2/i.test(html), `expected the Markdown heading rendered, not shown raw, got ${JSON.stringify(html)}`);
+    assert(!/##\s*Plan/.test(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteText())),
+      'expected rendered Markdown rather than the raw source');
+    ok('Notes: the position modal renders the move table\'s own note for that position');
+  } catch(e){ bad('Notes: position modal renders the note', e); }
+
+  // 421. The pencil COMMITS -- there is no enclosing Save to stage into here,
+  //      unlike Attributes -- and the modal repaints without being reopened.
+  try {
+    await appEN3.page.evaluate(() => window.__notesTestHooks.editPositionNote());
+    await appEN3.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN3.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    // it opens on the EXISTING note, not blank
+    const loaded = await appEN3.page.evaluate(() => window.__notesEditorTestHooks.getValue());
+    assert(/Hold the centre/.test(loaded || ''),
+      `expected the pencil to open on the existing note, got ${JSON.stringify(loaded)}`);
+
+    await appEN3.page.evaluate(() => window.__notesEditorTestHooks.setValue('Edited from the board.'));
+    await appEN3.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN3.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN3.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appEN3.page.waitForFunction(
+      () => /Edited from the board/.test(document.getElementById('positionNoteView').innerHTML), { timeout: 20000 });
+    const saved = await noteNow();
+    assert(/Edited from the board/.test(saved || ''),
+      `expected the pencil's Save to write the pref directly, got ${JSON.stringify(saved)}`);
+    assert(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteOpen()),
+      'expected the position modal to still be open underneath the editor');
+    ok('Notes: the position modal\'s pencil commits and repaints in place');
+  } catch(e){ bad('Notes: position modal pencil round trip', e); }
+
+  // 422. A position with no note says so rather than showing an empty frame,
+  //      and Done closes. The icon opens the position whether or not a note
+  //      exists (that is the point of showing the board), so the no-note state
+  //      is a real state, not an edge case.
+  try {
+    await close();
+    await appEN3.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, '');
+    });
+    await open();
+    assert(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteEmpty()),
+      'expected the empty state on a position with no note');
+    const txt = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/No note yet/.test(txt || ''), `expected an explicit "no note" message, got ${JSON.stringify(txt)}`);
+    // the board is still there -- the position is worth opening on its own
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board[4 * 8 + 2] === 'wp', 'expected the board still rendered with no note present');
+
+    await close();
+    assert(!(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteOpen())),
+      'expected Done to close the position modal');
+    ok('Notes: a position with no note still opens, and says there is none');
+  } catch(e){ bad('Notes: position modal empty state', e); }
+
+  // 423. The orientation is a parameter. The main VR world walks every line's
+  //      castles at once, so the modal cannot read the board's side off
+  //      whichever line the move table happens to have open -- Phase 4 passes
+  //      the walked room's own. Cheap to assert now, expensive to discover
+  //      later from a board that is upside down in half the world.
+  try {
+    await open({ flip: true });
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board[0] === 'wr', `expected White's rook top-left when flipped, got ${JSON.stringify(board[0])}`);
+    assert(board[3 * 8 + 5] === 'wp', `expected c4 to land on the flipped square, got ${JSON.stringify(board[3 * 8 + 5])}`);
+    await close();
+    ok('Notes: the position modal takes its orientation as a parameter');
+  } catch(e){ bad('Notes: position modal orientation', e); }
+} finally {
+  await appEN3.close();
+}
+} catch(e){ bad('Phase EN3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: notes, phase 1 -- the move-pair billboards carry the sequence
 //     they represent (Documents/notes-feature.md). Nothing reads it yet; this
 //     is the plumbing everything else in that feature needs, and the one
