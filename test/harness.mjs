@@ -30,6 +30,10 @@ const CDN_MAP = [
   // both mini boards) -- only this one static asset is vendored, not the whole
   // cm-chessboard JS widget, which stays un-mocked/aborted like other non-core CDNs.
   { re: /cm-chessboard@.*\/pieces\/standard\.svg/, file: 'cm-chessboard-standard.svg', type: 'image/svg+xml' },
+  // No entry for the Markdown editor: js/notes.js loads it from OUR OWN ORIGIN
+  // (js/vendor/), so the static server below already serves it and the tested
+  // path is byte-for-byte the shipped one. See notes.js's own header for the
+  // three findings that made self-hosting the right call.
 ];
 
 const MIME = {

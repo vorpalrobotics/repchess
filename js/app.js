@@ -1,10 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-300';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-305';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
+import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
 // Reaching here means the module's static imports above all loaded; clears the
@@ -105,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-422';
+const BUILD_TAG = '-432';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1934,7 +1935,22 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     const resp = lastMoveInfo(node.seq);
     const opp = lastMoveInfo(node.seq.slice(0, -1));
     if(!resp || !opp) return null;
-    const p = { side, order, opponent: CONV(opp, node.seq.length - 1), response: CONV(resp, node.seq.length) };
+    /* `seq` ends in OUR reply, so the pref carrying this pair's note (and its
+       name, mnemonic, moveQuality) is seq.slice(0,-1) -- the same row the move
+       table's three-dot menu edits.
+
+       It is ALREADY CANONICAL, which is the whole point of carrying it. `node`
+       is a room of the castle graph, and the graph dedupes by position
+       (getRoom), so two move orders transposing into one position share one
+       room and therefore one seq. canonicalRoomSeq() resolves a row's seq to
+       exactly this value, through a buildCastleGraph() call with the same
+       arguments -- so the VR and the move table agree on one note per position
+       without the VR re-deriving anything. That matters twice over:
+       canonicalRoomSeq builds a whole castle graph per call (far too expensive
+       per pair), and it reads the CURRENT_LINE global, which is the move
+       table's open line rather than whichever line the VR is walking. */
+    const p = { side, order, seq: node.seq.slice(),
+                opponent: CONV(opp, node.seq.length - 1), response: CONV(resp, node.seq.length) };
     const q = PREFS[prefKey(line.id, node.seq.slice(0, -1))]?.moveQuality;
     if(q) p.opponent.quality = q;
     const beards = moveDisambiguatorCount(node.seq);
@@ -1945,6 +1961,12 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   // that edge (ends in our reply). Unlike pairFor (which reads a room's canonical
   // seq) this is edge-specific, so transposition doors into one room each show
   // their own last move. Returns { opponent, response } or null.
+  //
+  // Deliberately does NOT carry `seq` the way pairFor does. Being edge-specific
+  // is exactly what makes it unusable as a note key: two doors into one room
+  // would resolve to two different prefs for a position that has one note. A
+  // door pair that ever needs one must resolve through its DESTINATION room's
+  // own pair instead.
   const pairFromSeq = (seq) => {
     if(!seq || seq.length < 2) return null;
     const resp = lastMoveInfo(seq);
@@ -3831,13 +3853,20 @@ $('castleWalkBtn').onclick = async () => {
     { lineId: CURRENT_LINE?.id, instanceId, genRooms: LAST_GENERATED_CASTLE.genRooms },
     ...linkedCastles.map(c => ({ lineId: CURRENT_LINE?.id, instanceId: c.instanceId, genRooms: c.genRooms }))
   ]);
+  VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+  await buildVrNoteIndex(lines);
   enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
     systems,
     castle: LAST_GENERATED_CASTLE,
+    // every castle in this preview belongs to the open line (its own, plus any
+    // it redirects into -- gatherLinkedCastles resolves those under CURRENT_LINE)
+    castleLineId: CURRENT_LINE?.id,
     castleInstanceId: instanceId,
     linkedCastles,
     piecesFile: PIECES_FILE,
+    hasNote: vrHasNote,
+    onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -3942,6 +3971,180 @@ const fieldModalBar = wireModalBar(
     },
   });
 
+/* Edits a row's note in place (Documents/notes-feature.md). Unlike the
+   Attributes launcher above, this one COMMITS -- it is its own editor, with no
+   enclosing modal whose Save it could stage into.
+
+   Keyed by canonicalRoomSeq, the same function the meta strip reads through,
+   so a transposing row edits the one note its position has rather than growing
+   a second one. */
+async function editRowNote(lineSeq, after){
+  const roomSeq = canonicalRoomSeq(lineSeq);
+  const current = PREFS[prefKey(CURRENT_LINE.id, roomSeq)]?.note || '';
+  const next = await openNoteEditor(current, { title: 'Note' });
+  if(next === null) return;
+  await savePrefField(roomSeq, 'note', next.trim());
+  if(after) after();
+}
+
+/* ---------- the position/notes modal (Documents/notes-feature.md) ----------
+
+   The board at a move pair's position, that position's note rendered beside
+   it, and a pencil. Phase 4 opens it from the in-world pair icon and Phase 5
+   from the dead-end scroll; it is built and tested FIRST, through a test hook,
+   so the modal is proven before any 3D affordance exists to open it.
+
+   Built on document.body rather than declared in index.html, the same pattern
+   js/notes.js, the room-geometry dialog and the asset picker use -- the VR
+   walk is itself a full-screen modal, and an overlay nested inside the page's
+   own modal stack cannot reliably layer above it.
+
+   It takes the pair's OWN seq -- the room seq, ending in our reply, exactly
+   what Phase 1 threaded onto the sprite as userData.pairSeq. That seq is
+   already canonical (see pairFor), so this deliberately does NOT run it back
+   through canonicalRoomSeq: doing so would rebuild a whole castle graph per
+   open, and would read CURRENT_LINE, which is the wrong line entirely when the
+   main world is walking someone else's castle. The note's own key is one ply
+   back, seq.slice(0,-1), the same row the move table's three-dot menu edits.
+
+   VR never touches PREFS: the whole modal lives here, and Phase 4 reaches it
+   through a threeOpts callback, the way onRoomRename already works. */
+let positionNoteState = null;   // { seq, lineId, flip } while open, else null
+let positionNoteToken = 0;      // guards a slow async render against a reopen
+
+/* "6…b6 7.e3" -- the pair as it would be written. The opponent's move always
+   carries its number (it is the first thing shown); ours carries one only when
+   it is White's, which is the ordinary notation rule. */
+function movePairLabel(seq){
+  if(!seq || seq.length < 2) return '';
+  const num = ply => Math.ceil(ply / 2) + (ply % 2 ? '.' : '…');
+  const oppPly = seq.length - 1, respPly = seq.length;
+  const resp = respPly % 2 ? num(respPly) + seq[respPly - 1] : seq[respPly - 1];
+  return `${num(oppPly)}${seq[oppPly - 1]} ${resp}`;
+}
+
+function buildPositionNoteOverlay(){
+  let ov = document.getElementById('positionNoteOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'positionNoteOverlay';
+    ov.className = 'overlay';
+    /* .room-info-board is reused on purpose: it IS the house mini-board (208px,
+       8x8 grid, framed), already styled for miniBoardGridHtml's output, and a
+       second copy of those rules would drift from it. */
+    ov.innerHTML = `
+      <div class="modal position-note-modal">
+        <div class="modal-bar-host"></div>
+        <div class="modal-body position-note-body">
+          <div class="position-note-left">
+            <div id="positionNoteBoard" class="room-info-board"></div>
+            <div id="positionNoteCap" class="room-info-board-cap"></div>
+          </div>
+          <div class="position-note-right">
+            <div id="positionNoteView" class="note-preview position-note-view is-empty">No note yet.</div>
+            <button type="button" id="positionNoteEditBtn"><i class="fa-solid fa-pen"></i> Edit note…</button>
+          </div>
+        </div>
+      </div>`;
+    /* Above the VR walk (#threeTestOverlay is z-index 25), in the same band as
+       the VR's own dialogs -- openRoomGeomDialog uses exactly this number on
+       exactly this line. Being on document.body is only half of it: it keeps
+       the overlay out of any stacking context the canvas's container might
+       make, but .overlay's default 20 still puts it UNDER the walk, which is
+       how this shipped in -430 -- the modal opened, correctly, invisibly. */
+    ov.style.zIndex = '70';
+    ov.querySelector('#positionNoteEditBtn').onclick = editPositionNote;
+  }
+  // moved to the end of body on every open, not just the first: every .overlay
+  // here shares one z-index, so DOM order is what puts this above the VR walk
+  // (and below the note editor, which re-appends itself the same way)
+  document.body.appendChild(ov);
+  return ov;
+}
+
+/* Renders the note for whatever the modal currently holds. Async because the
+   Markdown viewer is imported on first use; the token check stops a slow first
+   load from painting into a modal that has since been closed or moved on. */
+async function renderPositionNoteBody(){
+  const st = positionNoteState;
+  if(!st) return;
+  const token = positionNoteToken;
+  const el = $('positionNoteView');
+  if(!el) return;
+  const md = await readNoteFor(st.lineId, st.seq.slice(0, -1));
+  if(token !== positionNoteToken) return;   // closed or moved on while IDB answered
+  el.classList.toggle('is-empty', !md);
+  if(!md){ el.textContent = 'No note yet.'; return; }
+  await renderNoteInto(el, md);
+  /* The first render of a session imports ~1.1MB, which can easily outlast the
+     modal it was opened for. By the time it resolves the viewer has ALREADY
+     painted into the shared element, so bailing out would leave the previous
+     pair's note on screen -- repaint what the modal actually holds now. The
+     recursive call carries the current token, so it cannot loop. */
+  if(token !== positionNoteToken) renderPositionNoteBody();
+}
+
+/* The pencil. This one COMMITS, like the three-dot Notes… item and for the
+   same reason: there is no enclosing Save to stage into. */
+async function editPositionNote(){
+  const st = positionNoteState;
+  if(!st) return;
+  const key = st.seq.slice(0, -1);
+  const current = await readNoteFor(st.lineId, key);
+  const next = await openNoteEditor(current, { title: 'Note' });
+  if(next === null) return;
+  await writeNoteFor(st.lineId, key, next.trim());
+  renderPositionNoteBody();
+}
+
+function closePositionNote(){
+  const ov = document.getElementById('positionNoteOverlay');
+  if(ov) ov.style.display = 'none';
+  positionNoteState = null;
+  positionNoteToken++;
+  setForeignModalOpen(false);
+}
+
+/* seq: the pair's room seq (ends in our reply). opts.lineId / opts.flip default
+   to the move table's open line; the VR passes the walked room's own line,
+   since the main world spans all of them. */
+function openPositionNote(seq, opts = {}){
+  if(!seq || seq.length < 2) return;
+  const lineId = opts.lineId || CURRENT_LINE?.id;
+  if(!lineId) return;
+  positionNoteState = {
+    seq: seq.slice(),
+    lineId,
+    flip: opts.flip !== undefined ? opts.flip
+        : lineId === CURRENT_LINE?.id ? CURRENT_LINE.color === 'black'
+        : vrFlipFor(lineId),
+  };
+  positionNoteToken++;
+
+  const ov = buildPositionNoteOverlay();
+  // re-rendered per open so each open wires a fresh controller over fresh
+  // buttons, the same reason js/notes.js re-mounts its bar per open
+  ov.querySelector('.modal-bar-host').innerHTML =
+    modalBarHtml({ title: 'Position & Note', prefix: 'positionNote' });
+  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: closePositionNote });
+
+  const fen = fenForSeq(positionNoteState.seq);
+  const board = $('positionNoteBoard');
+  board.innerHTML = miniBoardGridHtml(fen, positionNoteState.flip);
+  board.style.display = 'grid';
+  const cap = $('positionNoteCap');
+  cap.textContent =
+    `${movePairLabel(positionNoteState.seq)} · ${fen.split(' ')[1] === 'b' ? 'Black' : 'White'} to move`;
+  cap.style.display = 'block';
+
+  /* Shown BEFORE the note is rendered: the Markdown viewer measures its host
+     on construction, and mounting it into a display:none subtree leaves it
+     laid out at zero height. The Attributes preview learned this the same way. */
+  ov.style.display = 'flex';
+  setForeignModalOpen(true);
+  renderPositionNoteBody();
+}
+
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------
    Most room decoration now happens in the VR walkthrough, so this modal is
    down to the two things the castle generator needs: a Room name (relevant for
@@ -3957,6 +4160,31 @@ let attrModalLineSeq = null;
 // from for the "Redirect to castle" candidate lookup.
 let attrModalRoomSeq = null;
 let attrModalSaved = null;
+/* The note is STAGED here rather than edited here (Documents/notes-feature.md).
+   The modal used to own a plain textarea; it now owns a rendered preview and a
+   launcher, and the one editor lives in js/notes.js. attrSnapshot still reads
+   this value, so dirty tracking and the discard prompt work exactly as before
+   -- the note is part of what this modal's single Save commits, and nothing
+   writes it out from under that. */
+let attrNoteStaged = '';
+function setAttrNote(md){
+  attrNoteStaged = md || '';
+  const prev = $('attrNotePreview');
+  if(!prev) return;
+  prev.classList.toggle('is-empty', !attrNoteStaged);
+  if(!attrNoteStaged){ prev.textContent = 'No note yet.'; return; }
+  renderNoteInto(prev, attrNoteStaged);
+}
+/* The launcher. Wired once at load -- the button is static markup. It STAGES:
+   the returned value goes into attrNoteStaged, and the Attributes modal's own
+   Save is the only thing that ever writes it out. */
+$('attrNoteEditBtn').onclick = async () => {
+  const next = await openNoteEditor(attrNoteStaged, { title: 'Note' });
+  if(next === null) return;              // left without saving
+  setAttrNote(next);
+  if(attrBarCtl) attrBarCtl.refresh();   // the note is part of what Save commits
+};
+
 function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrModalLineSeq = lineSeq;
   attrModalRoomSeq = roomSeq || lineSeq;
@@ -3966,7 +4194,7 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   $('attrCastleName').value = saved?.castleName || '';
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
-  $('attrNote').value = saved?.note || '';
+  attrNoteStaged = saved?.note || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -3974,6 +4202,9 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attributesModalSave = onSave;
   mountAttributesBar();
   $('attributesOverlay').style.display='flex';
+  // AFTER the overlay is shown: the Markdown viewer measures its host element,
+  // and rendering into a display:none subtree is a question not worth asking
+  setAttrNote(attrNoteStaged);
 }
 
 /* The Attributes modal's own button bar (Documents/modal-buttons.md).
@@ -3994,7 +4225,7 @@ function attrSnapshot(){
     castleName: $('attrCastleName').value.trim(),
     castleOwner: $('attrCastleOwner').value,
     streetNumber: $('attrStreetNumber').value.trim(),
-    note: $('attrNote').value.trim(),
+    note: attrNoteStaged.trim(),
     redirect: $('attrRedirectTo').value,
   };
 }
@@ -4477,7 +4708,7 @@ function commitAttributes(){
     castleName,
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
-    note: $('attrNote').value.trim(),
+    note: attrNoteStaged.trim(),
     redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
   const cb = attributesModalSave;
@@ -5310,6 +5541,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <hr class="row-menu-sep">
              <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="notes"><i class="fa-solid fa-scroll"></i>Notes…</button>
              <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
              <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
            </div>
@@ -5381,14 +5613,14 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
       metaTd.innerHTML =
         (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-        (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+        (note ? `<span class="meta-note-glyph" title="Read or edit this note"><i class="fa-solid fa-scroll"></i></span>` : '') +
         pvHtml + actualHtml;
       metaTr.style.display='';
 
       const mnemEl = metaTd.querySelector('.meta-mnem');
       if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-      const noteEl = metaTd.querySelector('.meta-note');
-      if(noteEl) noteEl.onclick = () => openRoomAttributes();
+      const noteEl = metaTd.querySelector('.meta-note-glyph');
+      if(noteEl) noteEl.onclick = () => editRowNote(lineSeq, refreshMeta);
       const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
       if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
       const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
@@ -5668,6 +5900,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         return {ok:true, value:mv.san};
       });
     };
+    rowMenu.querySelector('[data-act="notes"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      editRowNote(lineSeq, refreshMeta);
+    };
     rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -5788,6 +6025,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="generateCastle"><i class="fa-solid fa-dungeon"></i>Preview Palace</button>
            <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+           <button type="button" data-act="notes"><i class="fa-solid fa-scroll"></i>Notes…</button>
            <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            <button type="button" data-act="portRedirect" style="display:none"><i class="fa-solid fa-file-import"></i>Port Responses to Target</button>
          </div>
@@ -5853,14 +6091,14 @@ function renderBlackRoot(parent,games,trigger){
     if(!mnem && !note && !pvHtml && !actualHtml){ metaTr.style.display='none'; return; }
     metaTd.innerHTML =
       (mnem ? `<span class="meta-mnem" title="Edit mnemonic"><i class="fa-solid fa-brain"></i>${escapeHtml(mnem)}</span>` : '') +
-      (note ? `<span class="meta-note" title="Edit note (Set Attributes)"><i class="fa-solid fa-pen"></i>${escapeHtml(note)}</span>`       : '') +
+      (note ? `<span class="meta-note-glyph" title="Read or edit this note"><i class="fa-solid fa-scroll"></i></span>` : '') +
       pvHtml + actualHtml;
     metaTr.style.display='';
 
     const mnemEl = metaTd.querySelector('.meta-mnem');
     if(mnemEl) mnemEl.onclick = () => openFieldModal('mnemonic', currentSaved()?.mnemonic, v=>saveField('mnemonic',v));
-    const noteEl = metaTd.querySelector('.meta-note');
-    if(noteEl) noteEl.onclick = () => openRoomAttributes();
+    const noteEl = metaTd.querySelector('.meta-note-glyph');
+    if(noteEl) noteEl.onclick = () => editRowNote(lineSeq, refreshMeta);
     const dismissActualBtn = metaTd.querySelector('.meta-actual-dismiss');
     if(dismissActualBtn) dismissActualBtn.onclick = () => { savePrefField(lineSeq, 'compareGames', false); refreshMeta(); };
     const analyzeAllBtn = metaTd.querySelector('.meta-actual-analyze-all');
@@ -6081,6 +6319,11 @@ function renderBlackRoot(parent,games,trigger){
       if(!mv) return {ok:false, error:`"${v}" is not a legal move here`};
       return {ok:true, value:mv.san};
     });
+  };
+  rowMenu.querySelector('[data-act="notes"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    editRowNote(lineSeq, refreshMeta);
   };
   rowMenu.querySelector('[data-act="attributes"]').onclick = e => {
     e.stopPropagation();
@@ -9263,6 +9506,12 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     systems = await systemsForWalk(lines);
     if(forceRebuild) invalidateBuiltCastlesCache();
     castles = await gatherBuiltCastles(lines);
+    // which line each castle belongs to, and which positions have a note --
+    // both spanning every line, since this world walks all of them at once.
+    // Inside the spinner because the note index is one indexed IDB read per
+    // line (see buildVrNoteIndex).
+    VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+    await buildVrNoteIndex(lines);
   } finally {
     hideSpinner(spinner);
   }
@@ -9273,6 +9522,8 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     castles,
     piecesFile: PIECES_FILE,
     startRoomKey,
+    hasNote: vrHasNote,
+    onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -11973,8 +12224,80 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
 function savePrefField(seq,field,value){
   const key = prefKey(CURRENT_LINE.id,seq);
   (PREFS[key] ??= {key,lineId:CURRENT_LINE.id,seq,reply:'',note:'',mnemonic:'',hidden:false})[field]=value;
+  // every open-line note write funnels through here -- the three-dot Notes…
+  // item, the Attributes modal's Save, and the position modal's pencil -- so
+  // it is the one place the VR's note-exists index has to be kept current
+  if(field === 'note') vrNoteIndexSet(CURRENT_LINE.id, seq, !!(value && value.trim()));
   return setPref(CURRENT_LINE.id,seq,{[field]:value});
 }
+
+/* ---------- reading/writing ONE note on a line that may not be the open one
+   (Documents/notes-feature.md) ----------
+
+   PREFS holds only the OPEN line's prefs. withLinePrefs swaps another line's
+   in for the duration of one synchronous castle build and swaps it straight
+   back out, so outside that window `PREFS[prefKey(someOtherLine, seq)]` is
+   simply absent -- not empty, absent. The VR world walks every line's castles
+   at once, so a note opened from a pair standing in another line's castle
+   cannot go through PREFS: the read would report "no note" for a note that
+   exists, and saving over that answer would destroy it. IDB is the only
+   correct source there.
+
+   The open line still goes through PREFS so an edit made here is visible to
+   the move table immediately rather than after a reload -- savePrefField
+   keeps both in step, which is the whole reason it exists. */
+async function readNoteFor(lineId, seq){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return PREFS[prefKey(lineId, seq)]?.note || '';
+  return (await getPref(lineId, seq))?.note || '';
+}
+function writeNoteFor(lineId, seq, md){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return savePrefField(seq, 'note', md);
+  vrNoteIndexSet(lineId, seq, !!(md && md.trim()));
+  return setPref(lineId, seq, { note: md });
+}
+
+/* ---------- which positions have a note, per line ----------
+   The in-world glyph asks this for every visible move pair on every frame, so
+   it has to be a synchronous Set lookup -- an IDB read per pair per frame is
+   not a thing that can exist. Built when the walk opens (one indexed read per
+   line) and patched in place on every note write, so the glyph follows a save
+   immediately instead of waiting for the next world rebuild.
+
+   Reading it every frame rather than baking `hasNote` into the castle cache is
+   deliberate: that cache survives a reload and is only invalidated by
+   repertoire edits, so a note added from the move table would not have shown
+   up in the world at all. */
+let VR_NOTE_INDEX = null;                       // Map<lineId, Set<seqKey>>
+const noteIndexKey = seq => (seq || []).join('\x1f');
+async function buildVrNoteIndex(lines){
+  const idx = new Map();
+  for(const l of lines){
+    const prefs = (CURRENT_LINE && l.id === CURRENT_LINE.id) ? PREFS : await getAllPrefs(l.id);
+    const set = new Set();
+    for(const k in prefs){
+      const p = prefs[k];
+      if(p && typeof p.note === 'string' && p.note.trim()) set.add(noteIndexKey(p.seq));
+    }
+    idx.set(l.id, set);
+  }
+  VR_NOTE_INDEX = idx;
+  return idx;
+}
+function vrHasNote(lineId, seq){
+  const set = VR_NOTE_INDEX && VR_NOTE_INDEX.get(lineId);
+  return !!set && set.has(noteIndexKey(seq));
+}
+function vrNoteIndexSet(lineId, seq, has){
+  if(!VR_NOTE_INDEX) return;                    // no walk has been opened yet
+  let set = VR_NOTE_INDEX.get(lineId);
+  if(!set){ set = new Set(); VR_NOTE_INDEX.set(lineId, set); }
+  if(has) set.add(noteIndexKey(seq)); else set.delete(noteIndexKey(seq));
+}
+/* lineId -> 'white'|'black', captured when the walk opens. The board's
+   orientation is app.js's decision, not the VR's -- threeVR hands out a room's
+   lineId and a pair's seq and knows nothing about which way a board faces. */
+let VR_LINE_COLORS = null;
+const vrFlipFor = lineId => (VR_LINE_COLORS && VR_LINE_COLORS.get(lineId)) === 'black';
 
 /* manually-recorded opponent replies for the position `seq`, kept alongside
    that position's own prefs so a theoretical try can be added before any
@@ -13609,6 +13932,37 @@ if(localStorage.getItem('threeTestDebug')){
     assetsOfferedKey: ASSETS_DEFAULT_OFFERED_KEY,
     getMnemOffered: () => getMeta(MNEM_DEFAULT_OFFERED_KEY),
     getAssetsOffered: () => getMeta(ASSETS_DEFAULT_OFFERED_KEY),
+  };
+}
+
+/* test-only hooks for notes (Documents/notes-feature.md). The move table reads
+   AND writes a note under canonicalRoomSeq(row seq), so a test can ask for the
+   same key the UI would use without driving the Attributes modal. CURRENT_LINE
+   must be open -- canonicalRoomSeq reads it. */
+if(localStorage.getItem('threeTestDebug')){
+  window.__notesTestHooks = {
+    canonicalSeq: (seq) => canonicalRoomSeq(seq),
+    noteAt: (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.note ?? null,
+    setNote: (seq, note) => savePrefField(seq, 'note', note),
+    /* The position/notes modal, opened the way Phase 4's in-world icon will
+       open it: with a pair's own room seq. Exposed so the modal is testable
+       before any 3D affordance exists to reach it. */
+    openPositionNote: (seq, opts) => openPositionNote(seq, opts),
+    positionNoteOpen: () => {
+      const ov = document.getElementById('positionNoteOverlay');
+      return !!ov && ov.style.display === 'flex';
+    },
+    positionNoteCaption: () => $('positionNoteCap')?.textContent || null,
+    // the board as rendered: 64 cells of sprite id ('wp','bn') or '' for empty,
+    // in the order they are laid out, so a test can assert orientation too
+    positionNoteBoard: () => Array.from(
+      document.querySelectorAll('#positionNoteBoard > div'),
+      d => (d.querySelector('use')?.getAttribute('href') || '').replace('#', '')),
+    positionNoteText: () => $('positionNoteView')?.textContent ?? null,
+    positionNoteEmpty: () => !!$('positionNoteView')?.classList.contains('is-empty'),
+    editPositionNote: () => { $('positionNoteEditBtn').click(); },
+    closePositionNote: () => { $('positionNoteLeave').click(); },
+    pairLabel: (seq) => movePairLabel(seq),
   };
 }
 

@@ -9906,6 +9906,135 @@ try {
 } catch(e){ bad('Phase BGx: uncaught error outside a numbered test', e); }
 }
 
+/* --- Phase ATTR: the open-source ATTRIBUTION audit. A source-level test like
+       Phase BGx above, no browser: it reads test/build-vendor.mjs, js/vendor/
+       and index.html, and fails when the libraries the app actually ships
+       drift apart from the ones the About box credits.
+
+       Nothing else forces the list to keep up. A library can be added, or
+       pulled into the self-hosted bundle as a transitive dependency, without
+       anything breaking or looking wrong -- the app works fine, and the only
+       symptom is an attribution list that quietly understates what is being
+       distributed. That is a licence-compliance problem rather than a bug,
+       which is exactly the kind that survives every functional test there is.
+
+       Deliberately one-directional: every shipped library must be credited,
+       but the list may name things build-vendor.mjs does not (Font Awesome is
+       a stylesheet link, never vendored). Extra credit is harmless; missing
+       credit is not. --- */
+if(shouldRunPhase(['core'])){
+try {
+  const ROOT = path.join(process.cwd(), '..');
+  const indexHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const vendorSrc = fs.readFileSync(path.join(process.cwd(), 'build-vendor.mjs'), 'utf8');
+
+  // the About box's attribution list, from its heading to the end of the <ul>
+  const attrList = (() => {
+    const at = indexHtml.indexOf('Open Source Attributions');
+    if(at < 0) return '';
+    const ul = indexHtml.indexOf('<ul', at);
+    const end = indexHtml.indexOf('</ul>', ul);
+    return (ul < 0 || end < 0) ? '' : indexHtml.slice(ul, end);
+  })();
+
+  /* What each npm package is CALLED in the list. A package with no entry here
+     fails rather than being skipped: the mapping is the one line you have to
+     write when you add a library, and it is what makes forgetting the About
+     box impossible rather than merely unlikely. A value may name another
+     entry, for a dependency credited through the package that bundles it. */
+  const ATTRIBUTED_AS = {
+    'three': 'three.js',
+    'cytoscape': 'cytoscape.js',
+    'cytoscape-dagre': 'cytoscape-dagre',
+    'dagre': 'cytoscape-dagre',          // cytoscape-dagre's own dep, credited with it
+    'chess.js': 'chess.js',
+    'cm-chessboard': 'cm-chessboard',
+    '@toast-ui/editor': 'Toast UI Editor',
+    // bundled into the self-hosted editor, so we redistribute them (see 437)
+    'prosemirror': 'ProseMirror',
+    'DOMPurify': 'DOMPurify',
+  };
+
+  // 436. Every library build-vendor.mjs knows about is credited. Its VERSIONS
+  //      table mirrors the CDN URLs in index.html / js/app.js / js/threeVR.js
+  //      (its own header says so), which makes it the closest thing this repo
+  //      has to a manifest of what the app loads.
+  try {
+    const block = (vendorSrc.match(/const\s+VERSIONS\s*=\s*\{([\s\S]*?)\n\};/) || [, ''])[1];
+    const pkgs = [...block.matchAll(/^\s*'?([@\w./-]+?)'?\s*:\s*'/gm)].map(m => m[1]);
+    assert(pkgs.length >= 6, `sanity: expected build-vendor's VERSIONS table, got ${JSON.stringify(pkgs)}`);
+    assert(pkgs.includes('@toast-ui/editor'),
+      `sanity: expected the self-hosted editor among them, got ${JSON.stringify(pkgs)}`);
+    assert(attrList.length > 200, 'sanity: could not read the About box attribution list from index.html');
+
+    const unmapped = pkgs.filter(p => !ATTRIBUTED_AS[p]);
+    assert(unmapped.length === 0,
+      `these libraries are in build-vendor.mjs's VERSIONS but this test does not know what they are called ` +
+      `in the About box -- add them to ATTRIBUTED_AS (and to the About box): ${JSON.stringify(unmapped)}`);
+
+    const missing = pkgs.filter(p => !attrList.includes(ATTRIBUTED_AS[p]));
+    assert(missing.length === 0,
+      `these libraries are shipped by the app but not credited in the About box's Open Source Attributions ` +
+      `list: ${JSON.stringify(missing.map(p => `${p} (expected "${ATTRIBUTED_AS[p]}")`))}`);
+    ok(`attribution: all ${pkgs.length} vendored libraries are credited in the About box`);
+  } catch(e){ bad('attribution: vendored libraries', e); }
+
+  /* 437. The SELF-HOSTED bundle, which is the case that actually carries a
+          licence obligation rather than just courtesy: everything else is
+          fetched from a CDN at run time, but js/vendor/ is served from our own
+          origin, so its contents are redistributed by us.
+
+          Checked both ways. A dependency named in the bundle's own
+          esbuild legal-comment block must be credited; and a dependency we
+          credit must still BE in the bundle, so a future `node
+          build-vendor.mjs` that drops or replaces one leaves a stale claim
+          that fails here rather than sitting in the About box forever. */
+  try {
+    const VENDOR_DIR = path.join(ROOT, 'js', 'vendor');
+    const shipped = fs.readdirSync(VENDOR_DIR).filter(f => f.endsWith('.mjs'));
+    // a NEW self-hosted bundle is a new redistribution -- it does not get to
+    // appear here silently
+    assert(JSON.stringify(shipped.sort()) === JSON.stringify(['toastui-editor.mjs']),
+      `js/vendor holds a self-hosted bundle this test does not know about; every file served from our own ` +
+      `origin is redistributed and needs attribution: ${JSON.stringify(shipped)}`);
+
+    const bundle = fs.readFileSync(path.join(VENDOR_DIR, 'toastui-editor.mjs'), 'utf8');
+    const legal = (bundle.match(/\/\*! Bundled license information:([\s\S]*?)\*\//) || [, ''])[1];
+    assert(legal.length > 100, "sanity: could not read the bundle's own legal-comment block");
+
+    const named = new Set([
+      // `@toast-ui/editor/dist/esm/index.js:` -- esbuild's per-package heading
+      ...[...legal.matchAll(/^(@[\w.-]+\/[\w.-]+|[\w.-]+)\/[^\s:]*:\s*$/gm)].map(m => m[1]),
+      // `@license DOMPurify 2.3.3 | ...`
+      ...[...legal.matchAll(/@license\s+([A-Za-z][\w.-]*)/g)].map(m => m[1]),
+    ]);
+    /* Dependencies with no licence banner of their own, so esbuild's block
+       cannot see them. ProseMirror is MIT and is most of what the editor IS,
+       which makes leaving it uncredited the least defensible omission
+       available -- listed by hand, and checked against the bundle below. */
+    const UNBANNERED = ['prosemirror'];
+    for(const dep of UNBANNERED){
+      assert(new RegExp(dep, 'i').test(bundle),
+        `the About box credits ${ATTRIBUTED_AS[dep]}, but it is no longer in the self-hosted bundle -- ` +
+        `the credit is stale, or build-vendor.mjs changed what it builds`);
+      named.add(dep);
+    }
+    assert(named.has('@toast-ui/editor') && named.has('DOMPurify'),
+      `sanity: expected the editor and its sanitizer among the bundle's own licence notices, got ${JSON.stringify([...named])}`);
+
+    const missing = [...named].filter(n => {
+      const as = ATTRIBUTED_AS[n] || n;
+      return !attrList.includes(as);
+    });
+    assert(missing.length === 0,
+      `these are bundled into the self-hosted file REPchess serves from its own origin but are not credited ` +
+      `in the About box -- we redistribute them, so their notices are our responsibility: ${JSON.stringify(missing)}`);
+    ok(`attribution: all ${named.size} libraries inside the self-hosted bundle are credited`);
+  } catch(e){ bad('attribution: the self-hosted bundle', e); }
+} catch(e){ bad('Phase ATTR: uncaught error outside a numbered test', e); }
+}
+
+
 if(shouldRunPhase(['import-export'])){
 try {
 const appBH = await launchApp();
@@ -13853,34 +13982,50 @@ try {
     ok('Set Move Quality: picking a glyph through the new toggle still annotates the move');
   } catch(e){ bad('Set Move Quality: pick glyph via new toggle', e); }
 
-  // 168. "Add Note" is gone from the row menu; notes are set via "Set
-  //      Attributes" instead and still show as a meta-row badge, same as
-  //      before.
+  // 168. Notes have their own menu item and their own editor now
+  //      (Documents/notes-feature.md). The old standalone "Add Note" item is
+  //      still gone, and Set Attributes no longer owns a note field at all --
+  //      one editor over one field is what keeps its single-Save contract
+  //      honest.
   try {
     const noteItemGone = await appBV.page.evaluate(s => !document.querySelector(`${s} [data-act="note"]`), rowSel);
-    assert(noteItemGone, 'expected the standalone "Add Note" menu item to be removed');
-    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
-    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
-    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appBV.page.fill('#attrNote', 'watch the e6 setup');
-    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
-    await appBV.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
-    await appBV.page.waitForSelector(`${rowSel} + tr.meta-row .meta-note`, { timeout: 5000 });
-    const noteText = (await appBV.page.textContent(`${rowSel} + tr.meta-row .meta-note`)).trim();
-    assert(noteText === 'watch the e6 setup', `expected the note badge to show the saved note, got "${noteText}"`);
-    ok('Notes folded into Set Attributes: saving a note there shows the meta-row badge');
-  } catch(e){ bad('Notes folded into Set Attributes: save + badge', e); }
+    assert(noteItemGone, 'expected the old standalone "Add Note" menu item to stay removed');
+    const textareaGone = await appBV.page.evaluate(() => !document.getElementById('attrNote'));
+    assert(textareaGone, 'expected Set Attributes to have no note textarea of its own');
 
-  // 169. Reopening Set Attributes -- via the meta-row note badge itself --
-  //      shows the previously-saved note pre-filled.
+    await appBV.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appBV.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
+    await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appBV.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    await appBV.page.evaluate(() => window.__notesEditorTestHooks.setValue('watch the e6 setup'));
+    await appBV.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appBV.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appBV.page.waitForFunction(
+      () => document.getElementById('noteEditorOverlay').style.display === 'none', { timeout: 5000 });
+
+    await appBV.page.waitForFunction(s => !!document.querySelector(`${s} + tr.meta-row .meta-note-glyph`),
+      rowSel, { timeout: 5000 });
+    const badgeText = await appBV.page.evaluate(s =>
+      document.querySelector(`${s} + tr.meta-row .meta-note-glyph`).textContent.trim(), rowSel);
+    assert(badgeText === '', `expected a glyph rather than the note text on the row, got ${JSON.stringify(badgeText)}`);
+    ok('Notes: the row menu\'s own editor saves a note and the row shows a glyph');
+  } catch(e){ bad('Notes: row-menu editor save + glyph', e); }
+
+  // 169. Clicking that glyph reopens the editor on the saved note -- the
+  //      badge is the way back IN, not just an indicator.
   try {
-    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note`).click(), rowSel);
-    await appBV.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    const prefilled = await appBV.page.inputValue('#attrNote');
-    assert(prefilled === 'watch the e6 setup', `expected attrNote pre-filled with the saved note, got "${prefilled}"`);
-    await appBV.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
-    ok('Notes folded into Set Attributes: clicking the meta-row badge reopens Attributes with the note pre-filled');
-  } catch(e){ bad('Notes folded into Set Attributes: badge reopens pre-filled', e); }
+    await appBV.page.evaluate(s => document.querySelector(`${s} + tr.meta-row .meta-note-glyph`).click(), rowSel);
+    await appBV.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appBV.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    const loaded = await appBV.page.evaluate(() => window.__notesEditorTestHooks.getValue());
+    assert(/watch the e6 setup/.test(loaded || ''),
+      `expected the editor to open on the saved note, got ${JSON.stringify(loaded)}`);
+    await appBV.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());
+    await appBV.page.waitForFunction(
+      () => document.getElementById('noteEditorOverlay').style.display === 'none', { timeout: 5000 });
+    ok('Notes: the row glyph reopens the editor on the saved note');
+  } catch(e){ bad('Notes: glyph reopens the editor', e); }
 
   // 170. renderBlackRoot regression: the black-root row's menu now has a
   //      matching "Compare Games" button for its (previously dangling)
@@ -19857,7 +20002,10 @@ try {
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] .rowMenuBtn').click());
     await appDL.page.evaluate(() => document.querySelector('tr.data-row[data-seq="Nc3,d5,d4,Nf6"] [data-act="attributes"]').click());
     await appDL.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appDL.page.fill('#attrNote', 'just a note, not a redirect change');
+    // the room NAME as the unrelated edit: the note is no longer an inline
+    // field here (it opens its own editor now), and any field in the same
+    // snapshot serves the purpose
+    await appDL.page.fill('#attrRoomName', 'just a rename, not a redirect change');
     await appDL.page.evaluate(() => { document.getElementById('progress').textContent = ''; });   // clear -- a stray re-port would show up here
     await appDL.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDL.page.waitForTimeout(300);   // nothing async to await for a negative check -- this margin is generous given the check itself is synchronous
@@ -20138,7 +20286,8 @@ try {
     await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] .rowMenuBtn').click());
     await appDO.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,d5"] [data-act="attributes"]').click());
     await appDO.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
-    await appDO.page.fill('#attrNote', 'an unrelated note, not a redirect or new reply');
+    // see the note in test 314 on why this is the room name and not the note
+    await appDO.page.fill('#attrRoomName', 'an unrelated rename, not a redirect or new reply');
     await appDO.page.click('#attributesOverlay .modal-bar .mb-save');
     await appDO.page.waitForFunction(() => document.getElementById('attributesOverlay').style.display === 'none', { timeout: 5000 });
 
@@ -23664,6 +23813,471 @@ try {
 } catch(e){ bad('Phase EJ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase EN2: notes, phase 2 -- the Markdown editor and the move-table
+//     surfaces (Documents/notes-feature.md). The editor is a COMPONENT: it
+//     resolves to a value and commits nothing, which is what keeps the
+//     Attributes modal's single-Save contract intact. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEN2 = await launchApp();
+try {
+  await seedBackup(appEN2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN2.page.click('.line-row');
+  await appEN2.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const rowSel = 'tr.data-row[data-opp="Nf6"]';
+  /* Click through evaluate, not page.click: the ⋮ and its menu items are icon
+     buttons with zero size here (Font Awesome is CDN-blocked), so Playwright
+     deems them invisible while the real handlers still fire -- the same
+     workaround the rest of this suite uses. */
+  const openNotesMenu = async () => {
+    await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="notes"]`).click(), rowSel);
+    await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    // ...and for the editor itself. The bar renders synchronously; the first
+    // open of a session is still downloading ~940KB behind it.
+    await appEN2.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+  };
+  const noteNow = () => appEN2.page.evaluate(() =>
+    window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+
+  // 413. The real editor loads and round-trips: a value put in comes back out
+  //      through Save and reaches the pref. Driven through setValue rather
+  //      than by typing -- Toast's surface is a ProseMirror contenteditable,
+  //      and what is worth testing is our plumbing, not their key handling.
+  try {
+    await openNotesMenu();
+    const fellBack = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.isFallback());
+    const mountErr = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.lastMountError());
+    assert(!fellBack, 'expected the REAL editor, not the fallback -- the vendored bundle should have loaded' +
+      (mountErr ? ` (it fell back: ${mountErr})` : ''));
+
+    const bar = await modalBarState(appEN2.page, 'noteEditorOverlay');
+    assert(bar && bar.save && bar.save.disabled,
+      `expected Save disabled on an untouched note, got ${JSON.stringify(bar && bar.save)}`);
+
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('## Plan\n\nTrade the bad bishop.'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    const saved = await noteNow();
+    assert(/Trade the bad bishop/.test(saved || ''),
+      `expected the edited Markdown written to the pref, got ${JSON.stringify(saved)}`);
+    assert(/^##\s*Plan/m.test(saved || ''),
+      `expected Markdown structure preserved through the round trip, got ${JSON.stringify(saved)}`);
+    ok('Notes: the Markdown editor round-trips a value through Save into the pref');
+  } catch(e){ bad('Notes: editor round trip', e); }
+
+  // 414. ...and the row grows a glyph, not a preview of the text. A Markdown
+  //      first line is usually a heading rather than a summary, so a truncated
+  //      strip would invite reading the strip instead of the note.
+  try {
+    // existence, not visibility: a zero-size icon is never "visible" here
+    await appEN2.page.waitForFunction(() => !!document.querySelector('.meta-note-glyph'), { timeout: 5000 });
+    const strip = await appEN2.page.evaluate(() => {
+      const el = document.querySelector('.meta-note-glyph');
+      return el ? { html: el.innerHTML, text: el.textContent } : null;
+    });
+    assert(strip, 'expected a note glyph on the row once a note exists');
+    assert(strip.text.trim() === '', `expected a glyph with no note text beside it, got ${JSON.stringify(strip.text)}`);
+    assert(/fa-scroll/.test(strip.html), `expected the scroll icon, got ${JSON.stringify(strip.html)}`);
+    ok('Notes: a row with a note shows a glyph rather than the note text');
+  } catch(e){ bad('Notes: row glyph', e); }
+
+  // 415. Leaving the editor writes nothing. The whole design rests on it
+  //      returning a value rather than committing one.
+  try {
+    const before = await noteNow();
+    await openNotesMenu();
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('scribbled and abandoned'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());   // dirty: the harness accepts the discard prompt
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    const after = await noteNow();
+    assert(after === before, `expected leaving to write nothing, got ${JSON.stringify(after)}`);
+    ok('Notes: leaving the editor commits nothing');
+  } catch(e){ bad('Notes: cancel commits nothing', e); }
+
+  // 416. Existing plain-text notes keep their line breaks. Toast follows
+  //      CommonMark, where a single newline is a SOFT break rendered as a
+  //      space -- so without the softbreak override every multi-line note
+  //      written before this feature would silently reflow into one
+  //      paragraph. Checked through the Attributes preview, which is the real
+  //      rendering path.
+  try {
+    await appEN2.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, 'first line\nsecond line');
+    });
+    await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appEN2.page.waitForFunction(
+      () => /second line/.test(document.getElementById('attrNotePreview').innerHTML), { timeout: 10000 });
+    const html = await appEN2.page.evaluate(() => document.getElementById('attrNotePreview').innerHTML);
+    const renderErr = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.lastRenderError());
+    assert(/<br\s*\/?>/i.test(html),
+      `expected a single newline to render as a line break, got ${JSON.stringify(html)}` +
+      (renderErr ? ` (the viewer fell back: ${renderErr})` : ''));
+    ok('Notes: a single newline renders as a line break, so old plain-text notes keep their shape');
+  } catch(e){ bad('Notes: GFM line breaks', e); }
+
+  // 417. The Attributes modal STAGES the note rather than committing it. Its
+  //      snapshot includes the note and its Save commits everything at once,
+  //      so an editor that wrote through would leave that snapshot stale and
+  //      Attributes' own Cancel could revert a note saved elsewhere.
+  try {
+    const before = await noteNow();
+    // the modal is still open from 416
+    await appEN2.page.evaluate(() => document.getElementById('attrNoteEditBtn').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN2.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('staged, not committed'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    // saving the NOTE editor must not have written anything yet...
+    const midway = await noteNow();
+    assert(midway === before,
+      `expected the note editor's Save to stage only, got ${JSON.stringify(midway)}`);
+    // ...but it must have made Attributes dirty, or its Save would not offer
+    const attrBar = await modalBarState(appEN2.page, 'attributesOverlay');
+    assert(attrBar.save && !attrBar.save.disabled,
+      `expected the staged note to make Attributes dirty, got ${JSON.stringify(attrBar.save)}`);
+
+    await appEN2.page.evaluate(() => document.querySelector('#attributesOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
+    const after = await noteNow();
+    assert(after === 'staged, not committed',
+      `expected Attributes' own Save to commit the staged note, got ${JSON.stringify(after)}`);
+    ok('Notes: Attributes stages the note and commits it with its own Save');
+  } catch(e){ bad('Notes: Attributes staging', e); }
+
+  // 418. The fallback. A failed editor load degrades to a plain box over the
+  //      raw Markdown -- worse, never broken -- which is the property that
+  //      makes a 940KB CDN dependency acceptable in an app whose other CDN
+  //      deps stop it booting outright.
+  try {
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.forceFallback(true));
+    await openNotesMenu();
+    const isFallback = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.isFallback());
+    assert(isFallback, 'expected the textarea fallback once the editor bundle cannot load');
+    const raw = await appEN2.page.evaluate(() => document.getElementById('noteFallbackInput').value);
+    assert(raw === 'staged, not committed',
+      `expected the fallback to open on the raw Markdown, got ${JSON.stringify(raw)}`);
+
+    await appEN2.page.fill('#noteFallbackInput', 'typed into the fallback');
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    assert((await noteNow()) === 'typed into the fallback',
+      'expected the fallback to round-trip through Save exactly as the real editor does');
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.forceFallback(false));
+    ok('Notes: a failed editor load degrades to a working plain-text box');
+  } catch(e){ bad('Notes: editor fallback', e); }
+} finally {
+  await appEN2.close();
+}
+} catch(e){ bad('Phase EN2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EN3: notes, phase 3 -- the position/notes modal
+//     (Documents/notes-feature.md). Board, rendered note, pencil.
+//
+//     Driven entirely through the test hook, which is the point of the phase:
+//     Phase 4's in-world icon and Phase 5's dead-end scroll will both open
+//     this modal with a pair's own room seq, and the modal is proven BEFORE
+//     either of those 3D affordances exists -- the same reasoning that put
+//     buildReviewForecast ahead of its renderer. ---
+if(shouldRunPhase(['move-table','core'])){
+try {
+const appEN3 = await launchApp();
+try {
+  await seedBackup(appEN3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN3.page.click('.line-row');
+  await appEN3.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  /* The pair's own seq: the ROOM seq, ending in OUR reply -- exactly what
+     Phase 1 threaded onto the sprite as userData.pairSeq. Its note lives one
+     ply back, on ['d4','Nf6'], which is the move table row's own key. */
+  const pairSeq = ['d4','Nf6','c4'];
+  const open = async (opts) => {
+    await appEN3.page.evaluate(([s, o]) => window.__notesTestHooks.openPositionNote(s, o), [pairSeq, opts || {}]);
+    await appEN3.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+  };
+  const close = () => appEN3.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+  const noteNow = () => appEN3.page.evaluate(() =>
+    window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+
+  // 419. The board really is the position at that pair, right way up, and the
+  //      caption names the pair in notation. This is the half of the modal
+  //      that has no note in it at all, and it has to be right before the note
+  //      half is worth reading.
+  try {
+    await open();
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board.length === 64, `expected a 64-square board, got ${board.length}`);
+    // unflipped: cell 0 is a8. r = 8 - rank, index = r*8 + file
+    assert(board[0] === 'br', `expected Black's rook on a8 at the top-left, got ${JSON.stringify(board[0])}`);
+    assert(board[4 * 8 + 2] === 'wp', `expected White's pawn on c4, got ${JSON.stringify(board[4 * 8 + 2])}`);
+    assert(board[4 * 8 + 3] === 'wp', `expected White's pawn on d4, got ${JSON.stringify(board[4 * 8 + 3])}`);
+    assert(board[2 * 8 + 5] === 'bn', `expected Black's knight on f6, got ${JSON.stringify(board[2 * 8 + 5])}`);
+    assert(board[6 * 8 + 2] === '', `expected c2 empty after the pawn moved, got ${JSON.stringify(board[6 * 8 + 2])}`);
+
+    const cap = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(/1…Nf6/.test(cap) && /2\.c4/.test(cap),
+      `expected the caption to name the pair in notation, got ${JSON.stringify(cap)}`);
+    assert(/Black to move/.test(cap), `expected the caption to say whose move it is, got ${JSON.stringify(cap)}`);
+    ok('Notes: the position modal shows the board at that pair and names the pair');
+  } catch(e){ bad('Notes: position modal board', e); }
+
+  // 420. ...and it shows the SAME note the move table row does, rendered as
+  //      Markdown. Written through the move table's own key and read back
+  //      through the pair's seq: that is the one-note-per-position promise
+  //      arriving at the surface the VR will actually open.
+  try {
+    await close();
+    await appEN3.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, '## Plan\n\nHold the centre.');
+    });
+    await open();
+    await appEN3.page.waitForFunction(
+      () => /Hold the centre/.test(document.getElementById('positionNoteView').innerHTML), { timeout: 20000 });
+    const html = await appEN3.page.evaluate(() => document.getElementById('positionNoteView').innerHTML);
+    assert(!(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteEmpty())),
+      'expected the note pane to drop its empty state once there is a note');
+    assert(/<h2/i.test(html), `expected the Markdown heading rendered, not shown raw, got ${JSON.stringify(html)}`);
+    assert(!/##\s*Plan/.test(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteText())),
+      'expected rendered Markdown rather than the raw source');
+    ok('Notes: the position modal renders the move table\'s own note for that position');
+  } catch(e){ bad('Notes: position modal renders the note', e); }
+
+  // 421. The pencil COMMITS -- there is no enclosing Save to stage into here,
+  //      unlike Attributes -- and the modal repaints without being reopened.
+  try {
+    await appEN3.page.evaluate(() => window.__notesTestHooks.editPositionNote());
+    await appEN3.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN3.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    // it opens on the EXISTING note, not blank
+    const loaded = await appEN3.page.evaluate(() => window.__notesEditorTestHooks.getValue());
+    assert(/Hold the centre/.test(loaded || ''),
+      `expected the pencil to open on the existing note, got ${JSON.stringify(loaded)}`);
+
+    await appEN3.page.evaluate(() => window.__notesEditorTestHooks.setValue('Edited from the board.'));
+    await appEN3.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN3.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN3.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+
+    await appEN3.page.waitForFunction(
+      () => /Edited from the board/.test(document.getElementById('positionNoteView').innerHTML), { timeout: 20000 });
+    const saved = await noteNow();
+    assert(/Edited from the board/.test(saved || ''),
+      `expected the pencil's Save to write the pref directly, got ${JSON.stringify(saved)}`);
+    assert(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteOpen()),
+      'expected the position modal to still be open underneath the editor');
+    ok('Notes: the position modal\'s pencil commits and repaints in place');
+  } catch(e){ bad('Notes: position modal pencil round trip', e); }
+
+  // 422. A position with no note says so rather than showing an empty frame,
+  //      and Done closes. The icon opens the position whether or not a note
+  //      exists (that is the point of showing the board), so the no-note state
+  //      is a real state, not an edge case.
+  try {
+    await close();
+    await appEN3.page.evaluate(() => {
+      const k = window.__notesTestHooks.canonicalSeq(['d4','Nf6']);
+      return window.__notesTestHooks.setNote(k, '');
+    });
+    await open();
+    assert(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteEmpty()),
+      'expected the empty state on a position with no note');
+    const txt = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/No note yet/.test(txt || ''), `expected an explicit "no note" message, got ${JSON.stringify(txt)}`);
+    // the board is still there -- the position is worth opening on its own
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board[4 * 8 + 2] === 'wp', 'expected the board still rendered with no note present');
+
+    await close();
+    assert(!(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteOpen())),
+      'expected Done to close the position modal');
+    ok('Notes: a position with no note still opens, and says there is none');
+  } catch(e){ bad('Notes: position modal empty state', e); }
+
+  // 423. The orientation is a parameter. The main VR world walks every line's
+  //      castles at once, so the modal cannot read the board's side off
+  //      whichever line the move table happens to have open -- Phase 4 passes
+  //      the walked room's own. Cheap to assert now, expensive to discover
+  //      later from a board that is upside down in half the world.
+  try {
+    await open({ flip: true });
+    const board = await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteBoard());
+    assert(board[0] === 'wr', `expected White's rook top-left when flipped, got ${JSON.stringify(board[0])}`);
+    assert(board[3 * 8 + 5] === 'wp', `expected c4 to land on the flipped square, got ${JSON.stringify(board[3 * 8 + 5])}`);
+    await close();
+    ok('Notes: the position modal takes its orientation as a parameter');
+  } catch(e){ bad('Notes: position modal orientation', e); }
+} finally {
+  await appEN3.close();
+}
+} catch(e){ bad('Phase EN3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EM: notes, phase 1 -- the move-pair billboards carry the sequence
+//     they represent (Documents/notes-feature.md). Nothing reads it yet; this
+//     is the plumbing everything else in that feature needs, and the one
+//     assertion worth making early is that the VR and the move table agree on
+//     WHICH note a transposed position has. A note describes a position, not a
+//     path, so reaching it by a different move order must not produce a second
+//     note. ---
+if(shouldRunPhase(['vr-castle','digraph'])){
+try {
+const appEM = await launchApp();
+try {
+  /* Two move orders converging on one position: 1.d4 Nf6 2.c4 e6 3.Nc3 b6 and
+     1.d4 Nf6 2.c4 b6 3.Nc3 e6 reach the identical board. Both final black
+     moves are SINGLE pawn pushes, so neither leaves an en-passant target --
+     positionKey strips the phantom one anyway (see its own comment), but a
+     fixture that does not depend on that is a fixture testing one thing. */
+  await seedBackup(appEM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6'], reply: 'e3' },
+      /* A linear tail past the convergence, so the converged room merges into a
+         CORRIDOR and gets real side pairs on its walls. Test 411 needs one: a
+         room's centre/anchor pair is not an in-room billboard at all (buildRoom
+         skips it -- it lives on the door leading in), so only left/right run
+         pairs are actually in the scene.
+
+         Written out under BOTH move orders rather than one. The graph walks
+         whichever it reaches first and keys the tail off THAT seq; duplicating
+         it removes a guess about which order wins, at the cost of four lines. */
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+
+  // open the line so CURRENT_LINE is set -- canonicalRoomSeq reads it
+  await appEM.page.click('.line-row');
+  await appEM.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const viaE6 = ['d4','Nf6','c4','e6','Nc3','b6'];
+  const viaB6 = ['d4','Nf6','c4','b6','Nc3','e6'];
+  // the room the two orders converge on -- after our e3, and the anchor of the
+  // corridor the linear tail forms
+  const convergedKey = await appEM.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  // 410. The two orders really do transpose, and the move table resolves both
+  //      to ONE pref key. Setup for the VR half, and worth asserting on its
+  //      own: if this ever stopped holding, the VR test below would be
+  //      comparing a note against itself.
+  try {
+    const canon = await appEM.page.evaluate(([a, b]) => ({
+      a: window.__notesTestHooks.canonicalSeq(a),
+      b: window.__notesTestHooks.canonicalSeq(b),
+    }), [viaE6, viaB6]);
+    assert(JSON.stringify(canon.a) === JSON.stringify(canon.b),
+      `expected both move orders to canonicalise to one key, got ${JSON.stringify(canon)}`);
+    assert(JSON.stringify(canon.a) === JSON.stringify(viaE6) || JSON.stringify(canon.a) === JSON.stringify(viaB6),
+      `expected the canonical key to be one of the two real paths, got ${JSON.stringify(canon.a)}`);
+    ok('Notes: two transposing move orders resolve to one note key in the move table');
+  } catch(e){ bad('Notes: transposition canonicalises to one key', e); }
+
+  // 411. A wall billboard carries the sequence it represents, all the way into
+  //      the scene -- checked at the layout AND on the built sprite, because
+  //      those fail differently.
+  //
+  //      It must be a SIDE pair. A room's centre/anchor pair is not an in-room
+  //      billboard at all: buildRoom skips it because it lives on the door
+  //      leading into the room, drawn from the parent. An earlier version of
+  //      this test asked the scene for the centre pair and got null -- which
+  //      was the code telling the truth, not a bug.
+  try {
+    await openVR(appEM.page);
+    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
+    await appEM.page.waitForTimeout(300);
+
+    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), convergedKey);
+    assert(pairs.length, `test setup issue: expected the corridor to hold move pairs, got ${JSON.stringify(pairs)}`);
+    assert(pairs.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
+      `expected every pair to carry its sequence, got ${JSON.stringify(pairs)}`);
+
+    const side = pairs.find(p => p.side !== 'center');
+    assert(side, `test setup issue: expected the corridor to have wall (non-centre) pairs, got ${JSON.stringify(pairs)}`);
+    assert(side.seq[side.seq.length - 1] === 'Bd3' || side.seq[side.seq.length - 1] === 'cxd5',
+      `expected a wall pair's seq to end in OUR reply for that step, got ${JSON.stringify(side.seq)}`);
+
+    const inScene = await appEM.page.evaluate((id) => window.__threeTestEdit.scenePairSeq(id), side.id);
+    assert(JSON.stringify(inScene) === JSON.stringify(side.seq),
+      `expected the seq to survive onto the built sprite, got ${JSON.stringify(inScene)}`);
+    ok('Notes: a wall billboard carries its move-pair sequence into the scene');
+  } catch(e){ bad('Notes: pair sequence reaches the sprite', e); }
+
+  // 412. The payoff. A note set through the MOVE TABLE's own key is found by a
+  //      DIRECT lookup with the seq the VR carries -- no canonicalRoomSeq on
+  //      the VR side, because the castle graph already handed it the canonical
+  //      seq. That is what makes one note per position true rather than
+  //      merely intended, and it holds whichever of the two orders the graph
+  //      happened to walk first.
+  try {
+    const canonical = await appEM.page.evaluate((a) => window.__notesTestHooks.canonicalSeq(a), viaE6);
+    await appEM.page.evaluate(([seq, note]) => window.__notesTestHooks.setNote(seq, note),
+      [canonical, 'Both sides fianchetto; watch the c4 pawn.']);
+
+    await appEM.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
+    await appEM.page.waitForTimeout(300);
+
+    const pairs = await appEM.page.evaluate((k) => window.__threeTestEdit.pairSeqs(k), convergedKey);
+    const anchor = pairs.find(p => p.side === 'center') || pairs[0];
+    assert(anchor && Array.isArray(anchor.seq),
+      `expected the converged room to hold a pair with a seq, got ${JSON.stringify(pairs)}`);
+
+    const noteKey = anchor.seq.slice(0, -1);
+    assert(JSON.stringify(noteKey) === JSON.stringify(canonical),
+      `expected the VR pair's own key to BE the move table's canonical key, got ${JSON.stringify(noteKey)} against ${JSON.stringify(canonical)}`);
+    const found = await appEM.page.evaluate((k) => window.__notesTestHooks.noteAt(k), noteKey);
+    assert(found === 'Both sides fianchetto; watch the c4 pawn.',
+      `expected a direct lookup with the VR's own seq to find the note, got ${JSON.stringify(found)}`);
+    ok('Notes: the VR resolves the same note as the move table, without re-canonicalising');
+  } catch(e){ bad('Notes: VR and move table agree on a transposed note', e); }
+} finally {
+  await appEM.close();
+}
+} catch(e){ bad('Phase EM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase EL: a jump lands you at a door INTO the room, not inside it.
 //     Reviewing a room means standing at its door and recalling what's in
 //     there before walking in to check; landing in the middle puts the
@@ -23770,6 +24384,585 @@ try {
   await appEL.close();
 }
 } catch(e){ bad('Phase EL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+/* Is this overlay actually the thing a user would hit at its own centre --
+   on top, not merely display:flex?
+
+   Every other assertion in the notes phases reads style.display or
+   textContent, and a modal buried under the VR walk satisfies both perfectly:
+   -430 shipped the position/notes modal opening correctly and invisibly,
+   with a green suite, because .overlay's default z-index (20) is below
+   #threeTestOverlay's 25. elementFromPoint is the only one of these that
+   asks what the user would actually see. */
+const topmostAt = (page, overlaySel) => page.evaluate((o) => {
+  const ov = document.querySelector(o);
+  if(!ov) return { error: `no overlay ${o}` };
+  const el = ov.querySelector('.modal') || ov;
+  const r = el.getBoundingClientRect();
+  if(!r.width || !r.height) return { error: `${o} has no box`, rect: r.toJSON() };
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  return {
+    onTop: !!(hit && hit.closest(o)),
+    z: getComputedStyle(ov).zIndex,
+    // what IS on top instead, so a failure names the thing covering it
+    hit: hit ? (hit.id || hit.className || hit.tagName) : null,
+    coveredBy: hit && hit.closest('.overlay') ? (hit.closest('.overlay').id || null) : null,
+  };
+}, overlaySel);
+
+// --- Phase EN4: notes, phase 4 -- the in-world move-pair note icon
+//     (Documents/notes-feature.md). Proximity/facing gating, the note-exists
+//     glyph, and the click ordered AHEAD of walk mode's greedy door-trigger
+//     fallback, which is the single most likely bug in the whole feature. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN4 = await launchApp();
+try {
+  // the Phase EM fixture: two orders transposing into one room, with a linear
+  // tail past the convergence so it merges into a CORRIDOR and gets real wall
+  // pairs (a room's centre pair is not an in-room billboard -- it lives on the
+  // door leading in, which is the other half of what this phase covers).
+  await seedBackup(appEN4.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','b6','Nc3','e6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 b6 Nc3 e6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEN4.page.click('.line-row');
+  await appEN4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  const roomKeyAfter = (moves) => appEN4.page.evaluate((ms) => {
+    const c = new Chess();
+    for(const m of ms) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  // the converged corridor: real WALL pairs, but a dead end -- its tail runs
+  // out at cxd5, so it has no forward door and therefore no door billboard
+  const convergedKey = await roomKeyAfter(['d4','Nf6','c4','e6','Nc3','b6','e3']);
+  // the castle's entry room: a branch head with a forward door per reply, so
+  // this is where the DOOR billboards live. Its own centre pair is out on the
+  // street rather than in here, which is exactly why a door billboard has to
+  // resolve through its destination room instead of through its own edge.
+  const entryKey = await roomKeyAfter(['d4','Nf6','c4']);
+
+  await openVR(appEN4.page);
+  const enter = async (k) => {
+    await appEN4.page.evaluate((key) => window.__threeTestEdit.enter(key), k);
+    await appEN4.page.waitForTimeout(400);
+  };
+  await enter(entryKey);
+
+  const iconsNow = () => appEN4.page.evaluate(() => window.__threeTestEdit.pairIcons());
+  const iconNow = (slotId) => appEN4.page.evaluate(
+    (s) => window.__threeTestEdit.pairIcons().find(p => p.slotId === s) || null, slotId);
+  /* Stand `dz` metres south of a billboard, facing `yaw`. yaw 0 looks along
+     -z (see tick()'s own forward vector), so dz +1 / yaw 0 is "one metre away,
+     looking straight at it". setPlayerPos writes pos directly, which is what
+     we want -- no walking, no clamping, just the geometry under test. */
+  const standNear = async (pairPos, dx, dz, yaw) => {
+    await appEN4.page.evaluate(([x, z, y]) => window.__threeTestEdit.setPlayerPos(x, z, y),
+      [pairPos.x + dx, pairPos.z + dz, yaw]);
+    await appEN4.page.waitForTimeout(150);      // let at least one frame run
+  };
+
+  /* ----- in the ENTRY room: the door billboards ----- */
+
+  // 424. Every move-pair billboard in the room has an icon, and each one knows
+  //      which pref it stands for. The door billboards are the interesting
+  //      half: their own pair is edge-specific and carries no seq on purpose,
+  //      so they have to resolve through the DESTINATION room's centre pair
+  //      instead (notes-feature.md, finding 4).
+  try {
+    const icons = await iconsNow();
+    assert(icons.length, `expected the entry room's move pairs to carry note icons, got ${JSON.stringify(icons)}`);
+    assert(icons.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
+      `expected every icon to carry its pair's sequence, got ${JSON.stringify(icons.map(p => p.seq))}`);
+    assert(icons.every(p => p.lineId === 'L1'),
+      `expected every icon to carry its room's line, got ${JSON.stringify(icons.map(p => p.lineId))}`);
+
+    const doors = await appEN4.page.evaluate(() => window.__threeTestEdit.pairIcons()
+      .filter(p => p.doorBill)
+      .map(p => {
+        const target = p.slotId.replace(/^dbb-/, '');
+        const centre = window.__threeTestEdit.pairSeqs(target).find(x => x.side === 'center');
+        return { slotId: p.slotId, target, iconSeq: p.seq, centreSeq: centre ? centre.seq : null };
+      }));
+    assert(doors.length, 'test setup issue: expected at least one forward door with a pair billboard');
+    for(const d of doors){
+      assert(JSON.stringify(d.iconSeq) === JSON.stringify(d.centreSeq),
+        `expected the door icon to resolve to its DESTINATION room's canonical seq, got ${JSON.stringify(d)}`);
+    }
+    ok(`Notes: every move pair carries a note icon, doors keyed to the room beyond (${icons.length} icon(s), ${doors.length} door(s))`);
+  } catch(e){ bad('Notes: pair icons exist and carry the right key', e); }
+
+  // 425. ...and it wins against the door-trigger fallback. That fallback is
+  //      deliberately greedy -- any click whose world point lands in a door's
+  //      trigger box teleports you, with no facing requirement -- and a door
+  //      billboard's icon hangs right beside the doorway it belongs to. Proven
+  //      non-vacuously: the icon's own point is first confirmed to be inside a
+  //      trigger box, so the fallback really would have fired from there.
+  try {
+    let found = null;
+    for(const d of (await iconsNow()).filter(p => p.doorBill)){
+      await standNear(d.pairPos, 0, 1, 0);
+      const live = await iconNow(d.slotId);
+      if(!live || !live.visible) continue;
+      const trigger = await appEN4.page.evaluate(
+        (p) => window.__threeTestEdit.doorTriggerAt(p.x, p.z), live.iconPos);
+      if(trigger){ found = { ...live, trigger }; break; }
+    }
+    if(!found){
+      ok('Notes: no door icon in this fixture lands inside a door trigger box (skipped)');
+    } else {
+      const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), found.slotId);
+      const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
+      await appEN4.page.mouse.click(pt.x, pt.y);
+      await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+      const roomAfter = await appEN4.page.evaluate(() => window.__threeTestState.room);
+      assert(roomAfter === roomBefore,
+        `expected the icon to win over the door fallback, but the click teleported to ${roomAfter} (trigger: ${found.trigger})`);
+      await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+      ok('Notes: a pair icon inside a door trigger box opens its note instead of walking you through the door');
+    }
+  } catch(e){ bad('Notes: pair icon beats the door-trigger fallback', e); }
+
+  // a modal left open by a failure above would swallow every later
+  // page.mouse.click -- it covers the canvas -- turning one failure into four
+  await appEN4.page.evaluate(() => {
+    if(window.__notesTestHooks.positionNoteOpen()) window.__notesTestHooks.closePositionNote();
+  });
+
+  /* ----- in the CONVERGED CORRIDOR: the wall billboards -----
+     A dead end, so it has no door billboards at all -- which is what makes it
+     the right room for the gating, glyph and edit-mode tests: nothing here can
+     pass by accident through a door icon. */
+  await enter(convergedKey);
+
+  // 426. It appears only when you are close AND looking at it. The 45-degree
+  //      case matters more than the 180-degree one: a gate that only rejected
+  //      "facing the other way" would light up every pair in the room at once.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    assert(wall, 'test setup issue: expected a wall (non-door) pair in the corridor');
+
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert((await iconNow(wall.slotId)).visible, 'expected the icon to show from 1m, looking straight at it');
+
+    await standNear(wall.pairPos, 0, 5, 0);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2m range');
+
+    await standNear(wall.pairPos, 0, 1, Math.PI);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden when facing away from it');
+
+    // 1m south and 1m east of the pair, still looking down -z: 45 degrees off,
+    // so outside the 30-degree cone even though it is well within range
+    await standNear(wall.pairPos, 1, 1, 0);
+    assert(!(await iconNow(wall.slotId)).visible,
+      'expected the icon hidden at 45 degrees off the look direction, inside the 30-degree gate');
+    ok('Notes: the pair icon is gated on both proximity and facing');
+  } catch(e){ bad('Notes: pair icon proximity/facing gate', e); }
+
+  // 427. A distinct glyph when a note exists, and it follows a note written
+  //      elsewhere with no room rebuild -- which is the whole reason the icon
+  //      re-asks every frame instead of baking the answer into the world.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected no note glyph before a note exists');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'Watch the c4 pawn.'),
+      wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert((await iconNow(wall.slotId)).hasNote,
+      'expected the icon to pick up a note written through the move table, without a rebuild');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, ''), wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected the glyph to go away again when the note is cleared');
+    ok('Notes: the icon shows a distinct glyph when a note exists, live');
+  } catch(e){ bad('Notes: note-exists glyph', e); }
+
+  // 428. Clicking it opens the position/notes modal -- a REAL click at the
+  //      icon's own screen point, so this exercises handleWalkClick's raycast
+  //      rather than calling the callback directly.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+    assert(pt, 'expected a visible icon to report a screen point');
+    const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
+
+    await appEN4.page.mouse.click(pt.x, pt.y);
+    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const opened = await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(opened && /to move/.test(opened), `expected the position modal to open on that pair, got ${JSON.stringify(opened)}`);
+    assert((await appEN4.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
+      'expected clicking the icon not to move the player');
+    /* ...and it is actually ON TOP of the walk. The VR is itself a full-screen
+       overlay at z-index 25, so a modal at .overlay's default 20 opens
+       perfectly and is seen by nobody -- which is how -430 shipped. Every
+       other assertion here (display, caption, board) passes in that state. */
+    const stack = await topmostAt(appEN4.page, '#positionNoteOverlay');
+    assert(stack.onTop,
+      `expected the position modal above the VR walk, got ${JSON.stringify(stack)}`);
+    ok('Notes: clicking a pair icon opens the position modal, on top of the walk');
+  } catch(e){ bad('Notes: pair icon click', e); }
+
+  // 438. ...and the pencil's editor opens on top of THAT. The Phase 3 pencil
+  //      test drives this from the move table, where the only overlay in play
+  //      is a plain one -- from inside the walk there are two layers below it,
+  //      and that path had no test at all.
+  try {
+    assert(await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteOpen()),
+      'test setup issue: expected the position modal still open from 428');
+    await appEN4.page.evaluate(() => window.__notesTestHooks.editPositionNote());
+    await appEN4.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN4.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+
+    const stack = await topmostAt(appEN4.page, '#noteEditorOverlay');
+    assert(stack.onTop,
+      `expected the note editor above both the position modal and the walk, got ${JSON.stringify(stack)}`);
+
+    await appEN4.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-leave').click());
+    await appEN4.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    // leaving the editor must drop back to a position modal that is still usable
+    const back = await topmostAt(appEN4.page, '#positionNoteOverlay');
+    assert(back.onTop, `expected the position modal back on top once the editor closes, got ${JSON.stringify(back)}`);
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the editor opened from inside the walk layers above the modal that opened it');
+  } catch(e){ bad('Notes: note editor layering inside the walk', e); }
+
+  /* 439. The icon is on the SCREEN, not merely "shown", at every distance the
+          gate allows -- and clickable there, which is the whole point of it.
+
+          Test 426 above asserts the gating flag, which is the decision rather
+          than the outcome: a tile pushed off the top of the view reports
+          visible:true and fails nobody. That is exactly what -430 shipped.
+          The corner of a billboard whose centre is at eye height sits 0.7m
+          above the eye, walk mode has no look-up, and by 1m that is ~40
+          degrees against a 35-degree vertical half-FOV. */
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    const bad_ = [];
+    for(const back of [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]){
+      await standNear(wall.pairPos, 0, back, 0);
+      const live = await iconNow(wall.slotId);
+      if(!live || !live.visible){ bad_.push({ back, why: 'gate hid it' }); continue; }
+      const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+      if(!pt){ bad_.push({ back, why: 'no screen point' }); continue; }
+      /* onCanvas only. pickAt answers "what is the NEAREST thing along this
+         ray", which is deliberately not the question handleWalkClick asks:
+         it hit-tests the visible icons FIRST, against the icons alone, so an
+         icon with a prop in front of it is still clicked (and still drawn --
+         its material is depthTest:false). An earlier version of this test
+         asserted pickAt's nearest hit and failed at 0.5m against a prop
+         0.7m away, which was the test misdescribing the mechanism rather
+         than the icon being unreachable. The real click is checked below. */
+      const aim = await appEN4.page.evaluate((q) => window.__threeTestEdit.pickAt(q.x, q.y), pt);
+      if(!aim || !aim.onCanvas) bad_.push({ back, why: 'off the canvas', ndc: aim && aim.ndc });
+    }
+    assert(bad_.length === 0,
+      `the pair icon is meant to be on screen anywhere inside its 2m gate, but at these ` +
+      `distances it was not: ${JSON.stringify(bad_)}`);
+
+    // ...and still opens its note from the closest the gate allows, which is
+    // where the clamp is working hardest
+    await standNear(wall.pairPos, 0, 0.5, 0);
+    const near = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+    assert(near, 'expected a screen point at 0.5m');
+    await appEN4.page.mouse.click(near.x, near.y);
+    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the pair icon stays on screen and clickable right up to the billboard');
+  } catch(e){ bad('Notes: pair icon stays on screen at close range', e); }
+
+  // 429. Edit mode owns clicks on props, and the icons sit in front of the
+  //      very sprites you would be trying to select -- so they stay out of it
+  //      entirely rather than competing with the prop picker.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert((await iconNow(wall.slotId)).visible, 'test setup issue: expected the icon visible before entering edit mode');
+
+    await appEN4.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appEN4.page.waitForTimeout(200);
+    const inEdit = await iconsNow();
+    assert(inEdit.length && inEdit.every(p => !p.visible),
+      `expected every pair icon hidden in edit mode, got ${JSON.stringify(inEdit.map(p => p.visible))}`);
+
+    await appEN4.page.evaluate(() => window.__threeTestEdit.toggle());
+    await appEN4.page.waitForTimeout(200);
+    assert((await iconNow(wall.slotId)).visible, 'expected the icon back on leaving edit mode');
+    ok('Notes: pair icons stay out of edit mode');
+  } catch(e){ bad('Notes: pair icons in edit mode', e); }
+} finally {
+  await appEN4.close();
+}
+} catch(e){ bad('Phase EN4: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+/* Stand in front of scroll `i` and return the screen point to click.
+   The stand-back distance is tried rather than assumed: 2m behind a scroll
+   near a side wall can park the camera INSIDE that wall's move-object props
+   (a real run found one 0.15m from the eye), and then the click lands on the
+   prop rather than the scroll. pickAt says which, so the test can step in
+   closer instead of failing as a bare timeout. */
+const aimAtScroll = async (page, i, pos) => {
+  for(const back of [1.1, 1.5, 2.0, 2.6, 3.2]){
+    await page.evaluate(([p, b]) => window.__threeTestEdit.setPlayerPos(p.x, p.z + b, 0), [pos, back]);
+    await page.waitForTimeout(150);
+    const pt = await page.evaluate((n) => window.__threeTestEdit.noteScrollScreenPoint(n), i);
+    if(!pt) continue;
+    const aim = await page.evaluate((q) => window.__threeTestEdit.pickAt(q.x, q.y), pt);
+    if(aim && aim.onCanvas && aim.hit && aim.hit.kind === 'note-scroll') return { pt, aim, back };
+    if(back === 3.2) return { pt, aim, back };     // give the failure something to say
+  }
+  return null;
+};
+
+// --- Phase EN5: notes, phase 5 -- the dead-end scroll
+//     (Documents/notes-feature.md). A scroll on the wall beside the "no
+//     continuation" sign when the lane's LAST move pair has a note, opening
+//     that same pair's modal. It is a discoverability affordance: the pair's
+//     own chessboard icon only appears within two metres of its billboard,
+//     and in a one-member room that billboard is not even in the room. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN5 = await launchApp();
+try {
+  // the EN4 corridor: a linear tail that genuinely runs out at cxd5, so the
+  // room has no forward exit and gets a dead-end sign
+  await seedBackup(appEN5.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7'], reply: 'Bd3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','b6','e3','Bb7','Bd3','d5'], reply: 'cxd5' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 b6 e3 Bb7 Bd3 d5 cxd5', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appEN5.page.click('.line-row');
+  await appEN5.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  /* The castle ROOT's key. This fixture is one unbranched chain, so every node
+     from the root down is a single-child node and the whole thing merges into
+     ONE corridor whose head is the root -- there is no separate room at the
+     e3 position to enter. (An earlier version of this test asked for one and
+     got `undefined`, which was the generator telling the truth.) */
+  const deadEndKey = await appEN5.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+
+  await openVR(appEN5.page);
+  await appEN5.page.evaluate((k) => window.__threeTestEdit.enter(k), deadEndKey);
+  await appEN5.page.waitForTimeout(400);
+
+  const scrolls = () => appEN5.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+  const setNote = (seq, md) => appEN5.page.evaluate(
+    ([s, m]) => window.__notesTestHooks.setNote(s, m), [seq, md]);
+
+  // 430. The room grows exactly one scroll, on the dead-end wall beside the
+  //      sign, resolving the LAST pair this room teaches -- not its first and
+  //      not its anchor (which is on the door leading in, not in here at all).
+  try {
+    const sign = await appEN5.page.evaluate(() =>
+      window.__threeTestEdit.meshes().find(m => m.kind === 'no-continuation-icon') || null);
+    assert(sign, 'test setup issue: expected a dead-end sign in a room with no forward exit');
+
+    const list = await scrolls();
+    assert(list.length === 1, `expected exactly one scroll for a single-track dead end, got ${list.length}`);
+    const s = list[0];
+    assert(s.seq[s.seq.length - 1] === 'cxd5',
+      `expected the scroll to resolve the room's LAST pair, got ${JSON.stringify(s.seq)}`);
+    assert(s.lineId === 'L1', `expected the scroll to carry its room's line, got ${JSON.stringify(s.lineId)}`);
+    // beside the sign on the same wall, not on top of it: same height, offset
+    // along the wall by more than half the sign's 1.4m face
+    assert(Math.abs(s.pos.y - sign.y) < 0.01,
+      `expected the scroll at the sign's height, got ${s.pos.y} against ${sign.y}`);
+    assert(Math.abs(s.pos.x - sign.x) > 0.7,
+      `expected the scroll clear of the sign's face, got x ${s.pos.x} against ${sign.x}`);
+    ok('Notes: a dead-end room hangs a scroll beside its sign for the last pair it teaches');
+  } catch(e){ bad('Notes: dead-end scroll exists and resolves the last pair', e); }
+
+  // 431. Hidden until that pair actually has a note, and live either way --
+  //      built once per room but SHOWN per frame, so a note written in the
+  //      move table changes the wall with no rebuild behind it.
+  try {
+    const s = (await scrolls())[0];
+    assert(!s.visible, 'expected the scroll hidden while the last pair has no note');
+
+    await setNote(s.seq.slice(0, -1), 'Black recaptures and the game opens up.');
+    await appEN5.page.waitForTimeout(200);
+    assert((await scrolls())[0].visible, 'expected the scroll to appear once the last pair has a note');
+
+    await setNote(s.seq.slice(0, -1), '');
+    await appEN5.page.waitForTimeout(200);
+    assert(!(await scrolls())[0].visible, 'expected the scroll to go away again when the note is cleared');
+
+    await setNote(s.seq.slice(0, -1), 'Black recaptures and the game opens up.');
+    await appEN5.page.waitForTimeout(200);
+    ok('Notes: the dead-end scroll appears and disappears with the note, without a rebuild');
+  } catch(e){ bad('Notes: dead-end scroll visibility follows the note', e); }
+
+  // 432. Clicking it opens the SAME position/notes modal that pair's own icon
+  //      would -- there is no separate end-of-line note. A real click at the
+  //      scroll's own screen point, so this goes through handleWalkClick.
+  try {
+    const s = (await scrolls())[0];
+    assert(s.visible, 'test setup issue: expected the scroll visible (431 left a note in place)');
+    // stand back from the dead-end wall, looking at it (yaw 0 faces -z)
+    const shot = await aimAtScroll(appEN5.page, 0, s.pos);
+    assert(shot && shot.aim && shot.aim.hit && shot.aim.hit.kind === 'note-scroll',
+      `expected the scroll under the click point, got ${JSON.stringify(shot && shot.aim)}`);
+    const pt = shot.pt;
+    const roomBefore = await appEN5.page.evaluate(() => window.__threeTestState.room);
+
+    await appEN5.page.mouse.click(pt.x, pt.y);
+    await appEN5.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const cap = await appEN5.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(/cxd5/.test(cap || ''),
+      `expected the modal to open on the LAST pair, got ${JSON.stringify(cap)}`);
+    const text = await appEN5.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/recaptures/.test(text || ''),
+      `expected that pair's own note in the modal, got ${JSON.stringify(text)}`);
+    assert((await appEN5.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
+      'expected clicking the scroll not to move the player');
+    await appEN5.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: the dead-end scroll opens that pair\'s own note');
+  } catch(e){ bad('Notes: dead-end scroll click', e); }
+
+  // 433. NOT hint-gated, unlike the pair icons. Self-test mode hides the move
+  //      billboards, so an icon anchored to one has nothing to label -- but
+  //      the scroll hangs on a wall, and "there is something written about the
+  //      end of this line" gives away no move.
+  try {
+    await appEN5.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appEN5.page.waitForTimeout(400);
+    const off = await scrolls();
+    assert(off.length === 1 && off[0].visible,
+      `expected the scroll to survive hints off, got ${JSON.stringify(off)}`);
+    assert(!(await appEN5.page.evaluate(() => window.__threeTestEdit.pairIcons())).length,
+      'test setup issue: expected the move billboards (and so their icons) gone with hints off');
+    await appEN5.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap i.fa-lightbulb').closest('button').click());
+    await appEN5.page.waitForTimeout(400);
+    ok('Notes: the dead-end scroll is not hint-gated, unlike the pair icons');
+  } catch(e){ bad('Notes: dead-end scroll survives hints off', e); }
+} finally {
+  await appEN5.close();
+}
+} catch(e){ bad('Phase EN5: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase EN5b: the two-track half. A root branching into two even-depth
+//     single-child chains merges into ONE two-track room whose lanes dead-end
+//     independently and get a sign each -- so each needs its OWN scroll,
+//     resolving its OWN lane's last pair. A single-scroll implementation looks
+//     correct until exactly this room. (Fixture shared with Phase AH3.) ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appEN5b = await launchApp();
+try {
+  await seedBackup(appEN5b.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appEN5b.page.click('.line-row');
+  await appEN5b.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+  await openVR(appEN5b.page);
+  const root = await appEN5b.page.evaluate(() => {
+    const c = new Chess();
+    for(const m of ['d4','Nf6','c4']) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appEN5b.page.evaluate((k) => window.__threeTestEdit.enter(k), root);
+  await appEN5b.page.waitForTimeout(400);
+
+  // 434. Two dead lanes, two signs, two scrolls -- and each one resolves its
+  //      own lane's last pair rather than the room's.
+  try {
+    const divider = await appEN5b.page.evaluate(() =>
+      window.__threeTestEdit.meshes().some(m => m.kind === 'divider'));
+    assert(divider, 'test setup issue: expected a divider mesh, confirming this really is a two-track room');
+
+    const list = await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+    assert(list.length === 2, `expected one scroll per dead-ending lane, got ${list.length}`);
+    const ends = list.map(s => s.seq[s.seq.length - 1]).sort();
+    assert(JSON.stringify(ends) === JSON.stringify(['Qc2','e4']),
+      `expected each lane's OWN last pair, got ${JSON.stringify(list.map(s => s.seq))}`);
+    // ...and the two signs really are in different halves of the wall, so the
+    // scrolls are not two copies of one lane's affordance sitting together
+    assert(list[0].pos.x * list[1].pos.x < 0,
+      `expected one scroll per half of the north wall, got x ${list[0].pos.x} and ${list[1].pos.x}`);
+
+    const lanes = await appEN5b.page.evaluate((k) => ({
+      left: window.__threeTestEdit.lastPairSeq(k, 'left'),
+      right: window.__threeTestEdit.lastPairSeq(k, 'right'),
+    }), root);
+    assert(lanes.left && lanes.right &&
+           lanes.left[lanes.left.length - 1] !== lanes.right[lanes.right.length - 1],
+      `expected the two lanes to resolve to different last pairs, got ${JSON.stringify(lanes)}`);
+    ok('Notes: a two-track room gets one scroll per dead lane, each on its own lane\'s last pair');
+  } catch(e){ bad('Notes: two-track dead-end scrolls', e); }
+
+  // 435. Each scroll opens ITS lane's note, not the other's -- the assertion
+  //      that a per-lane lookup actually reaches the per-lane modal.
+  try {
+    const list = await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls());
+    const target = list.find(s => s.seq[s.seq.length - 1] === 'e4') || list[0];
+    const idx = list.indexOf(target);
+    await appEN5b.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'The big centre.'),
+      target.seq.slice(0, -1));
+    await appEN5b.page.waitForTimeout(200);
+
+    const live = (await appEN5b.page.evaluate(() => window.__threeTestEdit.noteScrolls()));
+    assert(live[idx].visible, 'expected only the noted lane\'s scroll to appear');
+    assert(live.filter(s => s.visible).length === 1,
+      `expected the OTHER lane's scroll to stay hidden, got ${JSON.stringify(live.map(s => s.visible))}`);
+
+    const shot = await aimAtScroll(appEN5b.page, idx, target.pos);
+    assert(shot && shot.aim && shot.aim.hit && shot.aim.hit.kind === 'note-scroll',
+      `expected this lane's scroll under the click point, got ${JSON.stringify(shot && shot.aim)} (scroll at ${JSON.stringify(target.pos)})`);
+    await appEN5b.page.mouse.click(shot.pt.x, shot.pt.y);
+    await appEN5b.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const text = await appEN5b.page.evaluate(() => window.__notesTestHooks.positionNoteText());
+    assert(/The big centre/.test(text || ''),
+      `expected that lane's own note in the modal, got ${JSON.stringify(text)}`);
+    await appEN5b.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: a lane\'s scroll opens that lane\'s own note');
+  } catch(e){ bad('Notes: two-track scroll opens its own lane', e); }
+} finally {
+  await appEN5b.close();
+}
+} catch(e){ bad('Phase EN5b: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys

@@ -589,6 +589,13 @@ function registerOneCastle(castle, instanceId, opts = {}){
       : null;
     ROOMS[key] = {
       size: sz, color: 0x6f5f8e, exits, twoTrack: isTwoTrack, deadTracks,
+      /* which opening line this castle belongs to. Needed only by the note
+         affordances (Documents/notes-feature.md): a note is a pref, prefs are
+         keyed by line, and this world walks every line's castles at once -- so
+         a pair's note cannot be resolved from "whichever line is open". The VR
+         does nothing with it but hand it back out through threeOpts.hasNote /
+         threeOpts.onPairNote. */
+      lineId: opts.lineId || '',
       // the node's "Room Name" attribute (r.name), the same value edited in the
       // tree's Attributes modal -- seeded here so the VR walk shows it and, when
       // renamed in-world, writes back to that same pref via threeOpts.onRoomRename.
@@ -3212,7 +3219,11 @@ function buildSlots(room, roomKey, slots){
     // and object-list indexing are unchanged.)
     if((slot.kind === 'mnemonic' || slot.kind === 'moveObject') && slot.side === 'center' && !room.entryNoStreet) continue;
     if(slot.kind === 'mnemonic'){
-      if(hintsOn) scene.add(placeMnemonicSlot(roomKey, slot));   // hidden during self-test
+      if(hintsOn){                                // hidden during self-test
+        const bb = placeMnemonicSlot(roomKey, slot);
+        scene.add(bb);
+        registerPairIcon(bb, (ROOMS[roomKey] || {}).lineId);
+      }
       continue;
     }
     if(slot.kind === 'moveObject'){
@@ -4142,8 +4153,321 @@ function placeMnemonicSlot(roomKey, slot){
   const sprite = buildMnemPairSprite(slot.pair, xform.scale || 1);
   sprite.userData.kind = 'accessory';
   sprite.userData.slotId = slot.id;
+  /* Which move pair this billboard IS (Documents/notes-feature.md). The seq
+     ends in our reply, so the pref holding this pair's note is
+     pairSeq.slice(0,-1) -- the same row the move table edits, already
+     canonicalised by the castle graph (see app.js's pairFor). Null for the
+     hard-coded demo room, whose pairs belong to no line. */
+  sprite.userData.pairSeq = (slot.pair && slot.pair.seq) || null;
   sprite.position.set(slot.x + (xform.dx || 0), slot.y + (xform.dy || 0), slot.z + (xform.dz || 0));
   return sprite;
+}
+
+/* ---------- the move-pair note icon (Documents/notes-feature.md) ----------
+
+   A small chessboard tile that appears in the upper-right corner of a move-pair
+   billboard when you are close to it and looking at it; clicking it opens the
+   position/notes modal for that pair. A distinct glyph when a note already
+   exists -- without one you would have to click every pair to find out which
+   ones have anything to read, and notes that cannot be found do not get read.
+
+   Three things about the billboards force the shape of this:
+
+   1. They are camera-facing Sprites, so "the upper-right corner of the
+      rectangle" is SCREEN-relative, not world-relative -- the icon's position
+      has to be recomputed every frame from the camera's right vector. It
+      cannot be a static child of the sprite. Same trick, same reason, as the
+      editor's selection gear just above tick()'s own corner math.
+   2. They only exist when hints are on. Self-test mode hides them, and an icon
+      anchored to a hidden billboard would be labelling nothing.
+   3. Edit mode owns clicks on props, so the icons stay out of it entirely --
+      they would otherwise sit in front of the very sprite you are trying to
+      select. */
+const PAIR_ICON_RANGE = 2.0;                    // metres: show within this distance...
+const PAIR_ICON_COS = Math.cos(30 * Math.PI/180);   // ...and within 30 degrees of the look direction
+const PAIR_ICON_SIZE = 0.26;                    // world size of the tile
+const PAIR_ICON_MARGIN = 0.1;                   // gap between the billboard's corner and the tile
+// [{ sprite, icon, seq, lineId, hasNote }] for the CURRENT room; rebuilt by
+// buildRoom like `billboards`, and walked once per frame by updatePairIcons
+let pairIcons = [];
+let pairIconTex = { plain: null, note: null };
+// scratch for updatePairIcons' project/unproject, so a per-frame loop over
+// every visible pair does not allocate a Vector3 per pair per frame
+let _iconPos = null;
+
+/* The tile: a rounded dark chip with a small board on it, plus -- when this
+   position has a note -- a gold dog-eared page over the lower-right corner and
+   a gold rim. Drawn rather than loaded so it needs no asset and no network;
+   the whole file's other in-world glyphs (the gear, the EXIT sign) are drawn
+   the same way. */
+function pairIconTexture(hasNote){
+  const which = hasNote ? 'note' : 'plain';
+  if(pairIconTex[which]) return pairIconTex[which];
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(20,20,20,0.88)';
+  ctx.beginPath(); ctx.roundRect(1, 1, 62, 62, 10); ctx.fill();
+  ctx.strokeStyle = hasNote ? '#ffd400' : 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = hasNote ? 4 : 2;
+  ctx.beginPath(); ctx.roundRect(2, 2, 60, 60, 9); ctx.stroke();
+  // 4x4 board rather than 8x8: at ~0.26m across, 8 files render as mush
+  const pad = 13, cell = (64 - pad*2) / 4;
+  for(let r = 0; r < 4; r++) for(let f = 0; f < 4; f++){
+    ctx.fillStyle = (r + f) % 2 === 0 ? '#e8ddc7' : '#9a7b53';
+    ctx.fillRect(pad + f*cell, pad + r*cell, cell, cell);
+  }
+  if(hasNote){
+    // a small scroll/page with a folded corner, sitting over the board's
+    // bottom-right -- the same "there is something written here" glyph the
+    // move table's row uses, at 20 pixels
+    ctx.fillStyle = '#fffbe6';
+    ctx.beginPath();
+    ctx.moveTo(34, 36); ctx.lineTo(54, 36); ctx.lineTo(54, 50); ctx.lineTo(48, 56); ctx.lineTo(34, 56);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#8a6d1a'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(54, 50); ctx.lineTo(48, 50); ctx.lineTo(48, 56); ctx.stroke();
+    ctx.strokeStyle = '#8a6d1a'; ctx.lineWidth = 1.5;
+    for(let i = 0; i < 2; i++){
+      ctx.beginPath(); ctx.moveTo(38, 42 + i*5); ctx.lineTo(50, 42 + i*5); ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  pairIconTex[which] = tex;
+  return tex;
+}
+/* Two SHARED materials, one per glyph, swapped by reference when a note
+   appears or goes away -- rather than one material per icon with its `map`
+   reassigned. disposeSceneContents keys "leave this alone" off the MATERIAL's
+   shared tag, disposing a material's textures with it, so a per-icon material
+   would take the shared texture down with it on the first room rebuild and
+   every icon after that would draw nothing. Same arrangement, same reason, as
+   gearMat.
+
+   depthTest:false so the tile is never swallowed by the billboard it sits
+   beside (they are near-coplanar from most angles), with renderOrder to match
+   -- the selection outline needs both for the same reason. */
+const pairIconMats = { plain: null, note: null };
+function pairIconMat(hasNote){
+  const which = hasNote ? 'note' : 'plain';
+  if(!pairIconMats[which]){
+    pairIconMats[which] = tagShared(new THREE.SpriteMaterial({
+      map: pairIconTexture(hasNote), transparent: true, depthTest: false }));
+  }
+  return pairIconMats[which];
+}
+function buildPairIconSprite(hasNote){
+  const s = new THREE.Sprite(pairIconMat(hasNote));
+  s.scale.set(PAIR_ICON_SIZE, PAIR_ICON_SIZE, 1);
+  s.renderOrder = 998;
+  s.visible = false;      // updatePairIcons decides, from the first frame on
+  return s;
+}
+
+/* Gives one move-pair billboard its note icon. `lineId` is the line that owns
+   the pref -- for a door billboard that is the DESTINATION room's line, not
+   the room the door is drawn in, since a redirect door can cross lines. */
+function registerPairIcon(sprite, lineId){
+  const seq = sprite.userData.pairSeq;
+  // no seq, no pref: the hard-coded demo room's pairs belong to no line, and a
+  // door whose destination has no centre pair has nothing to resolve
+  if(!seq || seq.length < 2 || !lineId) return;
+  const icon = buildPairIconSprite(false);
+  icon.userData = { kind: 'pair-icon', seq, lineId };
+  scene.add(icon);
+  pairIcons.push({ sprite, icon, seq, lineId, hasNote: false });
+}
+
+/* The destination room's OWN canonical seq, for a billboard hanging on the door
+   that leads into it.
+
+   The door's own pair (ex.pair, from app.js's pairFromSeq) deliberately carries
+   no seq: it is edge-specific, so two transposition doors into one room would
+   resolve to two prefs for a position that has one note. The room's centre pair
+   is the canonical one -- and it is exactly the pair that no longer renders
+   in-room, because it moved out here onto the door. */
+function destRoomPairSeq(target){
+  const pairs = DEMO_MNEMONICS[target] && DEMO_MNEMONICS[target].pairs;
+  const centre = pairs && pairs.find(p => p.side === 'center');
+  return (centre && centre.seq) || null;
+}
+
+/* Per frame: which icons are showing, and where. A room holds at most a handful
+   of pairs, so this is a distance check, a dot product and a Set lookup per
+   pair -- negligible beside what the rest of tick() already does. */
+function updatePairIcons(){
+  if(!pairIcons.length) return;
+  if(!_iconPos) _iconPos = new THREE.Vector3();   // THREE is only loaded once the walk opens
+  const fwd = cameraForwardVec();
+  const right = cameraRightVec();
+  for(const p of pairIcons){
+    const sp = p.sprite;
+    if(editMode || !sp.parent){ p.icon.visible = false; continue; }
+    const dx = sp.position.x - camera.position.x;
+    const dy = sp.position.y - camera.position.y;
+    const dz = sp.position.z - camera.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if(dist > PAIR_ICON_RANGE || dist < 1e-4){ p.icon.visible = false; continue; }
+    // the facing test is on the GROUND plane, matching how the player actually
+    // turns (yaw only; pitch is eased and near zero in walk mode) -- a 3D angle
+    // would hide the icon for a tall billboard you are standing right under
+    const flat = Math.hypot(dx, dz) || 1e-4;
+    if((dx/flat) * fwd.x + (dz/flat) * fwd.z < PAIR_ICON_COS){ p.icon.visible = false; continue; }
+    p.icon.visible = true;
+    const halfW = sp.scale.x/2, halfH = sp.scale.y/2;
+    const want = _iconPos.set(
+      sp.position.x + right.x * (halfW + PAIR_ICON_MARGIN),
+      sp.position.y + halfH + PAIR_ICON_MARGIN,
+      sp.position.z + right.z * (halfW + PAIR_ICON_MARGIN)
+    );
+    /* ...but never off the edge of the screen.
+
+       The corner of a 1.2m billboard whose centre is at eye height sits 0.7m
+       above the eye. Walk mode has no look-up (targetPitch is only ever the
+       automatic down-staircase peek), so at 1m that corner is ~40 degrees up
+       against a 35-degree vertical half-FOV: the icon left the view exactly as
+       you walked up to the thing it labels, which is the one moment you were
+       certain to want it. Worse in portrait, where the HORIZONTAL half-angle
+       falls to ~18 degrees and the 0.7m sideways offset puts it off the right
+       edge at the full 2m range -- i.e. on a phone it would essentially never
+       have appeared at all.
+
+       Clamped in NDC rather than by per-axis trig: project where we want it,
+       pull the point back inside the frustum by its own on-screen half-size,
+       and unproject at the same depth. That is correct for any fov, aspect and
+       pitch without restating the projection maths, and at normal viewing
+       distance it changes nothing -- the clamp simply does not bind. Closer
+       in, the icon slides along the billboard's edge and stays reachable. */
+    const ndc = want.project(camera);
+    const nh = (PAIR_ICON_SIZE/2) / Math.max(1e-4, dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+    const limY = Math.max(0.05, 1 - nh - 0.02);
+    const limX = Math.max(0.05, 1 - nh / Math.max(1e-4, camera.aspect) - 0.02);
+    const cx = Math.max(-limX, Math.min(limX, ndc.x));
+    const cy = Math.max(-limY, Math.min(limY, ndc.y));
+    if(cx !== ndc.x || cy !== ndc.y) ndc.set(cx, cy, ndc.z);
+    p.icon.position.copy(ndc.unproject(camera));
+    /* Re-asked every frame rather than baked in at build time: a note written
+       in the move table, or in this very walk, changes the answer with no room
+       rebuild behind it. It is a Set lookup in app.js (see buildVrNoteIndex),
+       and the texture only changes when the answer does. */
+    const has = !!(threeOpts.hasNote && threeOpts.hasNote(p.lineId, p.seq.slice(0, -1)));
+    if(has !== p.hasNote){
+      p.hasNote = has;
+      p.icon.material = pairIconMat(has);
+    }
+  }
+}
+
+/* ---------- the dead-end scroll (Documents/notes-feature.md) ----------
+
+   A scroll on the wall beside a room's "no continuation" sign, shown only when
+   the lane's LAST move pair has a note, and opening that same pair's
+   position/notes modal.
+
+   It is a discoverability affordance, not a second datum: "there is something
+   to read at the end of this line", readable from across the room, where the
+   pair's own chessboard icon only appears once you are within two metres of
+   the billboard -- and where, in a one-member room, the pair in question is
+   not even in the room (its billboard is on the door leading in).
+
+   Two-track rooms dead-end PER LANE and get two signs, so each lane resolves
+   its own last pair. A single-scroll implementation looks correct until the
+   first divided room. */
+// the two things the notes feature hangs in the world that are SHOWN per frame
+// rather than built per room -- handleWalkClick drops them from its hit list
+// when they are hidden (see its own comment)
+const NOTE_AFFORDANCE_KINDS = new Set(['note-scroll', 'pair-icon']);
+const SCROLL_SIZE = 0.55;
+const SCROLL_GAP = 0.25;                        // between the sign's edge and the scroll
+let noteScrollMat = null;
+let noteScrolls = [];                           // [{ mesh, seq, lineId }] for the current room
+
+function noteScrollMaterial(){
+  if(!noteScrollMat){
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    // a rolled parchment: a page with a curled top and bottom edge
+    ctx.fillStyle = '#f7ecc9';
+    ctx.beginPath(); ctx.roundRect(12, 6, 40, 52, 4); ctx.fill();
+    ctx.strokeStyle = '#7a5c22'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = '#d8c28a';
+    ctx.beginPath(); ctx.ellipse(32, 8, 20, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(32, 56, 20, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#7a5c22'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.ellipse(32, 8, 20, 6, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(32, 56, 20, 6, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = '#6b5636'; ctx.lineWidth = 2.5;
+    for(let i = 0; i < 4; i++){
+      ctx.beginPath(); ctx.moveTo(19, 20 + i*8); ctx.lineTo(45, 20 + i*8); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    noteScrollMat = tagShared(new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
+  }
+  return noteScrollMat;
+}
+
+/* The seq of the last pair a lane teaches -- what a note "at the end of this
+   line" belongs to.
+
+   `track` is a two-track room's lane ('left'/'right'); without it the whole
+   room is one lane and the last pair is the last in WALK order (centre, then
+   left by order, then right), the same ordering the move-object chain and the
+   list buckets use. Returns the room seq, ending in our reply, exactly as the
+   billboards carry it. */
+function lastPairSeqForLane(roomKey, track){
+  const layout = mnemPairLayout(roomKey).filter(L => L.pair && L.pair.seq);
+  const lane = track ? layout.filter(L => L.side === track) : layout;
+  if(!lane.length) return null;
+  const rank = L => (SIDE_WALK_RANK[L.side] ?? 3) * 1000 + (L.order || 0);
+  let last = lane[0];
+  for(const L of lane) if(rank(L) > rank(last)) last = L;
+  return last.pair.seq.slice();
+}
+
+/* Hangs the scroll beside a dead-end sign. `wall`/`offset` are the sign's own,
+   so this mirrors buildNoContinuationIcon's placement and shifts along the
+   wall's run axis.
+
+   Placed to the RIGHT as you face the wall, and clamped inside the wall's own
+   half-span so a sign already near a corner does not push it through the
+   adjoining wall. */
+function buildNoteScroll(roomKey, size, wall, offset, seq, lineId){
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(SCROLL_SIZE, SCROLL_SIZE), noteScrollMaterial());
+  mesh.userData = { kind: 'note-scroll', roomKey, seq, lineId };
+  const { fixed, half } = wallSpan(size, wall);
+  const y = DOOR_H / 2;
+  // just clear of the sign's own 1.4m face, and never within half a scroll of
+  // the corner. DOOR_SKIN_FORWARD_OFFSET*2 keeps it in front of the sign
+  // rather than z-fighting with it where the two faces meet.
+  const shift = 1.4/2 + SCROLL_GAP + SCROLL_SIZE/2;
+  const limit = half - SCROLL_SIZE/2 - 0.1;
+  // "right as you face it" runs +along on north and east, -along on south and
+  // west -- the walls face into the room from opposite sides
+  const dir = (wall === 'north' || wall === 'east') ? 1 : -1;
+  const along = Math.max(-limit, Math.min(limit, offset + dir * shift));
+  const f = WALL_THICK/2 + DOOR_SKIN_FORWARD_OFFSET * 2;
+  if(wall === 'north'){ mesh.position.set(along, y, fixed + f); mesh.rotation.y = 0; }
+  if(wall === 'south'){ mesh.position.set(along, y, fixed - f); mesh.rotation.y = Math.PI; }
+  if(wall === 'west'){  mesh.position.set(fixed + f, y, along); mesh.rotation.y = Math.PI/2; }
+  if(wall === 'east'){  mesh.position.set(fixed - f, y, along); mesh.rotation.y = -Math.PI/2; }
+  mesh.visible = false;                         // updateNoteScrolls decides, from the first frame
+  noteScrolls.push({ mesh, seq, lineId });
+  return mesh;
+}
+
+/* Built once per room, shown per frame -- the same liveness the pair icons
+   have, and for the same reason: a note written in the move table (or in this
+   walk) must change what the world shows without a rebuild behind it.
+   Hidden in edit mode, where the dead-end sign's own marker is the click
+   target and a scroll in front of it would just be in the way. */
+function updateNoteScrolls(){
+  for(const s of noteScrolls){
+    s.mesh.visible = !editMode
+      && !!(threeOpts.hasNote && threeOpts.hasNote(s.lineId, s.seq.slice(0, -1)));
+  }
 }
 
 function makeLabelMesh(text){
@@ -4654,8 +4978,15 @@ function buildPairAt(roomKey, room, x, z, target, exPair, occurrence, listFallba
     bb.userData.doorBill = true;
     bb.userData.roomKey = roomKey;
     bb.userData.base = { x, y: MNEM_EYE_Y, z };
+    /* The note this door billboard carries belongs to the room BEYOND it, not
+       to the edge (Documents/notes-feature.md, finding 4): that room's own
+       centre pair is what moved out here, and its seq is the canonical one.
+       The line is the destination's too -- a redirect door can lead into
+       another opening system's castle entirely. */
+    bb.userData.pairSeq = destRoomPairSeq(target);
     bb.position.set(x + (xf.dx || 0), MNEM_EYE_Y + (xf.dy || 0), z + (xf.dz || 0));
     group.add(bb);
+    registerPairIcon(bb, (ROOMS[target] || {}).lineId);
   }
   const doorId = 'dobj-' + target;                        // per-door transform key in this room
   // empty slot: a clickable stand-in that assigns the shared image (on the target)
@@ -6338,6 +6669,8 @@ function buildRoom(roomKey){
   scene.clear();
   billboards = [];
   floorLabels = [];
+  pairIcons = [];
+  noteScrolls = [];
   doorSignLog = [];
 
   scene.add(new THREE.AmbientLight(0xffffff, room.outdoor ? 0.75 : 0.55));
@@ -6420,6 +6753,14 @@ function buildRoom(roomKey){
     const deadEndAsset = deadEndAssetFor(roomKey);
     scene.add(deadEndAsset ? buildDoorPanel(room.size, deadEndWall, 0, deadEndAsset) : buildNoContinuationIcon(room.size, deadEndWall, 0));
     if(editMode) scene.add(buildDeadEndMarker(room.size, deadEndWall, 0, roomKey));
+    // ...and, beside it, the note scroll for the last pair this room teaches
+    // (Documents/notes-feature.md). Built unconditionally and SHOWN per frame
+    // by updateNoteScrolls, so a note added later needs no rebuild. Not
+    // hint-gated: it hangs on a wall rather than on a hidden billboard, and
+    // "there is something written about the end of this line" is not a hint
+    // about the move itself.
+    const deadEndSeq = lastPairSeqForLane(roomKey, null);
+    if(deadEndSeq) scene.add(buildNoteScroll(roomKey, room.size, deadEndWall, 0, deadEndSeq, room.lineId || ''));
   }
   // a two-track room's two lanes dead-end independently -- each gets its OWN
   // sign, centered in its own half of the north wall (the same quarter-width
@@ -6436,6 +6777,11 @@ function buildRoom(roomKey){
       const deadEndAsset = deadEndAssetFor(roomKey, track);
       scene.add(deadEndAsset ? buildDoorPanel(room.size, 'north', offset, deadEndAsset) : buildNoContinuationIcon(room.size, 'north', offset));
       if(editMode) scene.add(buildDeadEndMarker(room.size, 'north', offset, roomKey, track));
+      // each lane resolves its OWN last pair -- a single scroll for the room
+      // would look right until the first divided room, then quietly point both
+      // signs at whichever lane happened to sort last
+      const laneSeq = lastPairSeqForLane(roomKey, track);
+      if(laneSeq) scene.add(buildNoteScroll(roomKey, room.size, 'north', offset, laneSeq, room.lineId || ''));
     }
   }
 
@@ -7039,6 +7385,11 @@ function tick(){
       selectionAnchor.center.z + right.z * (selectionAnchor.halfW + margin)
     );
   }
+
+  // move-pair note icons: same screen-relative corner math as the gear above,
+  // but per pair and gated on proximity/facing (see updatePairIcons)
+  updatePairIcons();
+  updateNoteScrolls();
 
   // Doors (and elevators) teleport in edit mode too -- staying blocked there
   // just confused users with no way to reach the next room short of exiting
@@ -7682,11 +8033,51 @@ function handleWalkClick(e){
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(scene.children, true);
+
+  /* Move-pair note icons FIRST, before anything else in this handler.
+
+     The door-trigger fallback at the bottom is deliberately greedy: ANY click
+     whose world point lands inside a door's trigger box teleports you, with no
+     facing requirement. A door billboard's icon hangs right beside the doorway
+     it belongs to, squarely inside that box -- so ordered the other way round,
+     clicking the icon would walk you through the door instead, and the icon
+     would look broken exactly where it is most useful. This ordering is the
+     feature, not a micro-optimisation.
+
+     Only VISIBLE icons are offered to the raycaster: three.js does not check
+     `.visible` when intersecting, so an icon hidden by distance or facing
+     would still be clickable through a wall. */
+  const liveIcons = pairIcons.filter(p => p.icon.visible).map(p => p.icon);
+  if(liveIcons.length){
+    const iconHit = raycaster.intersectObjects(liveIcons, false)[0];
+    if(iconHit){
+      const ud = iconHit.object.userData;
+      if(threeOpts.onPairNote) threeOpts.onPairNote(ud.lineId, ud.seq);
+      return;
+    }
+  }
+
+  /* A HIDDEN note affordance is not there at all. three.js does not check
+     `.visible` when intersecting, so without this filter a scroll whose pair
+     has no note -- or an icon hidden by distance or facing -- would still be
+     the nearest hit, swallowing the click and, worse, handing its own world
+     point to the greedy door fallback below. */
+  const hits = raycaster.intersectObjects(scene.children, true)
+    .filter(h => h.object.visible || !NOTE_AFFORDANCE_KINDS.has(h.object.userData && h.object.userData.kind));
   const hit = hits[0];
   if(!hit) return;
   if(hit.uv && hit.object.userData && hit.object.userData.kind === 'elevator-panel'){
     selectElevatorFloor(hit.object.userData, hit.uv);
+    return;
+  }
+  /* The dead-end scroll, for the same reason the pair icons go first: it hangs
+     on a wall a NEIGHBOURING lane's door trigger box can reach (a two-track
+     room's two lanes share the north wall, and a trigger box is padded by a
+     metre), so without this the greedy fallback below could teleport you out
+     of a click that meant "read this". */
+  if(hit.object.userData && hit.object.userData.kind === 'note-scroll'){
+    const ud = hit.object.userData;
+    if(threeOpts.onPairNote) threeOpts.onPairNote(ud.lineId, ud.seq);
     return;
   }
   // tapping a door (its skin, frame, name plaque, or locked-door icon --
@@ -9375,7 +9766,7 @@ export async function openThreeTest(containerEl, opts){
   clearGeneratedCastle();
   const streetCastles = [];
   for(const c of (threeOpts.castles || [])){
-    const reg = registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { backToStreet: true });
+    const reg = registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { backToStreet: true, lineId: c.lineId });
     if(reg) streetCastles.push({ ...c, entryKey: reg.entryKey });
   }
   generateMainStreet(OPENING_SYSTEMS, streetCastles);   // Main Street + one side street per opening system
@@ -9464,12 +9855,12 @@ export async function openThreeTest(containerEl, opts){
   // No street/back-door wiring (they're not on a street in preview mode);
   // Close remains the way out once you've walked into one.
   for(const c of (threeOpts.linkedCastles || [])){
-    registerOneCastle({ genRooms: c.genRooms }, c.instanceId, {});
+    registerOneCastle({ genRooms: c.genRooms }, c.instanceId, { lineId: threeOpts.castleLineId || '' });
   }
   // a single generated castle (the report's Walk in VR): register its rooms and
   // spawn straight into the entry; otherwise start on Main Street as usual.
   const cas = threeOpts.castle
-    ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, {})
+    ? registerOneCastle(threeOpts.castle, threeOpts.castleInstanceId, { lineId: threeOpts.castleLineId || '' })
     : null;
   // an explicit start room (e.g. "Jump to VR" from the digraph) wins over both
   // -- it lands the freshly-opened world directly on the target room instead
@@ -9995,6 +10386,97 @@ export async function openThreeTest(containerEl, opts){
       // e.g. "obj-L1") -- for testing Part A's "fully decorated" slot check
       // without scraping placeholder sprites out of the scene by hand.
       moveObjectSlotIds: (roomKey) => moveObjectSlots(roomKey).map(s => s.id),
+      /* The move-pair sequence each wall billboard carries -- from the layout
+         (pairSeqs) and off the BUILT scene object (scenePairSeq). Both, because
+         they fail differently: the layout can be right while the trip into the
+         scene drops it, which is the half that breaks silently. */
+      pairSeqs: (roomKeyArg) => mnemPairLayout(roomKeyArg || currentRoomKey)
+        .map(L => ({ id: `mnem-${L.tag}`, tag: L.tag, side: L.side, order: L.order,
+                     seq: (L.pair && L.pair.seq) || null })),
+      scenePairSeq: (slotId) => {
+        const o = findAccessoryObject(slotId);
+        return o ? (o.userData.pairSeq || null) : null;
+      },
+      /* the move-pair note icons in the current room, as updatePairIcons has
+         most recently left them -- one entry per pair that HAS a note key
+         (a demo-room pair or an unresolvable door carries none and gets no
+         icon at all, which is itself worth being able to assert). */
+      pairIcons: () => pairIcons.map(p => ({
+        slotId: p.sprite.userData.slotId,
+        doorBill: !!p.sprite.userData.doorBill,
+        visible: p.icon.visible,
+        hasNote: p.hasNote,
+        seq: p.seq.slice(),
+        lineId: p.lineId,
+        // the billboard's own spot (where to stand to see the icon) and the
+        // icon's current one (what a click would land on)
+        pairPos: { x: p.sprite.position.x, y: p.sprite.position.y, z: p.sprite.position.z },
+        iconPos: { x: p.icon.position.x, y: p.icon.position.y, z: p.icon.position.z },
+      })),
+      /* which door, if any, a world point falls inside the trigger box of --
+         the exact question handleWalkClick's greedy fallback asks. A test uses
+         it to prove the icon-click test is not vacuous: the fallback really
+         WOULD have teleported you from that point, so the icon winning is the
+         ordering doing its job rather than the two never competing. */
+      doorTriggerAt: (x, z) => {
+        const m = findDoorTrigger(x, z, null);
+        return m ? (m.target || null) : null;
+      },
+      /* where an icon currently sits on screen, so a test can dispatch a REAL
+         click at that point and exercise handleWalkClick's own raycast and its
+         ordering against the door fallback -- rather than bypassing both with
+         a hook that calls onPairNote directly. Mirrors gizmoArrowScreenPoint. */
+      pairIconScreenPoint: (slotId) => {
+        const p = pairIcons.find(p => p.sprite.userData.slotId === slotId);
+        if(!p || !p.icon.visible || !renderer) return null;
+        const v = p.icon.position.clone().project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+      },
+      // which line a room belongs to -- the value the note affordances hand
+      // back out through onPairNote, threaded in at registerOneCastle
+      roomLineId: (roomKey) => (ROOMS[roomKey || currentRoomKey] || {}).lineId ?? null,
+      /* the dead-end note scrolls in the current room, as updateNoteScrolls
+         has most recently left them. One per dead-end sign, so a two-track
+         room with two dead lanes reports two -- each resolving its own lane's
+         last pair rather than the room's. */
+      noteScrolls: () => noteScrolls.map(s => ({
+        visible: s.mesh.visible,
+        seq: s.seq.slice(),
+        lineId: s.lineId,
+        pos: { x: s.mesh.position.x, y: s.mesh.position.y, z: s.mesh.position.z },
+      })),
+      noteScrollScreenPoint: (i) => {
+        const s = noteScrolls[i || 0];
+        if(!s || !s.mesh.visible || !renderer) return null;
+        const v = s.mesh.position.clone().project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+      },
+      // the last pair a lane teaches, as the scroll resolves it -- so a test
+      // can check the two-track split without scraping meshes out of the scene
+      lastPairSeq: (roomKey, track) => lastPairSeqForLane(roomKey || currentRoomKey, track || null),
+      /* what a click at this SCREEN point would actually land on, and whether
+         the point is even on the canvas. A test that dispatches a real click
+         and gets nothing has two quite different failure modes -- aimed off
+         the canvas, or aimed at something else -- and this tells them apart
+         without a second run. */
+      pickAt: (clientX, clientY) => {
+        if(!renderer) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const onCanvas = clientX >= rect.left && clientX <= rect.right
+                      && clientY >= rect.top && clientY <= rect.bottom;
+        const p = new THREE.Vector2(
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          -((clientY - rect.top) / rect.height) * 2 + 1);
+        const rc = new THREE.Raycaster();
+        rc.setFromCamera(p, camera);
+        const h = rc.intersectObjects(scene.children, true)[0];
+        return { onCanvas, rect: { w: rect.width, h: rect.height, left: rect.left, top: rect.top },
+                 ndc: { x: p.x, y: p.y },
+                 hit: h ? { kind: (h.object.userData && h.object.userData.kind) || null,
+                            visible: h.object.visible, dist: h.distance } : null };
+      },
       // a room's move count as the VR side sees it -- so the grade-log test
       // can check the value that was threaded through rather than hard-coding
       // a number the castle generator owns
@@ -10263,6 +10745,8 @@ export function closeThreeTest(){
   editUndoStack = []; editRedoStack = []; lastXformUndoKey = null;
   billboards = [];
   floorLabels = [];
+  pairIcons = [];
+  noteScrolls = [];
   selectedProp = null;
   selectionOutline = null;
   selectionGear = null;
