@@ -24290,15 +24290,26 @@ try {
   await appEN4.page.click('.line-row');
   await appEN4.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
 
-  const convergedKey = await appEN4.page.evaluate(() => {
+  const roomKeyAfter = (moves) => appEN4.page.evaluate((ms) => {
     const c = new Chess();
-    for(const m of ['d4','Nf6','c4','e6','Nc3','b6','e3']) c.move(m, { sloppy: true });
+    for(const m of ms) c.move(m, { sloppy: true });
     return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
-  });
+  }, moves);
+  // the converged corridor: real WALL pairs, but a dead end -- its tail runs
+  // out at cxd5, so it has no forward door and therefore no door billboard
+  const convergedKey = await roomKeyAfter(['d4','Nf6','c4','e6','Nc3','b6','e3']);
+  // the castle's entry room: a branch head with a forward door per reply, so
+  // this is where the DOOR billboards live. Its own centre pair is out on the
+  // street rather than in here, which is exactly why a door billboard has to
+  // resolve through its destination room instead of through its own edge.
+  const entryKey = await roomKeyAfter(['d4','Nf6','c4']);
 
   await openVR(appEN4.page);
-  await appEN4.page.evaluate((k) => window.__threeTestEdit.enter(k), convergedKey);
-  await appEN4.page.waitForTimeout(400);
+  const enter = async (k) => {
+    await appEN4.page.evaluate((key) => window.__threeTestEdit.enter(key), k);
+    await appEN4.page.waitForTimeout(400);
+  };
+  await enter(entryKey);
 
   const iconsNow = () => appEN4.page.evaluate(() => window.__threeTestEdit.pairIcons());
   const iconNow = (slotId) => appEN4.page.evaluate(
@@ -24313,6 +24324,8 @@ try {
     await appEN4.page.waitForTimeout(150);      // let at least one frame run
   };
 
+  /* ----- in the ENTRY room: the door billboards ----- */
+
   // 424. Every move-pair billboard in the room has an icon, and each one knows
   //      which pref it stands for. The door billboards are the interesting
   //      half: their own pair is edge-specific and carries no seq on purpose,
@@ -24320,7 +24333,7 @@ try {
   //      instead (notes-feature.md, finding 4).
   try {
     const icons = await iconsNow();
-    assert(icons.length, `expected the corridor's move pairs to carry note icons, got ${JSON.stringify(icons)}`);
+    assert(icons.length, `expected the entry room's move pairs to carry note icons, got ${JSON.stringify(icons)}`);
     assert(icons.every(p => Array.isArray(p.seq) && p.seq.length >= 2),
       `expected every icon to carry its pair's sequence, got ${JSON.stringify(icons.map(p => p.seq))}`);
     assert(icons.every(p => p.lineId === 'L1'),
@@ -24341,71 +24354,7 @@ try {
     ok(`Notes: every move pair carries a note icon, doors keyed to the room beyond (${icons.length} icon(s), ${doors.length} door(s))`);
   } catch(e){ bad('Notes: pair icons exist and carry the right key', e); }
 
-  // 425. It appears only when you are close AND looking at it. The 45-degree
-  //      case matters more than the 180-degree one: a gate that only rejected
-  //      "facing the other way" would light up every pair in the room at once.
-  try {
-    const wall = (await iconsNow()).find(p => !p.doorBill);
-    assert(wall, 'test setup issue: expected a wall (non-door) pair in the corridor');
-
-    await standNear(wall.pairPos, 0, 1, 0);
-    assert((await iconNow(wall.slotId)).visible, 'expected the icon to show from 1m, looking straight at it');
-
-    await standNear(wall.pairPos, 0, 5, 0);
-    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2m range');
-
-    await standNear(wall.pairPos, 0, 1, Math.PI);
-    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden when facing away from it');
-
-    // 1m south and 1m east of the pair, still looking down -z: 45 degrees off,
-    // so outside the 30-degree cone even though it is well within range
-    await standNear(wall.pairPos, 1, 1, 0);
-    assert(!(await iconNow(wall.slotId)).visible,
-      'expected the icon hidden at 45 degrees off the look direction, inside the 30-degree gate');
-    ok('Notes: the pair icon is gated on both proximity and facing');
-  } catch(e){ bad('Notes: pair icon proximity/facing gate', e); }
-
-  // 426. A distinct glyph when a note exists, and it follows a note written
-  //      elsewhere with no room rebuild -- which is the whole reason the icon
-  //      re-asks every frame instead of baking the answer into the world.
-  try {
-    const wall = (await iconsNow()).find(p => !p.doorBill);
-    await standNear(wall.pairPos, 0, 1, 0);
-    assert(!(await iconNow(wall.slotId)).hasNote, 'expected no note glyph before a note exists');
-
-    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'Watch the c4 pawn.'),
-      wall.seq.slice(0, -1));
-    await appEN4.page.waitForTimeout(150);
-    assert((await iconNow(wall.slotId)).hasNote,
-      'expected the icon to pick up a note written through the move table, without a rebuild');
-
-    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, ''), wall.seq.slice(0, -1));
-    await appEN4.page.waitForTimeout(150);
-    assert(!(await iconNow(wall.slotId)).hasNote, 'expected the glyph to go away again when the note is cleared');
-    ok('Notes: the icon shows a distinct glyph when a note exists, live');
-  } catch(e){ bad('Notes: note-exists glyph', e); }
-
-  // 427. Clicking it opens the position/notes modal -- a REAL click at the
-  //      icon's own screen point, so this exercises handleWalkClick's raycast
-  //      rather than calling the callback directly.
-  try {
-    const wall = (await iconsNow()).find(p => !p.doorBill);
-    await standNear(wall.pairPos, 0, 1, 0);
-    const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
-    assert(pt, 'expected a visible icon to report a screen point');
-    const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
-
-    await appEN4.page.mouse.click(pt.x, pt.y);
-    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
-    const opened = await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
-    assert(opened && /to move/.test(opened), `expected the position modal to open on that pair, got ${JSON.stringify(opened)}`);
-    assert((await appEN4.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
-      'expected clicking the icon not to move the player');
-    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
-    ok('Notes: clicking a pair icon opens the position modal');
-  } catch(e){ bad('Notes: pair icon click', e); }
-
-  // 428. ...and it wins against the door-trigger fallback. That fallback is
+  // 425. ...and it wins against the door-trigger fallback. That fallback is
   //      deliberately greedy -- any click whose world point lands in a door's
   //      trigger box teleports you, with no facing requirement -- and a door
   //      billboard's icon hangs right beside the doorway it belongs to. Proven
@@ -24435,6 +24384,82 @@ try {
       ok('Notes: a pair icon inside a door trigger box opens its note instead of walking you through the door');
     }
   } catch(e){ bad('Notes: pair icon beats the door-trigger fallback', e); }
+
+  // a modal left open by a failure above would swallow every later
+  // page.mouse.click -- it covers the canvas -- turning one failure into four
+  await appEN4.page.evaluate(() => {
+    if(window.__notesTestHooks.positionNoteOpen()) window.__notesTestHooks.closePositionNote();
+  });
+
+  /* ----- in the CONVERGED CORRIDOR: the wall billboards -----
+     A dead end, so it has no door billboards at all -- which is what makes it
+     the right room for the gating, glyph and edit-mode tests: nothing here can
+     pass by accident through a door icon. */
+  await enter(convergedKey);
+
+  // 426. It appears only when you are close AND looking at it. The 45-degree
+  //      case matters more than the 180-degree one: a gate that only rejected
+  //      "facing the other way" would light up every pair in the room at once.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    assert(wall, 'test setup issue: expected a wall (non-door) pair in the corridor');
+
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert((await iconNow(wall.slotId)).visible, 'expected the icon to show from 1m, looking straight at it');
+
+    await standNear(wall.pairPos, 0, 5, 0);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2m range');
+
+    await standNear(wall.pairPos, 0, 1, Math.PI);
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden when facing away from it');
+
+    // 1m south and 1m east of the pair, still looking down -z: 45 degrees off,
+    // so outside the 30-degree cone even though it is well within range
+    await standNear(wall.pairPos, 1, 1, 0);
+    assert(!(await iconNow(wall.slotId)).visible,
+      'expected the icon hidden at 45 degrees off the look direction, inside the 30-degree gate');
+    ok('Notes: the pair icon is gated on both proximity and facing');
+  } catch(e){ bad('Notes: pair icon proximity/facing gate', e); }
+
+  // 427. A distinct glyph when a note exists, and it follows a note written
+  //      elsewhere with no room rebuild -- which is the whole reason the icon
+  //      re-asks every frame instead of baking the answer into the world.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected no note glyph before a note exists');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, 'Watch the c4 pawn.'),
+      wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert((await iconNow(wall.slotId)).hasNote,
+      'expected the icon to pick up a note written through the move table, without a rebuild');
+
+    await appEN4.page.evaluate((seq) => window.__notesTestHooks.setNote(seq, ''), wall.seq.slice(0, -1));
+    await appEN4.page.waitForTimeout(150);
+    assert(!(await iconNow(wall.slotId)).hasNote, 'expected the glyph to go away again when the note is cleared');
+    ok('Notes: the icon shows a distinct glyph when a note exists, live');
+  } catch(e){ bad('Notes: note-exists glyph', e); }
+
+  // 428. Clicking it opens the position/notes modal -- a REAL click at the
+  //      icon's own screen point, so this exercises handleWalkClick's raycast
+  //      rather than calling the callback directly.
+  try {
+    const wall = (await iconsNow()).find(p => !p.doorBill);
+    await standNear(wall.pairPos, 0, 1, 0);
+    const pt = await appEN4.page.evaluate((s) => window.__threeTestEdit.pairIconScreenPoint(s), wall.slotId);
+    assert(pt, 'expected a visible icon to report a screen point');
+    const roomBefore = await appEN4.page.evaluate(() => window.__threeTestState.room);
+
+    await appEN4.page.mouse.click(pt.x, pt.y);
+    await appEN4.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const opened = await appEN4.page.evaluate(() => window.__notesTestHooks.positionNoteCaption());
+    assert(opened && /to move/.test(opened), `expected the position modal to open on that pair, got ${JSON.stringify(opened)}`);
+    assert((await appEN4.page.evaluate(() => window.__threeTestState.room)) === roomBefore,
+      'expected clicking the icon not to move the player');
+    await appEN4.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('Notes: clicking a pair icon opens the position modal');
+  } catch(e){ bad('Notes: pair icon click', e); }
 
   // 429. Edit mode owns clicks on props, and the icons sit in front of the
   //      very sprites you would be trying to select -- so they stay out of it
