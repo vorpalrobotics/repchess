@@ -1215,10 +1215,13 @@ async function setReviewGradeStats(stats){
    reverse, which is why the log had to exist before the data started arriving
    rather than after. */
 const REVIEW_GRADE_LOG_KEY = 'threeReviewGradeLog';
-// ~50 bytes an event, so ~1MB when full. A few hundred mature rooms generate
-// maybe 1-2k events a year, making this about a decade of detail; the tally
-// above carries the lifetime totals past the rollover.
-const REVIEW_GRADE_LOG_CAP = 20000;
+/* ~145 bytes an event now that each carries a room key, so ~1.5MB when full --
+   the same footprint as the quiz log, whose rows are the same shape. Halved
+   from 20k when `k` was added rather than letting the store triple. A few
+   hundred mature rooms generate maybe 1-2k grades a year, so 10k is still
+   decades of detail, and the tally above carries the lifetime totals past the
+   rollover regardless. */
+const REVIEW_GRADE_LOG_CAP = 10000;
 
 /* Appends one event, returning a NEW array. `replacePrev` drops the entry this
    same review already wrote -- the log follows the same "a correction replaces"
@@ -1231,7 +1234,13 @@ const REVIEW_GRADE_LOG_CAP = 20000;
    stranger's row would be worse than leaving a duplicate. */
 function appendGradeEvent(log, event, replacePrev = false){
   const out = Array.isArray(log) ? log.slice() : [];
-  if(replacePrev && out.length && out[out.length - 1].r === event.r) out.pop();
+  const prev = out.length ? out[out.length - 1] : null;
+  // the same review means the same ROOM at the same rung. Matching on the room
+  // too is the sharper guard the key bought: before it, two rooms graded in
+  // succession from the same rung looked alike to this check. A row written
+  // before the log carried a key reads as a non-match and is left alone, which
+  // is the safe direction -- a duplicate beats dropping a stranger's row.
+  if(replacePrev && prev && prev.r === event.r && (prev.k || null) === (event.k || null)) out.pop();
   out.push(event);
   return out.length > REVIEW_GRADE_LOG_CAP ? out.slice(out.length - REVIEW_GRADE_LOG_CAP) : out;
 }
@@ -1358,13 +1367,13 @@ function recordQuizStep(event){
    size at this moment, `elapsedDays` how long the interval actually ran. */
 let gradeStatsQueue = Promise.resolve();
 function recordReviewGrade(step, grade, opts = {}){
-  const { replacing = null, moves = 0, elapsedDays = null, now = Date.now() } = opts;
+  const { replacing = null, moves = 0, elapsedDays = null, roomKey = null, now = Date.now() } = opts;
   const next = gradeStatsQueue.then(async () => {
     const [prevStats, prevLog] = await Promise.all([getReviewGradeStats(), getReviewGradeLog()]);
     const stats = tallyReviewGrade(prevStats, step, grade, replacing);
     const rung = Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, Math.trunc(Number(step)) || 0));
     const log = appendGradeEvent(prevLog,
-      { t: now, r: rung, n: moves || 0, d: elapsedDays, g: grade }, !!replacing);
+      { t: now, k: roomKey, r: rung, n: moves || 0, d: elapsedDays, g: grade }, !!replacing);
     await Promise.all([setReviewGradeStats(stats), setReviewGradeLog(log)]);
     return { stats, log };
   });

@@ -1658,6 +1658,10 @@ async function gradeCurrentRoom(grade){
     persistReviews(),
     recordReviewGrade(rung, grade, {
       replacing, now,
+      // the room itself, so a grade can be joined to anything room-shaped --
+      // the quiz log's own steps above all, which is the only route to asking
+      // whether your self-assessment tracks your objective recall
+      roomKey: key,
       moves: (ROOMS[key] && ROOMS[key].moveCount) || 0,
       elapsedDays: since == null ? null : Math.max(0, Math.round((now - since) / DAY_MS)),
     }),

@@ -424,9 +424,9 @@ next to the number.
 
 - `REVIEW_GRADE_STATS_KEY` (`threeReviewGradeStats`), a `{rung: {A,B,C}}`
   tally folded by `tallyReviewGrade`. Lifetime totals, never forgets.
-- `REVIEW_GRADE_LOG_KEY` (`threeReviewGradeLog`), one `{t, r, n, d, g}` row
-  per graded review, capped at 20k (~1MB, roughly a decade). Both are written
-  by `recordReviewGrade` under one serialized queue.
+- `REVIEW_GRADE_LOG_KEY` (`threeReviewGradeLog`), one `{t, k, r, n, d, g}` row
+  per graded review, capped at 10k. Both are written by `recordReviewGrade`
+  under one serialized queue.
 
 No UI reads either yet, deliberately: the data is worthless until it has been
 accumulating, so shipping collection first means the projection arrives with
@@ -453,6 +453,19 @@ the tally and had to be widened before the thin data became months of it:
 The tally is derivable from the log and not the reverse, so of the two the log
 is the one that had to exist before the data started arriving. Both are kept
 because they lose different things: the tally survives the log's rollover.
+
+`k` is the room graded. It went in a release after the rest — the log shipped
+without it and the omission only became obvious once the quiz log had one —
+and it is what lines a grade up against the quiz's own steps for the same room.
+That join is the only route to the **calibration** question: does your
+self-assessment track your objective recall? Self-graded recall can err in both
+directions at once (recognition mistaken for recall with the objects in view;
+a room that reads fuzzy all at once yet plays correctly at the board when the
+cue arrives), so the answer is not guessable from either log alone.
+
+It also sharpened the replacement guard. "The same review" now means the same
+room at the same rung, where before two *different* rooms graded in succession
+from the same rung looked like one review correcting itself.
 
 **A third store: the quiz log** (`QUIZ_LOG_KEY`, `threeQuizLog`) — one row per
 question asked, across **all three quizzes**, because they are not three
