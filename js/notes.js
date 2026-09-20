@@ -105,6 +105,20 @@ const TOAST_COMMON = { usageStatistics: false, customHTMLRenderer: MD_RENDERER }
    own sanitizer. The fallback uses textContent rather than innerHTML for the
    same reason: a note is local data, but a restored backup is not necessarily
    a file this browser wrote. */
+/* The two bundles expose DIFFERENT shapes under the same `toastui.Editor`
+   global, which is not something their docs make obvious and cost a test run
+   to find:
+
+     toastui-editor.js         the Editor class, WITH a static .factory()
+     toastui-editor-viewer.js  the Viewer class itself, with no .factory at all
+
+   So construction has to branch on which one is in memory. Detecting the
+   static rather than tracking which bundle loaded keeps the two callers below
+   from having to know. */
+function newToast(T, opts){
+  return (typeof T.factory === 'function') ? T.factory(opts) : new T(opts);
+}
+
 let lastRenderError = null;
 export async function renderNoteInto(el, md){
   if(!el) return null;
@@ -112,7 +126,7 @@ export async function renderNoteInto(el, md){
   try {
     const T = await ensureViewer();
     el.innerHTML = '';
-    const v = T.factory({ el, viewer: true, initialValue: text, ...TOAST_COMMON });
+    const v = newToast(T, { el, viewer: true, initialValue: text, ...TOAST_COMMON });
     lastRenderError = null;
     return v;
   } catch(err){
@@ -154,11 +168,12 @@ function buildOverlay(title){
 /* Mounts the real editor, or a textarea if it can't be had. Resolves to a
    getter for the current Markdown, so the caller never needs to know which one
    it got. */
+let lastMountError = null;
 async function mountEditor(host, initial, onChange){
   try {
     const T = await ensureEditor();
     host.innerHTML = '';
-    const ed = T.factory({
+    const ed = newToast(T, {
       el: host,
       viewer: false,
       height: '100%',
@@ -173,12 +188,14 @@ async function mountEditor(host, initial, onChange){
       events: { change: onChange },
     });
     liveEditor = ed;
+    lastMountError = null;
     // onChange called explicitly: setMarkdown does not reliably fire Toast's
     // own change event, and a test that set a value the bar never noticed
     // would find Save still disabled
     liveSetValue = (md) => { ed.setMarkdown(md || ''); onChange(); };
     return () => ed.getMarkdown();
   } catch(err){
+    lastMountError = err;
     console.warn('[notes] the Markdown editor could not load — falling back to a plain text box', err);
     host.innerHTML = '';
     const ta = document.createElement('textarea');
@@ -269,6 +286,7 @@ if(typeof localStorage !== 'undefined' && localStorage.getItem('threeTestDebug')
     // that setValue()s on the bar's arrival writes into nothing.
     isReady: () => !!liveSetValue,
     lastRenderError: () => (lastRenderError && (lastRenderError.message || String(lastRenderError))) || null,
+    lastMountError: () => (lastMountError && (lastMountError.message || String(lastMountError))) || null,
     getValue: () => {
       if(liveEditor) return liveEditor.getMarkdown();
       const ta = document.getElementById('noteFallbackInput');

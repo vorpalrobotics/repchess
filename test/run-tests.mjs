@@ -23725,7 +23725,9 @@ try {
   try {
     await openNotesMenu();
     const fellBack = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.isFallback());
-    assert(!fellBack, 'expected the REAL editor, not the fallback -- the vendored bundle should have loaded');
+    const mountErr = await appEN2.page.evaluate(() => window.__notesEditorTestHooks.lastMountError());
+    assert(!fellBack, 'expected the REAL editor, not the fallback -- the vendored bundle should have loaded' +
+      (mountErr ? ` (it fell back: ${mountErr})` : ''));
 
     const bar = await modalBarState(appEN2.page, 'noteEditorOverlay');
     assert(bar && bar.save && bar.save.disabled,
