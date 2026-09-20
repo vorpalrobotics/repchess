@@ -22042,6 +22042,18 @@ try {
     const l3 = await H('appendGradeEvent', [ev(4, 'A')], ev(2, 'B'), true);
     assert(l3.length === 2, `expected a mismatched tail left alone, got ${JSON.stringify(l3)}`);
 
+    // the room key makes that guard sharper than the rung alone could: two
+    // DIFFERENT rooms graded in succession from the same rung used to look
+    // like one review correcting itself
+    const roomA = { t: 1, k: 'cas:L1_A:aaa', r: 2, n: 3, d: 2, g: 'A' };
+    const roomB = { t: 2, k: 'cas:L1_A:bbb', r: 2, n: 5, d: 2, g: 'C' };
+    const twoRooms = await H('appendGradeEvent', [roomA], roomB, true);
+    assert(twoRooms.length === 2,
+      `expected a second ROOM at the same rung to be a new row, not a correction: ${JSON.stringify(twoRooms)}`);
+    const sameRoom = await H('appendGradeEvent', [roomA], { ...roomA, t: 3, g: 'C' }, true);
+    assert(sameRoom.length === 1 && sameRoom[0].g === 'C',
+      `expected the same room at the same rung to replace, got ${JSON.stringify(sameRoom)}`);
+
     const cap = await H('gradeLogCap');
     const capped = await appEF.page.evaluate((c) => {
       const full = Array.from({ length: c }, (_, i) => ({ t: i, r: 0, n: 1, d: 1, g: 'A' }));
@@ -22062,7 +22074,7 @@ try {
     await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeStats(
       { '0': { A: 9, B: 2, C: 1 }, '3': { A: 4, B: 0, C: 0 } }));
     await appEF.page.evaluate(() => window.__reviewTestHooks.setGradeLog(
-      [{ t: 1700000000000, r: 3, n: 11, d: 25, g: 'B' }]));
+      [{ t: 1700000000000, k: 'cas:L1_X:abc', r: 3, n: 11, d: 25, g: 'B' }]));
     await appEF.page.evaluate(() => window.__oqTestHooks.setQuizLog(
       [{ t: 1700000000000, k: 'cas:L1_X:abc', o: 'miss', p: 6, r: 2, d: 14 }]));
     const stored = await H('getGradeStats');
@@ -22094,7 +22106,8 @@ try {
     assert(restored['0'].A === 9 && restored['0'].C === 1 && restored['3'].A === 4,
       `expected the tally to survive a full restore, got ${JSON.stringify(restored)}`);
     const restoredLog = await H('getGradeLog');
-    assert(restoredLog.length === 1 && restoredLog[0].n === 11 && restoredLog[0].d === 25,
+    assert(restoredLog.length === 1 && restoredLog[0].n === 11 && restoredLog[0].d === 25
+             && restoredLog[0].k === 'cas:L1_X:abc',
       `expected the event log to survive a full restore -- the tally is derivable from it and not the reverse, so this is the one that must not be lost: ${JSON.stringify(restoredLog)}`);
     const restoredQuiz = await appEF.page.evaluate(() => window.__oqTestHooks.getQuizLog());
     assert(restoredQuiz.length === 1 && restoredQuiz[0].o === 'miss' && restoredQuiz[0].d === 14,
@@ -23620,6 +23633,11 @@ try {
       `expected the corrected grade at the rung reviewed, got ${JSON.stringify(e0)}`);
     assert(e0.d === 10,
       `expected the ACTUAL 10 days elapsed, not the rung's nominal ${LADDER[2]}, got ${JSON.stringify(e0)}`);
+    // the join key: without it a grade cannot be lined up against the quiz
+    // log's steps for the same room, which is the only route to asking whether
+    // self-assessment tracks objective recall
+    assert(e0.k === keys.alpha,
+      `expected the graded room recorded, got ${JSON.stringify(e0.k)} against ${JSON.stringify(keys.alpha)}`);
 
     const size = await E('roomMoveCount', keys.alpha);
     assert(size > 0, `test setup issue: expected the room to teach at least one move, got ${size}`);
