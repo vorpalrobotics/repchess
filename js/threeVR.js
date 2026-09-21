@@ -1768,6 +1768,19 @@ function openGradeMenu(){
    grading writes REVIEWS[key] in memory -- so "reopen and the room is gone"
    needs no invalidation of anything, just a fresh read. */
 let reviewListEl = null, reviewListDismiss = null, reviewBtn = null;
+/* Priority order, or castle-then-priority. Persisted rather than held for the
+   session: toggling to castle order, walking to a room and reopening to find
+   yourself back in priority order would be maddening, and the hints toggle
+   already establishes localStorage as where a VR preference lives. */
+let reviewListOrder = (() => {
+  try { return localStorage.getItem('threeReviewOrder') === 'castle' ? 'castle' : 'priority'; }
+  catch(_){ return 'priority'; }
+})();
+function setReviewListOrder(mode){
+  reviewListOrder = mode === 'castle' ? 'castle' : 'priority';
+  try { localStorage.setItem('threeReviewOrder', reviewListOrder); } catch(_){}
+  openReviewList();                      // rebuilds in the new order
+}
 
 /* The room's own last move, "Nf6 c4", for a room with no Room Name.
 
@@ -1798,7 +1811,7 @@ function reviewRoomLabel(roomKey){
    buildReviewForecast already apply (and via the same isRoomEmpty they say
    they match): there is nothing in one to review. A castle's own entry room
    is exempt from the exemption -- a one-room castle is still a real room. */
-function dueRoomList(now = Date.now()){
+function dueRoomList(now = Date.now(), order = reviewListOrder){
   const out = [];
   for(const key in ROOMS){
     if(!key.startsWith('cas:')) continue;        // the street and the demo room have no schedule
@@ -1814,9 +1827,16 @@ function dueRoomList(now = Date.now()){
       moves: ROOMS[key].moveCount || 0,
     });
   }
-  out.sort((a, b) => (a.due - b.due)
-    || a.castle.localeCompare(b.castle)
-    || a.name.localeCompare(b.name));
+  /* Two orders, because there are only two you would ever want. By due date
+     ascending -- which orders the STATES for free, an overdue room's due date
+     being furthest in the past -- or by castle, staying in one building, with
+     priority still deciding within it. Name breaks the last tie either way. */
+  const byDue = (a, b) => a.due - b.due;
+  const byCastle = (a, b) => a.castle.localeCompare(b.castle);
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  out.sort(order === 'castle'
+    ? ((a, b) => byCastle(a, b) || byDue(a, b) || byName(a, b))
+    : ((a, b) => byDue(a, b) || byCastle(a, b) || byName(a, b)));
   return out;
 }
 
@@ -1862,6 +1882,30 @@ function openReviewList(){
     ? `${working.length} room${working.length === 1 ? '' : 's'} to review`
     : 'Nothing due. You’re caught up.';
   box.appendChild(head);
+
+  /* Two pills rather than sortable column headers: with the castle already on
+     every row, "sort by castle" and "sort by name" would be the same sort and
+     "sort by priority" is the order it opens in -- so three headers collapse
+     to one two-state toggle, at a fraction of the vertical space in a popup
+     that is meant to be opened, clicked and gone. Hidden when there is nothing
+     to reorder. */
+  if(all.length > 1){
+    const orderRow = document.createElement('div');
+    orderRow.style.cssText = 'display:flex;gap:4px;padding:0 .2rem .35rem;';
+    for(const [label, mode] of [['by priority', 'priority'], ['by castle', 'castle']]){
+      const on = reviewListOrder === mode;
+      const b = document.createElement('button');
+      b.dataset.reviewOrder = mode;
+      b.textContent = label;
+      b.style.cssText = 'padding:.15rem .5rem;border-radius:999px;cursor:pointer;font:inherit;'
+        + 'font-size:.68rem;font-weight:400;color:#fff;'
+        + `border:1px solid rgba(255,255,255,${on ? '.45' : '.18'});`
+        + `background:rgba(255,255,255,${on ? '.22' : '.06'});` + (on ? '' : 'opacity:.7;');
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setReviewListOrder(mode); });
+      orderRow.appendChild(b);
+    }
+    box.appendChild(orderRow);
+  }
 
   const row = (r) => {
     const b = document.createElement('button');
@@ -4097,6 +4141,28 @@ function loadBeardImage(){
   });
 }
 
+const BEARD_SIZE = 0.60;       // of the quadrant -- twice the old 0.30
+const BEARD_ALPHA = 0.5;       // a mark ON the picture, not a patch over it
+const BEARD_MAX_ROW = 0.94;    // of the quadrant, for several beards side by side
+/* Size and spacing for a row of `n` beards inside a `s`-wide quadrant.
+
+   Pulled out as a pure function because of the one rule here that is logic
+   rather than taste: at 60% of the square, TWO beards are already wider than
+   the square, and the quadrant is clipped -- so without shrinking they would
+   simply be cut in half. The row shrinks as a whole rather than the individual
+   size being capped, which keeps every beard the same size as its neighbours. */
+function beardRowGeom(s, n, aspect){
+  let bh = s * BEARD_SIZE;
+  let bw = bh * (aspect || 1);
+  let gap = bw * 0.15;
+  const totalW = n * bw + (n - 1) * gap;
+  const maxW = s * BEARD_MAX_ROW;
+  if(totalW > maxW){
+    const k = maxW / totalW;
+    bh *= k; bw *= k; gap *= k;
+  }
+  return { bh, bw, gap, rowW: n * bw + (n - 1) * gap };
+}
 function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
   const s = MNEM_QUADRANT;
   ctx.save();
@@ -4128,17 +4194,24 @@ function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
     }
     ctx.fillText(text, qx + s / 2, qy + s / 2 + 4);
   }
-  // disambiguation beard(s) along the bottom of the move image: one per the
-  // mover's age rank (older piece = more beards).
+  /* Disambiguation beard(s) OVER the move image: one per the mover's age rank
+     (older piece = more beards).
+
+     Centred in the square and drawn half-transparent rather than tucked small
+     along the bottom edge. At 30% of the square down in a corner it was easy
+     to miss entirely, which for a disambiguator is the one failure that
+     matters -- you read the image, play the wrong knight, and never knew there
+     was anything to notice. Twice the size and dead centre makes it
+     unmissable; 50% alpha means it costs almost none of the image underneath,
+     so it reads as a mark ON the picture rather than a patch covering it. */
   const n = content.beards || 0;
   if(n > 0 && beardImg){
-    const bh = s * 0.30;
-    const bw = bh * (beardImg.width / beardImg.height || 1);
-    const gap = bw * 0.15;
-    const totalW = n * bw + (n - 1) * gap;
-    let bx = qx + (s - totalW) / 2;
-    const by = qy + s - bh - s * 0.04;
-    for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, bw, bh); bx += bw + gap; }
+    const g = beardRowGeom(s, n, beardImg.width / beardImg.height || 1);
+    let bx = qx + (s - g.rowW) / 2;
+    const by = qy + (s - g.bh) / 2;
+    // restored by this function's own ctx.restore() just below
+    ctx.globalAlpha = BEARD_ALPHA;
+    for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, g.bw, g.bh); bx += g.bw + g.gap; }
   }
   ctx.restore();
 }
@@ -10642,6 +10715,16 @@ export async function openThreeTest(containerEl, opts){
          and they fail differently. */
       reviewList: () => dueRoomList().map(r => ({ key: r.key, state: r.state, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
+      reviewListOrder: () => reviewListOrder,
+      // beard (disambiguator) geometry: the one part of its drawing that is a
+      // rule rather than a look -- see beardRowGeom
+      beardGeom: (n, aspect) => ({ ...beardRowGeom(MNEM_QUADRANT, n, aspect || 1), quadrant: MNEM_QUADRANT, alpha: BEARD_ALPHA }),
+      clickReviewOrder: (mode) => {
+        const b = reviewListEl && reviewListEl.querySelector(`[data-review-order="${mode}"]`);
+        if(!b) return false;
+        b.click();
+        return true;
+      },
       reviewListHead: () => {
         const h = reviewListEl && reviewListEl.querySelector('[data-review-list-head]');
         return h ? h.textContent : null;

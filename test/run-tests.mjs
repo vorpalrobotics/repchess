@@ -24991,8 +24991,16 @@ try {
       { seq: ['d4','Nf6','c4','c5'], reply: 'd5' },
       { seq: ['d4','Nf6','c4','c5','d5','e6'], reply: 'Nc3' },
       { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+    ]}, {
+      // a SECOND castle, on its own line, so "by castle" can differ from "by
+      // priority" -- with one castle the two orders are indistinguishable and
+      // test 447 would pass without the toggle doing anything
+      id: 'L2', name: 'Test2', color: 'white', openingMoves: ['e4'], prefs: [
+      { seq: ['e4','e5'], reply: 'Nf3', isCastleRoot: true, castleName: 'Bravo', castleStreetNumber: 2, name: 'Armoury' },
+      { seq: ['e4','e5','Nf3','Nc6'], reply: 'Bb5' },
     ]}],
     games: [
+      { id: 'g5', moves: 'e4 e5 Nf3 Nc6 Bb5', white: 'a', black: 'b', result: '*' },
       { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2', white: 'a', black: 'b', result: '*' },
       { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
       { id: 'g3', moves: 'd4 Nf6 c4 c5 d5 e6 Nc3', white: 'a', black: 'b', result: '*' },
@@ -25014,6 +25022,11 @@ try {
     g6:     await keyAfter(['d4','Nf6','c4','g6','Nc3']),
     c5:     await keyAfter(['d4','Nf6','c4','c5','d5']),
     locked: await keyAfter(['d4','Nf6','c4','b6','Nc3']),
+    bravo:  await appRL.page.evaluate(() => {
+      const c = new Chess();
+      for(const m of ['e4','e5','Nf3']) c.move(m, { sloppy: true });
+      return 'cas:L2_Bravo:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+    }),
   };
   const E = (fn, ...args) => appRL.page.evaluate(
     ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
@@ -25184,6 +25197,78 @@ try {
       `expected the badge cluster still intact (memorize next to Close), got ${JSON.stringify(order)}`);
     ok('review list: its toolbar button sits left of the status badges, leaving that cluster intact');
   } catch(e){ bad('review list: toolbar placement', e); }
+
+  /* 447. The order toggle. Two orders is all there ever are: with the castle
+          already on every row, "by castle" and "by name" would be the same
+          sort and "by priority" is the order it opens in -- so sortable column
+          headers collapse to one two-state control, which costs a fraction of
+          the height in a popup you open, click and close in seconds. */
+  try {
+    const now = Date.now();
+    // Bravo MORE overdue than Alpha, so the two orders genuinely disagree:
+    // priority puts Bravo first, castle puts Alpha first
+    await sched(K.root, -5);
+    await E('setMemorized', K.bravo, true);
+    await E('setReviewRecord', K.bravo, { last: now - 9 * DAY, due: now - 9 * DAY, step: 2, lapses: 0, lastGrade: 'A' });
+    await openList();
+
+    const castles = async () => (await appRL.page.evaluate(() => window.__threeTestEdit.reviewListRows()))
+      .map(r => (r.text.match(/Alpha|Bravo/) || [null])[0]);
+    const byPriority = await castles();
+    assert(byPriority[0] === 'Bravo' && byPriority.includes('Alpha'),
+      `expected priority order to put the more overdue castle first, got ${JSON.stringify(byPriority)}`);
+
+    assert(await E('clickReviewOrder', 'castle'), 'expected a "by castle" control in the list');
+    await appRL.page.waitForTimeout(150);
+    const byCastle = await castles();
+    assert(byCastle[0] === 'Alpha',
+      `expected castle order to group by castle name regardless of urgency, got ${JSON.stringify(byCastle)}`);
+    assert(JSON.stringify([...byPriority].sort()) === JSON.stringify([...byCastle].sort()),
+      'expected the toggle to reorder the same rooms, not change which rooms are listed');
+
+    // it sticks: closing and reopening keeps the choice, and it is written
+    // where a reload would find it -- a preference that reset every time you
+    // walked to a room would be worse than not having one
+    await closeList();
+    await openList();
+    assert((await castles())[0] === 'Alpha', 'expected the chosen order to survive closing and reopening the list');
+    assert(await appRL.page.evaluate(() => localStorage.getItem('threeReviewOrder')) === 'castle',
+      'expected the order persisted, so it survives a reload too');
+    await closeList();
+    ok('review list: a two-state order toggle, which sticks');
+  } catch(e){ bad('review list: order toggle', e); }
+
+  /* 448. The disambiguation beard. It is drawn centred on the move image at
+          60% of the square and half-transparent -- it used to be 30% tucked
+          along the bottom edge, which for a disambiguator is the one failure
+          that matters: you read the image, play the wrong knight, and never
+          knew there was anything to notice.
+
+          Only the fit rule is asserted, not the look. At this size TWO beards
+          are already wider than the square and the quadrant is clipped, so
+          without shrinking they would be cut in half rather than obviously
+          wrong. */
+  try {
+    const one = await E('beardGeom', 1, 1);
+    assert(Math.abs(one.bh - one.quadrant * 0.6) < 0.01,
+      `expected a single beard at 60% of the quadrant, got ${JSON.stringify(one)}`);
+    assert(one.alpha === 0.5, `expected the beard drawn half-transparent, got ${one.alpha}`);
+    assert(one.rowW <= one.quadrant, `expected a single beard to fit unshrunk, got ${JSON.stringify(one)}`);
+
+    for(const n of [2, 3, 4]){
+      const g = await E('beardGeom', n, 1);
+      assert(g.rowW <= g.quadrant,
+        `expected ${n} beards to shrink to fit inside the square, got row ${g.rowW} of ${g.quadrant}`);
+      assert(g.bw > 0 && g.bh > 0, `expected ${n} beards to keep a real size, got ${JSON.stringify(g)}`);
+    }
+    // ...and they stay the same size as each other: the ROW shrinks, not the
+    // first one. rowW is n*bw + (n-1)*gap, which only holds for a uniform row.
+    const two = await E('beardGeom', 2, 1);
+    assert(Math.abs(two.rowW - (2 * two.bw + two.gap)) < 0.01,
+      `expected a uniform row of beards, got ${JSON.stringify(two)}`);
+    assert(two.bh < one.bh, 'expected two beards each smaller than one, since two at full size do not fit');
+    ok('beard: centred at 60% of the square, half-transparent, with several shrinking to fit as a row');
+  } catch(e){ bad('beard: disambiguator geometry', e); }
 } finally {
   await appRL.close();
 }
