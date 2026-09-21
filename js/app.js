@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-309';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-311';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-436';
+const BUILD_TAG = '-438';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1545,15 +1545,27 @@ function pieceAge(square, color){
    no ambiguity (or for castling). */
 function moveDisambiguatorCount(seq){
   if(!seq || !seq.length) return 0;
-  const parentFen = fenForSeq(seq.slice(0, -1));
+  return disambiguatorCountAt(fenForSeq(seq.slice(0, -1)), seq[seq.length - 1]);
+}
+/* The same question asked of a POSITION rather than a line. Split out so the
+   rule can be tested against a hand-built endgame FEN -- the cases that
+   exercise it (two pawns capture-promoting onto one square) take a contrived
+   position that no sensible opening fixture reaches. */
+function disambiguatorCountAt(parentFen, san){
   let mv;
-  try { mv = new Chess(parentFen).move(seq[seq.length - 1], { sloppy:true }); } catch(_){ return 0; }
+  try { mv = new Chess(parentFen).move(san, { sloppy:true }); } catch(_){ return 0; }
   if(!mv) return 0;
   if(mv.flags.includes('k') || mv.flags.includes('q')) return 0;   // castling is never ambiguous
   const candidates = new Chess(parentFen).moves({ verbose:true })
     .filter(m => m.to === mv.to && m.piece === mv.piece && m.color === mv.color);
-  if(candidates.length < 2) return 0;
-  const ages = candidates.map(m => pieceAge(m.from, mv.color)).sort((a, b) => a - b);
+  /* Ranked by ORIGIN SQUARE, not by move. chess.js enumerates a promotion as
+     four separate moves (=Q/=R/=B/=N), so two pawns able to capture-promote
+     onto one square yield EIGHT candidates -- and the older pawn came out
+     ranked 4th, drawing four beards where it should draw one. What is being
+     disambiguated is which PIECE moved, so one entry per from-square. */
+  const froms = [...new Set(candidates.map(m => m.from))];
+  if(froms.length < 2) return 0;
+  const ages = froms.map(f => pieceAge(f, mv.color)).sort((a, b) => a - b);
   return ages.indexOf(pieceAge(mv.from, mv.color));   // youngest -> 0, older -> more beards
 }
 
@@ -1927,6 +1939,9 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
   const CONV = (mv, ply) => {
     const out = { to: mv.to, piece: MNEM_WORD_FOR_PIECE[mv.piece] || 'pawn', san: mv.san };
     if(mv.color === 'w') out.moveNumber = Math.ceil(ply/2);
+    // see moveDescForSeq: the promotion piece is the move's last unexpressed
+    // dimension, and the renderer applies the queen convention
+    if(mv.promotion){ out.promo = mv.promotion; out.color = mv.color; }
     return out;
   };
   const pairFor = (roomId, side, order) => {
@@ -3731,6 +3746,8 @@ function miniBoardGridHtml(fen, flip){
 // canvas-rendered room-info mini board can be checked without driving a real
 // cytoscape node click.
 if(localStorage.getItem('threeTestDebug')) window.__miniBoardGridHtml = miniBoardGridHtml;
+// disambiguator count for one move in one position -- see disambiguatorCountAt
+if(localStorage.getItem('threeTestDebug')) window.__disambigProbe = (fen, san) => disambiguatorCountAt(fen, san);
 // the roomKey of whatever node showRoomInfoPanel most recently rendered --
 // read by roomInfoJumpBtn's click handler (kept as module state, same as
 // GRAPH_FOCUS_SEQ etc., rather than threaded through the DOM).
@@ -6442,6 +6459,11 @@ function moveDescForSeq(seq, moveNumber){
   if(moveNumber != null) out.moveNumber = moveNumber;
   const beards = moveDisambiguatorCount(seq);
   if(beards) out.disambig = beards;
+  // what the pawn BECOMES, and whose it is -- the one dimension of a legal
+  // move the mnemonic image could not previously express (see drawPromoIcon).
+  // Carried for every promotion, queen included; the "no icon means queen"
+  // convention lives in the renderer so it lives in one place.
+  if(mv.promotion){ out.promo = mv.promotion; out.color = mv.color; }
   return out;
 }
 async function systemsForWalk(lines){
