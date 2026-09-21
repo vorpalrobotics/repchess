@@ -810,6 +810,7 @@ let joyVec = { x: 0, y: 0 };
 let threeOpts = {};
 let toolbarEl = null, helpOverlay = null;
 let hintsBtn = null, editBtn = null, boardBtn = null, roomGeomBtn = null, wallListsBtn = null, assetsBtn = null, closeBtn = null, infoBtn = null, memBtn = null, decoratedBadge = null, dirtyBadge = null, editGroup = null;
+let roomStoryBtn = null;   // the lower-right room-story control (see buildTopToolbar)
 let undoBtn = null, redoBtn = null;
 let editTouchEl = null;   // mobile move/scale pad shown while a prop is selected
 // hints: when on, doors show the name of (and a move thumbnail for) the room
@@ -8881,6 +8882,21 @@ function buildTopToolbar(){
   // the day's review loop, without leaving the walk -- see openReviewList
   reviewBtn   = makeIconBtn('fa-list-check',     'Rooms due for review', () => toggleReviewList());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
+  /* The room story lives in the LOWER-RIGHT corner rather than the toolbar,
+     and is always present rather than appearing only when a story exists: the
+     point is to be able to write one without going through the Attributes
+     modal, so a control that vanishes on the rooms with nothing written yet
+     would hide itself exactly when it is most wanted. It styles itself
+     differently instead -- see refreshRoomStoryIcon. */
+  roomStoryBtn = makeIconBtn('fa-book-open', 'Room story', () => {
+    if(threeOpts.onRoomStory) threeOpts.onRoomStory(currentRoomKey, roomNameFor(currentRoomKey));
+  });
+  roomStoryBtn.dataset.roomStoryBtn = '1';
+  roomStoryBtn.style.position = 'absolute';
+  roomStoryBtn.style.right = '12px';
+  roomStoryBtn.style.bottom = '12px';
+  roomStoryBtn.style.zIndex = '6';
+  roomStoryBtn.style.pointerEvents = 'auto';
   // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
   // bordered "chip" so they read as a single grouped tool cluster, distinct
   // from the standalone hints/board/info icons around them. The wrapper's
@@ -8903,8 +8919,23 @@ function buildTopToolbar(){
   bar.append(left, right);
   return bar;
 }
+/* Gold and solid when this room has a story, faint when it has none -- so the
+   control is always in the same place (you can always write one) while still
+   telling you at a glance whether there is anything to read. */
+export function refreshRoomStoryIcon(){
+  if(!roomStoryBtn) return;
+  const target = threeOpts.roomStory ? threeOpts.roomStory(currentRoomKey) : '';
+  const has = !!(target && String(target).trim());
+  // a room with no pref of its own (the street, the demo room) has nowhere to
+  // put a story, so the control simply is not there
+  roomStoryBtn.style.display = threeOpts.onRoomStory && currentRoomKey.startsWith('cas:') ? '' : 'none';
+  roomStoryBtn.style.opacity = has ? '1' : '0.45';
+  roomStoryBtn.style.color = has ? '#ffd400' : '';
+  roomStoryBtn.title = has ? 'Read or edit this room\u2019s story' : 'No story yet \u2014 click to write one';
+}
 // reflect hints/edit state; show the edit-only buttons only while editing
 function updateToolbar(){
+  refreshRoomStoryIcon();
   if(hintsBtn){
     hintsBtn.style.background = hintsOn ? 'rgba(245,193,7,.92)' : 'rgba(28,38,58,.78)';
     hintsBtn.style.color = hintsOn ? '#1a1a1a' : '#fff';
@@ -10239,6 +10270,9 @@ export async function openThreeTest(containerEl, opts){
   hintsOn = (() => { try{ return localStorage.getItem('threeHintsOn') !== '0'; }catch(_){ return true; } })();
   toolbarEl = buildTopToolbar();
   container.appendChild(toolbarEl);
+  // the room-story control is absolutely positioned bottom-right, so it is a
+  // sibling of the toolbar rather than inside its flex row
+  if(roomStoryBtn) container.appendChild(roomStoryBtn);
   helpOverlay = buildHelpOverlay();
   container.appendChild(helpOverlay);
   updateToolbar();
@@ -10861,6 +10895,13 @@ export async function openThreeTest(containerEl, opts){
       reviewList: () => dueRoomList().map(r => ({ key: r.key, state: r.state, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
       reviewListOrder: () => reviewListOrder,
+      // the lower-right room-story control: present, and styled by whether
+      // this room has a story yet (see refreshRoomStoryIcon)
+      roomStoryBtn: () => roomStoryBtn
+        ? { display: roomStoryBtn.style.display, opacity: roomStoryBtn.style.opacity,
+            color: roomStoryBtn.style.color, title: roomStoryBtn.title }
+        : null,
+      clickRoomStory: () => { if(roomStoryBtn) roomStoryBtn.click(); },
       // beard (disambiguator) geometry: the one part of its drawing that is a
       // rule rather than a look -- see beardRowGeom
       beardGeom: (n, aspect) => ({ ...beardRowGeom(MNEM_QUADRANT, n, aspect || 1), quadrant: MNEM_QUADRANT, alpha: BEARD_ALPHA }),
@@ -11218,7 +11259,7 @@ export function closeThreeTest(){
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
   closeReviewList();
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = reviewBtn = null;
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = reviewBtn = roomStoryBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
