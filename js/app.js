@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-440';
+const BUILD_TAG = '-441';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4061,8 +4061,12 @@ function buildPositionNoteOverlay(){
             <div id="positionNoteCap" class="room-info-board-cap"></div>
           </div>
           <div class="position-note-right">
+            <div class="position-note-label">Note</div>
             <div id="positionNoteView" class="note-preview position-note-view is-empty">No note yet.</div>
             <button type="button" id="positionNoteEditBtn"><i class="fa-solid fa-pen"></i> Edit note…</button>
+            <div class="position-note-label">Story</div>
+            <div id="positionStoryView" class="note-preview position-note-view is-empty">No story yet.</div>
+            <button type="button" id="positionStoryEditBtn"><i class="fa-solid fa-pen"></i> Edit story…</button>
           </div>
         </div>
       </div>`;
@@ -4073,7 +4077,8 @@ function buildPositionNoteOverlay(){
        make, but .overlay's default 20 still puts it UNDER the walk, which is
        how this shipped in -430 -- the modal opened, correctly, invisibly. */
     ov.style.zIndex = '70';
-    ov.querySelector('#positionNoteEditBtn').onclick = editPositionNote;
+    ov.querySelector('#positionNoteEditBtn').onclick = () => editPositionText('note');
+    ov.querySelector('#positionStoryEditBtn').onclick = () => editPositionText('story');
   }
   // moved to the end of body on every open, not just the first: every .overlay
   // here shares one z-index, so DOM order is what puts this above the VR walk
@@ -4085,35 +4090,47 @@ function buildPositionNoteOverlay(){
 /* Renders the note for whatever the modal currently holds. Async because the
    Markdown viewer is imported on first use; the token check stops a slow first
    load from painting into a modal that has since been closed or moved on. */
+/* Both panes: the note (analysis) and the story (the mnemonic linkage for this
+   pair). They are separate fields rather than one box for the reason the
+   Attributes modal states -- a room's own pref and its anchor pair's note pref
+   are the same key, so one box would hold three different things at once. */
+const POSITION_PANES = [
+  { field: 'note',  viewId: 'positionNoteView',  empty: 'No note yet.',  title: 'Note' },
+  { field: 'story', viewId: 'positionStoryView', empty: 'No story yet.', title: 'Story' },
+];
 async function renderPositionNoteBody(){
   const st = positionNoteState;
   if(!st) return;
   const token = positionNoteToken;
-  const el = $('positionNoteView');
-  if(!el) return;
-  const md = await readNoteFor(st.lineId, st.seq.slice(0, -1));
-  if(token !== positionNoteToken) return;   // closed or moved on while IDB answered
-  el.classList.toggle('is-empty', !md);
-  if(!md){ el.textContent = 'No note yet.'; return; }
-  await renderNoteInto(el, md);
+  const key = st.seq.slice(0, -1);
+  for(const pane of POSITION_PANES){
+    const el = $(pane.viewId);
+    if(!el) continue;
+    const md = await readPrefTextFor(st.lineId, key, pane.field);
+    if(token !== positionNoteToken) return;   // closed or moved on while IDB answered
+    el.classList.toggle('is-empty', !md);
+    if(!md){ el.textContent = pane.empty; continue; }
+    await renderNoteInto(el, md);
+  }
   /* The first render of a session imports ~1.1MB, which can easily outlast the
      modal it was opened for. By the time it resolves the viewer has ALREADY
-     painted into the shared element, so bailing out would leave the previous
-     pair's note on screen -- repaint what the modal actually holds now. The
+     painted into the shared elements, so bailing out would leave the previous
+     pair's text on screen -- repaint what the modal actually holds now. The
      recursive call carries the current token, so it cannot loop. */
   if(token !== positionNoteToken) renderPositionNoteBody();
 }
 
-/* The pencil. This one COMMITS, like the three-dot Notes… item and for the
-   same reason: there is no enclosing Save to stage into. */
-async function editPositionNote(){
+/* The pencils. These COMMIT, like the three-dot Notes… item and for the same
+   reason: there is no enclosing Save to stage into. */
+async function editPositionText(field){
   const st = positionNoteState;
   if(!st) return;
+  const pane = POSITION_PANES.find(p => p.field === field);
   const key = st.seq.slice(0, -1);
-  const current = await readNoteFor(st.lineId, key);
-  const next = await openNoteEditor(current, { title: 'Note' });
+  const current = await readPrefTextFor(st.lineId, key, field);
+  const next = await openNoteEditor(current, { title: pane.title });
   if(next === null) return;
-  await writeNoteFor(st.lineId, key, next.trim());
+  await writePrefTextFor(st.lineId, key, field, next.trim());
   renderPositionNoteBody();
 }
 
@@ -12303,15 +12320,18 @@ function savePrefField(seq,field,value){
    The open line still goes through PREFS so an edit made here is visible to
    the move table immediately rather than after a reload -- savePrefField
    keeps both in step, which is the whole reason it exists. */
-async function readNoteFor(lineId, seq){
-  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return PREFS[prefKey(lineId, seq)]?.note || '';
-  return (await getPref(lineId, seq))?.note || '';
+async function readPrefTextFor(lineId, seq, field){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return PREFS[prefKey(lineId, seq)]?.[field] || '';
+  return (await getPref(lineId, seq))?.[field] || '';
 }
-function writeNoteFor(lineId, seq, md){
-  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return savePrefField(seq, 'note', md);
-  vrNoteIndexSet(lineId, seq, !!(md && md.trim()));
-  return setPref(lineId, seq, { note: md });
+function writePrefTextFor(lineId, seq, field, md){
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id) return savePrefField(seq, field, md);
+  // only `note` drives the in-world glyph, so only it patches that index
+  if(field === 'note') vrNoteIndexSet(lineId, seq, !!(md && md.trim()));
+  return setPref(lineId, seq, { [field]: md });
 }
+const readNoteFor = (lineId, seq) => readPrefTextFor(lineId, seq, 'note');
+const writeNoteFor = (lineId, seq, md) => writePrefTextFor(lineId, seq, 'note', md);
 
 /* ---------- which positions have a note, per line ----------
    The in-world glyph asks this for every visible move pair on every frame, so
@@ -14115,6 +14135,8 @@ if(localStorage.getItem('threeTestDebug')){
     positionNoteText: () => $('positionNoteView')?.textContent ?? null,
     positionNoteEmpty: () => !!$('positionNoteView')?.classList.contains('is-empty'),
     editPositionNote: () => { $('positionNoteEditBtn').click(); },
+    editPositionStory: () => { $('positionStoryEditBtn').click(); },
+    positionStoryText: () => $('positionStoryView')?.textContent ?? null,
     closePositionNote: () => { $('positionNoteLeave').click(); },
     pairLabel: (seq) => movePairLabel(seq),
   };
