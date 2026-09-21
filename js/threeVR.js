@@ -4585,7 +4585,7 @@ function placeMnemonicSlot(roomKey, slot){
    3. Edit mode owns clicks on props, so the icons stay out of it entirely --
       they would otherwise sit in front of the very sprite you are trying to
       select. */
-const PAIR_ICON_RANGE = 2.0;                    // metres: show within this distance...
+const PAIR_ICON_RANGE = 2.5;                    // metres: show within this distance...
 const PAIR_ICON_COS = Math.cos(30 * Math.PI/180);   // ...and within 30 degrees of the look direction
 const PAIR_ICON_SIZE = 0.26;                    // world size of the tile
 const PAIR_ICON_MARGIN = 0.1;                   // gap between the billboard's corner and the tile
