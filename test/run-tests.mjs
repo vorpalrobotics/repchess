@@ -25269,6 +25269,83 @@ try {
     assert(two.bh < one.bh, 'expected two beards each smaller than one, since two at full size do not fit');
     ok('beard: centred at 60% of the square, half-transparent, with several shrinking to fit as a row');
   } catch(e){ bad('beard: disambiguator geometry', e); }
+
+  /* 449. The beard count ranks PIECES, not moves. chess.js enumerates a
+          promotion as four separate moves (=Q/=R/=B/=N), so two pawns able to
+          capture-promote onto one square produced EIGHT candidates and the
+          older pawn was ranked 4th -- four beards where it should draw one.
+          Shipped and live until this was written. */
+  try {
+    const counts = await appRL.page.evaluate(() => {
+      const fen = '3r3k/2P1P3/8/8/8/8/8/6K1 w - - 0 1';
+      const out = {};
+      for(const san of ['cxd8=N', 'exd8=N', 'cxd8=Q', 'exd8=Q']) out[san] = window.__disambigProbe(fen, san);
+      return out;
+    });
+    assert(counts['exd8=N'] === 1,
+      `expected the older pawn to draw ONE beard, got ${counts['exd8=N']}`);
+    assert(counts['cxd8=N'] === 0,
+      `expected the younger pawn to draw none, got ${counts['cxd8=N']}`);
+    assert(counts['exd8=Q'] === 1 && counts['cxd8=Q'] === 0,
+      `expected the promotion PIECE not to change the beard count, got ${JSON.stringify(counts)}`);
+    ok('beard: two pawns capture-promoting onto one square rank as two pieces, not eight moves');
+  } catch(e){ bad('beard: promotion candidates are deduped by origin square', e); }
+
+  /* 450. The underpromotion icon: the one dimension of a legal move the
+          mnemonic image could not express, since the image is keyed by
+          (destination, piece type) and a promoting pawn is a pawn whatever it
+          becomes. Cut from the board's OWN sprite sheet, in the mover's
+          colour, so it is the same artwork the mini board shows. */
+  try {
+    const wn = await E('promoIcon', 'w', 'n');
+    const bn = await E('promoIcon', 'b', 'n');
+    assert(wn && wn.w > 0 && wn.h > 0, `expected a white knight icon to load, got ${JSON.stringify(wn)}`);
+    assert(bn && bn.w > 0, `expected a black knight icon to load, got ${JSON.stringify(bn)}`);
+    assert(/^data:image\/svg\+xml/.test(wn.src),
+      `expected the icon cut from the sprite sheet as an SVG data URL, got ${JSON.stringify(wn.src)}`);
+    for(const piece of ['r', 'b', 'n']){
+      const img = await E('promoIcon', 'w', piece);
+      assert(img && img.w > 0, `expected a ${piece} icon for underpromotion, got ${JSON.stringify(img)}`);
+    }
+    ok('underpromotion: rook, bishop and knight icons load from the board\'s own sprite sheet, per colour');
+  } catch(e){ bad('underpromotion: piece icons', e); }
+
+  /* 451. Placement. Alone, each mark is centred and large. Together -- two
+          pawns capture-promoting onto one square, one underpromoting -- they
+          STACK: which pawn on top, what it becomes below. The claim worth
+          pinning is that they do not overlap, which no centred-plus-corner
+          arrangement can manage: a centred mark at half the square leaves 25%
+          margins, so a second mark big enough to read would touch it wherever
+          it went. */
+  try {
+    const alone = await E('moveMarkBoxes', 1, false, 1, 1);
+    assert(alone.promo === null, 'expected no promo box when the move is not a promotion');
+    assert(Math.abs((alone.beard.y + alone.beard.h / 2) - alone.quadrant / 2) < 0.01,
+      `expected a lone beard centred, got ${JSON.stringify(alone.beard)}`);
+
+    const promoOnly = await E('moveMarkBoxes', 0, true, 1, 1);
+    assert(promoOnly.beard === null, 'expected no beard box when the move is unambiguous');
+    assert(Math.abs((promoOnly.promo.y + promoOnly.promo.h / 2) - promoOnly.quadrant / 2) < 0.01,
+      `expected a lone promo icon centred, got ${JSON.stringify(promoOnly.promo)}`);
+    assert(Math.abs(promoOnly.promo.h - promoOnly.quadrant * 0.5) < 0.01,
+      `expected the lone promo icon at 50% of the square, got ${JSON.stringify(promoOnly.promo)}`);
+
+    const both = await E('moveMarkBoxes', 1, true, 1, 1);
+    assert(both.beard && both.promo && both.both, 'expected both boxes when a move needs both marks');
+    assert(both.beard.y + both.beard.h <= both.promo.y + 0.01,
+      `expected the marks stacked without overlap, got beard ${JSON.stringify(both.beard)} and promo ${JSON.stringify(both.promo)}`);
+    assert(both.beard.y >= 0 && both.promo.y + both.promo.h <= both.quadrant + 0.01,
+      `expected both marks inside the square, got ${JSON.stringify(both)}`);
+    // and both still horizontally centred, so the pair reads as a column
+    for(const m of [both.beard, both.promo]){
+      assert(Math.abs((m.x + m.w / 2) - both.quadrant / 2) < 0.01,
+        `expected each stacked mark horizontally centred, got ${JSON.stringify(m)}`);
+    }
+    // the left edge stays clear for the move-number badge (drawn at qx+20)
+    assert(both.promo.x > 120 && alone.beard.x > 90,
+      `expected the marks clear of the move-number badge down the left edge, got ${both.promo.x} / ${alone.beard.x}`);
+    ok('underpromotion: marks are centred alone and stack without overlapping when a move needs both');
+  } catch(e){ bad('underpromotion: mark placement', e); }
 } finally {
   await appRL.close();
 }

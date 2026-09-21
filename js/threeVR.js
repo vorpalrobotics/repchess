@@ -4151,8 +4151,8 @@ const BEARD_MAX_ROW = 0.94;    // of the quadrant, for several beards side by si
    the square, and the quadrant is clipped -- so without shrinking they would
    simply be cut in half. The row shrinks as a whole rather than the individual
    size being capped, which keeps every beard the same size as its neighbours. */
-function beardRowGeom(s, n, aspect){
-  let bh = s * BEARD_SIZE;
+function beardRowGeom(s, n, aspect, sizeFrac){
+  let bh = s * (sizeFrac || BEARD_SIZE);
   let bw = bh * (aspect || 1);
   let gap = bw * 0.15;
   const totalW = n * bw + (n - 1) * gap;
@@ -4163,6 +4163,77 @@ function beardRowGeom(s, n, aspect){
   }
   return { bh, bw, gap, rowW: n * bw + (n - 1) * gap };
 }
+/* ---------- the promotion indicator (underpromotion) ----------
+
+   A pawn reaching the back rank is the one legal move the mnemonic image
+   could not express: the image is keyed by (destination square, piece type),
+   and the piece that moved is a pawn whichever piece it becomes. So
+   "e8" showed the same picture for =Q and =N, and a repertoire that turns on
+   an underpromotion -- underpromoting to a knight for a check, or to a rook to
+   avoid stalemate -- had no way to say so.
+
+   Drawn as the piece itself, in the mover's colour, rather than a letter or a
+   symbol: the whole system is images, and the reader already knows what a
+   knight looks like. Cut from the SAME cm-chessboard sprite sheet the mini
+   board uses (ensurePieceSprite has already inlined it), so it is the board's
+   own artwork rather than a second visual vocabulary.
+
+   Queen promotions get NO icon, deliberately. A pawn move to rank 1 or 8 is
+   always a promotion, so an absent mark is unambiguous rather than merely
+   conventional -- and marking the overwhelmingly common case would be noise
+   on almost every promotion in the file. */
+const PROMO_SIZE = 0.50;        // of the quadrant, when it is the only mark
+const PROMO_ALPHA = 0.55;       // a shade stronger than a beard: it IS the move, not a hint about it
+/* When a move needs BOTH marks -- two pawns able to capture-promote onto one
+   square, one of them underpromoting -- they stack rather than fight over the
+   centre: which pawn on top, what it becomes below. A centred 50% mark leaves
+   only 25% margins, so any corner placement big enough to read would still
+   touch it; stacking keeps both horizontally centred, clear of each other, and
+   clear of the move-number badge down the left edge. */
+const BOTH_SIZE = 0.42;
+const BOTH_BEARD_Y = 0.27;      // centre heights, as a fraction of the quadrant
+const BOTH_PROMO_Y = 0.73;
+
+/* The sprite sheet, parsed once, as our own document.
+
+   Deliberately NOT read out of the `cm-chessboard-sprite` div ensurePieceSprite
+   inlines: that div may be in flight, or owned by a real Chessboard instance,
+   and a promotion icon that silently fails to draw is a correctness bug rather
+   than a cosmetic one. The URL is the same, so the browser serves the second
+   request from cache. */
+let _pieceSheet = null;
+function pieceSheetDoc(){
+  if(!_pieceSheet){
+    _pieceSheet = fetch(PIECES_FILE_URL).then(r => r.text())
+      .then(txt => new DOMParser().parseFromString(txt, 'image/svg+xml'))
+      .catch(() => null);
+  }
+  return _pieceSheet;
+}
+const _promoImgs = new Map();   // 'wn' -> Promise<Image|null>
+function promoPieceImage(color, piece){
+  const id = (color === 'b' ? 'b' : 'w') + piece;
+  if(!_promoImgs.has(id)){
+    _promoImgs.set(id, (async () => {
+      const doc = await pieceSheetDoc();
+      const g = doc && doc.getElementById(id);
+      if(!g) return null;
+      /* The sheet's own 40x40 viewBox, so the piece keeps the proportions it
+         has on a board. Serialized to a data URL rather than referenced with
+         <use>, because a canvas can only draw an Image, not a DOM node. */
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">'
+        + new XMLSerializer().serializeToString(g) + '</svg>';
+      return await new Promise(res => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => res(null);
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      });
+    })());
+  }
+  return _promoImgs.get(id);
+}
+
 /* Disambiguation beard(s) OVER one move image: one per the mover's age rank
    (older piece = more beards).
 
@@ -4181,16 +4252,55 @@ function beardRowGeom(s, n, aspect){
    opponent's underneath the response image. Painting both on top afterwards
    leaves each one centred on its own move, with only the small square where
    the two beards themselves meet shared -- and at 50% alpha even that reads. */
-function drawBeards(ctx, qx, qy, content, beardImg){
+/* Where both marks go, as pure geometry -- boxes relative to the quadrant's
+   own origin, so a test can check the placement rule without a canvas.
+
+   Alone, each mark is centred and large. Together they stack: which pawn on
+   top, what it becomes below. The claim worth testing is that the two boxes do
+   not overlap, which the centred-50% option cannot satisfy -- a centred mark
+   at half the square leaves 25% margins, so any second mark big enough to read
+   would touch it wherever it was put. */
+function moveMarkBoxes(s, n, beardAspect, hasPromo, promoAspect){
+  const hasBeard = n > 0;
+  const both = hasBeard && hasPromo;
+  const out = { beard: null, promo: null, both };
+  if(hasBeard){
+    const g = beardRowGeom(s, n, beardAspect, both ? BOTH_SIZE : BEARD_SIZE);
+    out.beard = {
+      x: (s - g.rowW) / 2,
+      y: both ? s * BOTH_BEARD_Y - g.bh / 2 : (s - g.bh) / 2,
+      w: g.rowW, h: g.bh, bw: g.bw, gap: g.gap,
+    };
+  }
+  if(hasPromo){
+    const h = s * (both ? BOTH_SIZE : PROMO_SIZE);
+    const w = h * (promoAspect || 1);
+    out.promo = { x: (s - w) / 2, y: both ? s * BOTH_PROMO_Y - h / 2 : (s - h) / 2, w, h };
+  }
+  return out;
+}
+function drawMoveMarks(ctx, qx, qy, content, beardImg){
   const n = content.beards || 0;
-  if(n <= 0 || !beardImg) return;
-  const s = MNEM_QUADRANT;
-  const g = beardRowGeom(s, n, beardImg.width / beardImg.height || 1);
-  let bx = qx + (s - g.rowW) / 2;
-  const by = qy + (s - g.bh) / 2;
+  const beard = (n > 0 && beardImg) ? beardImg : null;
+  const promo = content.promoImg || null;
+  if(!beard && !promo) return;
+  const box = moveMarkBoxes(MNEM_QUADRANT, beard ? n : 0,
+    beard ? (beard.width / beard.height || 1) : 1,
+    !!promo, promo ? (promo.width / promo.height || 1) : 1);
+
   ctx.save();
-  ctx.globalAlpha = BEARD_ALPHA;
-  for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, g.bw, g.bh); bx += g.bw + g.gap; }
+  if(beard && box.beard){
+    let bx = qx + box.beard.x;
+    ctx.globalAlpha = BEARD_ALPHA;
+    for(let i = 0; i < n; i++){
+      ctx.drawImage(beard, bx, qy + box.beard.y, box.beard.bw, box.beard.h);
+      bx += box.beard.bw + box.beard.gap;
+    }
+  }
+  if(promo && box.promo){
+    ctx.globalAlpha = PROMO_ALPHA;
+    ctx.drawImage(promo, qx + box.promo.x, qy + box.promo.y, box.promo.w, box.promo.h);
+  }
   ctx.restore();
 }
 function drawMnemQuadrant(ctx, qx, qy, content){
@@ -4329,10 +4439,10 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
   drawMnemQuadrant(ctx, 0, 0, oppContent);                 // opponent pegged top-left
   drawMnemQuadrant(ctx, far, far, respContent);            // response pegged bottom-right
-  // ...then the beards, ON TOP of both images -- see drawBeards for why the
-  // order matters rather than being tidiness
-  drawBeards(ctx, 0, 0, oppContent, beardImg);
-  drawBeards(ctx, far, far, respContent, beardImg);
+  // ...then the beard/promotion marks, ON TOP of both images -- see
+  // drawMoveMarks for why the order matters rather than being tidiness
+  drawMoveMarks(ctx, 0, 0, oppContent, beardImg);
+  drawMoveMarks(ctx, far, far, respContent, beardImg);
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
   if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, MNEM_QUADRANT, oppContent.moveNumber);
   if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, MNEM_QUADRANT, respContent.moveNumber);
@@ -4379,7 +4489,7 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
 // algebraic notation, same priority the Mnemonics screen itself uses. With
 // wordOnly the text fallback is the bare word (or notation), without the
 // "(san)" suffix -- used by the elevator's compact floor labels.
-function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
+async function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
   const entry = mnemonicsBySquare && mnemonicsBySquare[move.to];
   const imgSrc = entry && entry[move.piece + 'Img'];
   const word = entry && entry[move.piece];
@@ -4389,8 +4499,17 @@ function resolveMoveContent(move, mnemonicsBySquare, wordOnly){
     : (wordTrim ? `${wordTrim} (${move.san})` : move.san);
   const beards = move.disambig || 0;
   const moveNumber = move.moveNumber;
-  if(!imgSrc) return Promise.resolve({ text: wordFallback, beards, moveNumber });
-  return loadImageCached(imgSrc).then(img => img ? { image: img, beards, moveNumber } : { text: wordFallback, beards, moveNumber });
+  /* The promotion icon is resolved HERE, alongside the move image, rather than
+     at draw time: a canvas draws nothing for an Image that has not decoded
+     yet, and the mnemonic canvas is painted once and turned into a texture.
+     Awaiting it here means the composite is right the first time. `q` is
+     dropped at the source -- see drawMoveMarks for why queens get no mark. */
+  const promo = (move.promo && move.promo !== 'q') ? move.promo : null;
+  const promoImg = promo ? await promoPieceImage(move.color, promo) : null;
+  const marks = { beards, moveNumber, promoImg };
+  if(!imgSrc) return { text: wordFallback, ...marks };
+  const img = await loadImageCached(imgSrc);
+  return img ? { image: img, ...marks } : { text: wordFallback, ...marks };
 }
 
 // builds the movable sprite for one mnemonic slot: position/scale come from
@@ -10734,6 +10853,15 @@ export async function openThreeTest(containerEl, opts){
       // beard (disambiguator) geometry: the one part of its drawing that is a
       // rule rather than a look -- see beardRowGeom
       beardGeom: (n, aspect) => ({ ...beardRowGeom(MNEM_QUADRANT, n, aspect || 1), quadrant: MNEM_QUADRANT, alpha: BEARD_ALPHA }),
+      // where the beard and the underpromotion icon land, alone and together
+      moveMarkBoxes: (n, hasPromo, beardAspect, promoAspect) =>
+        ({ ...moveMarkBoxes(MNEM_QUADRANT, n, beardAspect || 1, !!hasPromo, promoAspect || 1),
+           quadrant: MNEM_QUADRANT, promoAlpha: PROMO_ALPHA }),
+      // the underpromotion icon itself, cut from the board's own sprite sheet
+      promoIcon: async (color, piece) => {
+        const img = await promoPieceImage(color, piece);
+        return img ? { w: img.width, h: img.height, src: String(img.src).slice(0, 60) } : null;
+      },
       clickReviewOrder: (mode) => {
         const b = reviewListEl && reviewListEl.querySelector(`[data-review-order="${mode}"]`);
         if(!b) return false;
