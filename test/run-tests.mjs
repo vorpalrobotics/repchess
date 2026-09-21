@@ -24566,7 +24566,7 @@ try {
     assert((await iconNow(wall.slotId)).visible, 'expected the icon to show from 1m, looking straight at it');
 
     await standNear(wall.pairPos, 0, 5, 0);
-    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2m range');
+    assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden from 5m, past the 2.5m range');
 
     await standNear(wall.pairPos, 0, 1, Math.PI);
     assert(!(await iconNow(wall.slotId)).visible, 'expected the icon hidden when facing away from it');
@@ -24679,7 +24679,7 @@ try {
       if(!aim || !aim.onCanvas) bad_.push({ back, why: 'off the canvas', ndc: aim && aim.ndc });
     }
     assert(bad_.length === 0,
-      `the pair icon is meant to be on screen anywhere inside its 2m gate, but at these ` +
+      `the pair icon is meant to be on screen anywhere inside its 2.5m gate, but at these ` +
       `distances it was not: ${JSON.stringify(bad_)}`);
 
     // ...and still opens its note from the closest the gate allows, which is

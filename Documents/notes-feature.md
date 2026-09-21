@@ -250,7 +250,7 @@ usefully say.
 
 ## The VR pair icon
 
-Per frame, for each pair sprite: show the icon when **distance ≤ 2 m** and the
+Per frame, for each pair sprite: show the icon when **distance ≤ 2.5 m** and the
 angle between the camera's forward vector and the direction to the sprite is
 **≤ 30°**. A room holds at most a handful of pairs, so this is a distance check
 and a dot product per pair per frame — negligible beside what `tick()` already
@@ -400,7 +400,7 @@ says so; and the orientation really is a parameter.
 ## Phase 4 — the in-world pair icon ✅ BUILT
 
 A small drawn chessboard tile in the billboard's upper-right corner, shown
-within **2 m** and **30°**, repositioned every frame from the camera's right
+within **2.5 m** and **30°**, repositioned every frame from the camera's right
 vector (the billboard is a camera-facing Sprite, so that corner is
 screen-relative — same math, same reason, as the editor's selection gear).
 Clicking it opens the Phase 3 modal. Hidden in edit mode, where the prop picker
