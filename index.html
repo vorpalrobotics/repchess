@@ -1592,6 +1592,15 @@
       <div id="attrNotePreview" class="note-preview is-empty">No note yet.</div>
       <button type="button" id="attrNoteEditBtn"><i class="fa-solid fa-pen"></i> Edit note…</button>
     </div>
+    <div class="field attr-note-field">
+      <label>Story</label>
+      <!-- A second field, not a heading inside the note: a room's own pref and
+           its ANCHOR pair's note pref are the same key, so one box would hold
+           the position's analysis, the arriving pair's story and the room's
+           door-chain story all at once. See setAttrStory. -->
+      <div id="attrStoryPreview" class="note-preview is-empty">No story yet.</div>
+      <button type="button" id="attrStoryEditBtn"><i class="fa-solid fa-pen"></i> Edit story…</button>
+    </div>
     <div id="attrError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
 
     </div><!-- /.modal-body -- Cancel/SAVE moved to the bar above -->
@@ -2067,6 +2076,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-439"></script>
+<script type="module" src="js/app.js?v=20260804-440"></script>
 </body>
 </html>

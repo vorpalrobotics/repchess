@@ -23896,6 +23896,35 @@ try {
     ok('Notes: a row with a note shows a glyph rather than the note text');
   } catch(e){ bad('Notes: row glyph', e); }
 
+  /* 453. The Attributes modal's Story field round-trips to the pref.
+          It was staged and returned in the modal's value object but never
+          written -- and nothing would have caught it: the backup drift audit
+          only requires fields the source is seen WRITING, so an unwritten
+          field is invisible to it. */
+  try {
+    await appEN2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appEN2.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), rowSel);
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appEN2.page.evaluate(() => document.getElementById('attrStoryEditBtn').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN2.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    await appEN2.page.evaluate(() => window.__notesEditorTestHooks.setValue('The GRUB puts on the SHOES.'));
+    await appEN2.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN2.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    // staged only so far -- Attributes owns the single Save, same as the note
+    const midway = await appEN2.page.evaluate(() =>
+      window.__notesTestHooks.storyAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+    assert(!midway, `expected the story staged, not committed, got ${JSON.stringify(midway)}`);
+    await appEN2.page.evaluate(() => document.querySelector('#attributesOverlay .mb-save').click());
+    await appEN2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
+    const saved = await appEN2.page.evaluate(() =>
+      window.__notesTestHooks.storyAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+    assert(/GRUB/.test(saved || ''), `expected Attributes' Save to write the story, got ${JSON.stringify(saved)}`);
+    ok('story: the Attributes Story field stages, then commits with the modal\'s own Save');
+  } catch(e){ bad('story: Attributes round trip', e); }
+
   // 415. Leaving the editor writes nothing. The whole design rests on it
   //      returning a value rather than committing one.
   try {
@@ -25241,6 +25270,51 @@ try {
     await closeList();
     ok('review list: a two-state order toggle, which sticks');
   } catch(e){ bad('review list: order toggle', e); }
+
+  /* 452. Room stories. A room's door-chain narrative lives on the room's OWN
+          pref -- the same one its Room Name is on -- because that is what
+          "this room" already means to the rest of the app. Reachable from a
+          lower-right control in the walk rather than through the Attributes
+          modal, since the point is to write one while standing in the room. */
+  try {
+    const btn = await E('roomStoryBtn');
+    assert(btn, 'expected a room-story control in the walk');
+    assert(btn.display !== 'none', 'expected it present in a castle room even with no story yet');
+    assert(/No story yet/.test(btn.title),
+      `expected the blank state to say so in its tooltip, got ${JSON.stringify(btn.title)}`);
+    const blankOpacity = parseFloat(btn.opacity);
+    assert(blankOpacity < 1, `expected the blank state styled faint, got opacity ${btn.opacity}`);
+
+    await appRL.page.evaluate(() => window.__threeTestEdit.clickRoomStory());
+    await appRL.page.waitForFunction(
+      () => { const o = document.getElementById('roomStoryOverlay'); return o && o.style.display === 'flex'; },
+      { timeout: 10000 });
+    // above the walk, like every other modal opened from inside it
+    const stack = await topmostAt(appRL.page, '#roomStoryOverlay');
+    assert(stack.onTop, `expected the room-story modal above the walk, got ${JSON.stringify(stack)}`);
+    assert(/No story yet/.test(await appRL.page.evaluate(
+      () => document.getElementById('roomStoryView').textContent)),
+      'expected the empty state in the modal');
+
+    // write one through the same editor everything else uses
+    await appRL.page.evaluate(() => document.getElementById('roomStoryEditBtn').click());
+    await appRL.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appRL.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    await appRL.page.evaluate(() => window.__notesEditorTestHooks.setValue('Bookshelf next to the LIBRARY.'));
+    await appRL.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appRL.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appRL.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    await appRL.page.waitForFunction(
+      () => /LIBRARY/.test(document.getElementById('roomStoryView').innerHTML), { timeout: 20000 });
+
+    // ...and the corner control restyles itself, without leaving the walk
+    const after = await E('roomStoryBtn');
+    assert(parseFloat(after.opacity) > blankOpacity && !/No story yet/.test(after.title),
+      `expected the control to restyle once a story exists, got ${JSON.stringify(after)}`);
+    await appRL.page.evaluate(() => document.querySelector('#roomStoryOverlay .mb-leave').click());
+    ok('room story: written from the walk, on the room\'s own pref, with the corner control reflecting it');
+  } catch(e){ bad('room story: write and restyle from the walk', e); }
 
   /* 448. The disambiguation beard. It is drawn centred on the move image at
           60% of the square and half-transparent -- it used to be 30% tucked

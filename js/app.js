@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom } from './threeVR.js?v=20260804-312';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-313';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-439';
+const BUILD_TAG = '-440';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3871,6 +3871,7 @@ $('castleWalkBtn').onclick = async () => {
     ...linkedCastles.map(c => ({ lineId: CURRENT_LINE?.id, instanceId: c.instanceId, genRooms: c.genRooms }))
   ]);
   VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+  VR_ROOM_NAME_INDEX = roomNameIndex;
   await buildVrNoteIndex(lines);
   enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
@@ -3884,6 +3885,8 @@ $('castleWalkBtn').onclick = async () => {
     piecesFile: PIECES_FILE,
     hasNote: vrHasNote,
     onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
+    roomStory: vrRoomStory,
+    onRoomStory: openRoomStory,
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -4184,13 +4187,30 @@ let attrModalSaved = null;
    -- the note is part of what this modal's single Save commits, and nothing
    writes it out from under that. */
 let attrNoteStaged = '';
+/* The STORY is a second field, not a heading inside the note.
+
+   A room's own pref and its ANCHOR move pair's note pref are the same key
+   (a generated room's nameSeq is anchor.seq.slice(0,-1), which is exactly the
+   anchor pair's note key) -- so one text box on an anchor would be holding
+   three different things at once: analysis of the position, the mnemonic story
+   for the arriving move pair, and the door-chain story for the room. Splitting
+   them is what makes each separately readable, and what makes a future "print
+   my stories" view a query rather than a parse. */
+let attrStoryStaged = '';
+function setStagedText(md, previewId, empty){
+  const prev = $(previewId);
+  if(!prev) return;
+  prev.classList.toggle('is-empty', !md);
+  if(!md){ prev.textContent = empty; return; }
+  renderNoteInto(prev, md);
+}
 function setAttrNote(md){
   attrNoteStaged = md || '';
-  const prev = $('attrNotePreview');
-  if(!prev) return;
-  prev.classList.toggle('is-empty', !attrNoteStaged);
-  if(!attrNoteStaged){ prev.textContent = 'No note yet.'; return; }
-  renderNoteInto(prev, attrNoteStaged);
+  setStagedText(attrNoteStaged, 'attrNotePreview', 'No note yet.');
+}
+function setAttrStory(md){
+  attrStoryStaged = md || '';
+  setStagedText(attrStoryStaged, 'attrStoryPreview', 'No story yet.');
 }
 /* The launcher. Wired once at load -- the button is static markup. It STAGES:
    the returned value goes into attrNoteStaged, and the Attributes modal's own
@@ -4200,6 +4220,12 @@ $('attrNoteEditBtn').onclick = async () => {
   if(next === null) return;              // left without saving
   setAttrNote(next);
   if(attrBarCtl) attrBarCtl.refresh();   // the note is part of what Save commits
+};
+$('attrStoryEditBtn').onclick = async () => {
+  const next = await openNoteEditor(attrStoryStaged, { title: 'Story' });
+  if(next === null) return;
+  setAttrStory(next);
+  if(attrBarCtl) attrBarCtl.refresh();
 };
 
 function openAttributesModal(saved, onSave, lineSeq, roomSeq){
@@ -4212,6 +4238,7 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   const savedNum = parseInt(saved?.castleStreetNumber, 10);
   $('attrStreetNumber').value = (Number.isFinite(savedNum) && savedNum >= 1) ? savedNum : '';
   attrNoteStaged = saved?.note || '';
+  attrStoryStaged = saved?.story || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
   refreshAttrFieldVisibility();
@@ -4222,6 +4249,7 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   // AFTER the overlay is shown: the Markdown viewer measures its host element,
   // and rendering into a display:none subtree is a question not worth asking
   setAttrNote(attrNoteStaged);
+  setAttrStory(attrStoryStaged);
 }
 
 /* The Attributes modal's own button bar (Documents/modal-buttons.md).
@@ -4243,6 +4271,7 @@ function attrSnapshot(){
     castleOwner: $('attrCastleOwner').value,
     streetNumber: $('attrStreetNumber').value.trim(),
     note: attrNoteStaged.trim(),
+    story: attrStoryStaged.trim(),
     redirect: $('attrRedirectTo').value,
   };
 }
@@ -4726,6 +4755,7 @@ function commitAttributes(){
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
     note: attrNoteStaged.trim(),
+    story: attrStoryStaged.trim(),
     redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
   };
   const cb = attributesModalSave;
@@ -5714,6 +5744,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
         savePrefField(roomSeq, 'name', v.roomName);
         savePrefField(roomSeq, 'note', v.note);
+        savePrefField(roomSeq, 'story', v.story);
         savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
         savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
         savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
@@ -6181,6 +6212,7 @@ function renderBlackRoot(parent,games,trigger){
       savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
       savePrefField(roomSeq, 'name', v.roomName);
       savePrefField(roomSeq, 'note', v.note);
+      savePrefField(roomSeq, 'story', v.story);
       savePrefField(roomSeq, 'redirectToCastle', v.redirectToCastle);
       savePrefField(roomSeq, 'redirectTargetLineId', v.redirectTargetLineId);
       savePrefField(roomSeq, 'redirectTargetSeq', v.redirectTargetSeq);
@@ -7379,7 +7411,7 @@ async function buildBackupData(){
       name: line.name, color: line.color, openingMoves: line.openingMoves, streetName: line.streetName || '',
       hideUnselectedGameMoves: !!line.hideUnselectedGameMoves,
       prefs: Object.values(await getAllPrefs(line.id)).map(p=>({
-        seq:p.seq, reply:p.reply, note:p.note, mnemonic:p.mnemonic,
+        seq:p.seq, reply:p.reply, note:p.note, story:p.story, roomStory:p.roomStory, mnemonic:p.mnemonic,
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
         collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
@@ -9533,6 +9565,7 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     // Inside the spinner because the note index is one indexed IDB read per
     // line (see buildVrNoteIndex).
     VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
+    VR_ROOM_NAME_INDEX = buildRoomNameIndex(castles);
     await buildVrNoteIndex(lines);
   } finally {
     hideSpinner(spinner);
@@ -9546,6 +9579,8 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     startRoomKey,
     hasNote: vrHasNote,
     onPairNote: (lineId, seq) => openPositionNote(seq, { lineId, flip: vrFlipFor(lineId) }),
+    roomStory: vrRoomStory,
+    onRoomStory: openRoomStory,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onAssets: openThreeTestAssets
@@ -12291,10 +12326,14 @@ function writeNoteFor(lineId, seq, md){
    up in the world at all. */
 let VR_NOTE_INDEX = null;                       // Map<lineId, Set<seqKey>>
 const noteIndexKey = seq => (seq || []).join('\x1f');
+let VR_PREFS_BY_LINE = null;     // lineId -> its prefs map, for vrRoomStory
+let VR_ROOM_NAME_INDEX = null;   // roomKey -> { lineId, nameSeq }, the room's own pref
 async function buildVrNoteIndex(lines){
   const idx = new Map();
+  VR_PREFS_BY_LINE = new Map();
   for(const l of lines){
     const prefs = (CURRENT_LINE && l.id === CURRENT_LINE.id) ? PREFS : await getAllPrefs(l.id);
+    VR_PREFS_BY_LINE.set(l.id, prefs);
     const set = new Set();
     for(const k in prefs){
       const p = prefs[k];
@@ -12320,6 +12359,98 @@ function vrNoteIndexSet(lineId, seq, has){
    lineId and a pair's seq and knows nothing about which way a board faces. */
 let VR_LINE_COLORS = null;
 const vrFlipFor = lineId => (VR_LINE_COLORS && VR_LINE_COLORS.get(lineId)) === 'black';
+
+/* ---------- room stories ----------
+   The door-chain narrative for a room ("you notice a bookshelf -- next to the
+   LIBRARY -- then sit in the chair, next to the SITTING room..."). It lives on
+   the room's OWN pref, the same one its Room Name is on (buildRoomNameIndex's
+   nameSeq), because that is what "this room" means to the rest of the app --
+   not a new store and not a new identity.
+
+   Read synchronously: the VR's corner icon asks on every room change whether
+   this room has one, to decide how to style itself. */
+function vrRoomStoryTarget(roomKey){
+  return (VR_ROOM_NAME_INDEX && VR_ROOM_NAME_INDEX[roomKey]) || null;
+}
+function vrRoomStory(roomKey){
+  const t = vrRoomStoryTarget(roomKey);
+  if(!t) return '';
+  const prefs = VR_PREFS_BY_LINE && VR_PREFS_BY_LINE.get(t.lineId);
+  return (prefs && prefs[prefKey(t.lineId, t.nameSeq)]?.roomStory) || '';
+}
+async function vrSaveRoomStory(roomKey, md){
+  const t = vrRoomStoryTarget(roomKey);
+  if(!t) return;
+  await setPref(t.lineId, t.nameSeq, { roomStory: md });
+  // keep the in-memory copies in step, so the icon restyles and the move
+  // table's Attributes modal sees it without a reload
+  const k = prefKey(t.lineId, t.nameSeq);
+  const prefs = VR_PREFS_BY_LINE && VR_PREFS_BY_LINE.get(t.lineId);
+  if(prefs) (prefs[k] ??= { key:k, lineId:t.lineId, seq:t.nameSeq, reply:'', note:'', mnemonic:'' }).roomStory = md;
+  if(CURRENT_LINE && t.lineId === CURRENT_LINE.id && PREFS !== prefs){
+    (PREFS[k] ??= { key:k, lineId:t.lineId, seq:t.nameSeq, reply:'', note:'', mnemonic:'' }).roomStory = md;
+  }
+}
+
+/* The room-story reader/editor the VR's corner icon opens. Same shape as the
+   position/notes modal and for the same reasons -- built on document.body with
+   a z-index above the walk (see index.html's band comment), rendered Markdown,
+   and a pencil that hands off to the one editor. */
+let roomStoryKey = null;
+function buildRoomStoryOverlay(){
+  let ov = document.getElementById('roomStoryOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'roomStoryOverlay';
+    ov.className = 'overlay';
+    ov.innerHTML = `
+      <div class="modal position-note-modal">
+        <div class="modal-bar-host"></div>
+        <div class="modal-body position-note-right">
+          <div id="roomStoryView" class="note-preview position-note-view is-empty">No story yet.</div>
+          <button type="button" id="roomStoryEditBtn"><i class="fa-solid fa-pen"></i> Edit story…</button>
+        </div>
+      </div>`;
+    ov.style.zIndex = '70';
+    ov.querySelector('#roomStoryEditBtn').onclick = editRoomStory;
+  }
+  document.body.appendChild(ov);
+  return ov;
+}
+function renderRoomStoryBody(){
+  const md = roomStoryKey ? vrRoomStory(roomStoryKey) : '';
+  const el = $('roomStoryView');
+  if(!el) return;
+  el.classList.toggle('is-empty', !md);
+  if(!md){ el.textContent = 'No story yet.'; return; }
+  renderNoteInto(el, md);
+}
+async function editRoomStory(){
+  const key = roomStoryKey;
+  if(!key) return;
+  const next = await openNoteEditor(vrRoomStory(key), { title: 'Room story' });
+  if(next === null) return;
+  await vrSaveRoomStory(key, next.trim());
+  renderRoomStoryBody();
+  refreshRoomStoryIcon();          // blank <-> written restyles the corner icon
+}
+function closeRoomStory(){
+  const ov = document.getElementById('roomStoryOverlay');
+  if(ov) ov.style.display = 'none';
+  roomStoryKey = null;
+  setForeignModalOpen(false);
+}
+function openRoomStory(roomKey, roomLabel){
+  if(!vrRoomStoryTarget(roomKey)) return;   // street/demo rooms have no pref
+  roomStoryKey = roomKey;
+  const ov = buildRoomStoryOverlay();
+  ov.querySelector('.modal-bar-host').innerHTML =
+    modalBarHtml({ title: roomLabel ? `Story — ${roomLabel}` : 'Room story', prefix: 'roomStory' });
+  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: closeRoomStory });
+  ov.style.display = 'flex';                // before rendering: Toast measures its host
+  setForeignModalOpen(true);
+  renderRoomStoryBody();
+}
 
 /* manually-recorded opponent replies for the position `seq`, kept alongside
    that position's own prefs so a theoretical try can be added before any
@@ -13966,6 +14097,7 @@ if(localStorage.getItem('threeTestDebug')){
     canonicalSeq: (seq) => canonicalRoomSeq(seq),
     noteAt: (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.note ?? null,
     setNote: (seq, note) => savePrefField(seq, 'note', note),
+    storyAt: (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.story ?? null,
     /* The position/notes modal, opened the way Phase 4's in-world icon will
        open it: with a pair's own room seq. Exposed so the modal is testable
        before any 3D affordance exists to reach it. */
