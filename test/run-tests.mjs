@@ -5256,6 +5256,10 @@ try {
   //     in-memory DECORATED map) -- same rigor as the memorized-flag test.
   try {
     assert(await appAC.page.evaluate(() => window.__threeTestEdit.decorated()), 'setup: room not decorated before reload');
+    // the flag is persisted fire-and-forget (persistDecorated), so reloading
+    // straight after the in-memory assert races the IndexedDB write -- it lost
+    // that race once in four full runs. Wait for the write, not for luck.
+    await appAC.page.evaluate(() => window.__threeTestEdit.decoratedPersisted());
     await appAC.page.reload({ waitUntil: 'domcontentloaded' });
     await appAC.page.waitForFunction(() => {
       const el = document.getElementById('buildStamp');

@@ -1985,7 +1985,15 @@ async function loadDecorated(){
   try { DECORATED = raw ? JSON.parse(raw) : {}; }
   catch { DECORATED = {}; }
 }
-function persistDecorated(){ setMeta(DECORATED_KEY, JSON.stringify(DECORATED)); }
+/* Fire-and-forget, like every other setMeta in this file -- nothing in the app
+   needs to wait for it. The promise is kept only so a TEST can: a test that
+   reloads the page to prove the flag persisted is racing an IndexedDB write
+   nobody awaited, and lost that race once in four full runs. */
+let decoratedPersist = Promise.resolve();
+function persistDecorated(){
+  decoratedPersist = Promise.resolve(setMeta(DECORATED_KEY, JSON.stringify(DECORATED))).catch(() => {});
+  return decoratedPersist;
+}
 // A room is fully decorated when every move-object slot has EITHER a real
 // image asset OR at least a label (a manual placeholder word -- LAYOUT.slotWords,
 // set via the picker's text field -- or a WALL-LIST item's own name, image
@@ -10453,8 +10461,11 @@ export async function openThreeTest(containerEl, opts){
       evaluateDecorated: () => evaluateDecorated(currentRoomKey),
       setDecorated: (key, val) => {
         if(val) DECORATED[key] = Date.now(); else delete DECORATED[key];
-        persistDecorated();
+        return persistDecorated();
       },
+      // the last decorated write, so a test can await it before reloading the
+      // page out from under it -- see persistDecorated
+      decoratedPersisted: () => decoratedPersist,
       // dumps everything computeFullyDecorated looks at for one room, straight
       // to the console with a "[Debug]" prefix so it's easy to filter/copy --
       // for diagnosing a "won't decorate" report against real (non-test) data
