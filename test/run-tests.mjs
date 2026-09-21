@@ -24131,6 +24131,39 @@ try {
     ok('Notes: the position modal\'s pencil commits and repaints in place');
   } catch(e){ bad('Notes: position modal pencil round trip', e); }
 
+  /* 454. ...and the STORY pencil beside it. The position modal is where a
+          story gets written in practice -- looking at the board the images
+          encode -- so leaving it note-only meant the field existed but the
+          place you would use it did not. */
+  try {
+    assert(await appEN3.page.evaluate(() => window.__notesTestHooks.positionNoteOpen()),
+      'test setup issue: expected the position modal still open');
+    assert(/No story yet/.test(await appEN3.page.evaluate(
+      () => window.__notesTestHooks.positionStoryText())),
+      'expected an empty story pane before anything is written');
+
+    await appEN3.page.evaluate(() => window.__notesTestHooks.editPositionStory());
+    await appEN3.page.waitForSelector('#noteEditorOverlay .modal-bar', { state: 'visible', timeout: 10000 });
+    await appEN3.page.waitForFunction(() => window.__notesEditorTestHooks.isReady(), { timeout: 20000 });
+    await appEN3.page.evaluate(() => window.__notesEditorTestHooks.setValue('The GRUB eats the HAM.'));
+    await appEN3.page.waitForFunction(
+      () => !document.querySelector('#noteEditorOverlay .mb-save').disabled, { timeout: 5000 });
+    await appEN3.page.evaluate(() => document.querySelector('#noteEditorOverlay .mb-save').click());
+    await appEN3.page.waitForSelector('#noteEditorOverlay', { state: 'hidden', timeout: 5000 });
+    await appEN3.page.waitForFunction(
+      () => /GRUB/.test(document.getElementById('positionStoryView').innerHTML), { timeout: 20000 });
+
+    const story = await appEN3.page.evaluate(() =>
+      window.__notesTestHooks.storyAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+    assert(/GRUB/.test(story || ''), `expected the story written to the pref, got ${JSON.stringify(story)}`);
+    // the two panes are separate fields, not one box -- the note is untouched
+    const note = await appEN3.page.evaluate(() =>
+      window.__notesTestHooks.noteAt(window.__notesTestHooks.canonicalSeq(['d4','Nf6'])));
+    assert(!/GRUB/.test(note || ''),
+      `expected the note left alone by the story pencil, got ${JSON.stringify(note)}`);
+    ok('Notes: the position modal edits the story as well as the note, as separate fields');
+  } catch(e){ bad('Notes: position modal story pane', e); }
+
   // 422. A position with no note says so rather than showing an empty frame,
   //      and Done closes. The icon opens the position whether or not a note
   //      exists (that is the point of showing the board), so the no-note state
