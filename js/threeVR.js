@@ -4163,7 +4163,37 @@ function beardRowGeom(s, n, aspect){
   }
   return { bh, bw, gap, rowW: n * bw + (n - 1) * gap };
 }
-function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
+/* Disambiguation beard(s) OVER one move image: one per the mover's age rank
+   (older piece = more beards).
+
+   Centred on the image and half-transparent, rather than tucked small along
+   its bottom edge. At 30% of the square in a corner it was easy to miss
+   entirely, which for a disambiguator is the one failure that matters -- you
+   read the image, play the wrong knight, and never knew there was anything to
+   notice. Twice the size and dead centre makes it unmissable; 50% alpha costs
+   almost none of the picture underneath, so it reads as a mark ON the image
+   rather than a patch over it.
+
+   Drawn by renderMnemPairCanvas AFTER BOTH quadrants, which is not a detail:
+   the two overlap by half, with the response pegged bottom-right and painted
+   SECOND, so the opponent quadrant's own centre is exactly the corner of the
+   overlap. Beards drawn inside drawMnemQuadrant put roughly a quarter of the
+   opponent's underneath the response image. Painting both on top afterwards
+   leaves each one centred on its own move, with only the small square where
+   the two beards themselves meet shared -- and at 50% alpha even that reads. */
+function drawBeards(ctx, qx, qy, content, beardImg){
+  const n = content.beards || 0;
+  if(n <= 0 || !beardImg) return;
+  const s = MNEM_QUADRANT;
+  const g = beardRowGeom(s, n, beardImg.width / beardImg.height || 1);
+  let bx = qx + (s - g.rowW) / 2;
+  const by = qy + (s - g.bh) / 2;
+  ctx.save();
+  ctx.globalAlpha = BEARD_ALPHA;
+  for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, g.bw, g.bh); bx += g.bw + g.gap; }
+  ctx.restore();
+}
+function drawMnemQuadrant(ctx, qx, qy, content){
   const s = MNEM_QUADRANT;
   ctx.save();
   ctx.beginPath();
@@ -4193,25 +4223,6 @@ function drawMnemQuadrant(ctx, qx, qy, content, beardImg){
       ctx.font = `bold ${font}px sans-serif`;
     }
     ctx.fillText(text, qx + s / 2, qy + s / 2 + 4);
-  }
-  /* Disambiguation beard(s) OVER the move image: one per the mover's age rank
-     (older piece = more beards).
-
-     Centred in the square and drawn half-transparent rather than tucked small
-     along the bottom edge. At 30% of the square down in a corner it was easy
-     to miss entirely, which for a disambiguator is the one failure that
-     matters -- you read the image, play the wrong knight, and never knew there
-     was anything to notice. Twice the size and dead centre makes it
-     unmissable; 50% alpha means it costs almost none of the image underneath,
-     so it reads as a mark ON the picture rather than a patch covering it. */
-  const n = content.beards || 0;
-  if(n > 0 && beardImg){
-    const g = beardRowGeom(s, n, beardImg.width / beardImg.height || 1);
-    let bx = qx + (s - g.rowW) / 2;
-    const by = qy + (s - g.bh) / 2;
-    // restored by this function's own ctx.restore() just below
-    ctx.globalAlpha = BEARD_ALPHA;
-    for(let i = 0; i < n; i++){ ctx.drawImage(beardImg, bx, by, g.bw, g.bh); bx += g.bw + g.gap; }
   }
   ctx.restore();
 }
@@ -4316,8 +4327,12 @@ function renderMnemPairCanvas(sprite, oppContent, respContent, beardImg, oppQual
   canvas.height = MNEM_PAIR_SIZE + stripH;
   const ctx = canvas.getContext('2d');
   const far = MNEM_PAIR_SIZE - MNEM_QUADRANT;     // bottom-right box origin (256)
-  drawMnemQuadrant(ctx, 0, 0, oppContent, beardImg);        // opponent pegged top-left
-  drawMnemQuadrant(ctx, far, far, respContent, beardImg);   // response pegged bottom-right
+  drawMnemQuadrant(ctx, 0, 0, oppContent);                 // opponent pegged top-left
+  drawMnemQuadrant(ctx, far, far, respContent);            // response pegged bottom-right
+  // ...then the beards, ON TOP of both images -- see drawBeards for why the
+  // order matters rather than being tidiness
+  drawBeards(ctx, 0, 0, oppContent, beardImg);
+  drawBeards(ctx, far, far, respContent, beardImg);
   if(oppQuality) drawQualityBadge(ctx, oppQuality);         // annotate the opponent move
   if(oppContent.moveNumber != null) drawMoveNumberBadge(ctx, 0, 0, MNEM_QUADRANT, oppContent.moveNumber);
   if(respContent.moveNumber != null) drawMoveNumberBadge(ctx, far, far, MNEM_QUADRANT, respContent.moveNumber);
