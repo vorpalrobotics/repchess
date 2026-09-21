@@ -24965,6 +24965,231 @@ try {
 } catch(e){ bad('Phase EN5b: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase RL: the in-VR review list. The day's loop used to run through the
+//     digraph -- pick the review lens, scan for a due colour, jump into VR,
+//     review, leave VR, repeat -- where the expensive part was never the
+//     reviewing but the round trip. This keeps the whole loop inside one walk:
+//     open the list, take the top room, review it, open the list again (it no
+//     longer holds that room), until it is empty. ---
+if(shouldRunPhase(['vr-castle'])){
+try {
+const appRL = await launchApp();
+try {
+  /* Four branches off one root, so the root is a branch head and each branch
+     is its own room rather than merging into it:
+       e6 / g6 / c5  -- two-move chains, so each becomes a real (unlocked) corridor
+       b6            -- a single leaf, which is a LOCKED dead end (no forward
+                        exit, no wall pairs) and must never be offered */
+  await seedBackup(appRL.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1, name: 'Great Hall' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3', name: 'Library' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Qc2' },
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },
+      { seq: ['d4','Nf6','c4','c5'], reply: 'd5' },
+      { seq: ['d4','Nf6','c4','c5','d5','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Qc2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 c5 d5 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g4', moves: 'd4 Nf6 c4 b6 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appRL.page.click('.line-row');
+  await appRL.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+  await openVR(appRL.page);
+
+  const keyAfter = (moves) => appRL.page.evaluate((ms) => {
+    const c = new Chess();
+    for(const m of ms) c.move(m, { sloppy: true });
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  }, moves);
+  const K = {
+    root:   await keyAfter(['d4','Nf6','c4']),
+    e6:     await keyAfter(['d4','Nf6','c4','e6','Nc3']),
+    g6:     await keyAfter(['d4','Nf6','c4','g6','Nc3']),
+    c5:     await keyAfter(['d4','Nf6','c4','c5','d5']),
+    locked: await keyAfter(['d4','Nf6','c4','b6','Nc3']),
+  };
+  const E = (fn, ...args) => appRL.page.evaluate(
+    ({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+  const list = () => appRL.page.evaluate(() => window.__threeTestEdit.reviewList());
+  const DAY = 86400000;
+  // step 2 on the ladder is a 7-day interval, so: overdue past +3.5d,
+  // due from 0, soon from -1.4d (see roomReviewState's proportional windows)
+  const sched = async (key, dueOffsetDays, step = 2) => {
+    const now = Date.now();
+    await E('setMemorized', key, true);
+    await E('setReviewRecord', key, { last: now - 7 * DAY, due: now + dueOffsetDays * DAY, step, lapses: 0, lastGrade: 'A' });
+  };
+
+  await sched(K.root, -5);          // overdue
+  await sched(K.e6, -1);            // due
+  await sched(K.g6, +1);            // due soon
+  await sched(K.locked, -5);        // overdue, but locked -- must never be offered
+  // K.c5 is left unmemorized on purpose
+
+  const openList = async () => {
+    await appRL.page.evaluate(() =>
+      document.querySelector('#threeTestCanvasWrap [data-three-toolbar] i.fa-list-check').closest('button').click());
+    await appRL.page.waitForFunction(() => window.__threeTestEdit.reviewListOpen(), { timeout: 5000 });
+  };
+  const closeList = () => appRL.page.evaluate(() => {
+    const b = document.querySelector('[data-review-list] [data-review-list-close]');
+    if(b) b.click();
+  });
+
+  // 440. The list is exactly what is scheduled: overdue first, then due, then
+  //      "soon" -- and nothing that is unmemorized, not yet due, or locked.
+  try {
+    const rows = await list();
+    const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
+    assert(byKey[K.root] && byKey[K.root].state === 'overdue',
+      `expected the root listed overdue, got ${JSON.stringify(rows)}`);
+    assert(byKey[K.e6] && byKey[K.e6].state === 'due',
+      `expected the e6 room listed due, got ${JSON.stringify(rows)}`);
+    assert(byKey[K.g6] && byKey[K.g6].state === 'soon',
+      `expected the g6 room listed as due soon, got ${JSON.stringify(rows)}`);
+    assert(!byKey[K.c5], 'expected an UNMEMORIZED room to be absent -- nothing is scheduled for it');
+    assert(!byKey[K.locked],
+      'expected a locked dead end to be absent even when its own record is overdue -- there is nothing in one to review');
+    // worst first, which falls out of sorting by due date: an overdue room's
+    // due date is furthest in the past, a soon one's is in the future
+    assert(JSON.stringify(rows.map(r => r.state)) === JSON.stringify(['overdue','due','soon']),
+      `expected worst-first ordering, got ${JSON.stringify(rows.map(r => r.state))}`);
+    ok('review list: exactly the scheduled rooms, worst first, with locked and unmemorized rooms excluded');
+  } catch(e){ bad('review list: contents and ordering', e); }
+
+  // 441. Both labels the workflow needs. A room with no Room Name falls back
+  //      to its own move pair rather than a generated id -- in a repertoire
+  //      where few rooms are named, "R3" three times over is not a list.
+  try {
+    const rows = await list();
+    const root = rows.find(r => r.key === K.root);
+    const e6 = rows.find(r => r.key === K.e6);
+    const g6 = rows.find(r => r.key === K.g6);
+    assert(rows.every(r => r.castle === 'Alpha'),
+      `expected every row to carry its castle name, got ${JSON.stringify(rows.map(r => r.castle))}`);
+    assert(root.name === 'Great Hall' && e6.name === 'Library',
+      `expected named rooms to use their Room Name, got ${JSON.stringify([root.name, e6.name])}`);
+    assert(g6.name && !/^R\d+$/.test(g6.name) && /g6|Nc3/.test(g6.name),
+      `expected an unnamed room to fall back to its own move pair, got ${JSON.stringify(g6.name)}`);
+    assert(rows.every(r => typeof r.moves === 'number'),
+      `expected each row to carry its move count, got ${JSON.stringify(rows.map(r => r.moves))}`);
+    ok('review list: castle name plus room name, falling back to the move pair when unnamed');
+  } catch(e){ bad('review list: labels', e); }
+
+  // 442. It renders, holds "soon" BELOW the working set, and says how much
+  //      work there is. The tail is offered, not owed: counting "soon" as work
+  //      would mean the list never empties, and "until it is empty" is the end
+  //      condition the whole loop rests on.
+  try {
+    await openList();
+    const head = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListHead());
+    assert(/2 rooms to review/.test(head || ''),
+      `expected the header to count only the working set, not the soon tail, got ${JSON.stringify(head)}`);
+    const rows = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListRows());
+    assert(JSON.stringify(rows.map(r => r.state)) === JSON.stringify(['overdue','due','soon']),
+      `expected the rendered rows in worst-first order, got ${JSON.stringify(rows.map(r => r.state))}`);
+    assert(/Alpha/.test(rows[0].text) && /overdue/.test(rows[0].text),
+      `expected the row to show its castle and state, got ${JSON.stringify(rows[0].text)}`);
+    ok('review list: renders worst-first with the "due soon" tail held below the working set');
+  } catch(e){ bad('review list: rendering', e); }
+
+  // 443. Picking a room walks you to it -- at its DOOR, the same approach the
+  //      digraph's "Jump to VR" gives, since walking in through the door is
+  //      part of what you are recalling.
+  try {
+    assert(await appRL.page.evaluate(() => window.__threeTestEdit.reviewListOpen()),
+      'test setup issue: expected the list still open from 442');
+    /* The e6 room rather than the root, deliberately. A castle root is reached
+       from the STREET, and a street's doors into its buildings are not in
+       room.exits at all (they are street-building entries), so the root would
+       land you on mainStreet with nothing to assert against. An interior room
+       exercises the same enterAtDoorTo path against a real door. */
+    const clicked = await E('clickReviewRow', K.e6);
+    assert(clicked, 'expected the e6 row to be clickable');
+    await appRL.page.waitForTimeout(400);
+    assert(!(await appRL.page.evaluate(() => window.__threeTestEdit.reviewListOpen())),
+      'expected picking a room to close the list');
+    /* Where "there" is, precisely: enterAtDoorTo puts you in the room holding
+       the door INTO the target, facing it -- for a castle root, that is the
+       street outside its building. So the test is not "the current room is the
+       target" but "you are standing at a door to it", which is the property
+       that makes the approach part of the recall. */
+    const where = await appRL.page.evaluate(() => window.__threeTestState.room);
+    const exits = await appRL.page.evaluate((k) => window.__threeTestEdit.exitsFor(k), where);
+    assert(where === K.e6 || (exits || []).some(e => e.target === K.e6),
+      `expected to be in the target room or at a door into it, but stood in ${JSON.stringify(where)} ` +
+      `whose exits are ${JSON.stringify((exits || []).map(e => e.target))}`);
+    ok('review list: picking a room closes the list and walks you to its door');
+  } catch(e){ bad('review list: picking a room', e); }
+
+  // 444. The payoff, and the one claim the whole workflow rests on: grade a
+  //      room and it is gone from the list on the next open, with no rebuild
+  //      and no leaving the walk.
+  try {
+    await E('enter', K.e6);
+    await appRL.page.waitForTimeout(300);
+    const before = (await list()).map(r => r.key);
+    assert(before.includes(K.e6), `test setup issue: expected the e6 room still listed, got ${JSON.stringify(before)}`);
+    await appRL.page.evaluate(() => window.__threeTestEdit.gradeCurrentRoom('A'));
+    await appRL.page.waitForTimeout(200);
+    const after = (await list()).map(r => r.key);
+    assert(!after.includes(K.e6),
+      `expected the graded room to drop off the list, got ${JSON.stringify(after)}`);
+    assert(after.includes(K.root),
+      `expected the rooms you have NOT reviewed to stay, got ${JSON.stringify(after)}`);
+    ok('review list: a room you grade drops off it, without leaving the walk');
+  } catch(e){ bad('review list: grading removes a room', e); }
+
+  // 445. And when the working set empties, the list says so -- that message is
+  //      the end-of-session signal, not merely an absence.
+  try {
+    await E('setReviewRecord', K.root, { last: Date.now(), due: Date.now() + 30 * DAY, step: 4, lapses: 0, lastGrade: 'A' });
+    await appRL.page.waitForTimeout(150);
+    const rows = await list();
+    assert(!rows.some(r => r.state !== 'soon'),
+      `expected nothing left in the working set, got ${JSON.stringify(rows)}`);
+    await openList();
+    const head = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListHead());
+    assert(/caught up/.test(head || ''), `expected an explicit caught-up message, got ${JSON.stringify(head)}`);
+    // ...while the optional tail is still offered
+    const rendered = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListRows());
+    assert(rendered.length === 1 && rendered[0].state === 'soon',
+      `expected only the soon tail left on offer, got ${JSON.stringify(rendered)}`);
+    await closeList();
+    ok('review list: an empty working set reads as "caught up", with the soon tail still offered');
+  } catch(e){ bad('review list: empty state', e); }
+
+  // 446. The button is in the right-hand cluster but LEFT of the status
+  //      badges: those are about the room you are in and read together with
+  //      memorize next to Close, and a navigation control dropped between them
+  //      would cut that group in half.
+  try {
+    const order = await appRL.page.evaluate(() =>
+      [...document.querySelectorAll('#threeTestCanvasWrap [data-three-toolbar] i.fa-solid')]
+        .map(i => [...i.classList].find(c => c !== 'fa-solid')));
+    const listIdx = order.indexOf('fa-list-check');
+    const paletteIdx = order.indexOf('fa-palette');
+    const closeIdx = order.indexOf('fa-circle-xmark');
+    assert(listIdx >= 0, `expected the review-list button in the toolbar, got ${JSON.stringify(order)}`);
+    assert(listIdx < paletteIdx && paletteIdx < closeIdx,
+      `expected the review list left of the status badges, got ${JSON.stringify(order)}`);
+    assert(order.indexOf('fa-brain') === closeIdx - 1,
+      `expected the badge cluster still intact (memorize next to Close), got ${JSON.stringify(order)}`);
+    ok('review list: its toolbar button sits left of the status badges, leaving that cluster intact');
+  } catch(e){ bad('review list: toolbar placement', e); }
+} finally {
+  await appRL.close();
+}
+} catch(e){ bad('Phase RL: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower

@@ -572,3 +572,48 @@ equilibrium** — a mature room at 180 days costs almost nothing, a room stuck
 at rung 0 costs a review every day. One line ("your repertoire costs ~34
 moves/day to maintain") may drive the memorize-or-not decision better than any
 calendar, and it falls out of the same machinery.
+
+---
+
+# The in-VR review list (a sibling surface)
+
+The forecast answers *how much work is coming*. The review list answers *what
+do I do right now*, and it lives in the walk rather than in a report:
+`fa-list-check` in the VR toolbar → the rooms due or overdue, worst first,
+each labelled with its castle and room name. Picking one walks you to its
+door; grading it drops it from the list on the next open.
+
+It exists because the old loop was **digraph → review lens → scan for a due
+colour → jump into VR → review → leave VR → repeat**, where the expensive part
+was never the reviewing but the round trip. Now the loop closes inside one
+walk and ends when the list is empty.
+
+Four decisions worth keeping (each argued at its site in `js/threeVR.js`):
+
+- **A direct icon, not a one-item menu.** A menu would cost a click on the
+  critical path of a workflow whose entire purpose is fewer clicks. When a
+  second item exists, a three-dot menu earns its place.
+- **Left of the status badges, not next to Close.** The right cluster is
+  decorated / dirty / memorize / Close — indicators about the room you are
+  *in*, reading together with memorize beside Close. The review list is
+  navigation; dropping it between them would cut that group in half, and
+  phase AI's icon-order test pins the arrangement.
+- **"Due soon" is offered, not owed.** `roomReviewState`'s `soon` band exists
+  *because reaching a room costs a walk* — a cost already paid once you are
+  standing in here, which argues for showing them. But counting them as work
+  would mean the list never empties, and "until it is empty" is the end
+  condition the loop rests on. So they sit dimmed below a rule.
+- **Sorted by due date ascending**, which orders the states for free: an
+  overdue room's due date is furthest in the past, a `soon` one's is in the
+  future. Castle name breaks ties, so one castle's rooms clump.
+
+Two things it excludes: **locked dead ends** (the same `isRoomEmpty` exemption
+the coverage bars and `buildReviewForecast` already apply — there is nothing
+in one to review, with a castle's own entry room exempt from the exemption),
+and **unmemorized rooms**, which have nothing scheduled.
+
+A room with no Room Name falls back to **its own move pair**, not its
+generated id: in a repertoire where few rooms are named — the normal case — a
+list of "R3", "R7", "R11" identifies everything and tells you nothing.
+
+Tests: phase RL, 440–446.
