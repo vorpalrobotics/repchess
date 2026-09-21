@@ -611,6 +611,11 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // castle "Walk in VR" preview, which spawns straight inside with no
       // building -- keeps its centre pair in-room (nowhere else to show it).
       entryNoStreet: r === entry && !opts.backToStreet,
+      // this castle's root room. Only the review list reads it, for the one
+      // place the locked-dead-end exemption must NOT apply: a castle whose
+      // entry is its only room is still a real room to review. buildReviewForecast
+      // makes the same exemption from its own side (gr.posKey !== c.entryPosKey).
+      isCastleEntry: r === entry,
       posKey: r.posKey,   // first-4-FEN-fields for this room's position (mini-board icon)
       /* how many "opponent played X, I reply Y" facts this room teaches
          (genRoom.moveCount -- every member's out-degree, summed). Carried in
@@ -1747,6 +1752,188 @@ function openGradeMenu(){
     closeGradeMenu();
   };
   container.addEventListener('pointerdown', gradeMenuDismiss, true);
+}
+
+/* ---------- the review list ----------
+
+   The day's review loop used to run through the digraph: pick the review
+   lens, scan for a due colour, jump into VR, review, leave VR, repeat. The
+   expensive part of that was never the reviewing -- it was the round trip.
+   This keeps the whole loop inside one walk: open the list, take the top
+   room, review it, open the list again (it no longer holds that room),
+   until it is empty.
+
+   Everything it needs is already here. ROOMS holds every registered castle's
+   rooms rather than just the current one, REVIEWS/MEMORIZED are live, and
+   grading writes REVIEWS[key] in memory -- so "reopen and the room is gone"
+   needs no invalidation of anything, just a fresh read. */
+let reviewListEl = null, reviewListDismiss = null, reviewBtn = null;
+
+/* The room's own last move, "Nf6 c4", for a room with no Room Name.
+
+   Falling back to the generated id ("R3") would technically identify the room
+   and tell you nothing about it; a repertoire where few rooms are named -- the
+   normal case -- would list a dozen indistinguishable entries. The move pair
+   is what you actually recognise a room by. */
+function anchorMoveLabel(roomKey){
+  const pairs = DEMO_MNEMONICS[roomKey] && DEMO_MNEMONICS[roomKey].pairs;
+  const c = pairs && pairs.find(p => p.side === 'center');
+  return (c && c.opponent && c.response) ? `${c.opponent.san} ${c.response.san}` : '';
+}
+function reviewRoomLabel(roomKey){
+  return roomNameFor(roomKey)
+      || anchorMoveLabel(roomKey)
+      || (ROOMS[roomKey] && ROOMS[roomKey].castleSign && ROOMS[roomKey].castleSign.title)
+      || roomKey;
+}
+
+/* Every memorized castle room that wants reviewing, worst first.
+
+   Sorted by due date ascending, which orders the states for free: an overdue
+   room's due date is furthest in the past, a due one's more recent, a "soon"
+   one's in the near future. `soon` is carried but flagged, so the caller can
+   hold it below the working set -- see openReviewList.
+
+   Locked dead ends are excluded, the same exemption the coverage bars and
+   buildReviewForecast already apply (and via the same isRoomEmpty they say
+   they match): there is nothing in one to review. A castle's own entry room
+   is exempt from the exemption -- a one-room castle is still a real room. */
+function dueRoomList(now = Date.now()){
+  const out = [];
+  for(const key in ROOMS){
+    if(!key.startsWith('cas:')) continue;        // the street and the demo room have no schedule
+    const rec = reviewFor(key);
+    if(!rec) continue;                           // not memorized: nothing scheduled
+    const state = roomReviewState(rec, now);
+    if(state !== 'overdue' && state !== 'due' && state !== 'soon') continue;
+    if(isRoomEmpty(key) && !ROOMS[key].isCastleEntry) continue;
+    out.push({
+      key, state, due: rec.due,
+      castle: ROOMS[key].ownerCastle || '',
+      name: reviewRoomLabel(key),
+      moves: ROOMS[key].moveCount || 0,
+    });
+  }
+  out.sort((a, b) => (a.due - b.due)
+    || a.castle.localeCompare(b.castle)
+    || a.name.localeCompare(b.name));
+  return out;
+}
+
+function closeReviewList(){
+  if(!reviewListEl && !reviewListDismiss) return;
+  if(reviewListDismiss && container) container.removeEventListener('pointerdown', reviewListDismiss, true);
+  reviewListDismiss = null;
+  if(reviewListEl && reviewListEl.parentNode) reviewListEl.parentNode.removeChild(reviewListEl);
+  reviewListEl = null;
+  inputLocked = false;
+}
+function toggleReviewList(){
+  if(reviewListEl){ closeReviewList(); return; }
+  openReviewList();
+}
+
+const REVIEW_STATE_TAG = {
+  overdue: { text: 'overdue', color: 'rgba(198,40,40,.75)' },
+  due:     { text: 'due',     color: 'rgba(245,124,0,.7)' },
+  soon:    { text: 'soon',    color: 'rgba(120,130,150,.6)' },
+};
+
+function openReviewList(){
+  if(!container) return;
+  closeReviewList();
+  closeGradeMenu();
+  const all = dueRoomList();
+  const working = all.filter(r => r.state !== 'soon');
+  const soon = all.filter(r => r.state === 'soon');
+
+  const box = document.createElement('div');
+  box.dataset.reviewList = '1';
+  // same band as the grading menu: above the toolbar (6), below help (8)
+  box.style.cssText = 'position:absolute;top:52px;right:8px;z-index:7;min-width:19rem;max-width:min(26rem,90vw);'
+    + 'max-height:min(60vh,26rem);overflow:auto;display:flex;flex-direction:column;gap:3px;padding:6px;'
+    + 'border-radius:10px;background:rgba(28,38,58,.96);border:1px solid rgba(255,255,255,.35);'
+    + 'box-shadow:0 6px 20px rgba(0,0,0,.45);color:#fff;font:600 .85rem sans-serif;';
+
+  const head = document.createElement('div');
+  head.style.cssText = 'padding:.2rem .45rem .35rem;font-weight:400;font-size:.72rem;opacity:.75;';
+  head.dataset.reviewListHead = '1';
+  head.textContent = working.length
+    ? `${working.length} room${working.length === 1 ? '' : 's'} to review`
+    : 'Nothing due. You’re caught up.';
+  box.appendChild(head);
+
+  const row = (r) => {
+    const b = document.createElement('button');
+    b.dataset.reviewRoom = r.key;
+    b.dataset.reviewState = r.state;
+    b.style.cssText = 'text-align:left;padding:.4rem .45rem;border-radius:6px;cursor:pointer;'
+      + 'border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;'
+      + 'font:inherit;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:1px;'
+      + (r.state === 'soon' ? 'opacity:.6;' : '');
+    const tag = REVIEW_STATE_TAG[r.state] || REVIEW_STATE_TAG.due;
+    const top = document.createElement('div');
+    top.style.cssText = 'display:flex;align-items:center;gap:.4rem;';
+    const dot = document.createElement('span');
+    dot.style.cssText = `flex:none;width:.55rem;height:.55rem;border-radius:50%;background:${tag.color};`;
+    const nm = document.createElement('span');
+    nm.style.cssText = 'flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    nm.textContent = r.name;
+    top.append(dot, nm);
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-weight:400;font-size:.7rem;opacity:.7;';
+    // castle first: it is how you know WHERE you are being sent, and it is
+    // the thing the digraph workflow made obvious that a bare room name does not
+    sub.textContent = [r.castle, tag.text, r.moves ? `${r.moves} move${r.moves === 1 ? '' : 's'}` : '']
+      .filter(Boolean).join(' · ');
+    b.append(top, sub);
+    // same guard every VR overlay button uses -- without it the click also
+    // lands on the canvas behind the menu
+    b.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      closeReviewList();
+      enterAtDoorTo(r.key);
+    });
+    box.appendChild(b);
+    return b;
+  };
+
+  for(const r of working) row(r);
+  if(soon.length){
+    /* Below a rule and dimmed, deliberately. db.js's own note says the "soon"
+       state exists BECAUSE reaching a room costs a walk -- a cost you have
+       already paid once you are standing in here, which is the argument for
+       showing them at all. But counting them as work would mean the list
+       never empties, and "keep going until it is empty" is the end condition
+       the whole loop rests on. So they are offered, not owed. */
+    const rule = document.createElement('div');
+    rule.style.cssText = 'margin:.35rem .2rem .15rem;padding-top:.35rem;border-top:1px solid rgba(255,255,255,.18);'
+      + 'font-weight:400;font-size:.68rem;opacity:.6;';
+    rule.textContent = 'Due soon — optional, while you are here';
+    box.appendChild(rule);
+    for(const r of soon) row(r);
+  }
+
+  const close = document.createElement('button');
+  close.textContent = 'Close';
+  close.dataset.reviewListClose = '1';
+  close.style.cssText = 'margin-top:4px;text-align:left;padding:.4rem .45rem;border-radius:6px;cursor:pointer;'
+    + 'border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;font:inherit;opacity:.7;';
+  close.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeReviewList(); });
+  box.appendChild(close);
+
+  container.appendChild(box);
+  reviewListEl = box;
+  inputLocked = true;
+  // click-away dismiss, exactly as the grading menu does it -- and excluding
+  // this list's own button for the same reason, so its click toggles rather
+  // than closing and immediately reopening
+  reviewListDismiss = (ev) => {
+    if(box.contains(ev.target)) return;
+    if(reviewBtn && reviewBtn.contains(ev.target)) return;
+    closeReviewList();
+  };
+  container.addEventListener('pointerdown', reviewListDismiss, true);
 }
 
 async function loadDecorated(){
@@ -8476,6 +8663,8 @@ function buildTopToolbar(){
   // and unmarking is the rare one.
   memBtn      = makeIconBtn('fa-brain',          'Mark this room memorized',
                              () => { if(MEMORIZED[currentRoomKey]) toggleGradeMenu(); else toggleMemorized(); });
+  // the day's review loop, without leaving the walk -- see openReviewList
+  reviewBtn   = makeIconBtn('fa-list-check',     'Rooms due for review', () => toggleReviewList());
   closeBtn    = makeIconBtn('fa-circle-xmark',   'Close',         () => { if(threeOpts.onClose) threeOpts.onClose(); });
   // Edit + its edit-only buttons (roomGeom/wallLists/assets) wrapped in one
   // bordered "chip" so they read as a single grouped tool cluster, distinct
@@ -8491,7 +8680,11 @@ function buildTopToolbar(){
   // memorize is the rightmost status badge (right next to Close); decorated,
   // when shown, sits immediately to its left; dirty (when shown) sits between
   // decorated and memorize -- it's specifically about the memorized state.
-  right.append(decoratedBadge, dirtyBadge, memBtn, closeBtn);
+  /* Review list at the LEFT of the right group, not next to Close. The rest of
+     this cluster is status badges about the room you are in, reading together
+     at the right edge with memorize next to Close; the review list is
+     navigation, and dropping it between them would cut that group in half. */
+  right.append(reviewBtn, decoratedBadge, dirtyBadge, memBtn, closeBtn);
   bar.append(left, right);
   return bar;
 }
@@ -9676,6 +9869,13 @@ function onKeyDown(e){
     if(g){ closeGradeMenu(); gradeCurrentRoom(g); }
     return;
   }
+  // and the review list owns it the same way while it is up: Esc closes,
+  // everything else is swallowed so a stray w/a/s/d doesn't queue up a walk
+  // that fires the moment you pick a room
+  if(reviewListEl){
+    if(e.key === 'Escape') closeReviewList();
+    return;
+  }
   // Undo/redo -- ahead of the selectedProp branch below so it works whether
   // or not something is currently selected. Ctrl+Z / Cmd+Z undoes; adding
   // Shift, or Ctrl+Y, redoes (Ctrl+Y is the common Windows-only alt binding).
@@ -10436,6 +10636,28 @@ export async function openThreeTest(containerEl, opts){
       // which line a room belongs to -- the value the note affordances hand
       // back out through onPairNote, threaded in at registerOneCastle
       roomLineId: (roomKey) => (ROOMS[roomKey || currentRoomKey] || {}).lineId ?? null,
+      /* the review list (the day's loop, without leaving the walk). The data
+         and the rendered rows are separate hooks on purpose: the first is what
+         dueRoomList decided, the second is what actually reached the screen,
+         and they fail differently. */
+      reviewList: () => dueRoomList().map(r => ({ key: r.key, state: r.state, castle: r.castle, name: r.name, moves: r.moves })),
+      reviewListOpen: () => !!reviewListEl,
+      reviewListHead: () => {
+        const h = reviewListEl && reviewListEl.querySelector('[data-review-list-head]');
+        return h ? h.textContent : null;
+      },
+      reviewListRows: () => reviewListEl
+        ? [...reviewListEl.querySelectorAll('[data-review-room]')].map(b => ({
+            key: b.dataset.reviewRoom, state: b.dataset.reviewState, text: b.textContent }))
+        : null,
+      // clicks a row exactly as a user would -- the row's own handler does the
+      // close-and-walk, so this covers the real path rather than enterAtDoorTo
+      clickReviewRow: (key) => {
+        const b = reviewListEl && reviewListEl.querySelector(`[data-review-room="${key}"]`);
+        if(!b) return false;
+        b.click();
+        return true;
+      },
       /* the dead-end note scrolls in the current room, as updateNoteScrolls
          has most recently left them. One per dead-end sign, so a two-track
          room with two dead lanes reports two -- each resolving its own lane's
@@ -10758,7 +10980,8 @@ export function closeThreeTest(){
   joyVec = { x: 0, y: 0 };
   editTouchEl = null;
   toolbarEl = null; helpOverlay = null;
-  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = null;
+  closeReviewList();
+  hintsBtn = editBtn = roomGeomBtn = assetsBtn = closeBtn = infoBtn = memBtn = dirtyBadge = editGroup = undoBtn = redoBtn = reviewBtn = null;
   threeOpts = {};
   closeRoomGeomDialog();
   scene = null; camera = null; clock = null; container = null;
