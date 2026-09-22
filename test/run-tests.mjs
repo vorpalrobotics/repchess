@@ -25463,6 +25463,129 @@ try {
 } catch(e){ bad('Phase RL: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase AR: the Accuracy Report. Visibility into what the three
+//     collectors (per-rung grade tally, grade event log, quiz step log) have
+//     actually recorded. The aggregation is pure, like buildReviewForecast's,
+//     so its arithmetic is checkable without driving months of reviews
+//     through the UI. ---
+if(shouldRunPhase(['core'])){
+try {
+const appAR = await launchApp();
+try {
+  await seedBackup(appAR.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+
+  const report = (stats, gradeLog, quizLog) => appAR.page.evaluate(
+    ([s, g, q]) => window.__accuracyReport(s, g, q), [stats, gradeLog, quizLog]);
+
+  // 455. The arithmetic. Rates are per rung from the TALLY (which survives the
+  //      log's cap), room size and the interval actually run come from the
+  //      LOG (which is the only thing that carries them).
+  try {
+    const stats = { '0': { A: 1, B: 1, C: 8 }, '2': { A: 8, B: 1, C: 1 } };
+    const log = [
+      { t: 1, k: 'r1', r: 0, n: 3,  d: 2,  g: 'C' },
+      { t: 2, k: 'r2', r: 0, n: 25, d: 2,  g: 'C' },
+      { t: 3, k: 'r3', r: 2, n: 25, d: 10, g: 'A' },
+      { t: 4, k: 'r4', r: 2, n: 3,  d: 12, g: 'A' },
+    ];
+    const rep = await report(stats, log, []);
+    const r0 = rep.rungs.find(r => r.step === 0), r2 = rep.rungs.find(r => r.step === 2);
+    assert(r0.total === 10 && r0.failPct === 80,
+      `expected rung 0 at 80% failed from the tally, got ${JSON.stringify(r0)}`);
+    assert(r2.total === 10 && r2.failPct === 10 && r2.perfectPct === 80,
+      `expected rung 2 read from the tally too, got ${JSON.stringify(r2)}`);
+    assert(rep.totals.total === 20 && rep.totals.failPct === 45,
+      `expected totals across rungs, got ${JSON.stringify(rep.totals)}`);
+    // the interval that ACTUALLY ran, averaged, against the ladder's nominal
+    assert(r0.days === 1 && r0.elapsed === 2,
+      `expected rung 0's real interval to read as 2d against a 1d nominal, got ${JSON.stringify(r0)}`);
+    assert(r2.days === 7 && r2.elapsed === 11,
+      `expected rung 2's real interval averaged from the log, got ${JSON.stringify(r2)}`);
+    // rungs with nothing recorded report no rate rather than a misleading zero
+    const idle = rep.rungs.find(r => r.total === 0);
+    assert(idle && idle.failPct === null && idle.elapsed === null,
+      `expected an untouched rung to report no rate at all, got ${JSON.stringify(idle)}`);
+
+    const small = rep.sizes.find(b => /1-4/.test(b.label));
+    const big = rep.sizes.find(b => /20\+/.test(b.label));
+    assert(small.total === 2 && small.fails === 1 && small.failPct === 50,
+      `expected the small-room bucket from the log, got ${JSON.stringify(small)}`);
+    assert(big.total === 2 && big.fails === 1,
+      `expected the big-room bucket from the log, got ${JSON.stringify(big)}`);
+    ok('accuracy report: per-rung rates from the tally, size and real interval from the log');
+  } catch(e){ bad('accuracy report: aggregation', e); }
+
+  // 456. Quiz rows, one per kind, from their own outcomes -- and an event with
+  //      no kind reads as the opening quiz, which is what quizEventKind does.
+  try {
+    const q = [
+      { t: 1, q: 'mnem', o: 'hit' }, { t: 2, q: 'mnem', o: 'miss' },
+      { t: 3, q: 'mnem', o: 'reveal' }, { t: 4, q: 'mnem', o: 'unsure' },
+      { t: 5, q: 'list', o: 'hit' },
+      { t: 6, o: 'hit' }, { t: 7, o: 'miss' },
+    ];
+    const rep = await report({}, [], q);
+    const mnem = rep.quizzes.find(x => x.kind === 'mnem');
+    const opening = rep.quizzes.find(x => x.kind === 'opening');
+    assert(mnem.total === 4 && mnem.hit === 1 && mnem.miss === 1 && mnem.reveal === 1 && mnem.unsure === 1,
+      `expected every mnemonics outcome counted, got ${JSON.stringify(mnem)}`);
+    assert(mnem.hitPct === 25, `expected 1 of 4 right, got ${JSON.stringify(mnem.hitPct)}`);
+    assert(opening.total === 2, `expected a kindless event to count as the opening quiz, got ${JSON.stringify(opening)}`);
+    assert(rep.quizTotal === 7, `expected every step counted once, got ${rep.quizTotal}`);
+    assert(!rep.empty, 'expected a report with quiz data not to read as empty');
+    ok('accuracy report: one row per quiz kind, with a kindless step counting as the opening quiz');
+  } catch(e){ bad('accuracy report: quiz rows', e); }
+
+  // 457. It opens from the menu, obeys the informational bar contract, and
+  //      says what to do when nothing has been recorded -- which is the state
+  //      every new user is in, and the one a bare table of zeroes reads worst.
+  try {
+    await appAR.page.evaluate(() => document.getElementById('menuAccuracy').click());
+    await appAR.page.waitForSelector('#accuracyOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appAR.page, 'accuracyOverlay', 'Accuracy Report');
+    const body = await appAR.page.evaluate(() => document.getElementById('accuracyBody').textContent);
+    assert(/Nothing recorded yet/.test(body),
+      `expected an explicit empty state on a fresh install, got ${JSON.stringify(body.slice(0, 120))}`);
+    assert(/brain icon|1\/2\/3/.test(body) && /Test/.test(body),
+      `expected the empty state to say where the numbers come from, got ${JSON.stringify(body.slice(0, 200))}`);
+    await appAR.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
+    await appAR.page.waitForFunction(
+      () => document.getElementById('accuracyOverlay').style.display === 'none', { timeout: 5000 });
+    ok('accuracy report: opens from the menu as an informational modal, with a real empty state');
+  } catch(e){ bad('accuracy report: modal', e); }
+
+  // 458. A rate computed from too few reviews is not shown. "100% off two
+  //      samples" reads as a finding when it is noise, and this report exists
+  //      to be read as evidence.
+  try {
+    await appAR.page.evaluate(async () => {
+      await window.__reviewTestHooks.setGradeStats({ '3': { A: 2, B: 0, C: 0 }, '4': { A: 40, B: 5, C: 5 } });
+    });
+    await appAR.page.evaluate(() => document.getElementById('menuAccuracy').click());
+    await appAR.page.waitForSelector('#accuracyOverlay', { state: 'visible', timeout: 5000 });
+    const rows = await appAR.page.evaluate(() =>
+      [...document.querySelectorAll('#accuracyBody table.acc tr')].map(tr =>
+        [...tr.children].map(td => td.textContent.trim())));
+    const thin = rows.find(r => r[0] === '3'), thick = rows.find(r => r[0] === '4');
+    assert(thin && /^[—-]$/.test(thin[thin.length - 1]),
+      `expected no rate from 2 reviews, got ${JSON.stringify(thin)}`);
+    assert(thick && /%$/.test(thick[thick.length - 1]),
+      `expected a rate from 50 reviews, got ${JSON.stringify(thick)}`);
+    await appAR.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
+    ok('accuracy report: a rate from too few reviews is withheld rather than shown as noise');
+  } catch(e){ bad('accuracy report: small-sample suppression', e); }
+} finally {
+  await appAR.close();
+}
+} catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower
