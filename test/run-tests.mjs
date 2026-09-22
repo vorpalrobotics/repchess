@@ -25581,26 +25581,35 @@ try {
     ok('accuracy report: opens from the menu as an informational modal, with a real empty state');
   } catch(e){ bad('accuracy report: modal', e); }
 
-  // 458. A rate computed from too few reviews is not shown. "100% off two
-  //      samples" reads as a finding when it is noise, and this report exists
-  //      to be read as evidence.
+  /* 458. A thin score is SHOWN and marked provisional, not withheld.
+          Withholding it made the em dash mean two things at once -- "no
+          reviews" and "reviews, but not many" -- so a rung with a single clean
+          A reported nothing at all, which reads as broken rather than careful.
+          The dash now means only "nothing recorded". */
   try {
     await appAR.page.evaluate(async () => {
-      await window.__reviewTestHooks.setGradeStats({ '3': { A: 2, B: 0, C: 0 }, '4': { A: 40, B: 5, C: 5 } });
+      await window.__reviewTestHooks.setGradeStats({ '1': { A: 1, B: 0, C: 0 }, '4': { A: 40, B: 5, C: 5 } });
     });
     await appAR.page.evaluate(() => document.getElementById('menuAccuracy').click());
     await appAR.page.waitForSelector('#accuracyOverlay', { state: 'visible', timeout: 5000 });
-    const rows = await appAR.page.evaluate(() =>
-      [...document.querySelectorAll('#accuracyBody table.acc tr')].map(tr =>
-        [...tr.children].map(td => td.textContent.trim())));
-    const thin = rows.find(r => r[0] === '3'), thick = rows.find(r => r[0] === '4');
-    assert(thin && /^[—-]$/.test(thin[thin.length - 1]),
-      `expected no rate from 2 reviews, got ${JSON.stringify(thin)}`);
-    assert(thick && /%$/.test(thick[thick.length - 1]),
-      `expected a rate from 50 reviews, got ${JSON.stringify(thick)}`);
+    const cells = await appAR.page.evaluate(() =>
+      [...document.querySelectorAll('#accuracyBody table.acc tr')].map(tr => ({
+        label: tr.children[0] ? tr.children[0].textContent.trim() : '',
+        last: tr.children.length ? tr.children[tr.children.length - 1].textContent.trim() : '',
+        thin: !!(tr.children.length && tr.children[tr.children.length - 1].querySelector('.acc-thin')),
+      })));
+    const one = cells.find(c => c.label === '1');
+    const many = cells.find(c => c.label === '4');
+    const none = cells.find(c => c.label === '2');   // a rung with nothing recorded
+    assert(one && one.last === '100%' && one.thin,
+      `expected a single clean A to read 100%, marked provisional, got ${JSON.stringify(one)}`);
+    assert(many && /%$/.test(many.last) && !many.thin,
+      `expected a score from 50 reviews shown plainly, got ${JSON.stringify(many)}`);
+    assert(none && /^[—-]$/.test(none.last),
+      `expected the dash reserved for a rung with nothing recorded, got ${JSON.stringify(none)}`);
     await appAR.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
-    ok('accuracy report: a rate from too few reviews is withheld rather than shown as noise');
-  } catch(e){ bad('accuracy report: small-sample suppression', e); }
+    ok('accuracy report: a thin score is shown but marked provisional; the dash means no data');
+  } catch(e){ bad('accuracy report: thin-sample marking', e); }
 } finally {
   await appAR.close();
 }
