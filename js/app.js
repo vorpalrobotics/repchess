@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-442';
+const BUILD_TAG = '-443';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8508,8 +8508,36 @@ async function gatherBuiltCastles(lines){
    the ladder's nominal. Reviews always run late to some degree -- you reach a
    room when you walk to it -- so a rung whose real interval is consistently
    half again its nominal is not really being tested at its nominal at all. */
-const GRADE_FAIL = 'C';
+/* ---------- the figure of merit ----------
+
+   A weighted score rather than a failure rate. A failure rate counts only
+   outright losses, so it cannot see the signal that actually precedes them: a
+   rung drifting from mostly-A to mostly-B is getting too long, and nothing has
+   failed yet.
+
+   B is 0.6, not 0.5, and the reason is a collision rather than a preference.
+   At 0.5 a rung where EVERY review is a B scores exactly the same as one that
+   is half A and half C -- "known every time, imperfectly" rated identically to
+   "half the material is gone". It also matches what the scheduler already
+   believes: nextReviewStep treats A as advance, B as HOLD and C as reset to
+   zero, so B is a neutral outcome sitting nearer the top of the scale than the
+   middle.
+
+   These are display constants. The raw A/B/C counts are what is stored, so the
+   weighting can be re-tuned later and every past review re-scores with it. */
+const GRADE_WEIGHT = { A: 1, B: 0.6, C: 0 };
+// the quiz outcomes map onto the same idea: `unsure` is the quiz's B (you had
+// it, not cleanly), and a miss and a give-up are both simply not having it
+const QUIZ_WEIGHT = { hit: 1, unsure: 0.6, miss: 0, reveal: 0 };
 function pct(n, d){ return d > 0 ? Math.round((n / d) * 100) : null; }
+function weightedScore(counts, weights){
+  let sum = 0, total = 0;
+  for(const [k, w] of Object.entries(weights)){
+    const n = counts[k] || 0;
+    sum += n * w; total += n;
+  }
+  return total > 0 ? Math.round((sum / total) * 100) : null;
+}
 function buildAccuracyReport(stats, gradeLog, quizLog){
   const ladder = ROOM_REVIEW_LADDER;
   const log = Array.isArray(gradeLog) ? gradeLog : [];
@@ -8522,13 +8550,13 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
     const at = log.filter(e => (e.r || 0) === i && typeof e.d === 'number');
     const elapsed = at.length ? at.reduce((n, e) => n + e.d, 0) / at.length : null;
     return { step: i, days, ...row, total,
-             failPct: pct(row.C, total), perfectPct: pct(row.A, total),
+             scorePct: weightedScore(row, GRADE_WEIGHT), perfectPct: pct(row.A, total),
              elapsed: elapsed == null ? null : Math.round(elapsed * 10) / 10,
              elapsedSamples: at.length };
   });
   const totals = rungs.reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
     { A: 0, B: 0, C: 0, total: 0 });
-  totals.failPct = pct(totals.C, totals.total);
+  totals.scorePct = weightedScore(totals, GRADE_WEIGHT);
   totals.perfectPct = pct(totals.A, totals.total);
 
   /* By room size, from the LOG -- the tally cannot answer this, which is why
@@ -8542,8 +8570,9 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
   ];
   const sizes = SIZE_BUCKETS.map(b => {
     const rows = log.filter(e => (e.n || 0) >= b.lo && (e.n || 0) <= b.hi);
-    const fails = rows.filter(e => e.g === GRADE_FAIL).length;
-    return { label: b.label, total: rows.length, fails, failPct: pct(fails, rows.length) };
+    const c = { A: 0, B: 0, C: 0 };
+    for(const e of rows) if(c[e.g] != null) c[e.g]++;
+    return { label: b.label, total: rows.length, ...c, scorePct: weightedScore(c, GRADE_WEIGHT) };
   });
 
   // quizzes: one row per kind, from its own outcomes
@@ -8556,7 +8585,7 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
     const rows = qlog.filter(e => (e.q || 'opening') === k.kind);
     const c = { hit: 0, unsure: 0, miss: 0, reveal: 0 };
     for(const e of rows) if(c[e.o] != null) c[e.o]++;
-    return { ...k, ...c, total: rows.length, hitPct: pct(c.hit, rows.length) };
+    return { ...k, ...c, total: rows.length, scorePct: weightedScore(c, QUIZ_WEIGHT) };
   });
   const quizTotal = quizzes.reduce((n, q) => n + q.total, 0);
 
@@ -9077,27 +9106,30 @@ function renderAccuracyReport(rep){
 
   h += '<h3 class="acc-h">Reviews by ladder rung</h3>';
   h += `<p class="acc-sub">${rep.totals.total} graded review${rep.totals.total === 1 ? '' : 's'}. `
-    + 'A rung you almost never fail is too short; one you fail half the time is too long. '
+    + `Score weights A as 1, B as ${GRADE_WEIGHT.B} and C as 0 &mdash; so a rung sliding from mostly-A `
+    + 'to mostly-B is getting long before anything actually fails. A rung you score near the top is '
+    + 'too short; one well down the scale is too long. '
     + '&ldquo;Ran&rdquo; is how long the interval actually lasted, which is usually longer than nominal.</p>';
   h += '<table class="acc"><tr><th>Rung</th><th>Nominal</th><th>Ran</th>'
-    + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Failed</th></tr>';
+    + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Score</th></tr>';
   for(const r of rep.rungs){
     h += `<tr><td>${r.step}</td><td>${r.days}d</td>`
       + `<td>${r.elapsed == null ? '<span class="acc-none">&mdash;</span>' : r.elapsed + 'd'}</td>`
       + `<td>${r.A}</td><td>${r.B}</td><td>${r.C}</td><td>${r.total}</td>`
-      + `<td>${accRate(r.failPct, r.total)}</td></tr>`;
+      + `<td>${accRate(r.scorePct, r.total)}</td></tr>`;
   }
   h += `<tr class="acc-total"><td>All</td><td></td><td></td>`
     + `<td>${rep.totals.A}</td><td>${rep.totals.B}</td><td>${rep.totals.C}</td>`
-    + `<td>${rep.totals.total}</td><td>${accRate(rep.totals.failPct, rep.totals.total)}</td></tr></table>`;
+    + `<td>${rep.totals.total}</td><td>${accRate(rep.totals.scorePct, rep.totals.total)}</td></tr></table>`;
 
   h += '<h3 class="acc-h">Reviews by room size</h3>';
   h += '<p class="acc-sub">Whether bigger rooms fail more often &mdash; the confounder to rule out '
     + 'before reading a rung&rsquo;s rate as a verdict on its interval.</p>';
-  h += '<table class="acc"><tr><th>Room size</th><th>Reviews</th><th>Failed</th><th>Rate</th></tr>';
+  h += '<table class="acc"><tr><th>Room size</th><th>A</th><th>B</th><th>C</th>'
+    + '<th>Reviews</th><th>Score</th></tr>';
   for(const b of rep.sizes){
-    h += `<tr><td>${b.label}</td><td>${b.total}</td><td>${b.fails}</td>`
-      + `<td>${accRate(b.failPct, b.total)}</td></tr>`;
+    h += `<tr><td>${b.label}</td><td>${b.A}</td><td>${b.B}</td><td>${b.C}</td>`
+      + `<td>${b.total}</td><td>${accRate(b.scorePct, b.total)}</td></tr>`;
   }
   h += '</table>';
   if(rep.logged < rep.reviews){
@@ -9106,11 +9138,13 @@ function renderAccuracyReport(rep){
   }
 
   h += '<h3 class="acc-h">Quizzes</h3>';
+  h += `<p class="acc-sub">Scored the same way: right counts 1, unsure ${QUIZ_WEIGHT.unsure}, `
+    + 'and a wrong answer or a give-up 0.</p>';
   h += '<table class="acc"><tr><th>Quiz</th><th>Right</th><th>Unsure</th><th>Wrong</th>'
-    + '<th>Shown</th><th>Steps</th><th>Right</th></tr>';
+    + '<th>Shown</th><th>Steps</th><th>Score</th></tr>';
   for(const q of rep.quizzes){
     h += `<tr><td>${q.label}</td><td>${q.hit}</td><td>${q.unsure}</td><td>${q.miss}</td>`
-      + `<td>${q.reveal}</td><td>${q.total}</td><td>${accRate(q.hitPct, q.total)}</td></tr>`;
+      + `<td>${q.reveal}</td><td>${q.total}</td><td>${accRate(q.scorePct, q.total)}</td></tr>`;
   }
   h += '</table>';
   return h;
