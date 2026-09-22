@@ -25496,12 +25496,15 @@ try {
     ];
     const rep = await report(stats, log, []);
     const r0 = rep.rungs.find(r => r.step === 0), r2 = rep.rungs.find(r => r.step === 2);
-    assert(r0.total === 10 && r0.failPct === 80,
-      `expected rung 0 at 80% failed from the tally, got ${JSON.stringify(r0)}`);
-    assert(r2.total === 10 && r2.failPct === 10 && r2.perfectPct === 80,
-      `expected rung 2 read from the tally too, got ${JSON.stringify(r2)}`);
-    assert(rep.totals.total === 20 && rep.totals.failPct === 45,
-      `expected totals across rungs, got ${JSON.stringify(rep.totals)}`);
+    /* Scored, not a failure rate: A=1, B=0.6, C=0. Rung 0 is (1 + 0.6)/10 and
+       rung 2 is (8 + 0.6)/10 -- so a rung full of Bs cannot read the same as
+       one that is half A and half C, which a 0.5 weight would have allowed. */
+    assert(r0.total === 10 && r0.scorePct === 16,
+      `expected rung 0 to score 16, got ${JSON.stringify(r0)}`);
+    assert(r2.total === 10 && r2.scorePct === 86 && r2.perfectPct === 80,
+      `expected rung 2 to score 86 from the tally, got ${JSON.stringify(r2)}`);
+    assert(rep.totals.total === 20 && rep.totals.scorePct === 51,
+      `expected totals scored across rungs, got ${JSON.stringify(rep.totals)}`);
     // the interval that ACTUALLY ran, averaged, against the ladder's nominal
     assert(r0.days === 1 && r0.elapsed === 2,
       `expected rung 0's real interval to read as 2d against a 1d nominal, got ${JSON.stringify(r0)}`);
@@ -25509,17 +25512,34 @@ try {
       `expected rung 2's real interval averaged from the log, got ${JSON.stringify(r2)}`);
     // rungs with nothing recorded report no rate rather than a misleading zero
     const idle = rep.rungs.find(r => r.total === 0);
-    assert(idle && idle.failPct === null && idle.elapsed === null,
+    assert(idle && idle.scorePct === null && idle.elapsed === null,
       `expected an untouched rung to report no rate at all, got ${JSON.stringify(idle)}`);
 
     const small = rep.sizes.find(b => /1-4/.test(b.label));
     const big = rep.sizes.find(b => /20\+/.test(b.label));
-    assert(small.total === 2 && small.fails === 1 && small.failPct === 50,
-      `expected the small-room bucket from the log, got ${JSON.stringify(small)}`);
-    assert(big.total === 2 && big.fails === 1,
+    assert(small.total === 2 && small.A === 1 && small.C === 1 && small.scorePct === 50,
+      `expected the small-room bucket scored from the log, got ${JSON.stringify(small)}`);
+    assert(big.total === 2 && big.A === 1 && big.C === 1,
       `expected the big-room bucket from the log, got ${JSON.stringify(big)}`);
     ok('accuracy report: per-rung rates from the tally, size and real interval from the log');
   } catch(e){ bad('accuracy report: aggregation', e); }
+
+  /* 459. The reason B is 0.6 rather than 0.5, pinned. At 0.5 a rung where
+          EVERY review is a B scores exactly the same as one that is half A and
+          half C -- "known every time, imperfectly" rated identically to "half
+          the material is gone". The weighting exists to tell those apart. */
+  try {
+    const rep = await report({ '0': { A: 0, B: 10, C: 0 }, '1': { A: 5, B: 0, C: 5 } }, [], []);
+    const allB = rep.rungs.find(r => r.step === 0), split = rep.rungs.find(r => r.step === 1);
+    assert(allB.scorePct > split.scorePct,
+      `expected an all-B rung to score ABOVE one that is half A and half C, got ${allB.scorePct} and ${split.scorePct}`);
+    assert(split.scorePct === 50, `expected half A / half C at 50, got ${split.scorePct}`);
+    // ...and both still rank below a rung that is mostly clean recall
+    const clean = await report({ '0': { A: 9, B: 1, C: 0 } }, [], []);
+    assert(clean.rungs[0].scorePct > allB.scorePct,
+      `expected mostly-A to outscore all-B, got ${clean.rungs[0].scorePct} and ${allB.scorePct}`);
+    ok('accuracy report: the B weight separates "imperfect every time" from "half of it gone"');
+  } catch(e){ bad('accuracy report: B weighting', e); }
 
   // 456. Quiz rows, one per kind, from their own outcomes -- and an event with
   //      no kind reads as the opening quiz, which is what quizEventKind does.
@@ -25535,7 +25555,8 @@ try {
     const opening = rep.quizzes.find(x => x.kind === 'opening');
     assert(mnem.total === 4 && mnem.hit === 1 && mnem.miss === 1 && mnem.reveal === 1 && mnem.unsure === 1,
       `expected every mnemonics outcome counted, got ${JSON.stringify(mnem)}`);
-    assert(mnem.hitPct === 25, `expected 1 of 4 right, got ${JSON.stringify(mnem.hitPct)}`);
+    // (1 + 0.6)/4 -- unsure scores like a B, a miss and a give-up like a C
+    assert(mnem.scorePct === 40, `expected the mnemonics quiz scored 40, got ${JSON.stringify(mnem.scorePct)}`);
     assert(opening.total === 2, `expected a kindless event to count as the opening quiz, got ${JSON.stringify(opening)}`);
     assert(rep.quizTotal === 7, `expected every step counted once, got ${rep.quizTotal}`);
     assert(!rep.empty, 'expected a report with quiz data not to read as empty');
