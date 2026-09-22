@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-443';
+const BUILD_TAG = '-444';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9091,8 +9091,18 @@ async function openReviewForecast(){
    off two samples reads as a finding when it is noise, and this whole report
    exists to be read as evidence. */
 const ACC_MIN_SAMPLES = 5;
+/* A score is SHOWN whenever there is anything to score, and marked provisional
+   when it rests on too little.
+
+   Withholding it below a threshold was the first attempt and it was wrong in a
+   specific way: the em dash then meant two different things -- "no reviews at
+   all" and "reviews, but not enough of them" -- so a rung with one clean A
+   reported nothing, which reads as broken rather than careful. The counts are
+   right there in the same row; the reader can see a 100% came from one review.
+   Styling says "do not read a trend into this" without hiding the number. */
 function accRate(pctVal, n, min = ACC_MIN_SAMPLES){
-  if(pctVal == null || n < min) return '<span class="acc-none">&mdash;</span>';
+  if(pctVal == null || !n) return '<span class="acc-none">&mdash;</span>';
+  if(n < min) return `<span class="acc-thin" title="From ${n} recorded — too few to read as a trend">${pctVal}%</span>`;
   return `${pctVal}%`;
 }
 function renderAccuracyReport(rep){
