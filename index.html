@@ -470,6 +470,18 @@
   .cr-exits b{color:#888;font-weight:600;margin-right:.3em}
   .cr-empty{color:#999;font-style:italic}
 
+  /* ---------- Accuracy Report ---------- */
+  .acc-h{margin:1.1rem 0 .3rem;font-size:.95rem;color:#1f4e79}
+  .acc-h:first-child{margin-top:0}
+  .acc-sub{font-size:.78rem;color:#666;margin:0 0 .4rem}
+  table.acc{border-collapse:collapse;width:100%;font-size:.84rem}
+  table.acc th,table.acc td{border-bottom:1px solid #e6e6e6;padding:.3rem .45rem;text-align:right}
+  table.acc th:first-child,table.acc td:first-child{text-align:left}
+  table.acc th{color:#555;font-weight:600;font-size:.76rem;text-transform:uppercase;letter-spacing:.03em}
+  table.acc tr.acc-total td{font-weight:700;border-top:2px solid #ccc}
+  .acc-none{color:#999}
+  .acc-empty{color:#666;font-size:.9rem;line-height:1.5}
+
   /* ---------- Review Forecast (Documents/review-forecast.md) ----------
      Same labelled-bar idiom as the digraph's coverage panel below, with one
      difference that matters: a coverage bar is a FRACTION of a whole, so its
@@ -1031,6 +1043,7 @@
     <div id="menuList">
       <button id="menuThreeTest" title="Shift+click or right-click to force a fresh rebuild">Run VR</button>
       <button id="menuReviewForecast" title="How much review is coming, and when — for pacing new memorization">VR Schedule</button>
+      <button id="menuAccuracy" title="How often you actually recall what you have memorized, by ladder rung, room size and quiz">Accuracy Report</button>
       <hr class="row-menu-sep">
       <button id="menuAssets">VR Assets</button>
       <button id="menuObjectLists">VR Object Lists</button>
@@ -1497,6 +1510,15 @@
 </div>
 
 <!-- cross-castle transposition report -->
+<!-- Accuracy Report. Informational: nothing here is staged, so the bar is a
+     title and a bare Done (Documents/modal-buttons.md). -->
+<div id="accuracyOverlay" class="overlay">
+  <div class="modal" style="width:min(44em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div id="accuracyBar" class="modal-bar-host"></div>
+    <div class="modal-body"><div id="accuracyBody"></div></div>
+  </div>
+</div>
+
 <!-- Review Forecast (Documents/review-forecast.md). Informational under
      Documents/modal-buttons.md: nothing here is staged, so the bar is a title
      and a bare Done, and the scope dropdown is a view control that stays in
@@ -2080,6 +2102,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-441"></script>
+<script type="module" src="js/app.js?v=20260804-442"></script>
 </body>
 </html>

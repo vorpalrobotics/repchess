@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-441';
+const BUILD_TAG = '-442';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3748,6 +3748,9 @@ function miniBoardGridHtml(fen, flip){
 if(localStorage.getItem('threeTestDebug')) window.__miniBoardGridHtml = miniBoardGridHtml;
 // disambiguator count for one move in one position -- see disambiguatorCountAt
 if(localStorage.getItem('threeTestDebug')) window.__disambigProbe = (fen, san) => disambiguatorCountAt(fen, san);
+// the Accuracy Report's pure core, so its arithmetic is testable without
+// driving months of reviews through the UI
+if(localStorage.getItem('threeTestDebug')) window.__accuracyReport = (stats, gradeLog, quizLog) => buildAccuracyReport(stats, gradeLog, quizLog);
 // the roomKey of whatever node showRoomInfoPanel most recently rendered --
 // read by roomInfoJumpBtn's click handler (kept as module state, same as
 // GRAPH_FOCUS_SEQ etc., rather than threaded through the DOM).
@@ -8486,6 +8489,82 @@ async function gatherBuiltCastles(lines){
   return _builtCastlesBuildPromise;
 }
 
+/* ---------- Accuracy Report: the aggregation core ----------
+
+   What the three collectors have actually recorded, turned into the questions
+   worth asking of them. PURE over its inputs, like buildReviewForecast, so the
+   arithmetic is testable without a browser and the renderer stays a thin
+   view over it.
+
+   The headline is the per-rung failure rate. That is the number the ladder is
+   tuned against: a rung you almost never fail is too short, one you fail half
+   the time is too long, and until now nothing surfaced which was which. Room
+   size and the interval actually run are the two confounders worth separating
+   out before reading it -- a rung can look bad because its rooms are big
+   rather than because its interval is wrong, or because you got to them a week
+   late.
+
+   `elapsed` compares the interval that ACTUALLY ran (the log's `d`) against
+   the ladder's nominal. Reviews always run late to some degree -- you reach a
+   room when you walk to it -- so a rung whose real interval is consistently
+   half again its nominal is not really being tested at its nominal at all. */
+const GRADE_FAIL = 'C';
+function pct(n, d){ return d > 0 ? Math.round((n / d) * 100) : null; }
+function buildAccuracyReport(stats, gradeLog, quizLog){
+  const ladder = ROOM_REVIEW_LADDER;
+  const log = Array.isArray(gradeLog) ? gradeLog : [];
+  const qlog = Array.isArray(quizLog) ? quizLog : [];
+
+  // per rung, from the TALLY (authoritative -- it survives the log's cap)
+  const rungs = ladder.map((days, i) => {
+    const row = (stats && stats[String(i)]) || { A: 0, B: 0, C: 0 };
+    const total = row.A + row.B + row.C;
+    const at = log.filter(e => (e.r || 0) === i && typeof e.d === 'number');
+    const elapsed = at.length ? at.reduce((n, e) => n + e.d, 0) / at.length : null;
+    return { step: i, days, ...row, total,
+             failPct: pct(row.C, total), perfectPct: pct(row.A, total),
+             elapsed: elapsed == null ? null : Math.round(elapsed * 10) / 10,
+             elapsedSamples: at.length };
+  });
+  const totals = rungs.reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
+    { A: 0, B: 0, C: 0, total: 0 });
+  totals.failPct = pct(totals.C, totals.total);
+  totals.perfectPct = pct(totals.A, totals.total);
+
+  /* By room size, from the LOG -- the tally cannot answer this, which is why
+     the log carries `n` at all. Buckets rather than a scatter: with a few
+     hundred reviews a trend is all the data can honestly support. */
+  const SIZE_BUCKETS = [
+    { label: '1-4 moves', lo: 1, hi: 4 },
+    { label: '5-9 moves', lo: 5, hi: 9 },
+    { label: '10-19 moves', lo: 10, hi: 19 },
+    { label: '20+ moves', lo: 20, hi: Infinity },
+  ];
+  const sizes = SIZE_BUCKETS.map(b => {
+    const rows = log.filter(e => (e.n || 0) >= b.lo && (e.n || 0) <= b.hi);
+    const fails = rows.filter(e => e.g === GRADE_FAIL).length;
+    return { label: b.label, total: rows.length, fails, failPct: pct(fails, rows.length) };
+  });
+
+  // quizzes: one row per kind, from its own outcomes
+  const kinds = [
+    { kind: 'opening', label: 'Opening (chessboard)' },
+    { kind: 'mnem', label: 'Mnemonics' },
+    { kind: 'list', label: 'Object lists' },
+  ];
+  const quizzes = kinds.map(k => {
+    const rows = qlog.filter(e => (e.q || 'opening') === k.kind);
+    const c = { hit: 0, unsure: 0, miss: 0, reveal: 0 };
+    for(const e of rows) if(c[e.o] != null) c[e.o]++;
+    return { ...k, ...c, total: rows.length, hitPct: pct(c.hit, rows.length) };
+  });
+  const quizTotal = quizzes.reduce((n, q) => n + q.total, 0);
+
+  return { rungs, totals, sizes, quizzes, quizTotal, ladder,
+           reviews: totals.total, logged: log.length,
+           empty: totals.total === 0 && quizTotal === 0 };
+}
+
 /* ---------- Review Forecast: the aggregation core ----------
    Phase 1 of Documents/review-forecast.md -- read that first; this is the
    mechanism, the doc is the reasoning. Everything the feature will ever
@@ -8976,6 +9055,78 @@ async function openReviewForecast(){
     hideSpinner(spinner);
   }
 }
+
+/* ---------- Accuracy Report: the modal ----------
+   A thin view over buildAccuracyReport. Every rate is shown with the count it
+   came from, and a rate from too few reviews is not shown at all: a "100%"
+   off two samples reads as a finding when it is noise, and this whole report
+   exists to be read as evidence. */
+const ACC_MIN_SAMPLES = 5;
+function accRate(pctVal, n, min = ACC_MIN_SAMPLES){
+  if(pctVal == null || n < min) return '<span class="acc-none">&mdash;</span>';
+  return `${pctVal}%`;
+}
+function renderAccuracyReport(rep){
+  if(rep.empty){
+    return '<p class="acc-empty">Nothing recorded yet.<br><br>'
+      + 'Grades collect when you review a room in the VR walk (the brain icon, or 1/2/3), '
+      + 'and quiz results collect from Test &rsaquo; Mnemonics, Chessboard and Object Lists. '
+      + 'Come back once you have a few of either.</p>';
+  }
+  let h = '';
+
+  h += '<h3 class="acc-h">Reviews by ladder rung</h3>';
+  h += `<p class="acc-sub">${rep.totals.total} graded review${rep.totals.total === 1 ? '' : 's'}. `
+    + 'A rung you almost never fail is too short; one you fail half the time is too long. '
+    + '&ldquo;Ran&rdquo; is how long the interval actually lasted, which is usually longer than nominal.</p>';
+  h += '<table class="acc"><tr><th>Rung</th><th>Nominal</th><th>Ran</th>'
+    + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Failed</th></tr>';
+  for(const r of rep.rungs){
+    h += `<tr><td>${r.step}</td><td>${r.days}d</td>`
+      + `<td>${r.elapsed == null ? '<span class="acc-none">&mdash;</span>' : r.elapsed + 'd'}</td>`
+      + `<td>${r.A}</td><td>${r.B}</td><td>${r.C}</td><td>${r.total}</td>`
+      + `<td>${accRate(r.failPct, r.total)}</td></tr>`;
+  }
+  h += `<tr class="acc-total"><td>All</td><td></td><td></td>`
+    + `<td>${rep.totals.A}</td><td>${rep.totals.B}</td><td>${rep.totals.C}</td>`
+    + `<td>${rep.totals.total}</td><td>${accRate(rep.totals.failPct, rep.totals.total)}</td></tr></table>`;
+
+  h += '<h3 class="acc-h">Reviews by room size</h3>';
+  h += '<p class="acc-sub">Whether bigger rooms fail more often &mdash; the confounder to rule out '
+    + 'before reading a rung&rsquo;s rate as a verdict on its interval.</p>';
+  h += '<table class="acc"><tr><th>Room size</th><th>Reviews</th><th>Failed</th><th>Rate</th></tr>';
+  for(const b of rep.sizes){
+    h += `<tr><td>${b.label}</td><td>${b.total}</td><td>${b.fails}</td>`
+      + `<td>${accRate(b.failPct, b.total)}</td></tr>`;
+  }
+  h += '</table>';
+  if(rep.logged < rep.reviews){
+    h += `<p class="acc-sub">Size and interval come from the event log, which keeps the most recent `
+      + `${rep.logged} of ${rep.reviews} reviews; the rung table above counts them all.</p>`;
+  }
+
+  h += '<h3 class="acc-h">Quizzes</h3>';
+  h += '<table class="acc"><tr><th>Quiz</th><th>Right</th><th>Unsure</th><th>Wrong</th>'
+    + '<th>Shown</th><th>Steps</th><th>Right</th></tr>';
+  for(const q of rep.quizzes){
+    h += `<tr><td>${q.label}</td><td>${q.hit}</td><td>${q.unsure}</td><td>${q.miss}</td>`
+      + `<td>${q.reveal}</td><td>${q.total}</td><td>${accRate(q.hitPct, q.total)}</td></tr>`;
+  }
+  h += '</table>';
+  return h;
+}
+async function openAccuracyReport(){
+  const [stats, gradeLog, quizLog] = await Promise.all(
+    [getReviewGradeStats(), getReviewGradeLog(), getQuizLog()]);
+  $('accuracyBody').innerHTML = renderAccuracyReport(buildAccuracyReport(stats, gradeLog, quizLog));
+  $('accuracyOverlay').style.display = 'flex';
+}
+mountInfoBar('accuracyBar', 'Accuracy Report',
+  () => { $('accuracyOverlay').style.display = 'none'; }, { prefix: 'accuracy' });
+$('menuAccuracy').onclick = () => {
+  $('menuList').style.display = 'none';
+  openAccuracyReport();
+};
 
 $('menuReviewForecast').onclick = () => {
   $('menuList').style.display = 'none';
