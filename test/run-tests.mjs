@@ -6553,6 +6553,71 @@ try {
 
 } catch(e){ bad('Phase AI: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase MV: the VR toolbar on a phone held upright. At full size the
+//     walk-mode toolbar is wider than a portrait phone, which pushed the right
+//     group -- Close included -- off the edge; and a 100vh modal centred in a
+//     shorter visible viewport clipped the toolbar off the top. ---
+if(shouldRunPhase(['vr-ui'])){
+try {
+const appMV = await launchApp();
+try {
+  await seedBackup(appMV.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  });
+  await appMV.page.setViewportSize({ width: 390, height: 760 });
+  await openVR(appMV.page);
+  await appMV.page.waitForSelector('#threeTestCanvasWrap [data-three-toolbar]', { timeout: 10000 });
+  const toolbarRects = () => appMV.page.evaluate(() =>
+    [...document.querySelectorAll('#threeTestCanvasWrap [data-three-toolbar] button')]
+      .filter(b => getComputedStyle(b).display !== 'none')
+      .map(b => { const r = b.getBoundingClientRect();
+        return { icon: [...(b.querySelector('i')?.classList || [])].find(c => c !== 'fa-solid'),
+                 left: r.left, right: r.right, top: r.top, height: r.height }; }));
+
+  // 472. Every visible toolbar button, Close included, is wholly on screen
+  //      at 390px wide, and the buttons have shrunk to fit.
+  try {
+    await appMV.page.waitForFunction(() => {
+      const b = document.querySelector('#threeTestCanvasWrap [data-three-toolbar] button');
+      return b && b.getBoundingClientRect().height < 40;
+    }, null, { timeout: 5000 });
+    const rects = await toolbarRects();
+    const close = rects.find(r => r.icon === 'fa-circle-xmark');
+    assert(close, `expected a visible Close button, got ${JSON.stringify(rects.map(r => r.icon))}`);
+    const off = rects.filter(r => r.left < 0 || r.right > 390 || r.top < 0);
+    assert(!off.length, `expected every toolbar button on screen at 390px, off: ${JSON.stringify(off)}`);
+    ok('VR toolbar: every button, Close included, fits a portrait phone');
+  } catch(e){ bad('VR toolbar: portrait phone fit', e); }
+
+  // 473. The walk fills the visible viewport from the top: the modal starts
+  //      at y=0 and is no taller than the window, so nothing is clipped above.
+  try {
+    const m = await appMV.page.evaluate(() => {
+      const r = document.querySelector('#threeTestOverlay .modal').getBoundingClientRect();
+      return { top: r.top, height: r.height, inner: window.innerHeight };
+    });
+    assert(m.top === 0 && m.height <= m.inner, `expected the walk pinned at the top and within the window, got ${JSON.stringify(m)}`);
+    ok('VR walk: pinned to the top of the visible viewport');
+  } catch(e){ bad('VR walk: viewport height', e); }
+
+  // 474. Widening the window restores the full-size buttons.
+  try {
+    await appMV.page.setViewportSize({ width: 1100, height: 760 });
+    await appMV.page.waitForFunction(() => {
+      const b = document.querySelector('#threeTestCanvasWrap [data-three-toolbar] button');
+      return b && b.getBoundingClientRect().height >= 45;
+    }, null, { timeout: 5000 });
+    ok('VR toolbar: full-size buttons come back on a wide screen');
+  } catch(e){ bad('VR toolbar: restore on widen', e); }
+} finally {
+  await appMV.close();
+}
+} catch(e){ bad('Phase MV: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---

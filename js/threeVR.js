@@ -8871,12 +8871,15 @@ function buildTopToolbar(){
   // with the same inline Font Awesome icons, which a bare pane-wide selector
   // would otherwise count as extra "toolbar" icons.
   bar.dataset.threeToolbar = '1';
-  bar.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;display:flex;'
+  bar.style.cssText = 'position:absolute;top:calc(8px + env(safe-area-inset-top, 0px));left:8px;right:8px;display:flex;'
     + 'justify-content:space-between;align-items:flex-start;z-index:6;pointer-events:none;';
+  // The right group never shrinks, so Close is always on screen; if the two
+  // groups still don't fit (edit mode on a phone), the LEFT group wraps to a
+  // second row rather than pushing Close off the edge.
   const left = document.createElement('div');
-  left.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
+  left.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;min-width:0;flex:0 1 auto;pointer-events:none;';
   const right = document.createElement('div');
-  right.style.cssText = 'display:flex;gap:6px;pointer-events:none;';
+  right.style.cssText = 'display:flex;gap:6px;flex:0 0 auto;margin-left:6px;pointer-events:none;';
   hintsBtn    = makeIconBtn('fa-lightbulb',      'Show/hide hints (room names, door hints, move billboards)', () => setHintsOn(!hintsOn));
   editBtn     = makeIconBtn('fa-pencil',         'Edit mode',     () => setEditMode(!editMode));
   undoBtn     = makeIconBtn('fa-rotate-left',    'Undo (Ctrl+Z)', () => undoEdit());
@@ -8934,6 +8937,33 @@ function buildTopToolbar(){
   right.append(reviewBtn, decoratedBadge, dirtyBadge, memBtn, closeBtn);
   bar.append(left, right);
   return bar;
+}
+/* Shrink the toolbar's buttons on a narrow pane. At full size (48px) the
+   walk-mode toolbar is ~380-470px wide, which does not fit a phone held
+   upright -- the right group, Close included, went off the edge. Sized from
+   the pane rather than a media query because the buttons are styled inline,
+   and the pane is what they actually have to fit in. Re-run on every resize,
+   so rotating the phone restores the full size. */
+const TOOLBAR_BTN_SIZES = [
+  { maxW: 380, w: 32, h: 32, pad: '0 .3rem',  font: '.8rem',  gap: 3 },
+  { maxW: 520, w: 36, h: 36, pad: '0 .35rem', font: '.85rem', gap: 4 },
+];
+function fitToolbar(){
+  if(!container || !toolbarEl) return;
+  const pw = container.clientWidth;
+  if(!pw) return;
+  const tier = TOOLBAR_BTN_SIZES.find(t => pw < t.maxW);
+  const btns = [...toolbarEl.querySelectorAll('button')];
+  if(roomStoryBtn) btns.push(roomStoryBtn);
+  for(const b of btns){
+    b.style.minWidth = tier ? tier.w + 'px' : '48px';
+    b.style.height   = tier ? tier.h + 'px' : '46px';
+    b.style.padding  = tier ? tier.pad : '0 .55rem';
+    b.style.fontSize = tier ? tier.font : '1rem';
+  }
+  const gap = (tier ? tier.gap : 6) + 'px';
+  for(const g of toolbarEl.querySelectorAll('div')) g.style.gap = gap;
+  if(editGroup) editGroup.style.padding = tier ? '2px' : '4px';
 }
 /* Gold and solid when this room has a story, faint when it has none -- so the
    control is always in the same place (you can always write one) while still
@@ -10104,6 +10134,7 @@ function onResize(){
   if(!container || !renderer || !camera) return;
   const w = container.clientWidth, h = container.clientHeight;
   if(w===0 || h===0) return;
+  fitToolbar();
   renderer.setSize(w, h);
   camera.aspect = w/h;
   camera.updateProjectionMatrix();
@@ -10292,6 +10323,7 @@ export async function openThreeTest(containerEl, opts){
   // the room-story control is absolutely positioned bottom-right, so it is a
   // sibling of the toolbar rather than inside its flex row
   if(roomStoryBtn) container.appendChild(roomStoryBtn);
+  fitToolbar();
   helpOverlay = buildHelpOverlay();
   container.appendChild(helpOverlay);
   updateToolbar();
