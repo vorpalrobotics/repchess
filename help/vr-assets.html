@@ -40,12 +40,31 @@ prop, since a rectangular photo with a white background reads as a floating
 card in the room rather than as an object.</p>
 
 <h3>Generating images</h3>
-<p>If you have an OpenAI API key you can generate art directly: enter the key
-once, then describe what you want. A <strong>standing instructions</strong>
-field is appended to every prompt -- put your style there ("flat cartoon
-style, thick outlines, bright colors, no text") so a set of assets generated
-over many sessions still looks like a set. The key is stored only in this
-browser and sent only to OpenAI; generation is billed to your own account.</p>
+<p><strong>Generate&hellip;</strong> in the asset editor makes art from a
+description. You need an API key from one of two services, and generation is
+billed to your own account with that service.</p>
+<ul>
+  <li><strong>OpenAI:</strong> <em>GPT Image 1</em>, or <em>GPT Image 1
+  mini</em>, which costs a fraction as much.</li>
+  <li><strong>Runware:</strong> a large catalogue of other image models, most
+  of them far cheaper per image. The list offers FLUX.1 schnell (the fastest
+  and cheapest), FLUX.1 dev, FLUX.2 dev, Seedream 4.0 and Ideogram 3.0 (good
+  when the image includes text). <em>Other Runware model&hellip;</em> takes any
+  model's ID from its page at runware.ai/models.</li>
+</ul>
+<p>Pick a model and the key box asks for that service's key. Each service's key
+is remembered separately, only in this browser, and sent only to that service.
+Your last model is remembered too. When a Runware model reports its cost, the
+dialog shows what the image cost.</p>
+<p><strong>Transparent background</strong> is what you want for objects that
+stand in a room. OpenAI's models and FLUX.1 dev produce it directly. For the
+other Runware models the background is removed as a second step after the
+image is made, which the checkbox notes. It adds a small cost, and edges are
+occasionally less clean.</p>
+<p>A <strong>standing instructions</strong> field is appended to every prompt.
+Put your style there ("flat cartoon style, thick outlines, bright colors, no
+text") so a set of assets generated over many sessions, even with different
+models, still looks like a set.</p>
 
 <h3>Using them</h3>
 <p>Assets are offered wherever the VR walk needs art -- clicking an empty
