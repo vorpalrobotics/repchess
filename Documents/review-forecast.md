@@ -218,7 +218,8 @@ three of them in your head to get the one you wanted, and dropping overdue
 would understate the load exactly when it is worst.
 
 **The sentence is the payload, and it turns on a fact nobody had written down
-yet:** a room you memorize today first falls due *tomorrow*
+yet:** a room you memorize today first falls due *tomorrow* (since the
+learning step, after a same-day review first; see the end of this document)
 (`bootstrapRoomReview` dates it from the memorized timestamp plus one day). So
 the number a "should I memorize today?" decision is really made against is
 **tomorrow alone**, not the cumulative week — that is the pile the new room

@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-314';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-315';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-446';
+const BUILD_TAG = '-447';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8824,7 +8824,7 @@ function rfPacingHtml(f){
      advice. */
   const t = tomorrowOnly;
   const pacing = t.moves
-    ? `A room you memorize today first comes due <b>tomorrow</b>, on top of the
+    ? `A room you memorize today gets a same-day review a few hours later, then comes due <b>tomorrow</b>, on top of the
        <b>${t.moves} move${t.moves === 1 ? '' : 's'}</b> (${t.rooms} room${t.rooms === 1 ? '' : 's'}) already scheduled then.`
     : `Nothing is scheduled for tomorrow yet, so a room you memorize today would have it to itself.`;
 

@@ -11,9 +11,11 @@
   { "id": "mnemonics-testing", "title": "Move Mnemonics: Testing Yourself", "file": "mnemonics-testing.html" },
   { "id": "castle-example", "title": "Building a Castle: Example", "file": "castle-example.html" },
   { "id": "decorating-castle", "title": "Decorating Your Castle", "file": "decorating-castle.html" },
+  { "id": "notes-and-stories", "title": "Notes and Stories", "file": "notes-and-stories.html" },
   { "id": "vr-assets", "title": "VR Assets", "file": "vr-assets.html" },
   { "id": "object-lists", "title": "Object Lists", "file": "object-lists.html" },
   { "id": "marking-memorized", "title": "Marking Rooms as Memorized", "file": "marking-memorized.html" },
+  { "id": "review-schedule", "title": "Review Schedule and Accuracy", "file": "review-schedule.html" },
   { "id": "board-testing", "title": "Board Play Testing", "file": "board-testing.html" },
   { "id": "backup-and-reset", "title": "Backup, Restore, and Starting Over", "file": "backup-and-reset.html" }
 ]

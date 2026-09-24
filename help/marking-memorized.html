@@ -12,8 +12,8 @@ a glance how much of a castle you've actually learned versus just built.</p>
 
 <h3>Reviewing what you've memorized</h3>
 <p>Marking a room memorized also puts it on a review schedule, and a message
-confirms when its first review falls due -- the day after you marked it.
-Unmarking a room takes it back off the schedule and discards its review
+confirms when its first review falls due: the same day, about six hours
+later (see <em>The same-day review</em> below). Unmarking a room takes it back off the schedule and discards its review
 history, which is also confirmed, since that part isn't obvious from the icon
 going dark.</p>
 
@@ -27,11 +27,29 @@ say how it went -- press <strong>1</strong> for recalled perfectly,
 (Clicking the brain offers the same three choices, plus unmarking the room.)</p>
 
 <p>Each grade moves the room along a fixed ladder of intervals -- 1, 3, 7, 21,
-60, then 180 days. A perfect recall advances a step, a failure drops the room
-back to the start, and "mostly correct" holds it where it is -- twice in a row,
-though, and it steps back, since an interval you keep half-missing is too long.
-Due dates get a small random spread so a wing memorized in one sitting doesn't
-come due all on the same day forever after.</p>
+60, then 180 days. A perfect recall advances a step and "mostly correct"
+holds the room where it is. Two "mostly correct" grades in a row step it
+back, since an interval you keep half-missing is too long. A failure, at any
+rung, sends the room back for a same-day review, as if you had just
+memorized it. Due dates get a small random spread so a wing memorized in one
+sitting doesn't come due all on the same day forever after.</p>
+
+<h3>The same-day review</h3>
+<p>A room you have just memorized isn't on the ladder yet. Its first review
+comes about <strong>six hours</strong> later, on the same day. Grade it 1 or
+2 and the room joins the ladder, due again tomorrow. Grade it 3 and it gets
+another same-day review.</p>
+<p>The reason is timing. A review the next day comes too late for a lot of
+freshly memorized rooms: most of them came back only "mostly correct", and at
+that point "mostly correct" and "failed" schedule the room exactly the same.
+A retrieval a few hours in fixes the room while it is still fresh.</p>
+<p>A same-day review shows its time in hours rather than as a date: "in 5 hours
+(around 4:15 PM)". Missing one does no harm. The room simply waits, and
+whenever you do review it, it joins the ladder from there. A missed board-quiz
+move doesn't shorten a room that is still waiting for its same-day review,
+because there is nothing shorter to move it to.</p>
+<p>Rooms memorized before this step existed stay on the schedule they were
+already on.</p>
 
 <p>You don't have to walk into a room to find out it needs attention. A door
 whose room is due carries an orange <strong>DUE</strong> tag on its sign, and a
@@ -51,6 +69,50 @@ because a marker on every door of a wing you've memorized would be wallpaper
 and the value of a tag is that it means "stop here"; the brain icon inside the
 room still reports the full picture. Door signs are hints, so turning hints off
 for a self-test hides the markers along with the room names.</p>
+
+<h3>The review list</h3>
+<p>The <strong>checklist icon</strong> in the VR toolbar lists every room that
+is due or overdue, each with its castle and room name. Pick one and you are
+walked to its door. A room you grade drops off the list the next time you open
+it, so a review session is simply "work down the list until it's empty",
+without leaving the walk.</p>
+<p>Two orders are offered at the top of the list, and the one you pick is
+remembered:</p>
+<ul>
+  <li><strong>By priority</strong> puts same-day reviews first, then the most
+  overdue rooms.</li>
+  <li><strong>By castle</strong> keeps each building's rooms together, so you
+  can finish one castle before walking to the next.</li>
+</ul>
+<p>Rooms that are only due <em>soon</em> appear dimmed below a line. They are
+worth doing while you are already standing in the palace, but they don't count
+as work, so the list can still be emptied. A room with no Room Name is listed
+by its move pair.</p>
+
+<h3>Reminders</h3>
+<p>A same-day review is only useful if it happens the same day, so the app
+tells you when one comes due:</p>
+<ul>
+  <li><strong>The browser tab</strong> shows how many are due, for example
+  "(2) REPchess". This is always on.</li>
+  <li><strong>A desktop notification</strong> is optional. Turn it on under
+  Menu &rarr; <strong>Settings</strong>. Your browser asks for permission
+  when you tick the box. You get one notification per room when it comes due,
+  never repeated. If the app is already in front of you, you get a message in
+  the app instead.</li>
+</ul>
+<p>If you once told the browser to block notifications for this site, the
+Settings box is greyed out, with a note on how to allow them again from the
+address bar.</p>
+<p>Reminders only work while a <span class="repchess-brand">REPchess</span>
+tab is open somewhere. A background tab is fine, but a closed browser can't
+remind you, because the app has no server to send notifications from. The
+notification setting belongs to this browser, so it isn't part of a backup.</p>
+
+<h3>Seeing the bigger picture</h3>
+<p>Menu &rarr; <strong>VR Schedule</strong> shows how much review is coming
+and when. Menu &rarr; <strong>Accuracy Report</strong> shows how well your
+reviews are actually going. See <em>Review Schedule and Accuracy</em>.</p>
 
 <p>Grading the same room twice in one visit <em>replaces</em> the first grade
 rather than stacking on it, so a mis-keyed <strong>1</strong> when you meant
