@@ -25753,6 +25753,164 @@ try {
 } catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase RM: same-day review reminders and the Settings modal. The tab
+//     title count is always on; the desktop notification is opt-in, and is
+//     driven here through a fake window.Notification so permission states and
+//     "exactly one notification per newly due room" are checkable without a
+//     real OS prompt. ---
+if(shouldRunPhase(['core'])){
+try {
+const appRM = await launchApp();
+try {
+  await seedBackup(appRM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+
+  // A fake Notification: records every instance, with a settable permission
+  // and a requestPermission that answers with whatever the test preset.
+  await appRM.page.evaluate(() => {
+    class FakeNote {
+      constructor(title, opts){ this.title = title; this.opts = opts || {}; FakeNote.sent.push(this); }
+      close(){}
+      static async requestPermission(){ FakeNote.asked++; FakeNote.permission = FakeNote.answer; return FakeNote.answer; }
+    }
+    FakeNote.sent = []; FakeNote.asked = 0; FakeNote.permission = 'default'; FakeNote.answer = 'granted';
+    window.Notification = FakeNote;
+    window.__focused = false;
+    document.hasFocus = () => window.__focused;
+  });
+  const HOUR = 3600 * 1000;
+  const setReviews = (m) => appRM.page.evaluate((m) => window.__reviewTestHooks.setReviews(m), m);
+  const tick = () => appRM.page.evaluate(() => window.__reminderTestHooks.tick());
+  const sent = () => appRM.page.evaluate(() => window.Notification.sent.map(n => ({ title: n.title, body: n.opts.body, tag: n.opts.tag })));
+
+  // 465. Only a DUE LEARNING review counts: a due ladder review, and a
+  //      learning review not yet due, are both left out.
+  try {
+    const now = 1_800_000_000_000;
+    const keys = await appRM.page.evaluate(([now, H]) => window.__reminderTestHooks.learningDueNow({
+      a: { learning: true, due: now - H },
+      b: { learning: true, due: now + H },
+      c: { step: 0, due: now - 5 * H },
+      d: null,
+    }, now).map(d => d.key), [now, HOUR]);
+    assert(JSON.stringify(keys) === '["a"]', `expected only the due learning room, got ${JSON.stringify(keys)}`);
+    ok('reminders: only a due same-day review counts, not a due ladder review');
+  } catch(e){ bad('reminders: learningDueNow', e); }
+
+  // 466. The tab title carries the count, and drops it when nothing is due.
+  try {
+    const base = await appRM.page.evaluate(() => window.__reminderTestHooks.baseTitle());
+    const t0 = Date.now();
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 }, r2: { learning: true, due: t0 - 60000, step: 0 },
+                       r3: { learning: true, due: t0 + HOUR, step: 0 } });
+    await tick();
+    let title = await appRM.page.title();
+    assert(title === `(2) ${base}`, `expected "(2) ${base}", got ${JSON.stringify(title)}`);
+    await setReviews({});
+    await tick();
+    title = await appRM.page.title();
+    assert(title === base, `expected the bare title once nothing is due, got ${JSON.stringify(title)}`);
+    ok('reminders: the tab title shows the due count, and only while something is due');
+  } catch(e){ bad('reminders: title count', e); }
+
+  // 467. Off by default: something due sends nothing until opted in.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'granted'; window.__reminderTestHooks.resetSeen(); });
+    await setReviews({ r1: { learning: true, due: Date.now() - HOUR, step: 0 } });
+    await tick();
+    const n = (await sent()).length;
+    assert(n === 0, `expected no notification before opting in, got ${n}`);
+    ok('reminders: nothing is sent until the setting is turned on');
+  } catch(e){ bad('reminders: off by default', e); }
+
+  // 468. Settings: the Immediate-modal bar, and turning it on from 'default'
+  //      asks for permission from the click and ends up checked.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'default'; window.Notification.answer = 'granted'; });
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    await appRM.page.waitForSelector('#settingsOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appRM.page, 'settingsOverlay', 'Settings');
+    let st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders');
+      return { checked: b.checked, disabled: b.disabled, note: document.getElementById('setLearningRemindersNote').textContent };
+    });
+    assert(!st.checked && !st.disabled && /ask for permission/.test(st.note), `before: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => document.getElementById('setLearningReminders').click());
+    await appRM.page.waitForFunction(() => window.__reminderTestHooks.wanted(), null, { timeout: 5000 });
+    st = await appRM.page.evaluate(() => ({ checked: document.getElementById('setLearningReminders').checked,
+      asked: window.Notification.asked }));
+    assert(st.checked && st.asked === 1, `after: ${JSON.stringify(st)}`);
+    ok('settings: an Immediate modal whose reminder toggle asks for permission from the click');
+  } catch(e){ bad('settings: enabling reminders', e); }
+
+  // 469. One notification per newly due room: no repeat on the next tick,
+  //      and a room that comes due later fires again.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.sent.length = 0; window.__reminderTestHooks.resetSeen(); });
+    const t0 = Date.now();
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 } });
+    await tick();
+    let got = await sent();
+    assert(got.length === 1 && got[0].title === 'REPchess' && got[0].tag === 'repchess-learning'
+      && /1 room ready/.test(got[0].body), `first tick: ${JSON.stringify(got)}`);
+    await tick();
+    got = await sent();
+    assert(got.length === 1, `expected no repeat on the next tick, got ${got.length}`);
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 }, r2: { learning: true, due: t0 - 1000, step: 0 } });
+    await tick();
+    got = await sent();
+    assert(got.length === 2 && /2 rooms ready/.test(got[1].body), `second room: ${JSON.stringify(got)}`);
+    ok('reminders: one notification per newly due room, never repeated');
+  } catch(e){ bad('reminders: dedupe', e); }
+
+  // 470. With the page already in front of you, a toast instead of an OS
+  //      notification.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.sent.length = 0; window.__reminderTestHooks.resetSeen(); window.__focused = true; });
+    const toastsBefore = await appRM.page.evaluate(() => document.querySelectorAll('#toastStack .app-toast').length);
+    await tick();
+    const res = await appRM.page.evaluate(() => ({ n: window.Notification.sent.length,
+      toasts: [...document.querySelectorAll('#toastStack .app-toast')].map(t => t.textContent) }));
+    assert(res.n === 0, `expected no OS notification while focused, got ${res.n}`);
+    assert(res.toasts.length > toastsBefore && /same-day review/.test(res.toasts[res.toasts.length - 1]),
+      `expected a reminder toast, got ${JSON.stringify(res.toasts)}`);
+    await appRM.page.evaluate(() => { window.__focused = false; });
+    ok('reminders: a toast instead of a notification when the page is focused');
+  } catch(e){ bad('reminders: focused toast', e); }
+
+  // 471. Denied: the toggle is disabled, with the way back explained; and a
+  //      browser without notifications gets a disabled toggle and says so.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'denied'; });
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    let st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders'), n = document.getElementById('setLearningRemindersNote');
+      return { checked: b.checked, disabled: b.disabled, note: n.textContent, warn: n.classList.contains('is-warn') };
+    });
+    assert(!st.checked && st.disabled && st.warn && /blocked/.test(st.note) && /address bar/.test(st.note), `denied: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => { document.querySelector('#settingsOverlay .mb-leave').click(); delete window.Notification; window.Notification = undefined; });
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders');
+      return { disabled: b.disabled, note: document.getElementById('setLearningRemindersNote').textContent };
+    });
+    assert(st.disabled && /does not support/.test(st.note), `unsupported: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.waitForFunction(() => document.getElementById('settingsOverlay').style.display === 'none', null, { timeout: 5000 });
+    ok('settings: denied and unsupported both disable the toggle and say why');
+  } catch(e){ bad('settings: permission states', e); }
+} finally {
+  await appRM.close();
+}
+} catch(e){ bad('Phase RM: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower

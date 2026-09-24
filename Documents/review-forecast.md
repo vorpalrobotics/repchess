@@ -617,3 +617,59 @@ generated id: in a repertoire where few rooms are named — the normal case — 
 list of "R3", "R7", "R11" identifies everything and tells you nothing.
 
 Tests: phase RL, 440–446.
+
+# The learning step and same-day reminders ✅ BUILT
+
+## Why
+
+The accuracy report showed the first 1-day review of a newly memorized room
+scoring about 65%, mostly B. At rung 0, B and C schedule identically, so
+the grade taught the scheduler nothing. The first retrieval simply came too
+late. A room now has to pass a same-day review about 6 hours after it is
+memorized before it joins the ladder.
+
+## How it is modelled
+
+- **A flag, not a rung.** The record is `{ learning: true, due: memorizedAt + 6h, step: 0 }`
+  (`learningRecord` in `js/db.js`). Making it a rung would have needed three
+  things, all bad:
+  - renumbering every existing ladder index;
+  - midnight snapping, which would throw away the 6 hours;
+  - folding the learning step into rung 0's statistics.
+- **The due time is real, not midnight-snapped.** It is shown in hours: "in 5 hours (around 4:15 PM)".
+- **Grading:**
+  - A or B graduates the room to rung 0 (tomorrow).
+  - C from *any* rung returns the room to learning, a same-day relearn.
+  - Demote and soften (from quiz misses) leave a learning record alone.
+- **Who enters it:** only rooms memorized from now on. They get an explicit
+  record; rooms memorized earlier are unchanged, so there is no migration.
+- **Review list:** in priority order, due learning rooms sort first and carry a
+  "same-day" tag.
+- **Stats:** the tally and log use the rung key `'L'`. The Accuracy Report
+  shows it as its own row, in hours.
+
+## Reminders
+
+A static site has no server, so it can only reach you while a tab is open.
+Push needs a server, and Notification Triggers were never shipped. The
+learning step degrades gracefully: a missed same-day review just means
+tomorrow's review is the first retrieval, which is how things worked before.
+
+1. **Tab title:** "(N) REPchess". Always on, and needs no permission.
+2. **Desktop notification:** opt-in, from Settings in the menu.
+   - **Permission** is requested from the checkbox click, never on load.
+   - **Permission states:**
+     - Denied: the checkbox is disabled, and a note explains how to re-allow it from the address bar.
+     - Unsupported: the checkbox is disabled, and a note says so.
+   - **One grouped notification**, tagged `repchess-learning` so a newer one replaces an older one.
+   - **Deduped per room and due time** (localStorage `repchessLearningNotified`), so a
+     relearn after a C is announced again.
+   - **Toast instead:** if the page is visible and focused, it shows an in-app toast rather than an OS notification.
+   - **Room names** appear only when the castle build is already in memory. The reminder never triggers a build.
+   - **Storage:** the preference is in localStorage and deliberately left out of the backup,
+     because notification permission is per-browser.
+
+The scanner reads the review records from IndexedDB:
+- every 60 seconds;
+- on `visibilitychange`;
+- on `focus`.
