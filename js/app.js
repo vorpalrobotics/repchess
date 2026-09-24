@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-313';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-314';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-444';
+const BUILD_TAG = '-445';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8554,7 +8554,19 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
              elapsed: elapsed == null ? null : Math.round(elapsed * 10) / 10,
              elapsedSamples: at.length };
   });
-  const totals = rungs.reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
+  /* The learning step, on its own row rather than folded into rung 0 -- the
+     point of keeping it separate in the tally is to see whether it helps: a
+     learning row that scores well, followed by a rung 0 that improves on what
+     it used to be, is the step earning its keep. */
+  const lrow = (stats && stats[LEARNING_RUNG]) || { A: 0, B: 0, C: 0 };
+  const lTotal = lrow.A + lrow.B + lrow.C;
+  const lAt = log.filter(e => e.r === LEARNING_RUNG && typeof e.d === 'number');
+  const lElapsed = lAt.length ? lAt.reduce((n, e) => n + e.d, 0) / lAt.length : null;
+  const learning = { step: LEARNING_RUNG, hours: ROOM_LEARNING_MS / 3600000, ...lrow, total: lTotal,
+    scorePct: weightedScore(lrow, GRADE_WEIGHT), perfectPct: pct(lrow.A, lTotal),
+    // in HOURS here: a tenth of a day is the log's precision, but 0.3d reads worse than 7h
+    elapsedHours: lElapsed == null ? null : Math.round(lElapsed * 24) };
+  const totals = [learning, ...rungs].reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
     { A: 0, B: 0, C: 0, total: 0 });
   totals.scorePct = weightedScore(totals, GRADE_WEIGHT);
   totals.perfectPct = pct(totals.A, totals.total);
@@ -8589,7 +8601,7 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
   });
   const quizTotal = quizzes.reduce((n, q) => n + q.total, 0);
 
-  return { rungs, totals, sizes, quizzes, quizTotal, ladder,
+  return { rungs, learning, totals, sizes, quizzes, quizTotal, ladder,
            reviews: totals.total, logged: log.length,
            empty: totals.total === 0 && quizTotal === 0 };
 }
@@ -8668,9 +8680,13 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
       // step 0, which looks like neglect of work that was never started.
       if(!rec.last){ neverReviewed.rooms++; neverReviewed.moves += moves; }
 
-      const day = perDayMap.get(rec.due) || { due: rec.due, moves: 0, rooms: 0 };
+      // keyed by DAY: every other due date is already a local midnight, but a
+      // learning review's is a real timestamp and would otherwise land as a
+      // day of its own
+      const dayKey = rec.learning ? startOfLocalDay(rec.due) : rec.due;
+      const day = perDayMap.get(dayKey) || { due: dayKey, moves: 0, rooms: 0 };
       day.rooms++; day.moves += moves;
-      perDayMap.set(rec.due, day);
+      perDayMap.set(dayKey, day);
     }
   }
 
@@ -9122,6 +9138,13 @@ function renderAccuracyReport(rep){
     + '&ldquo;Ran&rdquo; is how long the interval actually lasted, which is usually longer than nominal.</p>';
   h += '<table class="acc"><tr><th>Rung</th><th>Nominal</th><th>Ran</th>'
     + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Score</th></tr>';
+  {
+    const L = rep.learning;
+    h += `<tr><td>Learning</td><td>${L.hours}h</td>`
+      + `<td>${L.elapsedHours == null ? '<span class="acc-none">&mdash;</span>' : L.elapsedHours + 'h'}</td>`
+      + `<td>${L.A}</td><td>${L.B}</td><td>${L.C}</td><td>${L.total}</td>`
+      + `<td>${accRate(L.scorePct, L.total)}</td></tr>`;
+  }
   for(const r of rep.rungs){
     h += `<tr><td>${r.step}</td><td>${r.days}d</td>`
       + `<td>${r.elapsed == null ? '<span class="acc-none">&mdash;</span>' : r.elapsed + 'd'}</td>`
@@ -14191,6 +14214,15 @@ if(localStorage.getItem('threeTestDebug')){
 // through so a test can be deterministic about both the clock and the fuzz.
 if(localStorage.getItem('threeTestDebug')){
   window.__reviewTestHooks = {
+    // the learning step (db.js, learningRecord) and the functions that must
+    // treat a learning record as below the ladder
+    learning: (prev, now, grade) => learningRecord(prev, now, grade),
+    learningMs: () => ROOM_LEARNING_MS,
+    demote: (rec, now) => demoteRoomReview(rec, now),
+    soften: (rec, now) => softenRoomReview(rec, now),
+    bucket: (rec, now) => reviewForecastBucket(rec, now),
+    duePhrase: (rec, now) => duePhrase(rec, now),
+    startOfDay: (ms) => startOfLocalDay(ms),
     ladder: () => ROOM_REVIEW_LADDER.slice(),
     fuzz: () => ROOM_REVIEW_FUZZ,
     nextStep: (step, grade, lastGrade) => nextReviewStep(step, grade, lastGrade),

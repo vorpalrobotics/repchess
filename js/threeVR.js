@@ -1586,6 +1586,11 @@ async function toggleMemorized(){
     MEMORIZED[currentRoomKey] = Date.now();
     const shape = ROOMS[currentRoomKey] && ROOMS[currentRoomKey].shape;
     if(shape) MEMORIZED_SHAPES[currentRoomKey] = shape;
+    /* ...and into the LEARNING step, as an explicit record: a same-day review
+       a few hours out, before the ladder's first rung (db.js, learningRecord).
+       Written here rather than bootstrapped, so rooms memorized before this
+       existed -- which have no record -- keep the schedule they already had. */
+    REVIEWS[currentRoomKey] = learningRecord(null, MEMORIZED[currentRoomKey]);
     // Marking a room memorized is also the moment it joins the review
     // schedule -- that's the whole mechanism starting up, and nothing else on
     // screen says so. Read back through reviewFor rather than stated as a
@@ -1658,7 +1663,7 @@ async function gradeCurrentRoom(grade){
      graded, sits at step 0, which is exactly where its first grade belongs.
      `replacing` hands back whatever an earlier press in THIS visit counted, so
      a corrected grade replaces rather than adds; see db.js's tallyReviewGrade. */
-  const rung = (before && before.step) || 0;
+  const rung = (before && before.learning) ? LEARNING_RUNG : ((before && before.step) || 0);
   const replacing = preGradeRecord.tallied;
   preGradeRecord.tallied = grade;
   /* How long the interval ACTUALLY ran, which is not the rung's nominal length
@@ -1676,7 +1681,9 @@ async function gradeCurrentRoom(grade){
       // whether your self-assessment tracks your objective recall
       roomKey: key,
       moves: (ROOMS[key] && ROOMS[key].moveCount) || 0,
-      elapsedDays: since == null ? null : Math.max(0, Math.round((now - since) / DAY_MS)),
+      // to a tenth of a day: a learning review runs hours, and whole days
+      // would log every one of them as 0
+      elapsedDays: since == null ? null : Math.max(0, Math.round((now - since) / DAY_MS * 10) / 10),
     }),
   ]);
   return rec;
@@ -1822,7 +1829,7 @@ function dueRoomList(now = Date.now(), order = reviewListOrder){
     if(state !== 'overdue' && state !== 'due' && state !== 'soon') continue;
     if(isRoomEmpty(key) && !ROOMS[key].isCastleEntry) continue;
     out.push({
-      key, state, due: rec.due,
+      key, state, due: rec.due, learning: !!rec.learning,
       castle: ROOMS[key].ownerCastle || '',
       name: reviewRoomLabel(key),
       moves: ROOMS[key].moveCount || 0,
@@ -1835,9 +1842,15 @@ function dueRoomList(now = Date.now(), order = reviewListOrder){
   const byDue = (a, b) => a.due - b.due;
   const byCastle = (a, b) => a.castle.localeCompare(b.castle);
   const byName = (a, b) => a.name.localeCompare(b.name);
+  /* In priority order, a learning review that is DUE goes to the top. Its
+     value decays in hours, where a ladder review due today has the whole day
+     -- and by due date alone it would sort after this morning's midnight-due
+     rooms, since its timestamp is later in the day. */
+  const byLearningDue = (a, b) =>
+    ((b.learning && b.state !== 'soon') ? 1 : 0) - ((a.learning && a.state !== 'soon') ? 1 : 0);
   out.sort(order === 'castle'
     ? ((a, b) => byCastle(a, b) || byDue(a, b) || byName(a, b))
-    : ((a, b) => byDue(a, b) || byCastle(a, b) || byName(a, b)));
+    : ((a, b) => byLearningDue(a, b) || byDue(a, b) || byCastle(a, b) || byName(a, b)));
   return out;
 }
 
@@ -1858,6 +1871,7 @@ const REVIEW_STATE_TAG = {
   overdue: { text: 'overdue', color: 'rgba(198,40,40,.75)' },
   due:     { text: 'due',     color: 'rgba(245,124,0,.7)' },
   soon:    { text: 'soon',    color: 'rgba(120,130,150,.6)' },
+  learning:{ text: 'same-day', color: 'rgba(66,165,245,.8)' },
 };
 
 function openReviewList(){
@@ -1916,7 +1930,9 @@ function openReviewList(){
       + 'border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;'
       + 'font:inherit;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:1px;'
       + (r.state === 'soon' ? 'opacity:.6;' : '');
-    const tag = REVIEW_STATE_TAG[r.state] || REVIEW_STATE_TAG.due;
+    // a learning review says so, since it is a different kind of due: hours, not a day
+    const tag = (r.learning && r.state !== 'soon') ? REVIEW_STATE_TAG.learning
+      : (REVIEW_STATE_TAG[r.state] || REVIEW_STATE_TAG.due);
     const top = document.createElement('div');
     top.style.cssText = 'display:flex;align-items:center;gap:.4rem;';
     const dot = document.createElement('span');
@@ -10892,7 +10908,7 @@ export async function openThreeTest(containerEl, opts){
          and the rendered rows are separate hooks on purpose: the first is what
          dueRoomList decided, the second is what actually reached the screen,
          and they fail differently. */
-      reviewList: () => dueRoomList().map(r => ({ key: r.key, state: r.state, castle: r.castle, name: r.name, moves: r.moves })),
+      reviewList: (order) => dueRoomList(Date.now(), order || reviewListOrder).map(r => ({ key: r.key, state: r.state, learning: r.learning, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
       reviewListOrder: () => reviewListOrder,
       // the lower-right room-story control: present, and styled by whether

@@ -910,6 +910,49 @@ const ROOM_REVIEW_LADDER = [1, 3, 7, 21, 60, 180];   // days until the next revi
 const ROOM_REVIEW_FUZZ = 0.15;
 const DAY_MS = 86400000;
 
+/* ---------- the learning step ----------
+
+   A same-day review BEFORE a room joins the ladder. Without it the 1-day
+   review was the first time a room was ever retrieved -- everything before it
+   was encoding -- and a first retrieval is effortful almost by definition:
+   rung 0 ran mostly B's. A few hours after memorizing, one recall turns
+   tomorrow's review into the SECOND retrieval. Anki's learning steps and
+   Pimsleur's sub-day intervals are the same idea.
+
+   A PHASE, flagged on the record, rather than a new rung at the front of the
+   ladder, for three reasons:
+   1. Due dates snap to local midnight (startOfLocalDay), and a 6-hour rung
+      would snap to either "already due" or "tomorrow" depending on the time
+      of day -- never actually six hours. A learning record keeps a real
+      timestamp instead.
+   2. Rungs are indexes. Inserting one at the front would renumber `step` on
+      every stored review, every key in the grade tally and `r` on every log
+      entry.
+   3. A record without the flag reads as already graduated, so nothing needs
+      migrating: rooms memorized before this existed keep their schedule.
+
+   It also gives a failure somewhere to go that is not where a B goes. At
+   rung 0 a C used to reset to rung 0 -- exactly where a B holds -- so the two
+   scheduled identically. A C at any rung now returns the room to learning. */
+const ROOM_LEARNING_MS = 6 * 3600 * 1000;
+// the tally/log key for a review taken during learning, so it never shares a
+// row with rung 0 and the report can show whether the step is earning its keep
+const LEARNING_RUNG = 'L';
+function learningRecord(prev, now = Date.now(), grade = null){
+  const out = {
+    // null until a learning review actually happens, the same "never reviewed"
+    // meaning bootstrapRoomReview gives it -- see gradeCurrentRoom's `since`
+    last: grade ? now : null,
+    due: now + ROOM_LEARNING_MS,     // a REAL timestamp: see (1) above
+    step: 0,
+    lapses: ((prev && prev.lapses) || 0) + (grade === 'C' ? 1 : 0),
+    lastGrade: grade,
+    learning: true,
+  };
+  if(prev && prev.dirtySeen) out.dirtySeen = prev.dirtySeen;
+  return out;
+}
+
 // Due dates are snapped to local midnight so "due today" means the whole day
 // regardless of what time the last review happened -- without this, grading
 // at 9pm makes the next one silently not-due until 9pm.
@@ -947,7 +990,11 @@ function nextReviewStep(step, grade, lastGrade){
    comes from. */
 function applyRoomReviewGrade(record, grade, now = Date.now(), rand = Math.random){
   const prev = record || { step: 0, lapses: 0, lastGrade: null };
-  const step = nextReviewStep(prev.step || 0, grade, prev.lastGrade);
+  // a failure, from anywhere, means relearning it today rather than tomorrow
+  if(grade === 'C') return learningRecord(prev, now, 'C');
+  // passing the learning review -- A or B -- graduates to the ladder's first
+  // rung; B still counts as a recall, it just doesn't skip ahead
+  const step = prev.learning ? 0 : nextReviewStep(prev.step || 0, grade, prev.lastGrade);
   const days = fuzzedDays(ROOM_REVIEW_LADDER[step], rand);
   const out = {
     last: now,
@@ -990,6 +1037,9 @@ function bootstrapRoomReview(memorizedAt){
    demote, and inventing a schedule from a miss isn't this function's call. */
 function demoteRoomReview(record, now = Date.now()){
   if(!record) return null;
+  // already below the ladder, and its due date is a real timestamp: re-dating
+  // it from the ladder would push a same-day review out to a whole day
+  if(record.learning) return record;
   const step = Math.max(0, (record.step || 0) - 1);
   return {
     ...record,
@@ -1014,6 +1064,7 @@ function demoteRoomReview(record, now = Date.now()){
    unchanged, with nothing to write. */
 function softenRoomReview(record, now = Date.now()){
   if(!record || !record.due) return record || null;
+  if(record.learning) return record;   // a same-day review is as soon as it gets
   const interval = ROOM_REVIEW_LADDER[record.step || 0] * DAY_MS;
   const pulled = startOfLocalDay(now + interval / 2);
   return pulled < record.due ? { ...record, due: pulled } : record;
@@ -1041,7 +1092,7 @@ function effectiveRoomReview(reviews, memorized, roomKey){
    review early since coming back is free. */
 function roomReviewState(record, now = Date.now()){
   if(!record || !record.due) return 'none';
-  const interval = ROOM_REVIEW_LADDER[record.step || 0] * DAY_MS;
+  const interval = record.learning ? ROOM_LEARNING_MS : ROOM_REVIEW_LADDER[record.step || 0] * DAY_MS;
   if(now >= record.due + Math.max(DAY_MS, interval * 0.5)) return 'overdue';
   if(now >= record.due) return 'due';
   if(now >= record.due - interval * 0.2) return 'soon';
@@ -1081,6 +1132,10 @@ function reviewForecastBucket(record, now = Date.now()){
   const state = roomReviewState(record, now);
   if(state === 'overdue') return 'overdue';
   if(state === 'due') return 'due';
+  // A learning review due later today is the one exception to the comment
+  // below: its due date is a real timestamp, not a midnight. It is today's
+  // work, and the forecast is day-granular, so it counts with today's.
+  if(record.learning) return 'due';
   // not due yet, so due dates are midnight-snapped into the future and
   // dueInDays is >= 1 here -- no zero case to worry about
   const d = dueInDays(record, now);
@@ -1102,6 +1157,15 @@ function dueInDays(rec, now = Date.now()){
   return Math.max(0, Math.round((rec.due - startOfLocalDay(now)) / DAY_MS));
 }
 function duePhrase(rec, now = Date.now()){
+  // a learning review is hours away, not days, and its time of day matters --
+  // "in 6 hours" alone would leave you working out when that is
+  if(rec && rec.learning){
+    const ms = rec.due - now;
+    if(ms <= 0) return 'now';
+    const at = new Date(rec.due).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const h = Math.round(ms / 3600000);
+    return h <= 1 ? `within the hour (around ${at})` : `in ${h} hours (around ${at})`;
+  }
   const d = dueInDays(rec, now);
   if(d <= 0) return 'today';
   if(d === 1) return 'tomorrow';
@@ -1174,7 +1238,8 @@ function tallyReviewGrade(stats, step, grade, replacing = null){
   const out = {};
   for(const [k, v] of Object.entries(stats || {})) out[k] = { ...emptyGradeRow(), ...v };
   const n = Math.trunc(Number(step)) || 0;
-  const rung = String(Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, n)));
+  const rung = step === LEARNING_RUNG ? LEARNING_RUNG
+    : String(Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, n)));
   const row = out[rung] || (out[rung] = emptyGradeRow());
   if(REVIEW_GRADES.includes(replacing)) row[replacing] = Math.max(0, row[replacing] - 1);
   if(REVIEW_GRADES.includes(grade)) row[grade] = row[grade] + 1;
@@ -1371,7 +1436,8 @@ function recordReviewGrade(step, grade, opts = {}){
   const next = gradeStatsQueue.then(async () => {
     const [prevStats, prevLog] = await Promise.all([getReviewGradeStats(), getReviewGradeLog()]);
     const stats = tallyReviewGrade(prevStats, step, grade, replacing);
-    const rung = Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, Math.trunc(Number(step)) || 0));
+    const rung = step === LEARNING_RUNG ? LEARNING_RUNG
+      : Math.max(0, Math.min(ROOM_REVIEW_LADDER.length - 1, Math.trunc(Number(step)) || 0));
     const log = appendGradeEvent(prevLog,
       { t: now, k: roomKey, r: rung, n: moves || 0, d: elapsedDays, g: grade }, !!replacing);
     await Promise.all([setReviewGradeStats(stats), setReviewGradeLog(log)]);
