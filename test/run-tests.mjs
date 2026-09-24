@@ -26039,6 +26039,213 @@ try {
 } catch(e){ bad('Phase RS: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase GN: the Generate… dialog's model picker -- OpenAI (gpt-image-1
+//     and -mini) over fetch, and Runware's catalogue over its WebSocket API.
+//     Neither provider is reachable from the sandbox, so both are faked here:
+//     OpenAI's endpoint by page.route, Runware by a fake WebSocket in the page,
+//     which records every task the dialog sends so the tests can assert on the
+//     actual requests rather than only on what the dialog displays. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appGN = await launchApp();
+try {
+  const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const openaiBodies = [];
+  await appGN.page.route('https://api.openai.com/v1/images/generations', async route => {
+    openaiBodies.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json',
+      headers: { 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ data: [{ b64_json: PNG1 }] }) });
+  });
+
+  await seedBackup(appGN.page, { version: 6, user: 'tester', lines: [] });
+  // A fake Runware server, in the page: WebSocket is swapped for Runware's URL
+  // only, so the dialog's own session code runs unchanged against it.
+  // (Playwright's routeWebSocket never saw the connection in this harness's
+  // Chromium build, so the socket is faked at the page level instead.)
+  await appGN.page.evaluate((PNG1) => {
+    window.__rwTasks = [];
+    const RealWS = window.WebSocket;
+    class FakeRunware {
+      constructor(url){
+        this.url = url; this.readyState = 0;
+        setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 0);
+      }
+      reply(obj){ setTimeout(() => this.onmessage && this.onmessage({ data: JSON.stringify(obj) }), 5); }
+      send(str){
+        for(const t of JSON.parse(str)){
+          window.__rwTasks.push(t);
+          if(t.taskType === 'authentication'){
+            this.reply(t.apiKey === 'rw-bad'
+              ? { errors: [{ code: 'invalidApiKey', message: 'Invalid API key.' }] }
+              : { data: [{ taskType: 'authentication', connectionSessionUUID: 'sess-1' }] });
+          } else if(t.taskType === 'imageInference'){
+            this.reply({ data: [{ taskType: 'imageInference', taskUUID: t.taskUUID,
+              imageUUID: 'img-gen-1', imageBase64Data: PNG1, cost: 0.0006 }] });
+          } else if(t.taskType === 'removeBackground'){
+            this.reply({ data: [{ taskType: 'removeBackground', taskUUID: t.taskUUID,
+              imageUUID: 'img-cut-1', imageBase64Data: PNG1, cost: 0.0002 }] });
+          }
+        }
+      }
+      close(){ this.readyState = 3; }
+    }
+    window.WebSocket = function(url, protocols){
+      return /runware\.ai/.test(url) ? new FakeRunware(url) : new RealWS(url, protocols);
+    };
+  }, PNG1);
+  const rwTasksNow = () => appGN.page.evaluate(() => window.__rwTasks.slice());
+  const rwReset = () => appGN.page.evaluate(() => { window.__rwTasks.length = 0; });
+  await appGN.page.evaluate(() => document.getElementById('menuAssets').click());
+  await appGN.page.waitForSelector('#assetsNewBtn', { timeout: 5000 });
+  await appGN.page.evaluate(() => document.getElementById('assetsNewBtn').click());
+  await appGN.page.waitForSelector('#assetGenBtn', { timeout: 5000 });
+  const openGen = async () => {
+    await appGN.page.evaluate(() => document.getElementById('assetGenBtn').click());
+    await appGN.page.waitForSelector('#assetGenOverlay #genModel', { state: 'visible', timeout: 5000 });
+  };
+  const closeGen = () => appGN.page.evaluate(() => document.getElementById('genCloseBtn').click());
+  const pickModel = (id) => appGN.page.selectOption('#genModel', id);
+  const statusText = () => appGN.page.evaluate(() => document.getElementById('genStatus').textContent);
+  const runAndWait = async () => {
+    await appGN.page.evaluate(() => document.getElementById('genRunBtn').click());
+    await appGN.page.waitForFunction(() => !document.getElementById('genRunBtn').disabled
+      && /Done|Error|Enter/.test(document.getElementById('genStatus').textContent), null, { timeout: 10000 });
+    return statusText();
+  };
+
+  // 477. The picker offers both OpenAI models and the Runware catalogue, and
+  //      the key box follows the provider: each keeps its own key, so
+  //      switching model never shows or sends one provider's key to the other.
+  try {
+    await openGen();
+    const ids = await appGN.page.evaluate(() => [...document.querySelectorAll('#genModel option')].map(o => o.value));
+    for(const want of ['openai:gpt-image-1', 'openai:gpt-image-1-mini', 'runware:flux1-schnell', 'runware:flux1-dev', 'runware:custom']){
+      assert(ids.includes(want), `expected model ${want} in the picker, got ${JSON.stringify(ids)}`);
+    }
+    await pickModel('openai:gpt-image-1');
+    await appGN.page.fill('#genApiKey', 'sk-openai-1');
+    await pickModel('runware:flux1-schnell');
+    let st = await appGN.page.evaluate(() => ({ label: document.getElementById('genKeyLabel').textContent,
+      key: document.getElementById('genApiKey').value }));
+    assert(/Runware/.test(st.label) && st.key === '', `expected an empty Runware key box, got ${JSON.stringify(st)}`);
+    await appGN.page.fill('#genApiKey', 'rw-good');
+    await pickModel('openai:gpt-image-1-mini');
+    st = await appGN.page.evaluate(() => ({ label: document.getElementById('genKeyLabel').textContent,
+      key: document.getElementById('genApiKey').value }));
+    assert(/OpenAI/.test(st.label) && st.key === 'sk-openai-1', `expected the OpenAI key back, got ${JSON.stringify(st)}`);
+    await closeGen();
+    await openGen();
+    const remembered = await appGN.page.evaluate(() => document.getElementById('genModel').value);
+    assert(remembered === 'openai:gpt-image-1-mini', `expected the last model remembered, got ${remembered}`);
+    ok('Generate: the model picker, with a separate key per provider and the last model remembered');
+  } catch(e){ bad('Generate: model picker and keys', e); }
+
+  // 478. GPT Image 1 mini: the real request names the mini model, asks for
+  //      a transparent background, and maps Portrait to OpenAI's own size.
+  try {
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    await appGN.page.fill('#genStanding', 'flat cartoon');
+    await appGN.page.selectOption('#genSize', 'portrait');
+    const status = await runAndWait();
+    const body = openaiBodies[openaiBodies.length - 1];
+    assert(body && body.model === 'gpt-image-1-mini' && body.background === 'transparent' && body.size === '1024x1536'
+      && /a brass clock/.test(body.prompt) && /flat cartoon/.test(body.prompt),
+      `unexpected OpenAI request: ${JSON.stringify(body)}`);
+    assert(/Done/.test(status), `expected success, got ${JSON.stringify(status)}`);
+    await closeGen();
+    ok('Generate: GPT Image 1 mini sends the mini model, transparency and the portrait size');
+  } catch(e){ bad('Generate: OpenAI mini request', e); }
+
+  // 479. FLUX.1 schnell with a transparent background: authenticate, generate
+  //      at FLUX dimensions, then remove the background BY THE GENERATED
+  //      IMAGE'S UUID; the cost of both steps is reported; and "Use this
+  //      image" stages it into the editor.
+  try {
+    await rwReset();
+    await openGen();
+    await pickModel('runware:flux1-schnell');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    await appGN.page.selectOption('#genSize', 'landscape');
+    const status = await runAndWait();
+    const rwTasks = await rwTasksNow();
+    const auth = rwTasks.find(t => t.taskType === 'authentication');
+    const inf = rwTasks.find(t => t.taskType === 'imageInference');
+    const bg = rwTasks.find(t => t.taskType === 'removeBackground');
+    assert(auth && auth.apiKey === 'rw-good', `expected authentication with the Runware key, got ${JSON.stringify(auth)}`);
+    assert(inf && inf.model === 'runware:100@1' && inf.width === 1216 && inf.height === 832
+      && /a brass clock/.test(inf.positivePrompt) && inf.outputFormat === 'PNG' && !inf.advancedFeatures,
+      `unexpected inference task: ${JSON.stringify(inf)}`);
+    assert(bg && bg.inputImage === 'img-gen-1' && bg.outputFormat === 'PNG',
+      `expected background removal on the generated image's UUID, got ${JSON.stringify(bg)}`);
+    assert(/Done/.test(status) && /Background removed/.test(status) && /\$0\.0008/.test(status),
+      `expected success with both steps' cost, got ${JSON.stringify(status)}`);
+    await appGN.page.evaluate(() => document.getElementById('genUseBtn').click());
+    await appGN.page.waitForSelector('#assetGenOverlay', { state: 'hidden', timeout: 5000 });
+    await appGN.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
+    ok('Generate: FLUX.1 schnell generates, removes the background by image UUID, reports cost, and stages it');
+  } catch(e){ bad('Generate: Runware with background removal', e); }
+
+  // 480. FLUX.1 dev makes transparency natively (LayerDiffuse), so there is
+  //      no second step; and with Transparent off there is none either.
+  try {
+    await rwReset();
+    await openGen();
+    await pickModel('runware:flux1-dev');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    await runAndWait();
+    let rwTasks = await rwTasksNow();
+    let inf = rwTasks.find(t => t.taskType === 'imageInference');
+    assert(inf && inf.model === 'runware:101@1' && inf.advancedFeatures && inf.advancedFeatures.layerDiffuse === true,
+      `expected LayerDiffuse on FLUX.1 dev, got ${JSON.stringify(inf)}`);
+    assert(!rwTasks.some(t => t.taskType === 'removeBackground'), 'expected no background-removal step with LayerDiffuse');
+    await rwReset();
+    await pickModel('runware:flux2-dev');
+    await appGN.page.evaluate(() => { document.getElementById('genTransparent').checked = false; });
+    await runAndWait();
+    rwTasks = await rwTasksNow();
+    inf = rwTasks.find(t => t.taskType === 'imageInference');
+    assert(inf && inf.model === 'runware:400@1' && !rwTasks.some(t => t.taskType === 'removeBackground'),
+      `expected one opaque FLUX.2 generation and nothing else, got ${JSON.stringify(rwTasks)}`);
+    await closeGen();
+    ok('Generate: native transparency on FLUX.1 dev, and no removal step when transparency is off');
+  } catch(e){ bad('Generate: native transparency', e); }
+
+  // 481. A custom Runware model ID is required, used as given, and remembered.
+  try {
+    await rwReset();
+    await openGen();
+    await pickModel('runware:custom');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    let status = await runAndWait();
+    assert(/model ID/i.test(status), `expected a prompt for the model ID, got ${JSON.stringify(status)}`);
+    await appGN.page.fill('#genCustomAir', 'civitai:12345@678');
+    await runAndWait();
+    const inf = (await rwTasksNow()).find(t => t.taskType === 'imageInference');
+    assert(inf && inf.model === 'civitai:12345@678', `expected the custom model sent as typed, got ${JSON.stringify(inf)}`);
+    await closeGen();
+    await openGen();
+    const kept = await appGN.page.evaluate(() => document.getElementById('genCustomAir').value);
+    assert(kept === 'civitai:12345@678', `expected the custom model ID remembered, got ${kept}`);
+    ok('Generate: a custom Runware model ID is required, sent as typed, and remembered');
+  } catch(e){ bad('Generate: custom model', e); }
+
+  // 482. A rejected Runware key comes back as Runware's own message.
+  try {
+    await pickModel('runware:flux1-schnell');
+    await appGN.page.fill('#genApiKey', 'rw-bad');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    const status = await runAndWait();
+    assert(/Error/.test(status) && /Invalid API key/.test(status), `expected Runware's error shown, got ${JSON.stringify(status)}`);
+    await closeGen();
+    ok('Generate: a rejected Runware key shows Runware\'s own error');
+  } catch(e){ bad('Generate: bad Runware key', e); }
+} finally {
+  await appGN.close();
+}
+} catch(e){ bad('Phase GN: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower

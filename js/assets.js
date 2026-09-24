@@ -940,14 +940,171 @@ async function handleImageFile(file){
 function setError(msg){ $('assetsError').textContent = msg || ''; }
 function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
 
-/* ---------- AI image generation (OpenAI gpt-image-1) ----------
-   A small modal launched from the editor's "Generate…" button: prompt + API key
-   (kept in localStorage so it's typed once), calls OpenAI's images endpoint from
-   the browser, previews the result, and on "Use this image" stages it into the
-   editor exactly like a dropped file. GPT only for now. */
+/* ---------- AI image generation (OpenAI, or Runware's model catalogue) ----------
+   A small modal launched from the editor's "Generate…" button: model, API key
+   (per provider, kept in localStorage so it's typed once), prompt + standing
+   instructions; calls the provider straight from the browser, previews the
+   result, and on "Use this image" stages it into the editor exactly like a
+   dropped file.
+
+   Two providers, each one self-contained function, so a third (fal.ai was the
+   runner-up when this was evaluated) is an entry in GEN_MODELS plus one
+   request function:
+
+   - OpenAI over plain fetch -- its images endpoint allows browser calls.
+   - Runware over its WebSocket API. A WebSocket handshake is not a CORS
+     request, so this works from a static page whether or not Runware's REST
+     endpoint sends CORS headers (unverified when this was written).
+
+   Transparency differs per model, and props need it: OpenAI's models and
+   FLUX.1 [dev] (LayerDiffuse) produce it natively; every other Runware model
+   gets a second removeBackground task on the image it just generated -- by
+   the image's UUID, so nothing is uploaded back. */
 const OPENAI_KEY_LS = 'repchess.openaiApiKey';
+const RUNWARE_KEY_LS = 'repchess.runwareApiKey';
+const GEN_MODEL_LS = 'repchess.genModel';
+const GEN_CUSTOM_AIR_LS = 'repchess.genCustomAir';
 const OPENAI_STANDING_LS = 'repchess.genStandingInstructions';
 const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
+const RUNWARE_WS_URL = 'wss://ws-api.runware.ai/v1';
+const RUNWARE_BG_MODEL = 'runware:110@1';      // Bria RMBG 2.0 -- clean edges on illustrations
+const RUNWARE_TASK_TIMEOUT_MS = 180000;
+
+// Size choices are named, and each model maps them to dimensions it accepts:
+// OpenAI has three fixed sizes; FLUX-family models want multiples of 64;
+// Seedream is a 2K-native model. Unverified sizes surface Runware's own error.
+const SIZES_OPENAI   = { square: [1024, 1024], portrait: [1024, 1536], landscape: [1536, 1024] };
+const SIZES_64       = { square: [1024, 1024], portrait: [832, 1216],  landscape: [1216, 832] };
+const SIZES_SEEDREAM = { square: [2048, 2048], portrait: [1728, 2304], landscape: [2304, 1728] };
+const GEN_MODELS = [
+  { id: 'openai:gpt-image-1',      group: 'OpenAI',  label: 'GPT Image 1',
+    provider: 'openai', model: 'gpt-image-1', sizes: SIZES_OPENAI, alpha: 'native' },
+  { id: 'openai:gpt-image-1-mini', group: 'OpenAI',  label: 'GPT Image 1 mini (cheaper)',
+    provider: 'openai', model: 'gpt-image-1-mini', sizes: SIZES_OPENAI, alpha: 'native' },
+  { id: 'runware:flux1-schnell',   group: 'Runware', label: 'FLUX.1 schnell (fastest, cheapest)',
+    provider: 'runware', air: 'runware:100@1', sizes: SIZES_64, alpha: 'remove' },
+  { id: 'runware:flux1-dev',       group: 'Runware', label: 'FLUX.1 dev',
+    provider: 'runware', air: 'runware:101@1', sizes: SIZES_64, alpha: 'layerDiffuse' },
+  { id: 'runware:flux2-dev',       group: 'Runware', label: 'FLUX.2 dev',
+    provider: 'runware', air: 'runware:400@1', sizes: SIZES_64, alpha: 'remove' },
+  { id: 'runware:seedream4',       group: 'Runware', label: 'Seedream 4.0',
+    provider: 'runware', air: 'bytedance:5@0', sizes: SIZES_SEEDREAM, alpha: 'remove' },
+  { id: 'runware:ideogram3',       group: 'Runware', label: 'Ideogram 3.0 (good with text)',
+    provider: 'runware', air: 'ideogram:4@1', sizes: SIZES_64, alpha: 'remove' },
+  { id: 'runware:custom',          group: 'Runware', label: 'Other Runware model (enter its ID)…',
+    provider: 'runware', custom: true, sizes: SIZES_64, alpha: 'remove' },
+];
+const GEN_PROVIDERS = {
+  openai:  { name: 'OpenAI',  keyLs: OPENAI_KEY_LS,  placeholder: 'sk-…' },
+  runware: { name: 'Runware', keyLs: RUNWARE_KEY_LS, placeholder: 'Runware API key' },
+};
+function genModelById(id){ return GEN_MODELS.find(m => m.id === id) || GEN_MODELS[0]; }
+function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ return ''; } }
+function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_){} }
+
+/* OpenAI: one fetch, image back as base64. */
+async function generateOpenAI(key, spec, prompt, [w, h], transparent){
+  const body = { model: spec.model, prompt, n: 1, size: `${w}x${h}` };
+  if(transparent) body.background = 'transparent';   // png cutout, ideal for props
+  const res = await fetch(OPENAI_IMAGES_URL, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error((json && json.error && json.error.message) || ('HTTP ' + res.status));
+  const b64 = json.data && json.data[0] && json.data[0].b64_json;
+  if(!b64) throw new Error('No image returned.');
+  return { dataUrl: 'data:image/png;base64,' + b64, cost: null };
+}
+
+/* A Runware WebSocket session: authenticate once, then run tasks one at a time
+   (the background removal needs the generated image's UUID, so they cannot
+   go in one batch). Messages are JSON; results arrive as { data: [...] } and
+   failures as { errors: [...] } -- matched to their task by taskUUID. */
+function runwareSession(key){
+  return new Promise((resolve, reject) => {
+    let ws;
+    try { ws = new WebSocket(RUNWARE_WS_URL); } catch(err){ reject(err); return; }
+    const pending = new Map();   // taskUUID -> { resolve, reject, timer }
+    let authed = false;
+    const failAll = (err) => {
+      if(!authed){ authed = true; reject(err); }
+      for(const p of pending.values()){ clearTimeout(p.timer); p.reject(err); }
+      pending.clear();
+    };
+    const errText = (e) => (e && (e.message || e.errorMessage || e.code)) || 'Runware error';
+    ws.onopen = () => ws.send(JSON.stringify([{ taskType: 'authentication', apiKey: key }]));
+    ws.onerror = () => failAll(new Error('Could not reach Runware (network?)'));
+    ws.onclose = () => failAll(new Error('Runware closed the connection'));
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch(_){ return; }
+      const errors = msg.errors || (msg.error ? [msg] : []);
+      for(const e of errors){
+        const p = e.taskUUID && pending.get(e.taskUUID);
+        if(p){ clearTimeout(p.timer); pending.delete(e.taskUUID); p.reject(new Error(errText(e))); }
+        else if(!authed){ authed = true; reject(new Error(errText(e))); try { ws.close(); } catch(_){} }
+      }
+      for(const d of (msg.data || [])){
+        if(d.taskType === 'authentication'){
+          if(!authed){ authed = true; resolve(session); }
+          continue;
+        }
+        const p = d.taskUUID && pending.get(d.taskUUID);
+        if(p){ clearTimeout(p.timer); pending.delete(d.taskUUID); p.resolve(d); }
+      }
+    };
+    const session = {
+      run(task){
+        return new Promise((res, rej) => {
+          const taskUUID = crypto.randomUUID();
+          const timer = setTimeout(() => {
+            pending.delete(taskUUID);
+            rej(new Error('Runware took too long to answer'));
+          }, RUNWARE_TASK_TIMEOUT_MS);
+          pending.set(taskUUID, { resolve: res, reject: rej, timer });
+          ws.send(JSON.stringify([{ ...task, taskUUID }]));
+        });
+      },
+      close(){ ws.onclose = null; try { ws.close(); } catch(_){} },
+    };
+  });
+}
+function runwareImageDataUrl(d){
+  if(d.imageDataURI) return d.imageDataURI;
+  if(d.imageBase64Data) return 'data:image/png;base64,' + d.imageBase64Data;
+  return null;
+}
+async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus){
+  const session = await runwareSession(key);
+  try {
+    const task = { taskType: 'imageInference', model: spec.air, positivePrompt: prompt,
+                   width: w, height: h, numberResults: 1,
+                   outputType: 'base64Data', outputFormat: 'PNG', includeCost: true };
+    const native = transparent && spec.alpha === 'layerDiffuse';
+    if(native) task.advancedFeatures = { layerDiffuse: true };
+    const img = await session.run(task);
+    let dataUrl = runwareImageDataUrl(img);
+    if(!dataUrl) throw new Error('No image returned.');
+    let cost = typeof img.cost === 'number' ? img.cost : null;
+    let note = '';
+    if(transparent && !native){
+      onStatus && onStatus('Removing the background…');
+      const bg = await session.run({ taskType: 'removeBackground', model: RUNWARE_BG_MODEL,
+        inputImage: img.imageUUID || dataUrl, outputType: 'base64Data', outputFormat: 'PNG', includeCost: true });
+      const cut = runwareImageDataUrl(bg);
+      if(!cut) throw new Error('Background removal returned no image.');
+      dataUrl = cut;
+      if(typeof bg.cost === 'number') cost = (cost || 0) + bg.cost;
+      note = ' Background removed as a second step.';
+    }
+    return { dataUrl, cost, note };
+  } finally {
+    session.close();
+  }
+}
+
 function openGenerateModal(){
   let ov = document.getElementById('assetGenOverlay');
   if(!ov){
@@ -957,32 +1114,41 @@ function openGenerateModal(){
       + 'justify-content:center;background:rgba(0,0,0,.6)';
     document.body.appendChild(ov);
   }
-  let savedKey = '', savedStanding = '';
-  try { savedKey = localStorage.getItem(OPENAI_KEY_LS) || ''; } catch(_){}
-  try { savedStanding = localStorage.getItem(OPENAI_STANDING_LS) || ''; } catch(_){}
+  const savedModel = genModelById(lsGet(GEN_MODEL_LS)).id;
+  const groups = [...new Set(GEN_MODELS.map(m => m.group))];
+  const modelOptions = groups.map(g => `<optgroup label="${esc(g)}">` + GEN_MODELS.filter(m => m.group === g)
+    .map(m => `<option value="${esc(m.id)}"${m.id === savedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')
+    + '</optgroup>').join('');
   ov.innerHTML = `
     <div style="background:#1c1f26;color:#eee;width:min(34em,94vw);max-height:92vh;overflow:auto;
                 border-radius:8px;padding:1rem 1.1rem;font:400 .9rem/1.4 sans-serif;box-shadow:0 8px 40px rgba(0,0,0,.5)">
-      <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Generate image with GPT</h2>
-      <label style="display:block;font-size:.78rem;margin:0 0 .15rem">OpenAI API key</label>
-      <input type="password" id="genApiKey" value="${esc(savedKey)}" placeholder="sk-…" autocomplete="off"
-             style="width:100%;box-sizing:border-box">
-      <div style="font-size:.68rem;color:#9aa;margin:.15rem 0 .6rem">Stored only in this browser (localStorage) and sent straight to OpenAI.</div>
+      <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Generate image</h2>
+      <label style="display:block;font-size:.78rem;margin:0 0 .15rem">Model</label>
+      <select id="genModel" style="width:100%;box-sizing:border-box">${modelOptions}</select>
+      <div id="genCustomWrap" style="display:none;margin-top:.35rem">
+        <input type="text" id="genCustomAir" value="${esc(lsGet(GEN_CUSTOM_AIR_LS))}" placeholder="Runware model ID, e.g. runware:100@1"
+               autocomplete="off" style="width:100%;box-sizing:border-box">
+        <div style="font-size:.68rem;color:#9aa;margin:.15rem 0 0">The model's AIR ID, shown on its page at runware.ai/models.</div>
+      </div>
+      <label id="genKeyLabel" style="display:block;font-size:.78rem;margin:.6rem 0 .15rem">API key</label>
+      <input type="password" id="genApiKey" autocomplete="off" style="width:100%;box-sizing:border-box">
+      <div id="genKeyNote" style="font-size:.68rem;color:#9aa;margin:.15rem 0 .6rem"></div>
       <label style="display:block;font-size:.78rem;margin:0 0 .15rem">Prompt</label>
       <textarea id="genPrompt" rows="3" placeholder="e.g. a friendly cartoon grandfather clock, front view, simple, centered"
                 style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
       <label style="display:block;font-size:.78rem;margin:.5rem 0 .15rem">Standing instructions
         <span style="color:#9aa;font-weight:400">— style applied to every generation</span></label>
       <textarea id="genStanding" rows="2" placeholder="e.g. flat cartoon style, thick outlines, bright colors, no text"
-                style="width:100%;box-sizing:border-box;resize:vertical">${esc(savedStanding)}</textarea>
+                style="width:100%;box-sizing:border-box;resize:vertical">${esc(lsGet(OPENAI_STANDING_LS))}</textarea>
       <div style="font-size:.68rem;color:#9aa;margin:.15rem 0 0">Saved in this browser and appended to every prompt.</div>
       <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 .6rem;font-size:.78rem">
-        <label><input type="checkbox" id="genTransparent" checked> Transparent background</label>
+        <label><input type="checkbox" id="genTransparent" checked> Transparent background
+          <span id="genAlphaNote" style="color:#9aa"></span></label>
         <label>Size
           <select id="genSize" style="font-size:.78rem">
-            <option value="1024x1024" selected>Square</option>
-            <option value="1024x1536">Portrait</option>
-            <option value="1536x1024">Landscape</option>
+            <option value="square" selected>Square</option>
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
           </select>
         </label>
       </div>
@@ -1009,40 +1175,63 @@ function openGenerateModal(){
   q('genCloseBtn').onclick = close;
   wireBackdropClose(ov, close);
 
+  // The key box follows the model's provider: each provider keeps its own key,
+  // so switching model never shows (or sends) one provider's key to the other.
+  let keyProvider = null;
+  const syncModel = () => {
+    const spec = genModelById(q('genModel').value);
+    const prov = GEN_PROVIDERS[spec.provider];
+    if(keyProvider && keyProvider !== spec.provider){
+      const typed = q('genApiKey').value.trim();
+      if(typed) lsSet(GEN_PROVIDERS[keyProvider].keyLs, typed);
+    }
+    if(keyProvider !== spec.provider){
+      q('genApiKey').value = lsGet(prov.keyLs);
+      keyProvider = spec.provider;
+    }
+    q('genKeyLabel').textContent = `${prov.name} API key`;
+    q('genApiKey').placeholder = prov.placeholder;
+    q('genKeyNote').textContent = `Stored only in this browser (localStorage) and sent straight to ${prov.name}.`;
+    q('genCustomWrap').style.display = spec.custom ? '' : 'none';
+    q('genAlphaNote').textContent = spec.alpha === 'remove' ? '(by removing it after generating)' : '';
+    lsSet(GEN_MODEL_LS, spec.id);
+  };
+  q('genModel').onchange = syncModel;
+  syncModel();
+
   q('genRunBtn').onclick = async () => {
+    const spec = { ...genModelById(q('genModel').value) };
+    const prov = GEN_PROVIDERS[spec.provider];
     const key = q('genApiKey').value.trim();
     const prompt = q('genPrompt').value.trim();
     const standing = q('genStanding').value.trim();
-    if(!key){ q('genStatus').textContent = 'Enter your OpenAI API key.'; return; }
+    if(spec.custom){
+      spec.air = q('genCustomAir').value.trim();
+      if(!spec.air){ q('genStatus').textContent = 'Enter the Runware model ID.'; return; }
+      lsSet(GEN_CUSTOM_AIR_LS, spec.air);
+    }
+    if(!key){ q('genStatus').textContent = `Enter your ${prov.name} API key.`; return; }
     if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return; }
-    try { localStorage.setItem(OPENAI_KEY_LS, key); } catch(_){}
-    try { localStorage.setItem(OPENAI_STANDING_LS, standing); } catch(_){}
+    lsSet(prov.keyLs, key);
+    lsSet(OPENAI_STANDING_LS, standing);
     const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
+    const dims = spec.sizes[q('genSize').value] || spec.sizes.square;
+    const transparent = q('genTransparent').checked;
     q('genRunBtn').disabled = true;
-    q('genStatus').textContent = 'Generating… (usually 10–30s)';
+    q('genStatus').textContent = `Generating with ${genModelById(spec.id).label}…`;
     try {
-      const body = { model: 'gpt-image-1', prompt: fullPrompt, n: 1, size: q('genSize').value };
-      if(q('genTransparent').checked) body.background = 'transparent';   // png cutout, ideal for props
-      const res = await fetch(OPENAI_IMAGES_URL, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const json = await res.json().catch(() => ({}));
-      if(!res.ok){
-        const msg = (json && json.error && json.error.message) || ('HTTP ' + res.status);
-        q('genStatus').textContent = 'Error: ' + msg;
-        return;
-      }
-      const b64 = json.data && json.data[0] && json.data[0].b64_json;
-      if(!b64){ q('genStatus').textContent = 'No image returned.'; return; }
-      lastDataUrl = 'data:image/png;base64,' + b64;
+      const out = spec.provider === 'openai'
+        ? await generateOpenAI(key, spec, fullPrompt, dims, transparent)
+        : await generateRunware(key, spec, fullPrompt, dims, transparent,
+            (s) => { q('genStatus').textContent = s; });
+      lastDataUrl = out.dataUrl;
       q('genResultImg').src = lastDataUrl;
       q('genResultWrap').style.display = '';
-      q('genStatus').textContent = 'Done — use it, or edit the prompt and generate again.';
+      const cost = typeof out.cost === 'number' ? ` Cost: $${out.cost.toFixed(4)}.` : '';
+      q('genStatus').textContent = 'Done — use it, or edit the prompt and generate again.' + (out.note || '') + cost;
     } catch(err){
       console.error('[assets] generate failed', err);
-      q('genStatus').textContent = 'Request failed: ' + ((err && err.message) || err) + ' (network or CORS?)';
+      q('genStatus').textContent = 'Error: ' + ((err && err.message) || err);
     } finally {
       q('genRunBtn').disabled = false;
     }
