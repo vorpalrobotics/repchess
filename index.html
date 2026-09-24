@@ -470,6 +470,14 @@
   .cr-exits b{color:#888;font-weight:600;margin-right:.3em}
   .cr-empty{color:#999;font-style:italic}
 
+  /* ---------- Settings ---------- */
+  .set-h{margin:0 0 .5rem;font-size:.95rem;color:#1f4e79}
+  .set-row{display:flex;align-items:center;gap:.5rem;font-size:.92rem;cursor:pointer}
+  .set-row input{margin:0}
+  .set-note{font-size:.8rem;color:#666;margin:.35rem 0 0 1.6rem;line-height:1.45}
+  .set-note:empty{display:none}
+  .set-note.is-warn{color:#b26a00}
+
   /* ---------- Accuracy Report ---------- */
   .acc-h{margin:1.1rem 0 .3rem;font-size:.95rem;color:#1f4e79}
   .acc-h:first-child{margin-top:0}
@@ -1083,6 +1091,7 @@
       <button id="menuBrowseGames">Browse Games</button>
       <button id="menuFindTranspositions" title="Scan every built castle for positions reached by two or more different castles">Find Transpositions</button>
       <hr class="row-menu-sep">
+      <button id="menuSettings">Settings</button>
       <button id="menuHelp">Help</button>
       <button id="menuAbout">About</button>
     </div>
@@ -1512,6 +1521,27 @@
 </div>
 
 <!-- cross-castle transposition report -->
+<!-- Settings. An IMMEDIATE modal (Documents/modal-buttons.md): each control
+     applies the moment it changes, so there is nothing staged and the bar is a
+     title and a bare Done. Grouped in sections so later settings slot in
+     without a redesign. Each setting chooses its own store deliberately --
+     see the note on the reminders one in app.js. -->
+<div id="settingsOverlay" class="overlay">
+  <div class="modal" style="width:min(34em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div id="settingsBar" class="modal-bar-host"></div>
+    <div class="modal-body">
+      <h3 class="set-h">Reviews</h3>
+      <label class="set-row">
+        <input type="checkbox" id="setLearningReminders">
+        <span>Notify me when a same-day review is due</span>
+      </label>
+      <p class="set-note" id="setLearningRemindersNote"></p>
+      <p class="set-note">The tab title always shows how many are due, e.g. &ldquo;(2) REPchess&rdquo;,
+        whether or not notifications are on.</p>
+    </div>
+  </div>
+</div>
+
 <!-- Accuracy Report. Informational: nothing here is staged, so the bar is a
      title and a bare Done (Documents/modal-buttons.md). -->
 <div id="accuracyOverlay" class="overlay">
@@ -2087,7 +2117,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-69"></script>
+<script src="js/db.js?v=20260804-70"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -2104,6 +2134,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-444"></script>
+<script type="module" src="js/app.js?v=20260804-446"></script>
 </body>
 </html>

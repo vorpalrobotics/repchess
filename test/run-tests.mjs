@@ -22987,6 +22987,86 @@ try {
     await appEF.page.evaluate(() => document.querySelector('#reviewForecastOverlay .modal-bar .mb-leave').click());
     ok('Review Forecast: changing scope resets the calendar to the current month');
   } catch(e){ bad('Review Forecast: scope resets the month', e); }
+  /* 460. The learning step's transitions. A same-day review before the ladder
+          (db.js, learningRecord): passing it -- A or B -- graduates to rung 0;
+          a failure from ANYWHERE goes back to it. That last part is also the
+          fix for B and C scheduling identically at rung 0, where a C used to
+          reset to exactly the rung a B holds at. */
+  try {
+    const LMS = await H('learningMs');
+    const fresh = await H('learning', null, T0, null);
+    assert(fresh.learning === true && fresh.step === 0 && fresh.last === null,
+      `expected a fresh learning record, never reviewed, got ${JSON.stringify(fresh)}`);
+    assert(fresh.due === T0 + LMS,
+      `expected the learning review due a REAL ${LMS / 3600000}h out, not a midnight, got ${fresh.due - T0}`);
+
+    for(const g of ['A', 'B']){
+      const grad = await H('applyGrade', fresh, g, T0 + LMS, 0.5);
+      assert(!grad.learning && grad.step === 0,
+        `expected ${g} to graduate learning to rung 0, got ${JSON.stringify(grad)}`);
+      assert(grad.due === await H('startOfDay', T0 + LMS + DAY),
+        `expected a graduated room due tomorrow, midnight-snapped like every rung, got ${grad.due}`);
+    }
+    const relearn = await H('applyGrade', fresh, 'C', T0 + LMS, 0.5);
+    assert(relearn.learning && relearn.due === T0 + LMS + LMS && relearn.lapses === 1,
+      `expected C in learning to stay in learning, +${LMS / 3600000}h, a lapse counted, got ${JSON.stringify(relearn)}`);
+
+    // at rung 0 a B and a C now go to DIFFERENT places
+    const rung0 = await H('applyGrade', null, 'B', T0, 0.5);
+    const b0 = await H('applyGrade', rung0, 'B', T0 + DAY, 0.5);
+    const c0 = await H('applyGrade', rung0, 'C', T0 + DAY, 0.5);
+    assert(!b0.learning && b0.step === 0, `expected B at rung 0 to hold there, got ${JSON.stringify(b0)}`);
+    assert(c0.learning === true, `expected C at rung 0 to go back to learning, got ${JSON.stringify(c0)}`);
+    assert(c0.due < b0.due, 'expected the failure reviewed SOONER than the hold -- the two no longer collide');
+
+    // and from high up the ladder too: a lapse is relearned today, not tomorrow
+    let high = null;
+    for(let i = 0; i < 4; i++) high = await H('applyGrade', high, 'A', T0 + i * DAY, 0.5);
+    const lapse = await H('applyGrade', high, 'C', T0 + 30 * DAY, 0.5);
+    assert(lapse.learning && lapse.step === 0,
+      `expected a lapse at rung ${high.step} to go back to learning, got ${JSON.stringify(lapse)}`);
+    ok('learning step: A/B graduate to rung 0, C from anywhere goes back to a same-day review');
+  } catch(e){ bad('learning step: transitions', e); }
+
+  /* 461. Everything that reads a record, on a learning one. Its due date is a
+          real timestamp, which breaks the midnight assumption several of these
+          were written under -- the forecast bucket's own comment said a
+          same-day future due date could not happen. */
+  try {
+    const LMS = await H('learningMs');
+    const rec = await H('learning', null, T0, null);
+    assert(['notdue', 'soon'].includes(await H('state', rec, T0 + LMS / 2)),
+      'expected a learning review not yet due halfway through its step');
+    assert(await H('state', rec, T0 + LMS) === 'due', 'expected it due at its real timestamp');
+    assert(await H('state', rec, T0 + LMS + 2 * DAY) === 'overdue', 'expected it overdue once left for days');
+    assert(await H('bucket', rec, T0 + LMS / 2) === 'due',
+      'expected a learning review due later TODAY to count as today\'s work, not "tomorrow"');
+    const phrase = await H('duePhrase', rec, T0);
+    assert(/in 6 hours \(around .+\)/.test(phrase),
+      `expected the due phrase in hours with a time of day, got ${JSON.stringify(phrase)}`);
+    // demotion and softening leave it alone: it is already below the ladder,
+    // and re-dating it from the ladder would push a same-day review out a day
+    assert(JSON.stringify(await H('demote', rec, T0)) === JSON.stringify(rec),
+      'expected structural demotion to leave a learning record untouched');
+    assert(JSON.stringify(await H('soften', rec, T0)) === JSON.stringify(rec),
+      'expected quiz softening to leave a learning record untouched');
+    // a record WITHOUT the flag -- everything memorized before this existed --
+    // reads exactly as it always did: graduated, day-scale
+    const old = { last: T0, due: await H('startOfDay', T0 + DAY), step: 0, lapses: 0, lastGrade: 'A' };
+    assert(await H('bucket', old, T0) === 'tomorrow', 'expected an unflagged record still scheduled on the ladder');
+    ok('learning step: due state, forecast bucket and phrasing read the real timestamp; demote/soften leave it alone');
+  } catch(e){ bad('learning step: record readers', e); }
+
+  /* 462. A learning review is tallied under its own key, so it never shares a
+          row with rung 0 -- the report has to be able to show whether the step
+          is doing anything. */
+  try {
+    const t = await H('tallyGrade', {}, 'L', 'B');
+    assert(t.L && t.L.B === 1 && !t['0'],
+      `expected the learning review counted under L, not rung 0, got ${JSON.stringify(t)}`);
+    ok('learning step: tallied under its own key, never rung 0');
+  } catch(e){ bad('learning step: tally key', e); }
+
 } finally {
   await appEF.close();
 }
@@ -23048,8 +23128,13 @@ try {
 
   // 371. Pressing 1 grades the room perfect: a record lands at step 1, the
   //      due date moves out past the bootstrapped one, and a toast says so.
+  //      Run on a room with NO stored record -- one memorized before the
+  //      learning step existed, which still bootstraps onto the ladder -- so
+  //      this stays a test of the keyboard; the learning step has its own
+  //      (460-463).
   try {
     await revisit();
+    await E('setReviewRecord', keys.alpha, null);
     assert(!(await E('reviewRecord')), 'setup: expected no stored record before the first grade');
     const boot = await E('reviewFor');
     assert(boot && boot.step === 0, `setup: expected a bootstrapped record at step 0, got ${JSON.stringify(boot)}`);
@@ -23118,6 +23203,9 @@ try {
     await E('toggleMemorized');
     await E('clickMemBtn');
     assert((await E('gradeMenu')).open, 'setup: expected the menu open');
+    // memorizing writes a learning record now, so "graded nothing" means that
+    // record is untouched -- a stricter check than "no record" ever was
+    const recBefore = JSON.stringify(await E('reviewRecord'));
     await press('b');                                  // "take the back door"
     await appEG.page.waitForTimeout(150);
     const room = await appEG.page.evaluate(() => window.__threeTestState.room);
@@ -23126,7 +23214,7 @@ try {
     await press('Escape');
     await appEG.page.waitForTimeout(100);
     assert(!(await E('gradeMenu')).open, 'expected Escape to close the menu');
-    assert(!(await E('reviewRecord')), 'expected Escape to grade nothing');
+    assert(JSON.stringify(await E('reviewRecord')) === recBefore, 'expected Escape to grade nothing');
     ok('Review grading: the open menu swallows walk keys; Escape cancels without grading');
   } catch(e){ bad('Review grading: menu owns the keyboard', e); }
 
@@ -23209,11 +23297,14 @@ try {
     const toast = await E('toastText');
     assert(toast && /memorized/i.test(toast) && /first review/i.test(toast),
       `expected a toast confirming when the first review falls due, got ${JSON.stringify(toast)}`);
-    assert(/tomorrow/i.test(toast),
-      `expected the first review one day out (the ladder's bottom rung), got ${JSON.stringify(toast)}`);
+    // the first review is the same-day LEARNING step now, hours out, and the
+    // toast says when in clock time so you do not have to work it out
+    assert(/in \d+ hours \(around .+\)|within the hour/i.test(toast),
+      `expected the first review phrased in hours with a time of day, got ${JSON.stringify(toast)}`);
     assert(await E('memorized'), 'expected the room actually memorized');
-    assert(!(await E('reviewRecord')),
-      'expected no record WRITTEN by marking -- the schedule is derived from the memorized timestamp');
+    const written = await E('reviewRecord');
+    assert(written && written.learning === true && written.last === null,
+      `expected marking to WRITE a learning record, never reviewed, got ${JSON.stringify(written)}`);
 
     // and the destructive direction says what it cost: the icon going dark
     // shows the flag cleared but not that a ladder position went with it
@@ -25349,6 +25440,37 @@ try {
     ok('room story: written from the walk, on the room\'s own pref, with the corner control reflecting it');
   } catch(e){ bad('room story: write and restyle from the walk', e); }
 
+  /* 463. Memorizing a room starts the LEARNING step: an explicit record, due a
+          real few hours out. Once due it tops the review list -- its value
+          decays in hours where a ladder review has the whole day -- and
+          passing it graduates the room to rung 0. */
+  try {
+    await E('enter', K.c5);                         // left unmemorized by the tests above
+    await appRL.page.waitForTimeout(300);
+    const before = Date.now();
+    await appRL.page.evaluate(() => window.__threeTestEdit.toggleMemorized());
+    const rec = await E('reviewRecord', K.c5);
+    assert(rec && rec.learning === true && rec.last === null,
+      `expected memorizing to write a learning record, got ${JSON.stringify(rec)}`);
+    const hrs = (rec.due - before) / 3600000;
+    assert(hrs > 5.9 && hrs < 6.1, `expected the same-day review ~6h out, got ${hrs.toFixed(2)}h`);
+
+    // bring it due, and make sure there is ladder work due too for it to beat
+    const now = Date.now();
+    await E('setReviewRecord', K.c5, { ...rec, due: now - 3600000 });
+    await sched(K.root, -1);
+    const rows = await appRL.page.evaluate(() => window.__threeTestEdit.reviewList('priority'));
+    assert(rows[0] && rows[0].key === K.c5 && rows[0].learning,
+      `expected the due learning review first in priority order, got ${JSON.stringify(rows.map(r => [r.key === K.c5, r.state]))}`);
+
+    await appRL.page.evaluate(() => window.__threeTestEdit.gradeCurrentRoom('A'));
+    await appRL.page.waitForTimeout(200);
+    const grad = await E('reviewRecord', K.c5);
+    assert(!grad.learning && grad.step === 0,
+      `expected passing the learning review to graduate the room to rung 0, got ${JSON.stringify(grad)}`);
+    ok('learning step: memorizing starts it, the list puts it first once due, passing it graduates the room');
+  } catch(e){ bad('learning step: memorize, list and graduate in the walk', e); }
+
   /* 448. The disambiguation beard. It is drawn centred on the move image at
           60% of the square and half-transparent -- it used to be 30% tucked
           along the bottom edge, which for a disambiguator is the one failure
@@ -25541,6 +25663,21 @@ try {
     ok('accuracy report: the B weight separates "imperfect every time" from "half of it gone"');
   } catch(e){ bad('accuracy report: B weighting', e); }
 
+  /* 464. The learning step gets its own row, never folded into rung 0 -- the
+          point of tallying it separately is to see whether it helps -- and its
+          real interval reads in hours, since a tenth of a day reads worse. */
+  try {
+    const rep = await report({ 'L': { A: 3, B: 1, C: 1 }, '0': { A: 1, B: 0, C: 0 } },
+      [{ t: 1, k: 'r', r: 'L', n: 3, d: 0.3, g: 'A' }, { t: 2, k: 'r', r: 0, n: 3, d: 1, g: 'A' }], []);
+    assert(rep.learning.total === 5 && rep.learning.scorePct === 72,
+      `expected the learning row scored (3 + 0.6)/5 = 72, got ${JSON.stringify(rep.learning)}`);
+    assert(rep.learning.elapsedHours === 7, `expected 0.3 days to read as 7h, got ${rep.learning.elapsedHours}`);
+    assert(rep.rungs[0].total === 1, `expected rung 0 NOT to absorb the learning reviews, got ${rep.rungs[0].total}`);
+    assert(rep.rungs[0].elapsed === 1, 'expected rung 0\'s interval read only from its own log rows');
+    assert(rep.totals.total === 6, `expected the totals to include learning, got ${rep.totals.total}`);
+    ok('accuracy report: the learning step on its own row, in hours, apart from rung 0');
+  } catch(e){ bad('accuracy report: learning row', e); }
+
   // 456. Quiz rows, one per kind, from their own outcomes -- and an event with
   //      no kind reads as the opening quiz, which is what quizEventKind does.
   try {
@@ -25614,6 +25751,164 @@ try {
   await appAR.close();
 }
 } catch(e){ bad('Phase AR: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
+// --- Phase RM: same-day review reminders and the Settings modal. The tab
+//     title count is always on; the desktop notification is opt-in, and is
+//     driven here through a fake window.Notification so permission states and
+//     "exactly one notification per newly due room" are checkable without a
+//     real OS prompt. ---
+if(shouldRunPhase(['core'])){
+try {
+const appRM = await launchApp();
+try {
+  await seedBackup(appRM.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+
+  // A fake Notification: records every instance, with a settable permission
+  // and a requestPermission that answers with whatever the test preset.
+  await appRM.page.evaluate(() => {
+    class FakeNote {
+      constructor(title, opts){ this.title = title; this.opts = opts || {}; FakeNote.sent.push(this); }
+      close(){}
+      static async requestPermission(){ FakeNote.asked++; FakeNote.permission = FakeNote.answer; return FakeNote.answer; }
+    }
+    FakeNote.sent = []; FakeNote.asked = 0; FakeNote.permission = 'default'; FakeNote.answer = 'granted';
+    window.Notification = FakeNote;
+    window.__focused = false;
+    document.hasFocus = () => window.__focused;
+  });
+  const HOUR = 3600 * 1000;
+  const setReviews = (m) => appRM.page.evaluate((m) => window.__reviewTestHooks.setReviews(m), m);
+  const tick = () => appRM.page.evaluate(() => window.__reminderTestHooks.tick());
+  const sent = () => appRM.page.evaluate(() => window.Notification.sent.map(n => ({ title: n.title, body: n.opts.body, tag: n.opts.tag })));
+
+  // 465. Only a DUE LEARNING review counts: a due ladder review, and a
+  //      learning review not yet due, are both left out.
+  try {
+    const now = 1_800_000_000_000;
+    const keys = await appRM.page.evaluate(([now, H]) => window.__reminderTestHooks.learningDueNow({
+      a: { learning: true, due: now - H },
+      b: { learning: true, due: now + H },
+      c: { step: 0, due: now - 5 * H },
+      d: null,
+    }, now).map(d => d.key), [now, HOUR]);
+    assert(JSON.stringify(keys) === '["a"]', `expected only the due learning room, got ${JSON.stringify(keys)}`);
+    ok('reminders: only a due same-day review counts, not a due ladder review');
+  } catch(e){ bad('reminders: learningDueNow', e); }
+
+  // 466. The tab title carries the count, and drops it when nothing is due.
+  try {
+    const base = await appRM.page.evaluate(() => window.__reminderTestHooks.baseTitle());
+    const t0 = Date.now();
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 }, r2: { learning: true, due: t0 - 60000, step: 0 },
+                       r3: { learning: true, due: t0 + HOUR, step: 0 } });
+    await tick();
+    let title = await appRM.page.title();
+    assert(title === `(2) ${base}`, `expected "(2) ${base}", got ${JSON.stringify(title)}`);
+    await setReviews({});
+    await tick();
+    title = await appRM.page.title();
+    assert(title === base, `expected the bare title once nothing is due, got ${JSON.stringify(title)}`);
+    ok('reminders: the tab title shows the due count, and only while something is due');
+  } catch(e){ bad('reminders: title count', e); }
+
+  // 467. Off by default: something due sends nothing until opted in.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'granted'; window.__reminderTestHooks.resetSeen(); });
+    await setReviews({ r1: { learning: true, due: Date.now() - HOUR, step: 0 } });
+    await tick();
+    const n = (await sent()).length;
+    assert(n === 0, `expected no notification before opting in, got ${n}`);
+    ok('reminders: nothing is sent until the setting is turned on');
+  } catch(e){ bad('reminders: off by default', e); }
+
+  // 468. Settings: the Immediate-modal bar, and turning it on from 'default'
+  //      asks for permission from the click and ends up checked.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'default'; window.Notification.answer = 'granted'; });
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    await appRM.page.waitForSelector('#settingsOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appRM.page, 'settingsOverlay', 'Settings');
+    let st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders');
+      return { checked: b.checked, disabled: b.disabled, note: document.getElementById('setLearningRemindersNote').textContent };
+    });
+    assert(!st.checked && !st.disabled && /ask for permission/.test(st.note), `before: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => document.getElementById('setLearningReminders').click());
+    await appRM.page.waitForFunction(() => window.__reminderTestHooks.wanted(), null, { timeout: 5000 });
+    st = await appRM.page.evaluate(() => ({ checked: document.getElementById('setLearningReminders').checked,
+      asked: window.Notification.asked }));
+    assert(st.checked && st.asked === 1, `after: ${JSON.stringify(st)}`);
+    ok('settings: an Immediate modal whose reminder toggle asks for permission from the click');
+  } catch(e){ bad('settings: enabling reminders', e); }
+
+  // 469. One notification per newly due room: no repeat on the next tick,
+  //      and a room that comes due later fires again.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.sent.length = 0; window.__reminderTestHooks.resetSeen(); });
+    const t0 = Date.now();
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 } });
+    await tick();
+    let got = await sent();
+    assert(got.length === 1 && got[0].title === 'REPchess' && got[0].tag === 'repchess-learning'
+      && /1 room ready/.test(got[0].body), `first tick: ${JSON.stringify(got)}`);
+    await tick();
+    got = await sent();
+    assert(got.length === 1, `expected no repeat on the next tick, got ${got.length}`);
+    await setReviews({ r1: { learning: true, due: t0 - HOUR, step: 0 }, r2: { learning: true, due: t0 - 1000, step: 0 } });
+    await tick();
+    got = await sent();
+    assert(got.length === 2 && /2 rooms ready/.test(got[1].body), `second room: ${JSON.stringify(got)}`);
+    ok('reminders: one notification per newly due room, never repeated');
+  } catch(e){ bad('reminders: dedupe', e); }
+
+  // 470. With the page already in front of you, a toast instead of an OS
+  //      notification.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.sent.length = 0; window.__reminderTestHooks.resetSeen(); window.__focused = true; });
+    const toastsBefore = await appRM.page.evaluate(() => document.querySelectorAll('#toastStack .app-toast').length);
+    await tick();
+    const res = await appRM.page.evaluate(() => ({ n: window.Notification.sent.length,
+      toasts: [...document.querySelectorAll('#toastStack .app-toast')].map(t => t.textContent) }));
+    assert(res.n === 0, `expected no OS notification while focused, got ${res.n}`);
+    assert(res.toasts.length > toastsBefore && /same-day review/.test(res.toasts[res.toasts.length - 1]),
+      `expected a reminder toast, got ${JSON.stringify(res.toasts)}`);
+    await appRM.page.evaluate(() => { window.__focused = false; });
+    ok('reminders: a toast instead of a notification when the page is focused');
+  } catch(e){ bad('reminders: focused toast', e); }
+
+  // 471. Denied: the toggle is disabled, with the way back explained; and a
+  //      browser without notifications gets a disabled toggle and says so.
+  try {
+    await appRM.page.evaluate(() => { window.Notification.permission = 'denied'; });
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    let st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders'), n = document.getElementById('setLearningRemindersNote');
+      return { checked: b.checked, disabled: b.disabled, note: n.textContent, warn: n.classList.contains('is-warn') };
+    });
+    assert(!st.checked && st.disabled && st.warn && /blocked/.test(st.note) && /address bar/.test(st.note), `denied: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => { document.querySelector('#settingsOverlay .mb-leave').click(); delete window.Notification; window.Notification = undefined; });
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    st = await appRM.page.evaluate(() => {
+      const b = document.getElementById('setLearningReminders');
+      return { disabled: b.disabled, note: document.getElementById('setLearningRemindersNote').textContent };
+    });
+    assert(st.disabled && /does not support/.test(st.note), `unsupported: ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.waitForFunction(() => document.getElementById('settingsOverlay').style.display === 'none', null, { timeout: 5000 });
+    ok('settings: denied and unsupported both disable the toggle and say why');
+  } catch(e){ bad('settings: permission states', e); }
+} finally {
+  await appRM.close();
+}
+} catch(e){ bad('Phase RM: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys

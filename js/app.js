@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-313';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-314';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-88';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-65';
@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-444';
+const BUILD_TAG = '-446';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3751,6 +3751,15 @@ if(localStorage.getItem('threeTestDebug')) window.__disambigProbe = (fen, san) =
 // the Accuracy Report's pure core, so its arithmetic is testable without
 // driving months of reviews through the UI
 if(localStorage.getItem('threeTestDebug')) window.__accuracyReport = (stats, gradeLog, quizLog) => buildAccuracyReport(stats, gradeLog, quizLog);
+// the reminder engine: the pure due check, one tick on demand, and the state
+// it keeps -- so a test can drive it without waiting a minute per step
+if(localStorage.getItem('threeTestDebug')) window.__reminderTestHooks = {
+  learningDueNow: (reviews, now) => learningDueNow(reviews, now),
+  tick: () => reminderTick(),
+  baseTitle: () => BASE_TITLE,
+  wanted: () => remindersWanted(),
+  resetSeen: () => writeNotified({}),
+};
 // the roomKey of whatever node showRoomInfoPanel most recently rendered --
 // read by roomInfoJumpBtn's click handler (kept as module state, same as
 // GRAPH_FOCUS_SEQ etc., rather than threaded through the DOM).
@@ -8554,7 +8563,19 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
              elapsed: elapsed == null ? null : Math.round(elapsed * 10) / 10,
              elapsedSamples: at.length };
   });
-  const totals = rungs.reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
+  /* The learning step, on its own row rather than folded into rung 0 -- the
+     point of keeping it separate in the tally is to see whether it helps: a
+     learning row that scores well, followed by a rung 0 that improves on what
+     it used to be, is the step earning its keep. */
+  const lrow = (stats && stats[LEARNING_RUNG]) || { A: 0, B: 0, C: 0 };
+  const lTotal = lrow.A + lrow.B + lrow.C;
+  const lAt = log.filter(e => e.r === LEARNING_RUNG && typeof e.d === 'number');
+  const lElapsed = lAt.length ? lAt.reduce((n, e) => n + e.d, 0) / lAt.length : null;
+  const learning = { step: LEARNING_RUNG, hours: ROOM_LEARNING_MS / 3600000, ...lrow, total: lTotal,
+    scorePct: weightedScore(lrow, GRADE_WEIGHT), perfectPct: pct(lrow.A, lTotal),
+    // in HOURS here: a tenth of a day is the log's precision, but 0.3d reads worse than 7h
+    elapsedHours: lElapsed == null ? null : Math.round(lElapsed * 24) };
+  const totals = [learning, ...rungs].reduce((t, r) => ({ A: t.A + r.A, B: t.B + r.B, C: t.C + r.C, total: t.total + r.total }),
     { A: 0, B: 0, C: 0, total: 0 });
   totals.scorePct = weightedScore(totals, GRADE_WEIGHT);
   totals.perfectPct = pct(totals.A, totals.total);
@@ -8589,7 +8610,7 @@ function buildAccuracyReport(stats, gradeLog, quizLog){
   });
   const quizTotal = quizzes.reduce((n, q) => n + q.total, 0);
 
-  return { rungs, totals, sizes, quizzes, quizTotal, ladder,
+  return { rungs, learning, totals, sizes, quizzes, quizTotal, ladder,
            reviews: totals.total, logged: log.length,
            empty: totals.total === 0 && quizTotal === 0 };
 }
@@ -8668,9 +8689,13 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
       // step 0, which looks like neglect of work that was never started.
       if(!rec.last){ neverReviewed.rooms++; neverReviewed.moves += moves; }
 
-      const day = perDayMap.get(rec.due) || { due: rec.due, moves: 0, rooms: 0 };
+      // keyed by DAY: every other due date is already a local midnight, but a
+      // learning review's is a real timestamp and would otherwise land as a
+      // day of its own
+      const dayKey = rec.learning ? startOfLocalDay(rec.due) : rec.due;
+      const day = perDayMap.get(dayKey) || { due: dayKey, moves: 0, rooms: 0 };
       day.rooms++; day.moves += moves;
-      perDayMap.set(rec.due, day);
+      perDayMap.set(dayKey, day);
     }
   }
 
@@ -9085,6 +9110,172 @@ async function openReviewForecast(){
   }
 }
 
+/* ---------- same-day review reminders ----------
+
+   The learning step only works if the review actually happens the same day,
+   and nothing else would tell you it is due while you are off doing something
+   else. Two layers:
+
+   1. The TAB TITLE -- "(2) REPchess" -- always on, needing no permission.
+   2. A desktop NOTIFICATION, opt-in from Settings.
+
+   What this cannot do, and why: a static site has no server, so it can only
+   notify while a tab is open somewhere. Real background notifications need a
+   push server; the one API that would have let a page schedule them locally
+   was trialled in Chrome and dropped. That is tolerable because the learning
+   step degrades gracefully -- a missed same-day review just means tomorrow's
+   is the first retrieval, which is where things stood before the step existed.
+
+   Runs on the MAIN page rather than inside the walk, since the whole point is
+   to reach you while you are not in it. Reads the review records straight from
+   IndexedDB -- the walk persists every grade, so this is at most one tick
+   behind it. */
+const REMINDERS_PREF_KEY = 'repchessLearningReminders';   // localStorage: '1' = on
+const REMINDERS_SEEN_KEY = 'repchessLearningNotified';    // localStorage: { roomKey: due }
+const REMINDER_TICK_MS = 60000;
+const BASE_TITLE = document.title;   // nothing else in the app writes document.title
+
+/* Every room whose LEARNING review is due now. Pure, so the one rule that
+   matters -- ladder reviews do not count, only same-day ones -- is testable. */
+function learningDueNow(reviews, now = Date.now()){
+  const out = [];
+  for(const [key, rec] of Object.entries(reviews || {})){
+    if(rec && rec.learning && typeof rec.due === 'number' && rec.due <= now) out.push({ key, due: rec.due });
+  }
+  return out;
+}
+
+/* The preference lives in localStorage rather than the database, and that is
+   a decision rather than a shortcut: notification PERMISSION is per-browser,
+   so a preference restored from a backup onto another machine would claim
+   reminders were on where the browser has never been asked. Deliberately
+   outside the backup for the same reason. */
+function remindersWanted(){
+  try { return localStorage.getItem(REMINDERS_PREF_KEY) === '1'; } catch(_){ return false; }
+}
+function setRemindersWanted(on){
+  try { localStorage.setItem(REMINDERS_PREF_KEY, on ? '1' : '0'); } catch(_){}
+}
+function notificationsSupported(){ return typeof window.Notification === 'function'; }
+
+function readNotified(){
+  try { return JSON.parse(localStorage.getItem(REMINDERS_SEEN_KEY) || '{}') || {}; } catch(_){ return {}; }
+}
+function writeNotified(map){
+  try { localStorage.setItem(REMINDERS_SEEN_KEY, JSON.stringify(map)); } catch(_){}
+}
+
+/* Room names, if the castle build is ALREADY in memory -- never triggering
+   one. A reminder that kicked off a full castle rebuild in a background tab
+   would cost far more than the name it was after; the count alone is enough. */
+function reminderRoomNames(keys){
+  // Names live in prefs, and PREFS holds only the open line's -- a room on
+  // another line simply goes unnamed rather than costing a database read.
+  if(!_builtCastlesCache) return [];
+  const index = buildRoomNameIndex(_builtCastlesCache);
+  const names = [];
+  for(const k of keys){
+    const t = index[k];
+    const name = t && PREFS[prefKey(t.lineId, t.nameSeq)]?.name;
+    if(name) names.push(name);
+  }
+  return names;
+}
+
+async function reminderTick(){
+  let reviews = {};
+  try {
+    const raw = await getMeta(ROOM_REVIEWS_KEY);
+    reviews = raw ? JSON.parse(raw) : {};
+  } catch(_){ return; }
+  const due = learningDueNow(reviews);
+
+  // layer 1: always
+  document.title = due.length ? `(${due.length}) ${BASE_TITLE}` : BASE_TITLE;
+
+  // forget rooms no longer due, so one that comes due AGAIN (a relearn after
+  // a failure) is announced again rather than remembered as already told
+  const seen = readNotified();
+  const live = {};
+  for(const d of due) if(seen[d.key] === d.due) live[d.key] = d.due;
+  const fresh = due.filter(d => live[d.key] !== d.due);
+  if(!fresh.length){ writeNotified(live); return; }
+
+  // layer 2: opt-in
+  if(!remindersWanted()){ writeNotified(live); return; }
+  const n = due.length;
+  const names = reminderRoomNames(due.map(d => d.key));
+  const body = `${n} room${n === 1 ? '' : 's'} ready for the same-day review`
+    + (names.length ? `: ${names.join(', ')}` : '');
+
+  // In front of you already -- mid-walk included -- a toast says it without
+  // an OS notification sliding in over the page you are looking at.
+  if(document.visibilityState === 'visible' && document.hasFocus()){
+    showAppToast(body);
+  } else if(notificationsSupported() && window.Notification.permission === 'granted'){
+    try {
+      // one tag, so a newer reminder REPLACES an older one instead of stacking
+      const note = new window.Notification('REPchess', { body, tag: 'repchess-learning' });
+      note.onclick = () => { window.focus(); note.close(); };
+    } catch(_){}
+  }
+  for(const d of due) live[d.key] = d.due;
+  writeNotified(live);
+}
+reminderTick();
+setInterval(reminderTick, REMINDER_TICK_MS);
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') reminderTick(); });
+window.addEventListener('focus', () => reminderTick());
+
+/* ---------- Settings ----------
+   An Immediate modal: each control applies as it changes. */
+function refreshReminderSetting(){
+  const box = $('setLearningReminders');
+  const note = $('setLearningRemindersNote');
+  note.classList.remove('is-warn');
+  if(!notificationsSupported()){
+    box.checked = false; box.disabled = true;
+    note.textContent = 'This browser does not support notifications.';
+    return;
+  }
+  const perm = window.Notification.permission;
+  if(perm === 'denied'){
+    box.checked = false; box.disabled = true;
+    note.classList.add('is-warn');
+    // the page cannot ask again once it has been refused -- only the browser can undo it
+    note.textContent = 'Notifications are blocked for this site. To allow them, click the icon at the '
+      + 'left of the address bar, set Notifications to Allow, then reopen Settings.';
+    return;
+  }
+  box.disabled = false;
+  box.checked = perm === 'granted' && remindersWanted();
+  note.textContent = perm === 'granted' ? '' : 'Your browser will ask for permission when you turn this on.';
+}
+$('setLearningReminders').onchange = async () => {
+  const box = $('setLearningReminders');
+  if(!box.checked){ setRemindersWanted(false); refreshReminderSetting(); return; }
+  if(!notificationsSupported()){ refreshReminderSetting(); return; }
+  let perm = window.Notification.permission;
+  // asked from THIS click: Firefox and Safari only show the prompt from a user
+  // gesture, and a prompt on page load is the quickest way to get "Block"
+  if(perm === 'default'){
+    try { perm = await window.Notification.requestPermission(); } catch(_){ perm = 'default'; }
+  }
+  setRemindersWanted(perm === 'granted');
+  refreshReminderSetting();
+  if(perm === 'granted') reminderTick();
+};
+function openSettings(){
+  refreshReminderSetting();
+  $('settingsOverlay').style.display = 'flex';
+}
+mountInfoBar('settingsBar', 'Settings',
+  () => { $('settingsOverlay').style.display = 'none'; }, { prefix: 'settings' });
+$('menuSettings').onclick = () => {
+  $('menuList').style.display = 'none';
+  openSettings();
+};
+
 /* ---------- Accuracy Report: the modal ----------
    A thin view over buildAccuracyReport. Every rate is shown with the count it
    came from, and a rate from too few reviews is not shown at all: a "100%"
@@ -9122,6 +9313,13 @@ function renderAccuracyReport(rep){
     + '&ldquo;Ran&rdquo; is how long the interval actually lasted, which is usually longer than nominal.</p>';
   h += '<table class="acc"><tr><th>Rung</th><th>Nominal</th><th>Ran</th>'
     + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Score</th></tr>';
+  {
+    const L = rep.learning;
+    h += `<tr><td>Learning</td><td>${L.hours}h</td>`
+      + `<td>${L.elapsedHours == null ? '<span class="acc-none">&mdash;</span>' : L.elapsedHours + 'h'}</td>`
+      + `<td>${L.A}</td><td>${L.B}</td><td>${L.C}</td><td>${L.total}</td>`
+      + `<td>${accRate(L.scorePct, L.total)}</td></tr>`;
+  }
   for(const r of rep.rungs){
     h += `<tr><td>${r.step}</td><td>${r.days}d</td>`
       + `<td>${r.elapsed == null ? '<span class="acc-none">&mdash;</span>' : r.elapsed + 'd'}</td>`
@@ -14191,6 +14389,15 @@ if(localStorage.getItem('threeTestDebug')){
 // through so a test can be deterministic about both the clock and the fuzz.
 if(localStorage.getItem('threeTestDebug')){
   window.__reviewTestHooks = {
+    // the learning step (db.js, learningRecord) and the functions that must
+    // treat a learning record as below the ladder
+    learning: (prev, now, grade) => learningRecord(prev, now, grade),
+    learningMs: () => ROOM_LEARNING_MS,
+    demote: (rec, now) => demoteRoomReview(rec, now),
+    soften: (rec, now) => softenRoomReview(rec, now),
+    bucket: (rec, now) => reviewForecastBucket(rec, now),
+    duePhrase: (rec, now) => duePhrase(rec, now),
+    startOfDay: (ms) => startOfLocalDay(ms),
     ladder: () => ROOM_REVIEW_LADDER.slice(),
     fuzz: () => ROOM_REVIEW_FUZZ,
     nextStep: (step, grade, lastGrade) => nextReviewStep(step, grade, lastGrade),
