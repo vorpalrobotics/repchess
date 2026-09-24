@@ -106,7 +106,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-448';
+const BUILD_TAG = '-449';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8773,7 +8773,25 @@ async function reviewForecast(opts = {}){
 // you decide whether to memorize a new room today, your load is whatever is
 // due across the whole repertoire, and a per-castle view can show a quiet
 // castle while tomorrow is genuinely heavy elsewhere.
-let RF_SCOPE = null;
+// Remembered across reloads (localStorage, per browser): a castle you are
+// working through is usually still the one you want next time. Stored as
+// { lineId, castleName } rather than the dropdown's index, which shifts
+// whenever a castle is added or renamed; a castle that has since gone is
+// dropped back to All when the options are rebuilt (rfFillScope).
+const RF_SCOPE_KEY = 'reviewForecastScope';
+let RF_SCOPE = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(RF_SCOPE_KEY) || 'null');
+    return v && typeof v.lineId === 'string' && typeof v.castleName === 'string'
+      ? { lineId: v.lineId, castleName: v.castleName } : null;
+  } catch(_){ return null; }
+})();
+function rfSaveScope(){
+  try {
+    if(RF_SCOPE) localStorage.setItem(RF_SCOPE_KEY, JSON.stringify({ lineId: RF_SCOPE.lineId, castleName: RF_SCOPE.castleName }));
+    else localStorage.removeItem(RF_SCOPE_KEY);
+  } catch(_){}
+}
 
 function rfFmt(moves, rooms){
   return `${moves} move${moves === 1 ? '' : 's'} <span class="rf-rooms">· ${rooms} room${rooms === 1 ? '' : 's'}</span>`;
@@ -9071,7 +9089,7 @@ function populateReviewForecastScope(castles){
     const o = RF_SCOPE_OPTIONS[i];
     if(RF_SCOPE && o.lineId === RF_SCOPE.lineId && o.castleName === RF_SCOPE.castleName){ sel.value = `c:${i}`; break; }
   }
-  if(!sel.value) RF_SCOPE = null;   // the remembered castle is gone; fall back to All
+  if(!sel.value){ RF_SCOPE = null; rfSaveScope(); }   // the remembered castle is gone; fall back to All
 }
 
 /* The forecast this modal is currently showing. The modal is a SNAPSHOT --
@@ -9377,6 +9395,7 @@ $('menuReviewForecast').onclick = () => {
 $('reviewForecastScope').onchange = () => {
   const v = $('reviewForecastScope').value;
   RF_SCOPE = v.startsWith('c:') ? RF_SCOPE_OPTIONS[+v.slice(2)] || null : null;
+  rfSaveScope();
   RF_MONTH = 0;   // a different scope is a different calendar; don't strand it on month 4
   refreshReviewForecast();
 };

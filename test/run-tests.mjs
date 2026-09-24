@@ -25976,6 +25976,69 @@ try {
 } catch(e){ bad('Phase RM: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase RS: the VR Schedule remembers its "Show:" scope across a reload
+//     (localStorage), and forgets it when that castle no longer exists. ---
+if(shouldRunPhase(['core'])){
+try {
+const appRS = await launchApp();
+try {
+  await seedBackup(appRS.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  const openSchedule = async () => {
+    await appRS.page.evaluate(() => document.getElementById('menuReviewForecast').click());
+    await appRS.page.waitForSelector('#reviewForecastOverlay', { state: 'visible', timeout: 20000 });
+    await appRS.page.waitForFunction(
+      () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
+  };
+  const reload = async () => {
+    await appRS.page.reload({ waitUntil: 'domcontentloaded' });
+    await appRS.page.waitForFunction(() => {
+      const el = document.getElementById('buildStamp');
+      return el && el.textContent.trim().length > 0 && !!window.__reviewForecastTestHooks;
+    }, { timeout: 15000 });
+  };
+
+  // 475. A castle picked under "Show:" is still picked after a reload.
+  try {
+    await openSchedule();
+    await appRS.page.selectOption('#reviewForecastScope', 'c:0');
+    await appRS.page.waitForFunction(() => window.__reviewForecastTestHooks.scope() !== null, { timeout: 20000 });
+    await appRS.page.evaluate(() => document.querySelector('#reviewForecastOverlay .mb-leave').click());
+    await reload();
+    await openSchedule();
+    const st = await appRS.page.evaluate(() => ({ scope: window.__reviewForecastTestHooks.scope(),
+      value: document.getElementById('reviewForecastScope').value }));
+    assert(st.scope && st.scope.castleName === 'Alpha' && st.scope.lineId === 'L1' && st.value === 'c:0',
+      `expected the Alpha scope restored after a reload, got ${JSON.stringify(st)}`);
+    await appRS.page.evaluate(() => document.querySelector('#reviewForecastOverlay .mb-leave').click());
+    ok('VR Schedule: the "Show:" scope survives a reload');
+  } catch(e){ bad('VR Schedule: scope persisted', e); }
+
+  // 476. A remembered castle that no longer exists falls back to All, and
+  //      the stale entry is cleared rather than kept around.
+  try {
+    await appRS.page.evaluate(() => localStorage.setItem('reviewForecastScope',
+      JSON.stringify({ lineId: 'L1', castleName: 'Gone' })));
+    await reload();
+    await openSchedule();
+    const st = await appRS.page.evaluate(() => ({ scope: window.__reviewForecastTestHooks.scope(),
+      value: document.getElementById('reviewForecastScope').value,
+      stored: localStorage.getItem('reviewForecastScope') }));
+    assert(st.scope === null && st.value === '' && st.stored === null,
+      `expected a vanished castle to fall back to All and be forgotten, got ${JSON.stringify(st)}`);
+    ok('VR Schedule: a remembered castle that has gone falls back to All');
+  } catch(e){ bad('VR Schedule: stale scope', e); }
+} finally {
+  await appRS.close();
+}
+} catch(e){ bad('Phase RS: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower
