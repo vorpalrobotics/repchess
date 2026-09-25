@@ -1091,13 +1091,38 @@ async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus)
     let note = '';
     if(transparent && !native){
       onStatus && onStatus('Removing the background…');
-      const bg = await session.run({ taskType: 'removeBackground', model: RUNWARE_BG_MODEL,
-        inputImage: img.imageUUID || dataUrl, outputType: 'base64Data', outputFormat: 'PNG', includeCost: true });
-      const cut = runwareImageDataUrl(bg);
-      if(!cut) throw new Error('Background removal returned no image.');
-      dataUrl = cut;
-      if(typeof bg.cost === 'number') cost = (cost || 0) + bg.cost;
-      note = ' Background removed as a second step.';
+      /* The generated image's UUID is the cheap way to point at it (nothing is
+         sent back up), but Runware does not always accept it: in real use a
+         second generation in the same dialog was refused with "Invalid value
+         for 'inputImage'" -- plausibly because a base64Data result is not
+         kept server-side, or not yet. So fall back to sending the image
+         itself, as a data URI and then as bare base64, both of which that
+         error lists as accepted. */
+      const b64 = dataUrl.replace(/^data:[^,]*,/, '');
+      const inputs = [img.imageUUID, dataUrl, b64].filter(Boolean);
+      let cut = null, lastErr = null;
+      for(const inputImage of inputs){
+        try {
+          const bg = await session.run({ taskType: 'removeBackground', model: RUNWARE_BG_MODEL,
+            inputImage, outputType: 'base64Data', outputFormat: 'PNG', includeCost: true });
+          cut = runwareImageDataUrl(bg);
+          if(!cut){ lastErr = new Error('Background removal returned no image.'); continue; }
+          if(typeof bg.cost === 'number') cost = (cost || 0) + bg.cost;
+          break;
+        } catch(err){
+          lastErr = err;
+          console.warn('[assets] removeBackground refused input', inputImage === img.imageUUID ? 'uuid' : inputImage === dataUrl ? 'dataURI' : 'base64', err);
+        }
+      }
+      if(cut){
+        dataUrl = cut;
+        note = ' Background removed as a second step.';
+      } else {
+        // The generation succeeded and has been paid for: keep it, with its
+        // background, rather than throwing it away over the second step.
+        note = ` Background removal failed (${(lastErr && lastErr.message) || 'unknown error'}), so this still has`
+          + ' its background -- Crop/Erase BG can remove it, or generate again.';
+      }
     }
     return { dataUrl, cost, note };
   } finally {
