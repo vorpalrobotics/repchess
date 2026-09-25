@@ -26080,6 +26080,12 @@ try {
               ? { errors: [{ code: 'invalidApiKey', message: 'Invalid API key.' }] }
               : { data: [{ taskType: 'authentication', connectionSessionUUID: 'sess-1' }] });
           } else if(t.taskType === 'imageInference'){
+            const bgAsked = t.providerSettings && t.providerSettings.openai && t.providerSettings.openai.background;
+            if(window.__rwRefuseOpenAIBg && bgAsked){
+              this.reply({ errors: [{ code: 'invalidProviderSetting', parameter: 'providerSettings.openai.background',
+                taskUUID: t.taskUUID, message: "Invalid value for 'providerSettings.openai.background' parameter." }] });
+              continue;
+            }
             this.reply({ data: [{ taskType: 'imageInference', taskUUID: t.taskUUID,
               imageUUID: 'img-gen-1', imageBase64Data: PNG1, cost: 0.0006 }] });
           } else if(t.taskType === 'removeBackground'){
@@ -26158,6 +26164,7 @@ try {
     const status = await runAndWait();
     const body = openaiBodies[openaiBodies.length - 1];
     assert(body && body.model === 'gpt-image-1-mini' && body.background === 'transparent' && body.size === '1024x1536'
+      && body.quality === 'high'
       && /a brass clock/.test(body.prompt) && /flat cartoon/.test(body.prompt),
       `unexpected OpenAI request: ${JSON.stringify(body)}`);
     assert(/Done/.test(status), `expected success, got ${JSON.stringify(status)}`);
@@ -26274,6 +26281,64 @@ try {
     await closeGen();
     ok('Generate: a failed background removal keeps the generated image and says why');
   } catch(e){ bad('Generate: removal failure keeps the image', e); }
+
+  // 485. GPT Image 2 through Runware: the smallest size it takes (848x848 is
+  //      about half the price of 1024x1024), transparency and quality asked
+  //      of the model itself via providerSettings.openai, no removal step;
+  //      Quality defaults to high and a change is remembered.
+  try {
+    await rwReset();
+    await openGen();
+    await pickModel('runware:gpt-image-2');
+    let ui = await appGN.page.evaluate(() => ({
+      qualityShown: document.getElementById('genQualityWrap').style.display !== 'none',
+      quality: document.getElementById('genQuality').value,
+      square: document.getElementById('genSize').options[0].textContent }));
+    assert(ui.qualityShown && ui.quality === 'high' && /848/.test(ui.square), `unexpected GPT Image 2 controls: ${JSON.stringify(ui)}`);
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    const status = await runAndWait();
+    const tasks = await rwTasksNow();
+    const inf = tasks.find(t => t.taskType === 'imageInference');
+    assert(inf && inf.model === 'openai:gpt-image@2' && inf.width === 848 && inf.height === 848
+      && inf.providerSettings && inf.providerSettings.openai
+      && inf.providerSettings.openai.quality === 'high' && inf.providerSettings.openai.background === 'transparent',
+      `unexpected GPT Image 2 task: ${JSON.stringify(inf)}`);
+    assert(!tasks.some(t => t.taskType === 'removeBackground') && /Done/.test(status),
+      `expected native transparency with no removal step, got ${JSON.stringify({ status, tasks: tasks.map(t => t.taskType) })}`);
+    await appGN.page.selectOption('#genQuality', 'medium');
+    await closeGen();
+    await openGen();
+    await pickModel('runware:flux1-schnell');
+    ui = await appGN.page.evaluate(() => ({ qualityShown: document.getElementById('genQualityWrap').style.display !== 'none' }));
+    assert(!ui.qualityShown, 'expected no Quality control for a FLUX model');
+    await pickModel('runware:gpt-image-2');
+    const kept = await appGN.page.evaluate(() => document.getElementById('genQuality').value);
+    assert(kept === 'medium', `expected the quality choice remembered, got ${kept}`);
+    await appGN.page.selectOption('#genQuality', 'high');
+    await closeGen();
+    ok('Generate: GPT Image 2 at 848px with native transparency and a remembered quality');
+  } catch(e){ bad('Generate: GPT Image 2', e); }
+
+  // 486. If Runware refuses GPT Image 2's native transparency, generate
+  //      opaque and remove the background as a second step instead.
+  try {
+    await rwReset();
+    await appGN.page.evaluate(() => { window.__rwRefuseOpenAIBg = true; });
+    await openGen();
+    await pickModel('runware:gpt-image-2');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    const status = await runAndWait();
+    const tasks = await rwTasksNow();
+    const infs = tasks.filter(t => t.taskType === 'imageInference');
+    assert(infs.length === 2 && infs[0].providerSettings.openai.background === 'transparent'
+      && !('background' in infs[1].providerSettings.openai) && infs[1].providerSettings.openai.quality === 'high',
+      `expected a transparent attempt then an opaque retry keeping quality, got ${JSON.stringify(infs.map(t => t.providerSettings))}`);
+    assert(tasks.some(t => t.taskType === 'removeBackground') && /Done/.test(status) && /Background removed/.test(status),
+      `expected the removal step to take over, got ${JSON.stringify(status)}`);
+    await appGN.page.evaluate(() => { window.__rwRefuseOpenAIBg = false; });
+    await closeGen();
+    ok('Generate: refused native transparency falls back to background removal');
+  } catch(e){ bad('Generate: GPT Image 2 transparency fallback', e); }
 
   // 482. A rejected Runware key comes back as Runware's own message.
   try {

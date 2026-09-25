@@ -964,6 +964,8 @@ const OPENAI_KEY_LS = 'repchess.openaiApiKey';
 const RUNWARE_KEY_LS = 'repchess.runwareApiKey';
 const GEN_MODEL_LS = 'repchess.genModel';
 const GEN_CUSTOM_AIR_LS = 'repchess.genCustomAir';
+const GEN_QUALITY_LS = 'repchess.genQuality';
+const GEN_QUALITY_DEFAULT = 'high';
 const OPENAI_STANDING_LS = 'repchess.genStandingInstructions';
 const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
 const RUNWARE_WS_URL = 'wss://ws-api.runware.ai/v1';
@@ -976,11 +978,20 @@ const RUNWARE_TASK_TIMEOUT_MS = 180000;
 const SIZES_OPENAI   = { square: [1024, 1024], portrait: [1024, 1536], landscape: [1536, 1024] };
 const SIZES_64       = { square: [1024, 1024], portrait: [832, 1216],  landscape: [1216, 832] };
 const SIZES_SEEDREAM = { square: [2048, 2048], portrait: [1728, 2304], landscape: [2304, 1728] };
+// GPT Image 2 takes any size with sides in multiples of 16 and at least ~655k
+// pixels, and is billed by size -- 848x848 costs about half of 1024x1024, and
+// assets are scaled far below either, so the smallest sizes are the right ones.
+const SIZES_GPT2     = { square: [848, 848],   portrait: [704, 1056],  landscape: [1056, 704] };
 const GEN_MODELS = [
   { id: 'openai:gpt-image-1',      group: 'OpenAI',  label: 'GPT Image 1',
-    provider: 'openai', model: 'gpt-image-1', sizes: SIZES_OPENAI, alpha: 'native' },
+    provider: 'openai', model: 'gpt-image-1', sizes: SIZES_OPENAI, alpha: 'native', quality: true },
   { id: 'openai:gpt-image-1-mini', group: 'OpenAI',  label: 'GPT Image 1 mini (cheaper)',
-    provider: 'openai', model: 'gpt-image-1-mini', sizes: SIZES_OPENAI, alpha: 'native' },
+    provider: 'openai', model: 'gpt-image-1-mini', sizes: SIZES_OPENAI, alpha: 'native', quality: true },
+  // alpha 'openaiNative': transparency asked of the model itself through
+  // Runware's providerSettings.openai, falling back to removeBackground if the
+  // provider refuses it (GPT Image 2's transparency was a preview at OpenAI)
+  { id: 'runware:gpt-image-2',     group: 'Runware', label: 'GPT Image 2 (best quality, 848px)',
+    provider: 'runware', air: 'openai:gpt-image@2', sizes: SIZES_GPT2, alpha: 'openaiNative', quality: true },
   { id: 'runware:flux1-schnell',   group: 'Runware', label: 'FLUX.1 schnell (fastest, cheapest)',
     provider: 'runware', air: 'runware:100@1', sizes: SIZES_64, alpha: 'remove' },
   { id: 'runware:flux1-dev',       group: 'Runware', label: 'FLUX.1 dev',
@@ -1003,8 +1014,9 @@ function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ retur
 function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_){} }
 
 /* OpenAI: one fetch, image back as base64. */
-async function generateOpenAI(key, spec, prompt, [w, h], transparent){
+async function generateOpenAI(key, spec, prompt, [w, h], transparent, quality){
   const body = { model: spec.model, prompt, n: 1, size: `${w}x${h}` };
+  if(quality) body.quality = quality;
   if(transparent) body.background = 'transparent';   // png cutout, ideal for props
   const res = await fetch(OPENAI_IMAGES_URL, {
     method: 'POST',
@@ -1076,19 +1088,39 @@ function runwareImageDataUrl(d){
   if(d.imageBase64Data) return 'data:image/png;base64,' + d.imageBase64Data;
   return null;
 }
-async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus){
+async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus, quality){
   const session = await runwareSession(key);
   try {
     const task = { taskType: 'imageInference', model: spec.air, positivePrompt: prompt,
                    width: w, height: h, numberResults: 1,
                    outputType: 'base64Data', outputFormat: 'PNG', includeCost: true };
-    const native = transparent && spec.alpha === 'layerDiffuse';
-    if(native) task.advancedFeatures = { layerDiffuse: true };
-    const img = await session.run(task);
+    let native = transparent && (spec.alpha === 'layerDiffuse' || spec.alpha === 'openaiNative');
+    if(native && spec.alpha === 'layerDiffuse') task.advancedFeatures = { layerDiffuse: true };
+    // OpenAI's own settings travel in providerSettings.openai
+    if(spec.alpha === 'openaiNative' || (spec.quality && quality)){
+      const openai = {};
+      if(spec.quality && quality) openai.quality = quality;
+      if(native && spec.alpha === 'openaiNative') openai.background = 'transparent';
+      task.providerSettings = { openai };
+    }
+    let img, note = '';
+    try {
+      img = await session.run(task);
+    } catch(err){
+      // The provider refused native transparency: generate opaque instead and
+      // let the removeBackground step below cut it out.
+      const bgRefused = native && spec.alpha === 'openaiNative'
+        && /background|transparen|providerSettings/i.test((err && err.message) || '');
+      if(!bgRefused) throw err;
+      console.warn('[assets] native transparency refused, falling back to removeBackground', err);
+      delete task.providerSettings.openai.background;
+      native = false;
+      note = ' (Native transparency was refused.)';
+      img = await session.run(task);
+    }
     let dataUrl = runwareImageDataUrl(img);
     if(!dataUrl) throw new Error('No image returned.');
     let cost = typeof img.cost === 'number' ? img.cost : null;
-    let note = '';
     if(transparent && !native){
       onStatus && onStatus('Removing the background…');
       /* The generated image's UUID is the cheap way to point at it (nothing is
@@ -1116,11 +1148,11 @@ async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus)
       }
       if(cut){
         dataUrl = cut;
-        note = ' Background removed as a second step.';
+        note += ' Background removed as a second step.';
       } else {
         // The generation succeeded and has been paid for: keep it, with its
         // background, rather than throwing it away over the second step.
-        note = ` Background removal failed (${(lastErr && lastErr.message) || 'unknown error'}), so this still has`
+        note += ` Background removal failed (${(lastErr && lastErr.message) || 'unknown error'}), so this still has`
           + ' its background -- Crop/Erase BG can remove it, or generate again.';
       }
     }
@@ -1169,6 +1201,13 @@ function openGenerateModal(){
       <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 .6rem;font-size:.78rem">
         <label><input type="checkbox" id="genTransparent" checked> Transparent background
           <span id="genAlphaNote" style="color:#9aa"></span></label>
+        <label id="genQualityWrap">Quality
+          <select id="genQuality" style="font-size:.78rem">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
         <label>Size
           <select id="genSize" style="font-size:.78rem">
             <option value="square" selected>Square</option>
@@ -1219,9 +1258,15 @@ function openGenerateModal(){
     q('genKeyNote').textContent = `Stored only in this browser (localStorage) and sent straight to ${prov.name}.`;
     q('genCustomWrap').style.display = spec.custom ? '' : 'none';
     q('genAlphaNote').textContent = spec.alpha === 'remove' ? '(by removing it after generating)' : '';
+    // Quality is an OpenAI-model setting; the other models have no equivalent
+    q('genQualityWrap').style.display = spec.quality ? '' : 'none';
+    const [sw, sh] = spec.sizes.square;
+    q('genSize').options[0].textContent = `Square (${sw}×${sh})`;
     lsSet(GEN_MODEL_LS, spec.id);
   };
   q('genModel').onchange = syncModel;
+  q('genQuality').value = lsGet(GEN_QUALITY_LS) || GEN_QUALITY_DEFAULT;
+  q('genQuality').onchange = () => lsSet(GEN_QUALITY_LS, q('genQuality').value);
   syncModel();
 
   q('genRunBtn').onclick = async () => {
@@ -1242,13 +1287,14 @@ function openGenerateModal(){
     const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
     const dims = spec.sizes[q('genSize').value] || spec.sizes.square;
     const transparent = q('genTransparent').checked;
+    const quality = spec.quality ? q('genQuality').value : null;
     q('genRunBtn').disabled = true;
     q('genStatus').textContent = `Generating with ${genModelById(spec.id).label}…`;
     try {
       const out = spec.provider === 'openai'
-        ? await generateOpenAI(key, spec, fullPrompt, dims, transparent)
+        ? await generateOpenAI(key, spec, fullPrompt, dims, transparent, quality)
         : await generateRunware(key, spec, fullPrompt, dims, transparent,
-            (s) => { q('genStatus').textContent = s; });
+            (s) => { q('genStatus').textContent = s; }, quality);
       lastDataUrl = out.dataUrl;
       q('genResultImg').src = lastDataUrl;
       q('genResultWrap').style.display = '';
