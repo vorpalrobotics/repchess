@@ -26300,6 +26300,7 @@ try {
       quality: document.getElementById('genQuality').value,
       square: document.getElementById('genSize').options[0].textContent }));
     assert(ui.qualityShown && ui.quality === 'high' && /848/.test(ui.square), `unexpected GPT Image 2 controls: ${JSON.stringify(ui)}`);
+    await appGN.page.selectOption('#genSize', 'square');   // earlier tests left another size remembered
     await appGN.page.fill('#genPrompt', 'a brass clock');
     const status = await runAndWait();
     const tasks = await rwTasksNow();
@@ -26358,6 +26359,7 @@ try {
       assert(labels[id] && !/quality/i.test(labels[id]), `expected a plain label for ${id}, got ${JSON.stringify(labels[id])}`);
     }
     await pickModel('runware:gpt-image-1-mini');
+    await appGN.page.selectOption('#genSize', 'square');
     await appGN.page.fill('#genPrompt', 'a brass clock');
     let status = await runAndWait();
     let infs = (await rwTasksNow()).filter(t => t.taskType === 'imageInference');
@@ -26379,6 +26381,29 @@ try {
     await closeGen();
     ok('Generate: GPT Image 1 mini via Runware, with a size fallback, and plain GPT labels');
   } catch(e){ bad('Generate: Runware GPT Image 1 mini', e); }
+
+  // 488. Size and quality are remembered across opens, like the standing
+  //      instructions -- the size by name, so it carries across models whose
+  //      pixel sizes differ.
+  try {
+    await openGen();
+    await pickModel('runware:gpt-image-2');
+    await appGN.page.selectOption('#genSize', 'portrait');
+    await appGN.page.selectOption('#genQuality', 'low');
+    await closeGen();
+    await openGen();
+    let st = await appGN.page.evaluate(() => ({ size: document.getElementById('genSize').value,
+      quality: document.getElementById('genQuality').value }));
+    assert(st.size === 'portrait' && st.quality === 'low', `expected portrait/low remembered, got ${JSON.stringify(st)}`);
+    await pickModel('runware:flux1-schnell');
+    st = await appGN.page.evaluate(() => ({ size: document.getElementById('genSize').value }));
+    assert(st.size === 'portrait', `expected the size kept across a model change, got ${JSON.stringify(st)}`);
+    await pickModel('runware:gpt-image-2');
+    await appGN.page.selectOption('#genSize', 'square');
+    await appGN.page.selectOption('#genQuality', 'high');
+    await closeGen();
+    ok('Generate: size and quality are remembered across opens');
+  } catch(e){ bad('Generate: size and quality remembered', e); }
 
   // 482. A rejected Runware key comes back as Runware's own message.
   try {
