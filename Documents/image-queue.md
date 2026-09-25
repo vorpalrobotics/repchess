@@ -1,6 +1,19 @@
 # Image generation queue — design
 
-**Status: agreed design, nothing built yet.**
+**Status: phase 1 built** (`js/imageQueue.js`, tests 489–496, phase IQ).
+Phases 2–4 are not started.
+
+Built as designed, with two implementation choices:
+- **Storage is the meta store, not a new object store.** The key is
+  `imageQueue`, plus one `imageQueueImg:<id>` key per finished image. That
+  needs no schema bump, and `clearAllData()` already empties it on every
+  restore, which is the agreed backup behaviour. It is listed in
+  `BACKUP_EXCLUDED_META`.
+- **The provider layer moved from `assets.js` into `imageQueue.js`**, so the
+  dialog and the queue share it. `assets.js` is the module's only importer
+  (`app.js` goes through its re-exports), and approving is handed in through
+  `setImageQueueApprover`. That avoids a circular import, which would need two
+  cache-busters kept identical.
 
 Generation moves out of the one-at-a-time Generate dialog into a queue that
 runs in the background. Finished images wait in a review list. Approving one

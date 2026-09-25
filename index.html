@@ -477,6 +477,28 @@
   .set-note{font-size:.8rem;color:#666;margin:.35rem 0 0 1.6rem;line-height:1.45}
   .set-note:empty{display:none}
   .set-note.is-warn{color:#b26a00}
+  /* Image Queue (js/imageQueue.js) */
+  .iq-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.6rem;flex-wrap:wrap}
+  .iq-tabs{display:flex;gap:.3rem}
+  .iq-tab{padding:.25rem .8rem;border-radius:6px;border:1px solid #bbb;background:#f4f4f4;cursor:pointer}
+  .iq-tab.active{background:#1565c0;border-color:#1565c0;color:#fff}
+  .iq-spent{font-size:.8rem;color:#666}
+  .iq-link{border:none;background:none;color:#1565c0;text-decoration:underline;cursor:pointer;padding:0;font-size:inherit}
+  .iq-row,.iq-card{display:flex;gap:.7rem;align-items:flex-start;padding:.55rem 0;border-bottom:1px solid #e5e5e5}
+  .iq-row-main,.iq-card-info{flex:1 1 auto;min-width:0}
+  .iq-prompt{font-weight:600;overflow-wrap:anywhere}
+  .iq-meta{font-size:.78rem;color:#666;margin:.15rem 0}
+  .iq-note{font-size:.78rem;color:#8a5a00}
+  .iq-st{font-size:.8rem;color:#555}
+  .iq-st-run{color:#1565c0}
+  .iq-st-fail{color:#c62828}
+  .iq-st-wait{color:#b26a00}
+  .iq-actions{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
+  .iq-thumb{flex:0 0 7.5rem;height:7.5rem;border-radius:4px;display:flex;align-items:center;justify-content:center;
+    background:repeating-conic-gradient(#ddd 0 25%,#f7f7f7 0 50%) 50%/16px 16px}
+  .iq-thumb img{max-width:100%;max-height:100%}
+  .iq-redo-text{width:100%;box-sizing:border-box;font:inherit}
+  .iq-empty{color:#666}
 
   /* ---------- Accuracy Report ---------- */
   .acc-h{margin:1.1rem 0 .3rem;font-size:.95rem;color:#1f4e79}
@@ -1063,6 +1085,7 @@
       <button id="menuAccuracy" title="How often you actually recall what you have memorized, by ladder rung, room size and quiz">Accuracy Report</button>
       <hr class="row-menu-sep">
       <button id="menuAssets">VR Assets</button>
+      <button id="menuImageQueue" title="Images generating in the background, and finished ones waiting for you to approve">Image Queue</button>
       <button id="menuObjectLists">VR Object Lists</button>
       <button id="menuMnemonics">Mnemonics</button>
       <hr class="row-menu-sep">
@@ -2141,6 +2164,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-454"></script>
+<script type="module" src="js/app.js?v=20260804-455"></script>
 </body>
 </html>
