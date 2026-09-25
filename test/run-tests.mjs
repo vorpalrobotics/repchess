@@ -26081,6 +26081,11 @@ try {
               : { data: [{ taskType: 'authentication', connectionSessionUUID: 'sess-1' }] });
           } else if(t.taskType === 'imageInference'){
             const bgAsked = t.providerSettings && t.providerSettings.openai && t.providerSettings.openai.background;
+            if(window.__rwRefuseSmallFor === t.model && t.width < 1024){
+              this.reply({ errors: [{ code: 'invalidWidth', parameter: 'width', taskUUID: t.taskUUID,
+                message: "Invalid value for 'width' parameter." }] });
+              continue;
+            }
             if(window.__rwRefuseOpenAIBg && bgAsked){
               this.reply({ errors: [{ code: 'invalidProviderSetting', parameter: 'providerSettings.openai.background',
                 taskUUID: t.taskUUID, message: "Invalid value for 'providerSettings.openai.background' parameter." }] });
@@ -26339,6 +26344,41 @@ try {
     await closeGen();
     ok('Generate: refused native transparency falls back to background removal');
   } catch(e){ bad('Generate: GPT Image 2 transparency fallback', e); }
+
+  // 487. GPT Image 1 mini through Runware: asked for GPT Image 2's small
+  //      sizes with native transparency and quality; if Runware refuses the
+  //      size, one retry at OpenAI's own fixed size, and the status says so.
+  //      Neither GPT label claims a quality -- the Quality control decides it.
+  try {
+    await rwReset();
+    await openGen();
+    const labels = await appGN.page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#genModel option')]
+      .map(o => [o.value, o.textContent])));
+    for(const id of ['runware:gpt-image-2', 'runware:gpt-image-1-mini']){
+      assert(labels[id] && !/quality/i.test(labels[id]), `expected a plain label for ${id}, got ${JSON.stringify(labels[id])}`);
+    }
+    await pickModel('runware:gpt-image-1-mini');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    let status = await runAndWait();
+    let infs = (await rwTasksNow()).filter(t => t.taskType === 'imageInference');
+    assert(infs.length === 1 && infs[0].model === 'openai:1@2' && infs[0].width === 848 && infs[0].height === 848
+      && infs[0].providerSettings.openai.background === 'transparent' && infs[0].providerSettings.openai.quality,
+      `unexpected mini task: ${JSON.stringify(infs)}`);
+    assert(/Done/.test(status) && !/refused/.test(status), `expected a clean success, got ${JSON.stringify(status)}`);
+
+    await rwReset();
+    await appGN.page.evaluate(() => { window.__rwRefuseSmallFor = 'openai:1@2'; });
+    status = await runAndWait();
+    infs = (await rwTasksNow()).filter(t => t.taskType === 'imageInference');
+    assert(infs.length === 2 && infs[1].width === 1024 && infs[1].height === 1024
+      && infs[1].providerSettings.openai.background === 'transparent',
+      `expected a retry at 1024x1024 keeping transparency, got ${JSON.stringify(infs.map(t => [t.width, t.height]))}`);
+    assert(/Done/.test(status) && /848×848 was refused/.test(status) && /1024×1024/.test(status),
+      `expected the fallback size reported, got ${JSON.stringify(status)}`);
+    await appGN.page.evaluate(() => { window.__rwRefuseSmallFor = null; });
+    await closeGen();
+    ok('Generate: GPT Image 1 mini via Runware, with a size fallback, and plain GPT labels');
+  } catch(e){ bad('Generate: Runware GPT Image 1 mini', e); }
 
   // 482. A rejected Runware key comes back as Runware's own message.
   try {

@@ -990,8 +990,13 @@ const GEN_MODELS = [
   // alpha 'openaiNative': transparency asked of the model itself through
   // Runware's providerSettings.openai, falling back to removeBackground if the
   // provider refuses it (GPT Image 2's transparency was a preview at OpenAI)
-  { id: 'runware:gpt-image-2',     group: 'Runware', label: 'GPT Image 2 (best quality, 848px)',
+  { id: 'runware:gpt-image-2',     group: 'Runware', label: 'GPT Image 2',
     provider: 'runware', air: 'openai:gpt-image@2', sizes: SIZES_GPT2, alpha: 'openaiNative', quality: true },
+  // Mini is asked for the same small sizes; whether it takes them is
+  // unconfirmed, so a size refusal retries at OpenAI's own fixed sizes
+  { id: 'runware:gpt-image-1-mini', group: 'Runware', label: 'GPT Image 1 mini',
+    provider: 'runware', air: 'openai:1@2', sizes: SIZES_GPT2, fallbackSizes: SIZES_OPENAI,
+    alpha: 'openaiNative', quality: true },
   { id: 'runware:flux1-schnell',   group: 'Runware', label: 'FLUX.1 schnell (fastest, cheapest)',
     provider: 'runware', air: 'runware:100@1', sizes: SIZES_64, alpha: 'remove' },
   { id: 'runware:flux1-dev',       group: 'Runware', label: 'FLUX.1 dev',
@@ -1088,7 +1093,7 @@ function runwareImageDataUrl(d){
   if(d.imageBase64Data) return 'data:image/png;base64,' + d.imageBase64Data;
   return null;
 }
-async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus, quality){
+async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus, quality, sizeName){
   const session = await runwareSession(key);
   try {
     const task = { taskType: 'imageInference', model: spec.air, positivePrompt: prompt,
@@ -1104,8 +1109,22 @@ async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus,
       task.providerSettings = { openai };
     }
     let img, note = '';
+    // One retry at the model's fallback size if the first size is refused --
+    // for models whose accepted sizes could not be confirmed up front.
+    const runSized = async () => {
+      try {
+        return await session.run(task);
+      } catch(err){
+        const fb = spec.fallbackSizes && spec.fallbackSizes[sizeName];
+        if(!fb || !/width|height|dimension|size|resolution/i.test((err && err.message) || '')) throw err;
+        console.warn('[assets] size refused, retrying at', fb, err);
+        [task.width, task.height] = fb;
+        note += ` (${w}×${h} was refused, so this is ${fb[0]}×${fb[1]}.)`;
+        return await session.run(task);
+      }
+    };
     try {
-      img = await session.run(task);
+      img = await runSized();
     } catch(err){
       // The provider refused native transparency: generate opaque instead and
       // let the removeBackground step below cut it out.
@@ -1115,8 +1134,8 @@ async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus,
       console.warn('[assets] native transparency refused, falling back to removeBackground', err);
       delete task.providerSettings.openai.background;
       native = false;
-      note = ' (Native transparency was refused.)';
-      img = await session.run(task);
+      note += ' (Native transparency was refused.)';
+      img = await runSized();
     }
     let dataUrl = runwareImageDataUrl(img);
     if(!dataUrl) throw new Error('No image returned.');
@@ -1285,7 +1304,8 @@ function openGenerateModal(){
     lsSet(prov.keyLs, key);
     lsSet(OPENAI_STANDING_LS, standing);
     const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
-    const dims = spec.sizes[q('genSize').value] || spec.sizes.square;
+    const sizeName = spec.sizes[q('genSize').value] ? q('genSize').value : 'square';
+    const dims = spec.sizes[sizeName];
     const transparent = q('genTransparent').checked;
     const quality = spec.quality ? q('genQuality').value : null;
     q('genRunBtn').disabled = true;
@@ -1294,7 +1314,7 @@ function openGenerateModal(){
       const out = spec.provider === 'openai'
         ? await generateOpenAI(key, spec, fullPrompt, dims, transparent, quality)
         : await generateRunware(key, spec, fullPrompt, dims, transparent,
-            (s) => { q('genStatus').textContent = s; }, quality);
+            (s) => { q('genStatus').textContent = s; }, quality, sizeName);
       lastDataUrl = out.dataUrl;
       q('genResultImg').src = lastDataUrl;
       q('genResultWrap').style.display = '';
