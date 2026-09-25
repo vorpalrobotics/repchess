@@ -965,6 +965,7 @@ const RUNWARE_KEY_LS = 'repchess.runwareApiKey';
 const GEN_MODEL_LS = 'repchess.genModel';
 const GEN_CUSTOM_AIR_LS = 'repchess.genCustomAir';
 const GEN_QUALITY_LS = 'repchess.genQuality';
+const GEN_SIZE_LS = 'repchess.genSize';       // 'square' | 'portrait' | 'landscape'
 const GEN_QUALITY_DEFAULT = 'high';
 const OPENAI_STANDING_LS = 'repchess.genStandingInstructions';
 const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
@@ -1284,8 +1285,14 @@ function openGenerateModal(){
     lsSet(GEN_MODEL_LS, spec.id);
   };
   q('genModel').onchange = syncModel;
+  // Quality and size are remembered like the standing instructions: saved as
+  // they change and again on Generate, restored on the next open. The size is
+  // stored by NAME, so it carries across models whose pixel sizes differ.
   q('genQuality').value = lsGet(GEN_QUALITY_LS) || GEN_QUALITY_DEFAULT;
   q('genQuality').onchange = () => lsSet(GEN_QUALITY_LS, q('genQuality').value);
+  const savedSize = lsGet(GEN_SIZE_LS);
+  if(['square', 'portrait', 'landscape'].includes(savedSize)) q('genSize').value = savedSize;
+  q('genSize').onchange = () => lsSet(GEN_SIZE_LS, q('genSize').value);
   syncModel();
 
   q('genRunBtn').onclick = async () => {
@@ -1303,6 +1310,8 @@ function openGenerateModal(){
     if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return; }
     lsSet(prov.keyLs, key);
     lsSet(OPENAI_STANDING_LS, standing);
+    lsSet(GEN_SIZE_LS, q('genSize').value);
+    if(spec.quality) lsSet(GEN_QUALITY_LS, q('genQuality').value);
     const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
     const sizeName = spec.sizes[q('genSize').value] ? q('genSize').value : 'square';
     const dims = spec.sizes[sizeName];
