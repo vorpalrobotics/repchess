@@ -26083,8 +26083,16 @@ try {
             this.reply({ data: [{ taskType: 'imageInference', taskUUID: t.taskUUID,
               imageUUID: 'img-gen-1', imageBase64Data: PNG1, cost: 0.0006 }] });
           } else if(t.taskType === 'removeBackground'){
-            this.reply({ data: [{ taskType: 'removeBackground', taskUUID: t.taskUUID,
-              imageUUID: 'img-cut-1', imageBase64Data: PNG1, cost: 0.0002 }] });
+            // __rwRefuse reproduces what real use hit: 'uuid' refuses an image
+            // referenced by UUID but takes the image itself; 'all' refuses every form
+            const isData = /^data:|^iVBOR/.test(String(t.inputImage));
+            if(window.__rwRefuse === 'all' || (window.__rwRefuse === 'uuid' && !isData)){
+              this.reply({ errors: [{ code: 'invalidInputImage', parameter: 'inputImage', taskType: 'removeBackground',
+                taskUUID: t.taskUUID, message: "Invalid value for 'inputImage' parameter." }] });
+            } else {
+              this.reply({ data: [{ taskType: 'removeBackground', taskUUID: t.taskUUID,
+                imageUUID: 'img-cut-1', imageBase64Data: PNG1, cost: 0.0002 }] });
+            }
           }
         }
       }
@@ -26230,8 +26238,46 @@ try {
     ok('Generate: a custom Runware model ID is required, sent as typed, and remembered');
   } catch(e){ bad('Generate: custom model', e); }
 
+  // 483. Runware refusing the generated image's UUID for background removal
+  //      (seen in real use on a second generation) falls back to sending the
+  //      image itself, and still succeeds.
+  try {
+    await rwReset();
+    await appGN.page.evaluate(() => { window.__rwRefuse = 'uuid'; });
+    await openGen();
+    await pickModel('runware:flux1-schnell');
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    const status = await runAndWait();
+    const bgs = (await rwTasksNow()).filter(t => t.taskType === 'removeBackground');
+    assert(bgs.length === 2 && bgs[0].inputImage === 'img-gen-1' && /^data:image\/png;base64,/.test(bgs[1].inputImage),
+      `expected a UUID attempt then a data-URI retry, got ${JSON.stringify(bgs.map(b => String(b.inputImage).slice(0, 30)))}`);
+    assert(/Done/.test(status) && /Background removed/.test(status), `expected success after the retry, got ${JSON.stringify(status)}`);
+    await closeGen();
+    ok('Generate: a refused image UUID falls back to sending the image itself');
+  } catch(e){ bad('Generate: inputImage fallback', e); }
+
+  // 484. If background removal fails in every form, the generated image is
+  //      kept -- shown, usable, and the failure explained -- not thrown away.
+  try {
+    await rwReset();
+    await appGN.page.evaluate(() => { window.__rwRefuse = 'all'; });
+    await openGen();
+    await appGN.page.fill('#genPrompt', 'a brass clock');
+    const status = await runAndWait();
+    const st = await appGN.page.evaluate(() => ({
+      shown: document.getElementById('genResultWrap').style.display !== 'none',
+      attempts: window.__rwTasks.filter(t => t.taskType === 'removeBackground').length }));
+    assert(st.attempts === 3, `expected three removal attempts (UUID, data URI, base64), got ${st.attempts}`);
+    assert(st.shown && /Done/.test(status) && /Background removal failed/.test(status) && /Crop\/Erase BG/.test(status),
+      `expected the image kept with the failure explained, got ${JSON.stringify({ status, shown: st.shown })}`);
+    await appGN.page.evaluate(() => { window.__rwRefuse = null; });
+    await closeGen();
+    ok('Generate: a failed background removal keeps the generated image and says why');
+  } catch(e){ bad('Generate: removal failure keeps the image', e); }
+
   // 482. A rejected Runware key comes back as Runware's own message.
   try {
+    await openGen();
     await pickModel('runware:flux1-schnell');
     await appGN.page.fill('#genApiKey', 'rw-bad');
     await appGN.page.fill('#genPrompt', 'a brass clock');
