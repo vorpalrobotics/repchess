@@ -20,8 +20,8 @@ It builds on existing pieces:
 | Variants per job | **1.** Build the field, but default and offer only 1 for now. |
 | Run while the VR walk is open | **Yes.** It is network work, not CPU work, and decorating while images arrive is the point. |
 | Object-list prompts | Item name, plus a new optional per-item **Image instructions** field, plus the list's room context and the standing instructions. |
-| Default asset type for list items | **Extruded (silhouette).** User did not choose; the default can be revised. |
-| Unreviewed images in backups | **Excluded.** User did not choose; a restore discards them. |
+| Default asset type for list items | **Billboard (cylindrical)**, the type the user almost always uses. Changeable per batch for the rare exception. |
+| Unreviewed images in backups | **Excluded.** Confirmed by the user; a restore discards them. |
 
 ## A job
 
@@ -34,7 +34,7 @@ One record per job in a new IDB store, `imageJobs`:
   "standing": "flat cartoon style, …",
   "model": "runware:gpt-image-1-mini",
   "quality": "low", "size": "square", "transparent": true,
-  "asset": { "id": "brass-clock", "type": "extruded", "keywords": "", "resolution": "normal" },
+  "asset": { "id": "brass-clock", "type": "billboard-cylindrical", "keywords": "", "resolution": "normal" },
   "target": { "kind": "asset" },
   "result": { "image": "data:…", "cost": 0.005 },
   "error": null
@@ -84,6 +84,8 @@ One record per job in a new IDB store, `imageJobs`:
      `{item}. {imageInstructions}. From a {roomName}.` plus the standing
      instructions.
    - IDs default to `{list}-{item}`.
+   - The asset type defaults to billboard (cylindrical) and can be changed for
+     the whole batch.
 
 ## Review
 
