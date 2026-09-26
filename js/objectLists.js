@@ -21,8 +21,9 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal, openImageQueueForList, runwareText, RUNWARE_KEY_LS } from './assets.js?v=20260804-98';
-import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260804-2';
+import { openNewAssetModal, openImageQueueForList, openImageQueue, runwareText, RUNWARE_KEY_LS,
+         queueImagesForList, describeListImageSettings } from './assets.js?v=20260804-99';
+import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260804-3';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 const ORDERING_TYPES = {
@@ -608,13 +609,20 @@ function listFromCandidate(c){
     mnemonic: { type: c.mnemonic.type, initialism: c.mnemonic.initialism || '', phrase: c.mnemonic.phrase || '', source: 'AI brainstorm' },
   };
 }
-// Offer the pictures for a brainstormed list's imageless items -- its items
-// arrive with Image instructions, so they are the natural next step.
-function offerImagesFor(id, list){
+/* Offer the pictures for a brainstormed list's imageless items -- its items
+   arrive with Image instructions, so they are the natural next step. "Yes"
+   QUEUES them, with the last image settings, which the question names; it no
+   longer opens the batch form, which queued nothing until its own button was
+   pressed (and from the brainstorm dialog opened out of sight behind it).
+   Returns how many were queued. */
+async function offerImagesFor(id, list){
   const missing = (list.items || []).filter(it => !it.assetId);
-  if(missing.length && confirm(`Queue images for the ${missing.length} item${missing.length === 1 ? '' : 's'} in "${list.name}"?`)){
-    openImageQueueForList({ id, name: list.name, roomName: list.roomName || '', items: missing.map(it => shapeItem(it)) });
-  }
+  if(!missing.length) return 0;
+  const n = missing.length;
+  if(!confirm(`Queue images for the ${n} item${n === 1 ? '' : 's'} in "${list.name}"?\n\n`
+    + `They will use your last image settings: ${describeListImageSettings()}. For different settings, `
+    + 'choose Cancel and use Generate missing images… in the list instead.')) return 0;
+  return queueImagesForList({ id, name: list.name, roomName: list.roomName || '', items: missing.map(it => shapeItem(it)) });
 }
 /* "Save as list": a suggestion saved as it stands, with the same checks the
    editor's Save makes that could apply to it -- a fresh unique ID, unique
@@ -630,8 +638,8 @@ async function saveCandidateAsList(c){
   }
   await setObjectList(id, list);
   await refresh();
-  offerImagesFor(id, list);
-  return id;
+  const queued = await offerImagesFor(id, list);
+  return { id, queued };
 }
 // a list id from its name, unique among existing lists
 function listIdFromName(name){
@@ -1191,7 +1199,10 @@ async function saveEditor(){
   EDIT_FROM_IDEA = null;
   await refresh();
   if(fromIdea) await removeListIdea(fromIdea);   // it is a list now, not an idea
-  if(fromBrainstorm) offerImagesFor(savedId, { name: l.name.trim(), roomName: l.roomName.trim(), items: l.items });
+  if(fromBrainstorm){
+    const queued = await offerImagesFor(savedId, { name: l.name.trim(), roomName: l.roomName.trim(), items: l.items });
+    if(queued) openImageQueue('queue');   // show what was just queued
+  }
   return savedId;   // lets a standalone caller (e.g. openNewObjectListModal) know the save succeeded
 }
 

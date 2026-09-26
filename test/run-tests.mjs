@@ -27113,15 +27113,26 @@ try {
     let msg = null;
     appLB.page.once('dialog', d => { msg = d.message(); });   // the harness accepts it
     await appLB.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
-    await appLB.page.waitForSelector('#imageQueueOverlay #iqBatchTemplate', { state: 'visible', timeout: 5000 });
-    assert(msg && /Queue images for the 6 items in "Forge Tools"/.test(msg), `expected the offer to queue images, got ${JSON.stringify(msg)}`);
-    const rows = await appLB.page.evaluate(() => document.querySelectorAll('#iqBatchPreview .iq-plan').length);
+    // "yes" QUEUES the images (with the last settings, which the question
+    // names) and shows them on the Queue tab -- it used to open a batch form
+    // that queued nothing until its own button was pressed
+    await appLB.page.waitForFunction(() => document.getElementById('imageQueueOverlay')?.style.display === 'flex'
+      && document.querySelector('#imageQueueOverlay .iq-tab.active')?.dataset.tab === 'queue', null, { timeout: 5000 });
+    assert(msg && /Queue images for the 6 items in "Forge Tools"/.test(msg) && /last image settings: .+/.test(msg),
+      `expected the offer to name its settings, got ${JSON.stringify(msg)}`);
+    const q = await appLB.page.evaluate(async () => ({
+      jobs: (await window.__imageQueueTestHooks.jobs()).filter(j => j.target && j.target.listId === 'forge_tools'),
+      // topmost, not merely display:flex -- the old form "opened" behind a dialog
+      onTop: (() => { const m = document.querySelector('#imageQueueOverlay .modal').getBoundingClientRect();
+        return !!document.elementFromPoint(m.left + m.width / 2, m.top + 20)?.closest('#imageQueueOverlay'); })() }));
+    assert(q.jobs.length === 6 && q.jobs[0].target.itemName === 'Bellows' && /leather bellows/.test(q.jobs[0].prompt)
+      && q.jobs.every(j => j.asset.type === 'billboard-cylindrical') && q.onTop,
+      `expected six jobs queued for the list, shown on top: ${JSON.stringify({ n: q.jobs.length, onTop: q.onTop, first: q.jobs[0] && q.jobs[0].prompt })}`);
     const stored = await appLB.page.evaluate(async () => (await getAllObjectLists()).find(l => l.id === 'forge_tools'));
-    assert(rows === 6 && stored && stored.items[0].imagePrompt === 'leather bellows' && stored.mnemonic.source === 'AI brainstorm',
-      `expected the saved list and its image batch, got rows=${rows} ${JSON.stringify(stored && stored.items[0])}`);
-    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]').click());
+    assert(stored && stored.items[0].imagePrompt === 'leather bellows' && stored.mnemonic.source === 'AI brainstorm',
+      `expected the saved list, got ${JSON.stringify(stored && stored.items[0])}`);
     await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
-    ok('List brainstorm: Use this fills the editor, and Save offers to queue its images');
+    ok('List brainstorm: Use this fills the editor, and yes to the offer queues its images');
   } catch(e){ bad('List brainstorm: use and save', e); }
 
   // 511. Suggestions are kept as Saved ideas: closing no longer asks, and
@@ -27172,16 +27183,18 @@ try {
     appLB.page.once('dialog', d => { msg = d.message(); });   // accepted by the harness
     await appLB.page.evaluate((id) => document.querySelector(`#lbIdeasView .lb-card[data-idea="${id}"] [data-act="save"]`).click(), first.id);
     await appLB.page.waitForFunction(() => /Saved "/.test(document.getElementById('lbNotice').textContent), null, { timeout: 5000 });
+    const notice = await appLB.page.evaluate(() => document.getElementById('lbNotice').textContent);
+    assert(/queued \d+ images?/.test(notice), `expected the notice to say images were queued, got ${JSON.stringify(notice)}`);
     const lists = await appLB.page.evaluate(async () => (await getAllObjectLists()).filter(l => l.mnemonic && l.mnemonic.source === 'AI brainstorm').map(l => l.id));
+    // jobs aimed at a brainstormed list other than 510's forge_tools: the one just saved
+    const queuedFor = await appLB.page.evaluate(async (ids) => (await window.__imageQueueTestHooks.jobs())
+      .filter(j => j.target && ids.includes(j.target.listId) && j.target.listId !== 'forge_tools').length, lists);
+    assert(queuedFor > 0, `expected jobs queued for the saved list, got ${queuedFor}`);
     assert((await ideas()).length === before - 1 && !(await ideas()).some(i => i.id === first.id), 'expected the idea removed');
     assert(msg && /Queue images for the/.test(msg), `expected the image offer, got ${JSON.stringify(msg)}`);
     assert(lists.includes('forge_tools_2') || lists.some(id => /^forge_tools|^smithy|^kitchen_fixtures/.test(id)),
       `expected the suggestion saved under a unique id, got ${JSON.stringify(lists)}`);
-    // the offer opened the Image Queue on it; put it away
-    await appLB.page.waitForSelector('#imageQueueOverlay #iqBatchTemplate', { state: 'visible', timeout: 5000 });
-    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]').click());
-    await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
-    ok('List brainstorm: Save as list saves it under a unique ID and offers its images');
+    ok('List brainstorm: Save as list saves it under a unique ID and queues its images on yes');
   } catch(e){ bad('List brainstorm: save as list', e); }
 
   // 514. Use this from Saved ideas, with the manager on its index: a new
@@ -27201,7 +27214,6 @@ try {
     await appLB.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
     assert(!(await ideas()).some(i => i.id === target.id), 'expected the idea removed once its list was saved');
     await appLB.page.waitForSelector('#imageQueueOverlay', { state: 'visible', timeout: 5000 });
-    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]')?.click());
     await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
     ok('List brainstorm: Use this from Saved ideas opens a new list, and saving removes the idea');
   } catch(e){ bad('List brainstorm: use from ideas', e); }

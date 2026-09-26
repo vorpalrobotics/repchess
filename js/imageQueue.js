@@ -629,6 +629,50 @@ function iqOverlayOpen(){
   const ov = document.getElementById('imageQueueOverlay');
   return !!(ov && ov.style.display === 'flex');
 }
+/* The settings a list's images are queued with when nobody opens the batch
+   form: the last ones used anywhere (the same memory the Generate dialog and
+   the batch form keep), a billboard by default, and that type's usual
+   transparency. Shared by queueImagesForList and its description, so what
+   the question promises is what gets queued. */
+function lastListImageSettings(){
+  const spec = genModelById(lsGet(GEN_MODEL_LS));
+  const type = lsGet(IQ_BATCH_TYPE_LS) || 'billboard-cylindrical';
+  const kind = (ASSET_TYPE_LIST.find(t => t.id === type) || {}).kind || 'prop';
+  const d = TYPE_GEN_DEFAULTS[kind] || TYPE_GEN_DEFAULTS.prop;
+  const savedSize = lsGet(GEN_SIZE_LS);
+  return {
+    spec, type, transparent: d.transparent,
+    size: ['square', 'portrait', 'landscape'].includes(savedSize) ? savedSize : d.size,
+    quality: spec.quality ? (lsGet(GEN_QUALITY_LS) || GEN_QUALITY_DEFAULT) : null,
+    customAir: spec.custom ? lsGet(GEN_CUSTOM_AIR_LS) : '',
+    standing: lsGet(OPENAI_STANDING_LS),
+    template: lsGet(IQ_LIST_TEMPLATE_LS) || LIST_PROMPT_TEMPLATE_DEFAULT,
+  };
+}
+// "GPT Image 1 mini, low quality" -- for the question asked before queuing
+export function describeListImageSettings(){
+  const st = lastListImageSettings();
+  return `${st.spec.custom ? (st.customAir || 'a custom model') : st.spec.label}${st.quality ? `, ${st.quality} quality` : ''}`;
+}
+/* Queue a list's imageless items straight away, with the last settings --
+   what "yes" to "Queue images for this list?" means. (It used to open the
+   batch form instead, which queued nothing until its own Queue button was
+   pressed; from the brainstorm dialog's Save as list, that form even opened
+   BEHIND the dialog.) Returns how many were queued. */
+export async function queueImagesForList(list){
+  await loadJobs();
+  const st = lastListImageSettings();
+  const plan = planList(list, st.template, await takenAssetIds());
+  for(const p of plan){
+    await enqueueImageJob({
+      prompt: p.prompt, standing: st.standing, model: st.spec.id, customAir: st.customAir,
+      quality: st.quality, size: st.size, transparent: st.transparent,
+      asset: { id: p.id, type: st.type, keywords: '', resolution: 'normal' },
+      target: { kind: 'objectListItem', listId: list.id, listName: list.name || '', itemName: p.itemName },
+    });
+  }
+  return plan.length;
+}
 /* From the Object List Manager: the batch form, filling this list's
    imageless items. list: { id, name, roomName, items: [{ name, imagePrompt }] } */
 export async function openImageQueueForList(list){
