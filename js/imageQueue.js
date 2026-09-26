@@ -261,6 +261,35 @@ export async function generateRunware(key, spec, prompt, [w, h], transparent, on
 }
 
 
+/* Runware text generation (textInference) over the same session code as the
+   images -- one key for both. Used by the object-list brainstorm
+   (js/listBrainstorm.js). With a jsonSchema, the reply is asked for as
+   schema-conforming JSON (outputFormat 'JSON'); a model that refuses that
+   gets the request again without it, and the caller's own parsing and
+   checking take over -- the same fallback shape as refused native
+   transparency above. Returns { text, finishReason, cost, structured }. */
+export async function runwareText(key, { model, systemPrompt, messages, maxTokens = 6000, jsonSchema = null }){
+  const session = await runwareSession(key);
+  try {
+    const base = { taskType: 'textInference', model, messages, maxTokens, includeCost: true };
+    if(systemPrompt) base.systemPrompt = systemPrompt;
+    let structured = !!jsonSchema;
+    let res;
+    try {
+      res = await session.run(jsonSchema ? { ...base, outputFormat: 'JSON', jsonSchema } : base);
+    } catch(err){
+      if(!jsonSchema || !/outputFormat|jsonSchema|schema|json/i.test((err && err.message) || '')) throw err;
+      console.warn('[runwareText] structured output refused, retrying as plain text', err);
+      structured = false;
+      res = await session.run(base);
+    }
+    return { text: typeof res.text === 'string' ? res.text : '', finishReason: res.finishReason || '',
+             cost: typeof res.cost === 'number' ? res.cost : null, structured };
+  } finally {
+    session.close();
+  }
+}
+
 /* ================= the queue ================= */
 
 /* Storage: the job list (no images) under one meta key, each finished image

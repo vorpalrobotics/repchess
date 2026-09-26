@@ -1,0 +1,355 @@
+/* ---------- AI brainstorm for new object lists ----------
+   Documents/list-brainstorm.md is the design.
+
+   Describe the list you want; a model on Runware (the same key as image
+   generation) suggests three candidate lists in the object-list shape; you
+   refine them in conversation, and "Use this" fills in the new list's editor,
+   where the ordinary Save -- with all its checks -- makes it real.
+
+   This module imports nothing from the rest of the app: objectLists.js, its
+   only importer, hands in what it needs (the Runware text call, the key's
+   storage name, the ordering/mnemonic vocabularies, existing list names, and
+   what "Use this" does). One importer, one ?v= to keep in step.
+
+   Output: asked for as schema-conforming JSON where the model supports it,
+   and in every case parsed forgivingly (code fences, a stray sentence) and
+   checked strictly. A reply that cannot be used gets one repair round -- the
+   specific problems sent back in the same conversation -- before it is shown
+   to you as a failure, raw text included, rather than silently dropped. */
+import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
+
+const BRAINSTORM_MODEL_LS = 'repchess.brainstormModel';
+const BRAINSTORM_CUSTOM_LS = 'repchess.brainstormCustomModel';
+/* The cheaper model is the default: suggesting a handful of ordered objects
+   is not a demanding task. Runware names Claude models 'anthropic:claude@…'
+   (e.g. anthropic:claude@opus-4.8); these two follow that pattern, and
+   "Other model" takes any ID from runware.ai/models if one is renamed. */
+export const BRAINSTORM_MODELS = [
+  { id: 'anthropic:claude@haiku-4.5',  label: 'Claude Haiku 4.5 (fast, cheap)' },
+  { id: 'anthropic:claude@sonnet-4.6', label: 'Claude Sonnet 4.6 (stronger)' },
+  { id: 'custom',                      label: 'Other Runware model (enter its ID)…' },
+];
+export const BRAINSTORM_CANDIDATES = 3;
+const MAX_TOKENS = 6000;
+
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ return ''; } }
+function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_){} }
+
+/* ---------- what the model is told ----------
+   A condensed Documents/MnemonicListDesignPrinciples.md -- the app's own
+   account of what makes a list memorable -- plus the output contract. Kept
+   identical between requests. */
+export function brainstormSystemPrompt(orderingTypes, mnemonicTypes){
+  const list = (o) => Object.entries(o).map(([k, v]) => `- ${k}: ${v}`).join('\n');
+  return `You help design ordered object lists for a chess memory palace. Each list is a set of objects placed, in order, along a wall of a room in a virtual castle; each object anchors one pair of chess moves, so the user must be able to recall the objects IN ORDER from the room and the rule alone.
+
+What makes a list memorable -- prefer the highest tier that fits:
+1. An existing cultural mnemonic already in long-term memory (planets, rainbow, musical scale).
+2. A familiar phrase lightly adapted to cover the category.
+3. A canonical sequence without a popular acronym (months, days of the week, taxonomic ranks).
+4. A strong natural ordering inherent to the objects: size, weight, age, brightness, temperature, hardness, chronology, a life cycle, or a real process or workflow (e.g. food: store, prep, cook, clean).
+5. Only when nothing above fits: an invented phrase whose initials match the objects.
+Spatial orderings (left to right, clockwise, walking path) are the weakest: avoid them.
+
+Rules:
+- Never weaken a strong ordering to improve a mnemonic's initials; canonical sequences are never reordered.
+- The objects must fit the room's theme, be concrete, and be easy to picture as a single image.
+- Item names are short (one to three words) and unique within the list.
+- Give each item brief image instructions: what it looks like, so a picture of it can be generated.
+- Say why the order holds in one or two sentences, and state the ordering rule itself plainly.
+- The mnemonic is optional support: leave initialism and phrase empty rather than force a weak one.
+
+Ordering types (use one of these keys):
+${list(orderingTypes)}
+
+Mnemonic types (use one of these keys):
+${list(mnemonicTypes)}
+
+Reply with JSON only -- no prose, no code fences -- in exactly this shape:
+{"candidates":[{"name":"","roomName":"","category":"","orderingType":"","orderingRule":"","whyThisOrder":"","items":[{"name":"","imagePrompt":""}],"mnemonic":{"type":"","initialism":"","phrase":""}}]}`;
+}
+
+export function brainstormSchema(orderingKeys, mnemonicKeys){
+  const str = { type: 'string' };
+  return {
+    name: 'object_list_candidates', strict: true,
+    schema: {
+      type: 'object', additionalProperties: false, required: ['candidates'],
+      properties: {
+        candidates: { type: 'array', items: {
+          type: 'object', additionalProperties: false,
+          required: ['name', 'roomName', 'category', 'orderingType', 'orderingRule', 'whyThisOrder', 'items', 'mnemonic'],
+          properties: {
+            name: str, roomName: str, category: str,
+            orderingType: { type: 'string', enum: orderingKeys },
+            orderingRule: str, whyThisOrder: str,
+            items: { type: 'array', items: {
+              type: 'object', additionalProperties: false, required: ['name', 'imagePrompt'],
+              properties: { name: str, imagePrompt: str } } },
+            mnemonic: { type: 'object', additionalProperties: false, required: ['type', 'initialism', 'phrase'],
+              properties: { type: { type: 'string', enum: mnemonicKeys }, initialism: str, phrase: str } },
+          } } },
+      },
+    },
+  };
+}
+
+/* ---------- reading the reply ----------
+   Forgiving about the wrapping, strict about the content. */
+export function extractJson(text){
+  let t = String(text || '').trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if(fence) t = fence[1].trim();
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if(a < 0 || b <= a) throw new Error('the reply contained no JSON object');
+  try { return JSON.parse(t.slice(a, b + 1)); }
+  catch(err){ throw new Error('the reply was not valid JSON (' + err.message + ')'); }
+}
+/* Hard problems (unusable) drop a candidate; soft ones (a list longer than
+   asked, a name you already use) travel with it as warnings, since you may
+   well want it anyway. Zero usable candidates is what triggers the repair. */
+export function validateCandidates(obj, { orderingKeys, mnemonicKeys, minItems = 0, maxItems = Infinity, existingNames = [] } = {}){
+  const errors = [];
+  const out = [];
+  const cands = obj && Array.isArray(obj.candidates) ? obj.candidates : null;
+  if(!cands) return { candidates: [], errors: ['the reply has no "candidates" array'] };
+  const taken = new Set(existingNames.map(n => String(n).trim().toLowerCase()));
+  cands.forEach((c, i) => {
+    const label = `candidate ${i + 1}`;
+    if(!c || typeof c !== 'object'){ errors.push(`${label} is not an object`); return; }
+    const s = (v) => (typeof v === 'string' ? v.trim() : '');
+    const name = s(c.name);
+    if(!name){ errors.push(`${label} has no name`); return; }
+    if(!orderingKeys.includes(c.orderingType)){
+      errors.push(`${label} ("${name}") has orderingType "${c.orderingType}", which is not one of: ${orderingKeys.join(', ')}`);
+      return;
+    }
+    const warnings = [];
+    const seen = new Set();
+    const items = [];
+    for(const it of (Array.isArray(c.items) ? c.items : [])){
+      const n = s(it && it.name);
+      if(!n) continue;
+      if(seen.has(n.toLowerCase())){ warnings.push(`duplicate item "${n}" left out`); continue; }
+      seen.add(n.toLowerCase());
+      items.push({ name: n, imagePrompt: s(it.imagePrompt) });
+    }
+    if(items.length < 2){ errors.push(`${label} ("${name}") has fewer than two usable items`); return; }
+    if(items.length < minItems || items.length > maxItems){
+      warnings.push(`${items.length} items, outside the ${minItems}–${maxItems} asked for`);
+    }
+    if(taken.has(name.toLowerCase())) warnings.push('you already have a list with this name');
+    const m = c.mnemonic && typeof c.mnemonic === 'object' ? c.mnemonic : {};
+    let mType = m.type;
+    if(!mnemonicKeys.includes(mType)){ mType = 'generated_phrase'; if(s(m.phrase)) warnings.push('mnemonic type was not recognised'); }
+    out.push({
+      name, roomName: s(c.roomName), category: s(c.category), orderingType: c.orderingType,
+      orderingRule: s(c.orderingRule), whyThisOrder: s(c.whyThisOrder), items,
+      mnemonic: { type: mType, initialism: s(m.initialism), phrase: s(m.phrase) }, warnings,
+    });
+  });
+  if(!out.length && !errors.length) errors.push('the reply had no candidates');
+  return { candidates: out, errors: out.length ? [] : errors };
+}
+
+/* ---------- the dialog ---------- */
+let DEPS = null;           // what objectLists.js handed in
+let HISTORY = [];          // the conversation so far, for Refine
+let CANDS = [];
+let SPENT = 0;
+let BUSY = false;
+
+/* deps: { runwareText, keyLs, orderingTypes, mnemonicTypes, existingNames, onUse(candidate) } */
+export function openListBrainstorm(deps){
+  DEPS = deps;
+  HISTORY = []; CANDS = []; SPENT = 0; BUSY = false;
+  let ov = document.getElementById('listBrainstormOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'listBrainstormOverlay';
+    ov.className = 'overlay';
+    // above the Object List Manager (30), its standalone New List modal (72)
+    // and the Image Queue (90); below the asset editor (162)
+    ov.style.zIndex = '95';
+    document.body.appendChild(ov);
+  }
+  const savedModel = lsGet(BRAINSTORM_MODEL_LS) || BRAINSTORM_MODELS[0].id;
+  const orderingOpts = Object.entries(deps.orderingTypes)
+    .map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('');
+  ov.innerHTML = `
+    <div class="modal" style="width:min(48em,94vw);max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-bar-host">${modalBarHtml({ title: 'Brainstorm a list', prefix: 'lb' })}</div>
+      <div class="modal-body lb-body">
+        <label class="iq-f">What is the list for?
+          <textarea id="lbDesc" rows="3" placeholder="e.g. things in a blacksmith's forge, for a medieval castle; or: the stages of making bread"></textarea></label>
+        <div class="iq-grid">
+          <label class="iq-f">Preferred ordering <select id="lbOrdering"><option value="">Any (the strongest that fits)</option>${orderingOpts}</select></label>
+          <label class="iq-f">Items, from <input type="number" id="lbMin" min="2" max="20" value="5"></label>
+          <label class="iq-f">to <input type="number" id="lbMax" min="2" max="20" value="9"></label>
+          <label class="iq-f">Room (optional) <input type="text" id="lbRoom" autocomplete="off"></label>
+          <label class="iq-f">Category (optional) <input type="text" id="lbCategory" autocomplete="off"></label>
+          <label class="iq-f">Model <select id="lbModel">${BRAINSTORM_MODELS.map(m =>
+            `<option value="${esc(m.id)}"${m.id === savedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select></label>
+          <label class="iq-f" id="lbCustomWrap">Runware model ID <input type="text" id="lbCustom" value="${esc(lsGet(BRAINSTORM_CUSTOM_LS))}" autocomplete="off"></label>
+        </div>
+        <label class="iq-f">Runware API key (the same one as image generation)
+          <input type="password" id="lbKey" value="${esc(lsGet(deps.keyLs))}" autocomplete="off"></label>
+        <div class="iq-actions"><button type="button" id="lbGo">Brainstorm ${BRAINSTORM_CANDIDATES} lists</button></div>
+        <div id="lbStatus" class="iq-hint"></div>
+        <div id="lbResults"></div>
+        <div id="lbRefineWrap" class="lb-refine" style="display:none">
+          <label class="iq-f">Not quite? Say what to change
+            <textarea id="lbRefineText" rows="2" placeholder="e.g. fewer items, more tools and fewer furnishings"></textarea></label>
+          <div class="iq-actions"><button type="button" id="lbRefine">Refine</button></div>
+        </div>
+      </div>
+    </div>`;
+  ov.style.display = 'flex';
+  const q = (id) => ov.querySelector('#' + id);
+  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: closeBrainstorm });
+  const syncModel = () => {
+    q('lbCustomWrap').style.display = q('lbModel').value === 'custom' ? '' : 'none';
+    lsSet(BRAINSTORM_MODEL_LS, q('lbModel').value);
+  };
+  q('lbModel').onchange = syncModel;
+  syncModel();
+  q('lbGo').onclick = () => brainstorm(false);
+  q('lbRefine').onclick = () => brainstorm(true);
+  ov.querySelector('#lbResults').onclick = (e) => {
+    const b = e.target.closest('[data-use]');
+    if(!b) return;
+    const cand = CANDS[+b.dataset.use];
+    if(!cand) return;
+    CANDS = [];               // used: nothing left to warn about on close
+    hide();
+    DEPS.onUse(cand);
+  };
+}
+function hide(){
+  const ov = document.getElementById('listBrainstormOverlay');
+  if(ov){ ov.style.display = 'none'; ov.innerHTML = ''; }
+}
+function closeBrainstorm(){
+  if(BUSY) return;
+  if(CANDS.length && !confirm(`Close without using any of the ${CANDS.length} suggestions?`)) return;
+  CANDS = [];
+  hide();
+}
+
+function modelId(q){
+  const v = q('lbModel').value;
+  if(v !== 'custom') return v;
+  const c = q('lbCustom').value.trim();
+  if(c) lsSet(BRAINSTORM_CUSTOM_LS, c);
+  return c;
+}
+
+async function brainstorm(refine){
+  const ov = document.getElementById('listBrainstormOverlay');
+  if(!ov || BUSY) return;
+  const q = (id) => ov.querySelector('#' + id);
+  const status = (t) => { q('lbStatus').textContent = t; };
+  const key = q('lbKey').value.trim();
+  const model = modelId(q);
+  const orderingKeys = Object.keys(DEPS.orderingTypes);
+  const mnemonicKeys = Object.keys(DEPS.mnemonicTypes);
+  let min = Math.max(2, parseInt(q('lbMin').value, 10) || 5);
+  let max = Math.max(min, parseInt(q('lbMax').value, 10) || 9);
+  if(!key) return status('Enter your Runware API key.');
+  if(!model) return status('Enter the Runware model ID.');
+  lsSet(DEPS.keyLs, key);
+  let userMsg;
+  if(refine){
+    const fb = q('lbRefineText').value.trim();
+    if(!fb) return status('Say what to change first.');
+    if(!HISTORY.length) return status('Brainstorm first, then refine.');
+    userMsg = `Feedback on those candidates: ${fb}\nReply with ${BRAINSTORM_CANDIDATES} new candidates in the same JSON shape.`;
+  } else {
+    const desc = q('lbDesc').value.trim();
+    if(!desc) return status('Describe the list you want.');
+    const ord = q('lbOrdering').value;
+    userMsg = [
+      `Suggest ${BRAINSTORM_CANDIDATES} candidate object lists.`,
+      `What the list is for: ${desc}`,
+      `Preferred ordering: ${ord ? `${ord} (${DEPS.orderingTypes[ord]})` : 'any -- choose the strongest that fits'}`,
+      `Number of items: between ${min} and ${max}.`,
+      `Room: ${q('lbRoom').value.trim() || '(your choice)'}`,
+      `Category: ${q('lbCategory').value.trim() || '(your choice)'}`,
+      `Lists the user already has (do not duplicate these): ${(DEPS.existingNames || []).slice(0, 60).join('; ') || 'none'}`,
+    ].join('\n');
+    HISTORY = [];
+  }
+  const systemPrompt = brainstormSystemPrompt(DEPS.orderingTypes, DEPS.mnemonicTypes);
+  const jsonSchema = brainstormSchema(orderingKeys, mnemonicKeys);
+  const check = (text) => {
+    try {
+      return validateCandidates(extractJson(text), { orderingKeys, mnemonicKeys, minItems: min, maxItems: max,
+        existingNames: DEPS.existingNames || [] });
+    } catch(err){ return { candidates: [], errors: [err.message] }; }
+  };
+  const ask = async (messages) => {
+    const res = await DEPS.runwareText(key, { model, systemPrompt, messages, maxTokens: MAX_TOKENS, jsonSchema });
+    if(typeof res.cost === 'number') SPENT += res.cost;
+    if(res.finishReason === 'length') throw new Error('the reply was cut off before it finished -- ask for fewer items, or try a stronger model');
+    return res;
+  };
+  BUSY = true;
+  q('lbGo').disabled = true; q('lbRefine').disabled = true;
+  status(refine ? 'Refining…' : 'Brainstorming…');
+  try {
+    let conv = [...HISTORY, { role: 'user', content: userMsg }];
+    let res = await ask(conv);
+    let got = check(res.text);
+    if(got.errors.length){
+      // one repair round: the specific problems, back in the same conversation
+      status('The reply needed fixing; asking again…');
+      conv = [...conv, { role: 'assistant', content: res.text },
+        { role: 'user', content: `That reply could not be used: ${got.errors.join('; ')}. Reply with the corrected JSON only.` }];
+      res = await ask(conv);
+      got = check(res.text);
+    }
+    if(got.errors.length){
+      status('');
+      q('lbResults').innerHTML = `<div class="lb-fail">The model's reply could not be used: ${esc(got.errors.join('; '))}.
+        Try again, or pick a stronger model.<details><summary>What it replied</summary><pre>${esc(res.text)}</pre></details></div>`;
+      return;
+    }
+    HISTORY = [...conv, { role: 'assistant', content: res.text }];
+    CANDS = got.candidates;
+    renderCandidates(q);
+    q('lbRefineWrap').style.display = '';
+    q('lbRefineText').value = '';
+    status(SPENT ? `Cost so far: $${SPENT.toFixed(4)}` : '');
+  } catch(err){
+    console.error('[listBrainstorm] failed', err);
+    status('Error: ' + ((err && err.message) || err));
+  } finally {
+    BUSY = false;
+    q('lbGo').disabled = false; q('lbRefine').disabled = false;
+  }
+}
+
+function renderCandidates(q){
+  q('lbResults').innerHTML = CANDS.map((c, i) => `
+    <div class="lb-card" data-cand="${i}">
+      <div class="lb-card-head"><strong>${esc(c.name)}</strong>
+        <span class="iq-meta">${esc([c.roomName, c.category].filter(Boolean).join(' · '))}</span></div>
+      <div class="lb-order"><span class="lb-tag">${esc(DEPS.orderingTypes[c.orderingType] || c.orderingType)}</span>
+        ${esc(c.orderingRule)}</div>
+      ${c.whyThisOrder ? `<div class="iq-hint">${esc(c.whyThisOrder)}</div>` : ''}
+      <ol class="lb-items">${c.items.map(it => `<li><strong>${esc(it.name)}</strong>${it.imagePrompt
+        ? ` <span class="iq-hint">— ${esc(it.imagePrompt)}</span>` : ''}</li>`).join('')}</ol>
+      ${c.mnemonic.phrase ? `<div class="lb-mnem">Mnemonic: “${esc(c.mnemonic.phrase)}”${c.mnemonic.initialism
+        ? ` (${esc(c.mnemonic.initialism)})` : ''}</div>` : ''}
+      ${c.warnings.length ? `<div class="lb-warn">${c.warnings.map(esc).join(' · ')}</div>` : ''}
+      <div class="iq-actions"><button type="button" data-use="${i}">Use this</button></div>
+    </div>`).join('');
+}
+
+if(localStorage.getItem('threeTestDebug')) window.__listBrainstormTestHooks = {
+  extractJson: (t) => extractJson(t),
+  validate: (obj, opts) => validateCandidates(obj, opts),
+  systemPrompt: (o, m) => brainstormSystemPrompt(o, m),
+  schema: (o, m) => brainstormSchema(o, m),
+};

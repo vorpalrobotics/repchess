@@ -41,6 +41,32 @@ discard your artwork.</p>
 <p>Each card shows how many of its items have images bound yet, so you can see
 at a glance which lists are finished and which are still text.</p>
 
+<h3>Brainstorming a list with AI</h3>
+<p>A new list's editor has <strong>Brainstorm with AI&hellip;</strong>. It uses
+your Runware API key, the same one as image generation:</p>
+<ul>
+  <li><strong>Describe</strong> what the list is for. Optionally choose a
+  preferred ordering, the number of items, a room and a category.</li>
+  <li><strong>Choose from three suggestions.</strong> Each shows its ordering
+  rule and why it holds, its items with Image instructions, and a mnemonic if
+  there is a good one.</li>
+  <li><strong>Refine</strong> tells the model what to change and gets three
+  new suggestions.</li>
+  <li><strong>Use this</strong> fills in the list editor. Nothing is saved
+  until you Save.</li>
+</ul>
+<p>The model is told the principles behind a memorable list:</p>
+<ul>
+  <li>Prefer an existing cultural sequence, then a strong natural ordering.</li>
+  <li>Never weaken a strong ordering for the sake of a mnemonic.</li>
+  <li>Avoid purely spatial orders.</li>
+</ul>
+<p>Suggestions that don't fit what you asked for, or that repeat a list you
+already have, are flagged. The default model, Claude Haiku 4.5, is fast and
+cheap. A stronger model, or any other Runware model, can be picked instead.
+Each brainstorm shows what it cost. Saving a brainstormed list offers to
+queue its images straight away.</p>
+
 <h3>Generating the images</h3>
 <p>Each item can have optional <strong>Image instructions</strong>, typed under
 its name in the list editor, for example <em>vintage 1950s, rounded, mint
