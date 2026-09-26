@@ -268,6 +268,9 @@
   #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
   #menuList button{border:none;background:none;text-align:left;padding:.5em .9em;border-radius:0;font-weight:400}
   #menuList button:hover{background:#f0f0f0}
+  /* the chosen item flashes (js/app.js, MENU_FLASH_MS) */
+  #menuList button.menu-flash{animation:menuFlash .6s ease-out}
+  @keyframes menuFlash{0%{background:#1565c0;color:#fff}60%{background:#1565c0;color:#fff}100%{background:transparent;color:inherit}}
   /* two-level menu: a .menu-parent toggles the .menu-sub block right below it */
   #menuList .menu-parent::after{content:"\25B8";float:right;color:#999;transition:transform .15s}
   #menuList .menu-parent.open::after{transform:rotate(90deg)}
@@ -2192,6 +2195,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-462"></script>
+<script type="module" src="js/app.js?v=20260804-463"></script>
 </body>
 </html>

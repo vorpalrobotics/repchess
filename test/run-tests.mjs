@@ -25991,6 +25991,33 @@ try {
     await appRM.page.waitForFunction(() => document.getElementById('settingsOverlay').style.display === 'none', null, { timeout: 5000 });
     ok('settings: denied and unsupported both disable the toggle and say why');
   } catch(e){ bad('settings: permission states', e); }
+  // 519. A menu item chosen with a real click flashes, and its action is
+  //      held back just long enough for that to paint (a slow action would
+  //      otherwise block the frame that shows it); the replayed click keeps
+  //      its modifier keys, which Run VR's Shift+click depends on.
+  try {
+    await appRM.page.click('#menuBtn');
+    await appRM.page.click('#menuSettings');
+    const now = await appRM.page.evaluate(() => ({
+      flashing: document.getElementById('menuSettings').classList.contains('menu-flash'),
+      opened: document.getElementById('settingsOverlay').style.display === 'flex' }));
+    assert(now.flashing && !now.opened, `expected the item flashing and the action held back a moment, got ${JSON.stringify(now)}`);
+    await appRM.page.waitForFunction(() => document.getElementById('settingsOverlay').style.display === 'flex', null, { timeout: 5000 });
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+
+    await appRM.page.evaluate(() => {
+      window.__menuShift = null;
+      document.getElementById('menuAbout').addEventListener('click', e => { if(!e.isTrusted) window.__menuShift = e.shiftKey; }, { once: true });
+    });
+    await appRM.page.click('#menuBtn');
+    await appRM.page.click('#menuAbout', { modifiers: ['Shift'] });
+    await appRM.page.waitForFunction(() => window.__menuShift !== null, null, { timeout: 5000 });
+    const shift = await appRM.page.evaluate(() => window.__menuShift);
+    assert(shift === true, 'expected the replayed click to keep the Shift key');
+    await appRM.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    await appRM.page.evaluate(() => document.querySelector('#aboutOverlay .mb-leave').click());
+    ok('menu: a chosen item flashes before its action runs, keeping modifier keys');
+  } catch(e){ bad('menu: item flash', e); }
 } finally {
   await appRM.close();
 }
