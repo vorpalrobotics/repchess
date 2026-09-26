@@ -142,9 +142,9 @@ const AUTO_CROP_ALPHA = 24;
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { OPENAI_STANDING_LS, GEN_MODEL_LS, GEN_CUSTOM_AIR_LS, GEN_QUALITY_LS, GEN_SIZE_LS, GEN_QUALITY_DEFAULT,
          GEN_MODELS, GEN_PROVIDERS, genModelById, lsGet, lsSet, generateOpenAI, generateRunware,
-         enqueueImageJob, configureImageQueue } from './imageQueue.js?v=20260804-2';
+         enqueueImageJob, configureImageQueue } from './imageQueue.js?v=20260804-3';
 // app.js reaches the queue through here, so imageQueue.js has a single importer
-export { openImageQueue, resetImageQueue, imageQueueCounts } from './imageQueue.js?v=20260804-2';
+export { openImageQueue, openImageQueueForList, resetImageQueue, imageQueueCounts } from './imageQueue.js?v=20260804-3';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one

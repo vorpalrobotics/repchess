@@ -462,7 +462,26 @@ async function approveImageJob(id, quick = false){
   const image = await getImageJobImage(id);
   if(!image) return;
   const saved = await approver(job, image, { quick });
-  if(saved) await removeImageJob(id);
+  if(!saved) return;
+  if(job.target && job.target.kind === 'objectListItem') await bindListItem(job.target, saved);
+  await removeImageJob(id);
+}
+/* Approving an object-list item's image links the new asset to that item in
+   the stored list, and tells the Object List Manager so its open copy stays
+   in step (see objectLists.js's 'objectlists:bound' listener). A list or item
+   removed since the job was queued just gets the asset, unlinked. */
+async function bindListItem(target, assetId){
+  try {
+    const list = (await getAllObjectLists()).find(l => l.id === target.listId);
+    const key = String(target.itemName || '').toLowerCase();
+    const items = list ? (list.items || []).map(it => ({ ...it })) : [];
+    const it = items.find(x => x.name.toLowerCase() === key);
+    if(!it){ console.warn('[imageQueue] list item gone, asset left unlinked', target, assetId); return; }
+    it.assetId = assetId;
+    await setObjectList(list.id, { items });
+    window.dispatchEvent(new CustomEvent('objectlists:bound',
+      { detail: { listId: list.id, itemName: it.name, assetId } }));
+  } catch(err){ console.error('[imageQueue] could not link the image to its list item', err); }
 }
 // the ID a review card shows can be corrected before approving
 async function setJobAssetId(id, assetId){
@@ -501,6 +520,38 @@ export function planBatch(text, takenIds){
   }
   return out;
 }
+/* Object lists: one image per imageless item. The prompt comes from a
+   template -- {item}, {instructions} (the item's own Image instructions),
+   {room} (the list's room name), {list} -- and a sentence whose placeholders
+   all come out empty is dropped, so an item with no instructions does not
+   produce "Refrigerator. . From a Kitchen." IDs default to list + item. */
+export const LIST_PROMPT_TEMPLATE_DEFAULT = '{item}. {instructions}. From a {room}.';
+export function expandPromptTemplate(template, vars){
+  const sentences = String(template || '').split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter(sn => {
+    const names = [...sn.matchAll(/\{(\w+)\}/g)].map(m => m[1]);
+    return !names.length || names.some(n => String(vars[n] || '').trim());
+  });
+  return kept.join(' ').replace(/\{(\w+)\}/g, (_, n) => String(vars[n] || '').trim())
+    .replace(/\.\s*\./g, '.').replace(/\s+/g, ' ').trim();
+}
+export function planList(list, template, takenIds){
+  const taken = new Set(takenIds || []);
+  const out = [];
+  for(const it of (list.items || [])){
+    const base = slugAssetId(`${list.id} ${it.name}`);
+    let id = base, n = 2;
+    while(taken.has(id)) id = `${base}-${n++}`;
+    taken.add(id);
+    const prompt = expandPromptTemplate(template, {
+      item: it.name, instructions: it.imagePrompt || '', room: list.roomName || '', list: list.name || '' });
+    out.push({ id, prompt, itemName: it.name });
+  }
+  return out;
+}
+const IQ_LIST_TEMPLATE_LS = 'repchess.iqListTemplate';
+let BATCH_LIST = null;           // the object list the batch form is filling, or null for free lines
+
 async function takenAssetIds(){
   const ids = (JOBS || []).map(j => j.asset && j.asset.id).filter(Boolean);
   try { for(const a of await getAllAssets()) ids.push(a.id); } catch(_){}
@@ -522,6 +573,14 @@ function iqOverlayOpen(){
   const ov = document.getElementById('imageQueueOverlay');
   return !!(ov && ov.style.display === 'flex');
 }
+/* From the Object List Manager: the batch form, filling this list's
+   imageless items. list: { id, name, roomName, items: [{ name, imagePrompt }] } */
+export async function openImageQueueForList(list){
+  BATCH_LIST = list;
+  await openImageQueue('batch');
+  const body = document.querySelector('#imageQueueOverlay #iqBody');
+  if(body){ body.innerHTML = ''; renderImageQueue(); }   // rebuild the form in list mode
+}
 export async function openImageQueue(tab){
   await loadJobs();
   let ov = document.getElementById('imageQueueOverlay');
@@ -529,9 +588,9 @@ export async function openImageQueue(tab){
     ov = document.createElement('div');
     ov.id = 'imageQueueOverlay';
     ov.className = 'overlay';
-    // above the main page's own overlays (20); below the New Asset modal
-    // (162) that Approve opens on top of it
-    ov.style.zIndex = '40';
+    // above the Object List Manager (30) and its image-pick sub-overlay (80),
+    // which can open it; below the New Asset modal (162) Approve opens on top
+    ov.style.zIndex = '90';
     ov.innerHTML = `
       <div class="modal" style="width:min(46em,94vw);max-height:90vh;display:flex;flex-direction:column">
         <div id="imageQueueBar" class="modal-bar-host">${modalBarHtml({ title: 'Image Queue', prefix: 'iq' })}</div>
@@ -549,7 +608,12 @@ export async function openImageQueue(tab){
       </div>`;
     document.body.appendChild(ov);
     wireModalBar(ov.querySelector('.modal-bar'), { onLeave: () => { ov.style.display = 'none'; iqRedoId = null; } });
-    ov.querySelectorAll('.iq-tab').forEach(b => b.onclick = () => { iqTab = b.dataset.tab; iqRedoId = null; renderImageQueue(); });
+    ov.querySelectorAll('.iq-tab').forEach(b => b.onclick = () => {
+      iqTab = b.dataset.tab; iqRedoId = null; BATCH_LIST = null;
+      const body = ov.querySelector('#iqBody');
+      if(body) body.innerHTML = '';      // a fresh form, not a list-mode one left over
+      renderImageQueue();
+    });
     ov.addEventListener('click', onIqClick);
     ov.addEventListener('input', onIqInput);
     ov.addEventListener('change', onIqInput);
@@ -564,6 +628,7 @@ export async function openImageQueue(tab){
 function iqMeta(job){
   const spec = genModelById(job.model);
   const bits = [job.asset.id || '(no ID yet)', spec.custom ? job.customAir : spec.label];
+  if(job.target && job.target.kind === 'objectListItem') bits.unshift(`for ${job.target.listName || job.target.listId} › ${job.target.itemName}`);
   if(spec.quality && job.quality) bits.push(job.quality);
   bits.push(job.size);
   return bits.map(esc).join(' · ');
@@ -648,13 +713,22 @@ function batchFormHtml(){
   const types = ASSET_TYPE_LIST.map(t =>
     `<option value="${esc(t.id)}"${t.id === savedType ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
   const res = RESOLUTIONS.map(r => `<option value="${esc(r)}"${r === 'normal' ? ' selected' : ''}>${esc(r[0].toUpperCase() + r.slice(1))}</option>`).join('');
-  return `
-    <div id="iqBatchForm" class="iq-batch">
+  const L = BATCH_LIST;
+  const source = L ? `
+      <div class="iq-listhead">Images for <strong>${esc(L.name || L.id)}</strong>: the
+        ${L.items.length} item${L.items.length === 1 ? '' : 's'} without one. Approving an image links it to its item.</div>
+      <label class="iq-f">Prompt template
+        <input type="text" id="iqBatchTemplate" value="${esc(lsGet(IQ_LIST_TEMPLATE_LS) || LIST_PROMPT_TEMPLATE_DEFAULT)}" autocomplete="off"></label>
+      <div class="iq-hint"><code>{item}</code> the item's name, <code>{instructions}</code> its Image instructions,
+        <code>{room}</code> the list's room, <code>{list}</code> the list's name. A sentence whose placeholders are all
+        empty is left out.</div>` : `
       <label class="iq-f">Subjects, one per line
         <textarea id="iqBatchLines" rows="6" placeholder="brass grandfather clock&#10;copper kettle&#10;lamp-tall | a tall brass reading lamp"></textarea>
       </label>
       <div class="iq-hint">Each line becomes one image. The asset ID is made from the line; to choose it yourself,
-        write <code>id | prompt</code>.</div>
+        write <code>id | prompt</code>.</div>`;
+  return `
+    <div id="iqBatchForm" class="iq-batch">${source}
       <div class="iq-grid">
         <label class="iq-f">Model <select id="iqBatchModel">${modelOptions}</select></label>
         <label class="iq-f" id="iqBatchCustomWrap">Runware model ID <input type="text" id="iqBatchCustomAir"
@@ -704,10 +778,14 @@ async function syncBatchForm(first){
     if(['square', 'portrait', 'landscape'].includes(savedSize)) q('iqBatchSize').value = savedSize;
     batchTaken = await takenAssetIds();
   }
-  const plan = planBatch(q('iqBatchLines').value, batchTaken);
+  const plan = currentPlan(f);
   q('iqBatchQueueBtn').textContent = plan.length ? `Queue ${plan.length} image${plan.length === 1 ? '' : 's'}` : 'Queue';
   q('iqBatchPreview').innerHTML = plan.length
     ? plan.map(p => `<div class="iq-plan"><code>${esc(p.id)}</code> ${esc(p.prompt)}</div>`).join('') : '';
+}
+function currentPlan(f){
+  if(BATCH_LIST) return planList(BATCH_LIST, f.querySelector('#iqBatchTemplate').value, batchTaken);
+  return planBatch(f.querySelector('#iqBatchLines').value, batchTaken);
 }
 function applyTypeDefaults(){
   const f = document.getElementById('iqBatchForm');
@@ -743,8 +821,8 @@ async function queueBatch(){
   const customAir = q('iqBatchCustomAir').value.trim();
   if(spec.custom && !customAir) return status('Enter the Runware model ID.');
   batchTaken = await takenAssetIds();
-  const plan = planBatch(q('iqBatchLines').value, batchTaken);
-  if(!plan.length) return status('Enter at least one subject.');
+  const plan = currentPlan(f);
+  if(!plan.length) return status(BATCH_LIST ? 'Every item already has an image.' : 'Enter at least one subject.');
   const quality = spec.quality ? q('iqBatchQuality').value : null;
   if(plan.length >= IQ_CONFIRM_AT){
     const what = `${spec.custom ? customAir : spec.label}${quality ? `, ${quality} quality` : ''}`;
@@ -763,9 +841,15 @@ async function queueBatch(){
     size: q('iqBatchSize').value, transparent: q('iqBatchTransparent').checked,
   };
   const asset = { type: q('iqBatchType').value, keywords: q('iqBatchKeywords').value.trim(), resolution: q('iqBatchRes').value };
+  if(BATCH_LIST) lsSet(IQ_LIST_TEMPLATE_LS, q('iqBatchTemplate').value);
   for(const p of plan){
-    await enqueueImageJob({ ...common, prompt: p.prompt, asset: { ...asset, id: p.id }, target: { kind: 'asset' } });
+    const target = BATCH_LIST
+      ? { kind: 'objectListItem', listId: BATCH_LIST.id, listName: BATCH_LIST.name || '', itemName: p.itemName }
+      : { kind: 'asset' };
+    await enqueueImageJob({ ...common, prompt: p.prompt, asset: { ...asset, id: p.id }, target });
   }
+  BATCH_LIST = null;
+  f.remove();                      // the next New batch… starts clean
   iqTab = 'queue';
   renderImageQueue();
 }
@@ -776,7 +860,11 @@ async function onIqClick(e){
   const act = btn.dataset.act;
   if(act === 'reset-spent'){ lsSet(IMAGE_QUEUE_SPENT_LS, '0'); renderImageQueue(); return; }
   if(act === 'batch-queue') return queueBatch();
-  if(act === 'batch-cancel'){ iqTab = 'queue'; renderImageQueue(); return; }
+  if(act === 'batch-cancel'){
+    BATCH_LIST = null;
+    document.getElementById('iqBatchForm')?.remove();
+    iqTab = 'queue'; renderImageQueue(); return;
+  }
   const card = btn.closest('[data-id]');
   const id = card && card.dataset.id;
   if(!id) return;
@@ -817,6 +905,8 @@ if(localStorage.getItem('threeTestDebug')) window.__imageQueueTestHooks = {
   pump: () => pumpImageQueue(),
   enqueue: (draft) => enqueueImageJob(draft),
   planBatch: (text, taken) => planBatch(text, taken),
+  planList: (list, template, taken) => planList(list, template, taken),
+  expand: (template, vars) => expandPromptTemplate(template, vars),
   open: (tab) => openImageQueue(tab),
   counts: () => imageQueueCounts(),
   running: () => running.size,

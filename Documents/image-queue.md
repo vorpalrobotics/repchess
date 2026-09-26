@@ -1,7 +1,26 @@
 # Image generation queue — design
 
-**Status: phases 1 and 2 built** (`js/imageQueue.js`, tests 489–500, phase IQ).
-Phases 3–4 are not started.
+**Status: phases 1–3 built** (`js/imageQueue.js`, tests 489–504, phase IQ).
+Phase 4 is not started.
+
+Phase 3's implementation choices:
+- **One item shape.** `shapeItem` in `objectLists.js` is now the single place
+  items are built. That covers the editor's Save, the import normalizer, and
+  the import MERGE, a third rebuild site this doc did not originally list.
+  The merge keeps an existing `imagePrompt` when a re-import lacks one, the
+  same way it keeps `assetId`.
+- **List mode is the batch form.** `openImageQueueForList` opens it with a
+  prompt template in place of the lines box, via `planList` and
+  `expandPromptTemplate`, which are pure. A sentence whose placeholders are
+  all empty is dropped. The template is remembered.
+- **Binding on approve** writes the stored list, then fires
+  `objectlists:bound`. The Object List Manager updates its cache and, if that
+  list is open, both `EDIT` and `EDIT_BASELINE`, then rebases its bar. The
+  editor therefore neither reads as changed nor writes the old `null` back on
+  a later Save.
+- **Generating needs a saved list,** since binding targets the stored item.
+- **The Image Queue's z-index is 90,** above the Object List Manager (30) and
+  its image-pick sub-overlay (80).
 
 Phase 2's implementation choices:
 - **Quick approve runs the editor's own Save.** It opens the pre-filled New

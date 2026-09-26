@@ -21,7 +21,7 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal } from './assets.js?v=20260804-95';
+import { openNewAssetModal, openImageQueueForList } from './assets.js?v=20260804-96';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 const ORDERING_TYPES = {
@@ -432,6 +432,18 @@ function renderListCards(grid, visible){
 }
 
 /* ---------- editor ---------- */
+/* The one shape an item is stored in. Every place that rebuilds items -- the
+   editor's Save, import normalizing, import merging -- goes through here,
+   because each used to spell out { name, assetId } and a field added later
+   (imagePrompt) would be silently dropped at whichever one was missed.
+   imagePrompt is only kept when non-empty. */
+function shapeItem(it){
+  const out = { name: it.name, assetId: it.assetId || null };
+  const p = typeof it.imagePrompt === 'string' ? it.imagePrompt.trim() : '';
+  if(p) out.imagePrompt = p;
+  return out;
+}
+
 function openEditor(id){
   const src = id ? LISTS.find(l => l.id === id) : null;
   EDIT_IS_NEW = !src;
@@ -533,7 +545,9 @@ function renderEditor(){
          Documents/modal-buttons.md the bar is modal LIFECYCLE only, and
          quizzing is a body action on the thing being edited. -->
     ${l.items.length ? `<div class="assets-editor-actions">
-      <div class="left"><button id="ol_quiz"><i class="fa-solid fa-graduation-cap"></i> Quiz this list</button></div>
+      <div class="left"><button id="ol_quiz"><i class="fa-solid fa-graduation-cap"></i> Quiz this list</button>
+        ${EDIT_IS_NEW ? '' : `<button id="ol_genmissing" title="Queue one generated image for every item that has none; approving one links it to its item">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Generate missing images…</button>`}</div>
     </div>` : ''}
   `;
   renderItems();
@@ -553,10 +567,52 @@ function renderEditor(){
   $('ol_additembtn').onclick = addItem;
   $('ol_newitem').onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); addItem(); } };
   if(l.items.length) $('ol_quiz').onclick = () => openListQuiz(l);
+  if(l.items.length && !EDIT_IS_NEW) $('ol_genmissing').onclick = generateMissingImages;
   // re-mounted on every editor render, because the bar's Delete… depends on
   // EDIT_IS_NEW and its title on the list's name
   renderBar();
 }
+
+/* Generate missing images: hand the list's imageless items to the Image
+   Queue. The list must be saved first -- approving an image links it to the
+   STORED item, so an item that exists only in this unsaved editor would have
+   nothing to link to. */
+function generateMissingImages(){
+  if(JSON.stringify(EDIT) !== EDIT_BASELINE){
+    setError('Save the list first, so the new images can be linked to its items.');
+    return;
+  }
+  const missing = EDIT.items.filter(it => !it.assetId);
+  if(!missing.length){ setError('Every item in this list already has an image.'); return; }
+  setError('');
+  openImageQueueForList({ id: EDIT.id, name: EDIT.name, roomName: EDIT.roomName, items: missing.map(it => ({ ...it })) });
+}
+
+/* The Image Queue linked an approved image to one of a list's items. Keep
+   this manager's copies in step: the cached list, and -- if that list is open
+   in the editor -- both EDIT and the baseline it is compared against, so the
+   new image neither shows as an unsaved change nor gets written back to null
+   by a later Save of an editor opened before it arrived. */
+window.addEventListener('objectlists:bound', async (e) => {
+  const { listId, itemName, assetId } = e.detail || {};
+  const key = String(itemName || '').toLowerCase();
+  const bind = (list) => {
+    const it = list && (list.items || []).find(x => x.name.toLowerCase() === key);
+    if(it) it.assetId = assetId;
+  };
+  bind(LISTS.find(l => l.id === listId));
+  try { ASSETS = await getAllAssets(); } catch(_){}
+  if(EDIT && EDIT.id === listId){
+    bind(EDIT);
+    if(EDIT_BASELINE !== null){
+      const base = JSON.parse(EDIT_BASELINE);
+      bind(base);
+      EDIT_BASELINE = JSON.stringify(base);
+      if(BAR_CTL) BAR_CTL.rebase(EDIT_BASELINE);
+    }
+    if($('ol_items')) renderItems();
+  }
+});
 
 function renderItems(){
   // every programmatic mutation of EDIT.items -- add, remove, reorder, bind or
@@ -578,7 +634,9 @@ function renderItems(){
     tr.dataset.name = it.name;   // stable drag identity -- item names are already enforced unique
     tr.innerHTML = `
       <td class="objlist-num">${i+1}</td>
-      <td class="objlist-name">${esc(it.name)}</td>
+      <td class="objlist-name">${esc(it.name)}
+        <input type="text" class="objlist-imgprompt" data-imgprompt="${i}" value="${esc(it.imagePrompt || '')}"
+               placeholder="Image instructions (optional)" title="Added to this item's prompt when its image is generated"></td>
       <td class="objlist-asset">
         <div class="objlist-asset-cell">
           <span class="objlist-thumb">${a && a.image ? `<img src="${esc(a.image)}" alt="">` : '<span class="objlist-noimg">word only</span>'}</span>
@@ -593,6 +651,12 @@ function renderItems(){
       </td>
     `;
     tb.appendChild(tr);
+  });
+  // cleared back to nothing removes the field, so emptying a box you typed in
+  // reads as unchanged rather than as an edit
+  tb.querySelectorAll('[data-imgprompt]').forEach(inp => inp.oninput = () => {
+    const it = EDIT.items[+inp.dataset.imgprompt];
+    if(inp.value) it.imagePrompt = inp.value; else delete it.imagePrompt;
   });
   tb.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => openPicker(+b.dataset.pick));
   tb.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { EDIT.items[+b.dataset.clear].assetId = null; renderItems(); });
@@ -1026,7 +1090,7 @@ async function saveEditor(){
   await setObjectList(l.id, {
     name: l.name.trim(), roomName: l.roomName.trim(), category: l.category.trim(),
     orderingType: l.orderingType, orderingRule: l.orderingRule.trim(),
-    items: l.items.map(it => ({ name: it.name, assetId: it.assetId || null })),
+    items: l.items.map(shapeItem),
     mnemonic: {
       type: l.mnemonic.type,
       initialism: (l.mnemonic.initialism||'').trim(),
@@ -1185,9 +1249,12 @@ export async function importObjectListsData(data){
     // here would silently drop an existing binding whenever a re-imported
     // item's name differs only in case from what was previously saved.
     if(prev) for(const it of (prev.items || [])) if(it.assetId) prevAssetByName[it.name.toLowerCase()] = it.assetId;
-    const items = inc.items.map(it => ({
+    const prevPromptByName = {};
+    if(prev) for(const it of (prev.items || [])) if(it.imagePrompt) prevPromptByName[it.name.toLowerCase()] = it.imagePrompt;
+    const items = inc.items.map(it => shapeItem({
       name: it.name,
-      assetId: (it.assetId || prevAssetByName[it.name.toLowerCase()] || null)
+      assetId: (it.assetId || prevAssetByName[it.name.toLowerCase()] || null),
+      imagePrompt: it.imagePrompt || prevPromptByName[it.name.toLowerCase()] || '',
     }));
     await setObjectList(inc.id, {
       name: inc.name, roomName: inc.roomName, category: inc.category,
@@ -1242,8 +1309,7 @@ function normalizeImport(data){
     const items = [];
     const seenNames = new Set();
     for(const it of (list.items||[])){
-      const shaped = typeof it === 'string' ? { name: it, assetId: null }
-                                             : { name: it.name, assetId: it.assetId || null };
+      const shaped = typeof it === 'string' ? { name: it, assetId: null } : shapeItem(it);
       const key = shaped.name.toLowerCase();
       if(seenNames.has(key)) continue;
       seenNames.add(key);
