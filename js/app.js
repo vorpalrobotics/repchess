@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-464';
+const BUILD_TAG = '-465';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8799,8 +8799,8 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
      worst. */
   const WINDOWS = {
     now:      ['overdue', 'due'],
-    tomorrow: ['overdue', 'due', 'tomorrow'],
-    week:     ['overdue', 'due', 'tomorrow', 'week'],
+    tomorrow: ['overdue', 'due', 'today', 'tomorrow'],
+    week:     ['overdue', 'due', 'today', 'tomorrow', 'week'],
   };
   const load = {};
   for(const [name, ids] of Object.entries(WINDOWS)){

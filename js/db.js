@@ -1120,6 +1120,8 @@ function roomReviewState(record, now = Date.now()){
 const REVIEW_FORECAST_BUCKETS = [
   { id: 'overdue',  label: 'Overdue',          color: '#c62828' },
   { id: 'due',      label: 'Due now',          color: '#ef6c00' },
+  // a same-day (learning) review not due yet -- see reviewForecastBucket
+  { id: 'today',    label: 'Later today',      color: '#fb8c00' },
   { id: 'tomorrow', label: 'Tomorrow',         color: '#f9a825' },
   { id: 'week',     label: 'In 2-7 days',      color: '#827717' },
   { id: 'month',    label: 'In 8-30 days',     color: '#2e7d32' },
@@ -1134,8 +1136,11 @@ function reviewForecastBucket(record, now = Date.now()){
   if(state === 'due') return 'due';
   // A learning review due later today is the one exception to the comment
   // below: its due date is a real timestamp, not a midnight. It is today's
-  // work, and the forecast is day-granular, so it counts with today's.
-  if(record.learning) return 'due';
+  // work -- but NOT due now. It first counted as 'due', so the VR Schedule
+  // said "5 moves due now" while the walk's review list (which asks whether
+  // the review has actually come due) said you were caught up. It has its
+  // own bucket, which the "by tomorrow" and "next 7 days" windows include.
+  if(record.learning) return 'today';
   // not due yet, so due dates are midnight-snapped into the future and
   // dueInDays is >= 1 here -- no zero case to worry about
   const d = dueInDays(record, now);

@@ -646,6 +646,12 @@ memorized before it joins the ladder.
   record; rooms memorized earlier are unchanged, so there is no migration.
 - **Review list:** in priority order, due learning rooms sort first and carry a
   "same-day" tag.
+- **VR Schedule:** a learning review not due yet has its own bucket, **Later
+  today**, between Due now and Tomorrow.
+  - It counts in "By tomorrow" and "Next 7 days", but not in "Due now".
+  - At first it was bucketed as `due`. The Schedule then said "5 moves due now"
+    while the walk's review list, which asks whether the review has actually
+    come due, said the user was caught up. Fixed in build -465.
 - **Stats:** the tally and log use the rung key `'L'`. The Accuracy Report
   shows it as its own row, in hours.
 

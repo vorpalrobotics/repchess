@@ -22518,7 +22518,8 @@ try {
   try {
     const bucketIds = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.buckets().map(b => b.id));
     const f = await run([], {}, {});
-    assert(bucketIds.length === 8, `expected the eight documented buckets, got ${JSON.stringify(bucketIds)}`);
+    assert(bucketIds.length === 9 && bucketIds.includes('today'),
+      `expected the nine documented buckets (with "Later today"), got ${JSON.stringify(bucketIds)}`);
     assert(bucketIds.every(id => f.buckets[id] && f.buckets[id].moves === 0 && f.buckets[id].rooms === 0),
       `expected every bucket present and zeroed for an empty scope: ${JSON.stringify(f.buckets)}`);
     assert(f.ladder.length === LADDER.length && f.perDay.length === 0 && f.castles === 0,
@@ -22693,7 +22694,7 @@ try {
       window.__reviewForecastTestHooks.ladder(),
       await window.__reviewForecastTestHooks.forecast(),
     ]);
-    // 8 buckets + one rung per ladder step + 2 totals rows
+    // 9 buckets + one rung per ladder step + 2 totals rows
     assert(shown.length === buckets.length + ladder.length + 2,
       `expected a row per bucket, per ladder rung, plus the two totals: got ${shown.length}`);
     for(const b of buckets){
@@ -23125,8 +23126,11 @@ try {
       'expected a learning review not yet due halfway through its step');
     assert(await H('state', rec, T0 + LMS) === 'due', 'expected it due at its real timestamp');
     assert(await H('state', rec, T0 + LMS + 2 * DAY) === 'overdue', 'expected it overdue once left for days');
-    assert(await H('bucket', rec, T0 + LMS / 2) === 'due',
-      'expected a learning review due later TODAY to count as today\'s work, not "tomorrow"');
+    // today's work, but not due NOW: "Later today", so the VR Schedule's
+    // "Due now" agrees with the walk's review list (it once said 'due')
+    assert(await H('bucket', rec, T0 + LMS / 2) === 'today',
+      'expected a learning review due later today in "Later today" -- not "Due now", not "Tomorrow"');
+    assert(await H('bucket', rec, T0 + LMS) === 'due', 'expected it "Due now" once its time comes');
     const phrase = await H('duePhrase', rec, T0);
     assert(/in 6 hours \(around .+\)/.test(phrase),
       `expected the due phrase in hours with a time of day, got ${JSON.stringify(phrase)}`);
