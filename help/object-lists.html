@@ -41,6 +41,31 @@ discard your artwork.</p>
 <p>Each card shows how many of its items have images bound yet, so you can see
 at a glance which lists are finished and which are still text.</p>
 
+<h3>Generating the images</h3>
+<p>Each item can have optional <strong>Image instructions</strong>, typed under
+its name in the list editor, for example <em>vintage 1950s, rounded, mint
+green</em> for a Refrigerator. They shape that item's picture when it's
+generated.</p>
+<p><strong>Generate missing images&hellip;</strong>, in a saved list's
+editor, opens the Image Queue's batch form filled in with every item that
+has no image yet:</p>
+<ul>
+  <li>Each item's prompt comes from a <strong>template</strong>, by default
+  <code>{item}. {instructions}. From a {room}.</code> A sentence whose
+  placeholders are all empty is left out, so an item without instructions
+  just gets <em>Oven. From a Kitchen.</em> The template you use is
+  remembered.</li>
+  <li>Asset IDs are made from the list and the item, for example
+  <code>kitchen-refrigerator</code>.</li>
+  <li>The asset type defaults to billboard, and you can change it for the
+  whole batch.</li>
+</ul>
+<p>When one of these images is approved in the Image Queue, it is linked to
+its item straight away, even while the list's editor is still open. The list
+must be saved before you generate, because an item that exists only in
+unsaved edits has nothing to link to. See <em>VR Assets</em> for the Image
+Queue itself.</p>
+
 <h3>Applying one to a room</h3>
 <p>Inside a room in VR, edit mode's <strong>Wall Object Lists</strong> dialog
 assigns a list to a wall. Its items then fill that wall's move-object slots in

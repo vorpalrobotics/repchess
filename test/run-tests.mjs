@@ -26722,6 +26722,130 @@ try {
     ok('Image Queue: Quick approve saves via the editor, and a taken ID stops it with the reason');
   } catch(e){ bad('Image Queue: quick approve', e); }
 
+  // 501. The object-list prompt template: {item}, {instructions}, {room},
+  //      {list}, with a sentence dropped when its placeholders all come out
+  //      empty; IDs default to list + item.
+  try {
+    const r = await appIQ.page.evaluate(() => {
+      const H = window.__imageQueueTestHooks;
+      const t = '{item}. {instructions}. From a {room}.';
+      return {
+        withNotes: H.expand(t, { item: 'Refrigerator', instructions: 'vintage, mint green', room: 'Kitchen' }),
+        bare: H.expand(t, { item: 'Oven', instructions: '', room: 'Kitchen' }),
+        noRoom: H.expand(t, { item: 'Oven', instructions: '', room: '' }),
+        plan: H.planList({ id: 'kitchen', name: 'Kitchen', roomName: 'Kitchen',
+          items: [{ name: 'Refrigerator', imagePrompt: 'mint' }, { name: 'Oven' }] }, t, ['kitchen-oven']),
+      };
+    });
+    assert(r.withNotes === 'Refrigerator. vintage, mint green. From a Kitchen.', `with instructions: ${JSON.stringify(r.withNotes)}`);
+    assert(r.bare === 'Oven. From a Kitchen.', `without instructions: ${JSON.stringify(r.bare)}`);
+    assert(r.noRoom === 'Oven.', `without a room: ${JSON.stringify(r.noRoom)}`);
+    assert(JSON.stringify(r.plan.map(p => [p.id, p.itemName])) === '[["kitchen-refrigerator","Refrigerator"],["kitchen-oven-2","Oven"]]',
+      `unexpected list plan: ${JSON.stringify(r.plan)}`);
+    ok('Image Queue: list prompts drop empty sentences, and IDs come from list + item');
+  } catch(e){ bad('Image Queue: list prompt template', e); }
+
+  // 502. Image instructions survive every path that rebuilds a list's items:
+  //      import (normalizing), re-import without them (merging keeps the old
+  //      ones), and the editor's Save.
+  const listFile = (lists) => ({ name: 'lists.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(lists)) });
+  const storedItems = () => appIQ.page.evaluate(async () =>
+    ((await getAllObjectLists()).find(l => l.id === 'kitchen') || {}).items || []);
+  try {
+    await appIQ.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appIQ.page.waitForSelector('#objectListsOverlay', { state: 'visible', timeout: 5000 });
+    await appIQ.page.setInputFiles('#objlistImportFile', listFile([{ id: 'kitchen', name: 'Kitchen Fixtures', roomName: 'Kitchen',
+      items: [{ name: 'Refrigerator', imagePrompt: 'vintage, mint green' }, { name: 'Oven' }, { name: 'Sink', assetId: 'queued-clock' }] }]));
+    await appIQ.page.waitForSelector('#objlistGrid .objlist-card', { timeout: 5000 });
+    let items = await storedItems();
+    assert(items[0] && items[0].imagePrompt === 'vintage, mint green', `import dropped the instructions: ${JSON.stringify(items)}`);
+    await appIQ.page.setInputFiles('#objlistImportFile', listFile([{ id: 'kitchen', name: 'Kitchen Fixtures', roomName: 'Kitchen',
+      items: [{ name: 'Refrigerator' }, { name: 'Oven' }, { name: 'Sink' }, { name: 'Toaster' }] }]));
+    // the new Toaster is how we know the re-import has actually landed --
+    // without it the stored list looks the same before and after
+    for(let t = 0; t < 50 && (await storedItems()).length < 4; t++) await new Promise(r => setTimeout(r, 100));
+    items = await storedItems();
+    assert(items.length === 4, `the re-import never landed: ${JSON.stringify(items)}`);
+    assert(items[0].imagePrompt === 'vintage, mint green' && items[2].assetId === 'queued-clock',
+      `a re-import without them should keep the instructions and image: ${JSON.stringify(items)}`);
+    await appIQ.page.evaluate(() => [...document.querySelectorAll('#objlistGrid .objlist-card')]
+      .find(c => c.textContent.includes('Kitchen Fixtures')).click());
+    await appIQ.page.waitForSelector('#objlistEditor', { state: 'visible', timeout: 5000 });
+    await appIQ.page.fill('#ol_items [data-imgprompt="1"]', 'cast iron');
+    await appIQ.page.waitForFunction(() => !document.querySelector('#objectListsOverlay .modal-bar .mb-save').disabled, null, { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
+    await appIQ.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    items = await storedItems();
+    assert(items[1].imagePrompt === 'cast iron' && items[0].imagePrompt === 'vintage, mint green',
+      `the editor's Save dropped instructions: ${JSON.stringify(items)}`);
+    ok('Image Queue: an item\'s Image instructions survive import, re-import and the editor\'s Save');
+  } catch(e){ bad('Image Queue: Image instructions field', e); }
+
+  // 503. Generate missing images: refused while the list has unsaved edits;
+  //      otherwise the Image Queue opens above the manager, filling in the
+  //      imageless items only, and queues one job per item aimed at it.
+  try {
+    await appIQ.page.evaluate(() => [...document.querySelectorAll('#objlistGrid .objlist-card')]
+      .find(c => c.textContent.includes('Kitchen Fixtures')).click());
+    await appIQ.page.waitForSelector('#ol_genmissing', { timeout: 5000 });
+    await appIQ.page.fill('#ol_name', 'Kitchen Fixtures!');
+    await appIQ.page.evaluate(() => document.getElementById('ol_genmissing').click());
+    const err = await appIQ.page.evaluate(() => document.getElementById('ol_error').textContent);
+    assert(/Save the list first/.test(err), `expected unsaved edits to block it, got ${JSON.stringify(err)}`);
+    await appIQ.page.fill('#ol_name', 'Kitchen Fixtures');
+    await appIQ.page.evaluate(() => document.getElementById('ol_genmissing').click());
+    await appIQ.page.waitForSelector('#imageQueueOverlay #iqBatchTemplate', { state: 'visible', timeout: 5000 });
+    const z = await appIQ.page.evaluate(() => [+getComputedStyle(document.getElementById('imageQueueOverlay')).zIndex,
+      +getComputedStyle(document.getElementById('objectListsOverlay')).zIndex]);
+    assert(z[0] > z[1], `expected the Image Queue above the Object List Manager, got ${JSON.stringify(z)}`);
+    const rows = await appIQ.page.evaluate(() => [...document.querySelectorAll('#iqBatchPreview .iq-plan')].map(r => r.textContent.trim()));
+    assert(rows.length === 3 && /kitchen-refrigerator\s+Refrigerator\. vintage, mint green\. From a Kitchen\./.test(rows[0])
+      && /kitchen-oven\s+Oven\. cast iron\. From a Kitchen\./.test(rows[1])
+      && /kitchen-toaster\s+Toaster\. From a Kitchen\./.test(rows[2]),
+      `expected the three imageless items only (not Sink), got ${JSON.stringify(rows)}`);
+    const before = (await jobs()).length;
+    await appIQ.page.evaluate(() => document.getElementById('iqBatchQueueBtn').click());
+    await waitCounts('c.queued === 0 && c.running === 0');
+    const added = (await jobs()).slice(before);
+    assert(added.length === 3 && added.every(j => j.target.kind === 'objectListItem' && j.target.listId === 'kitchen'
+      && j.asset.type === 'billboard-cylindrical') && added[0].target.itemName === 'Refrigerator',
+      `unexpected list jobs: ${JSON.stringify(added.map(j => [j.target, j.asset.type]))}`);
+    ok('Image Queue: Generate missing images queues the imageless items, aimed at them, above the manager');
+  } catch(e){ bad('Image Queue: generate missing images', e); }
+
+  // 504. Approving a list item's image links it to that item -- in storage
+  //      and in the editor still open behind the queue, without the editor
+  //      reading as changed or a later Save putting the old empty image back.
+  try {
+    const job = (await jobs()).find(j => j.target && j.target.itemName === 'Refrigerator');
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector(`#iqBody .iq-card[data-id="${job.id}"]`, { timeout: 5000 });
+    const meta = await appIQ.page.evaluate((id) => document.querySelector(`#iqBody .iq-card[data-id="${id}"] .iq-meta`).textContent, job.id);
+    assert(/for Kitchen Fixtures › Refrigerator/.test(meta), `expected the card to name its list item, got ${JSON.stringify(meta)}`);
+    await appIQ.page.evaluate((id) => document.querySelector(`#iqBody .iq-card[data-id="${id}"] [data-act="quick"]`).click(), job.id);
+    for(let t = 0; t < 100; t++){
+      if(!(await jobs()).some(j => j.id === job.id)) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    let items = await storedItems();
+    assert(items[0].assetId === 'kitchen-refrigerator', `expected the item linked in storage, got ${JSON.stringify(items[0])}`);
+    await closeQueue();
+    const ed = await appIQ.page.evaluate(() => ({
+      shown: document.querySelector('#ol_items tr:first-child .objlist-asset-id')?.textContent || '',
+      saveDisabled: document.querySelector('#objectListsOverlay .modal-bar .mb-save').disabled }));
+    assert(ed.shown === 'kitchen-refrigerator' && ed.saveDisabled,
+      `expected the open editor to show the image and still read clean, got ${JSON.stringify(ed)}`);
+    // an unrelated edit and Save must not put the old null back
+    await appIQ.page.fill('#ol_room', 'Big Kitchen');
+    await appIQ.page.waitForFunction(() => !document.querySelector('#objectListsOverlay .modal-bar .mb-save').disabled, null, { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
+    await appIQ.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    items = await storedItems();
+    assert(items[0].assetId === 'kitchen-refrigerator', `a later Save put the old image back: ${JSON.stringify(items[0])}`);
+    await appIQ.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
+    ok('Image Queue: approving links the image to its list item, and the open editor keeps it');
+  } catch(e){ bad('Image Queue: bind on approve', e); }
+
   // 496. A restore discards the queue: unreviewed images are not backed up.
   try {
     await seedBackup(appIQ.page, { version: 6, user: 'tester', lines: [] });
