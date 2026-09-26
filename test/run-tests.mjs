@@ -26456,6 +26456,10 @@ try {
               this.reply({ data: [{ taskType: 'imageInference', taskUUID: t.taskUUID,
                 imageUUID: 'img-' + t.taskUUID, imageBase64Data: PNG1, cost: 0.005 }] }, window.__rwDelay || 5);
             }
+          } else if(t.taskType === 'removeBackground'){
+            // a transparent FLUX.1 schnell job's second step
+            this.reply({ data: [{ taskType: 'removeBackground', taskUUID: t.taskUUID,
+              imageUUID: 'cut-' + t.taskUUID, imageBase64Data: PNG1, cost: 0.001 }] });
           }
         }
       }
@@ -26616,13 +26620,107 @@ try {
       await new Promise(r => setTimeout(r, 100));
     }
     const redone = (await jobs()).find(j => j.id === firstId);
+    const diag = await appIQ.page.evaluate(() => ({ running: window.__imageQueueTestHooks.running(),
+      counts: window.__imageQueueTestHooks.counts() }));
     assert(redone && redone.prompt === 'a brass lamp, taller' && redone.status === 'review',
-      `expected the redo generated with the edited prompt, got ${JSON.stringify(redone)}`);
+      `expected the redo generated with the edited prompt, got ${JSON.stringify(redone)} (queue: ${JSON.stringify(diag)})`);
+    await appIQ.page.waitForSelector(`#iqBody .iq-card[data-id="${firstId}"] [data-act="discard"]`, { timeout: 5000 });
     await appIQ.page.evaluate((id) => document.querySelector(`#iqBody .iq-card[data-id="${id}"] [data-act="discard"]`).click(), firstId);
     await waitCounts('c.review === 5');
     await closeQueue();
     ok('Image Queue: Redo re-queues with an edited prompt, Discard removes');
   } catch(e){ bad('Image Queue: redo and discard', e); }
+
+  // 497. Batch planning: one image per non-blank line, `id | prompt` names
+  //      the asset, and IDs are made unique against existing assets and
+  //      each other.
+  try {
+    const plan = await appIQ.page.evaluate(() => window.__imageQueueTestHooks.planBatch(
+      'brass clock\n\ncopper kettle\nlamp | a tall brass lamp\nbrass clock\n  | a teapot\n', ['copper-kettle']));
+    const want = [['brass-clock', 'brass clock'], ['copper-kettle-2', 'copper kettle'], ['lamp', 'a tall brass lamp'],
+                  ['brass-clock-2', 'brass clock'], ['a-teapot', 'a teapot']];
+    assert(JSON.stringify(plan.map(p => [p.id, p.prompt])) === JSON.stringify(want),
+      `unexpected batch plan: ${JSON.stringify(plan)}`);
+    ok('Image Queue: batch lines become unique asset IDs, with id | prompt to name one');
+  } catch(e){ bad('Image Queue: batch planning', e); }
+
+  // 498. The batch form: a preview of what will be queued, type-driven
+  //      defaults (a surface is opaque, a prop is not), and Queue adds one
+  //      job per line carrying the chosen type and keywords. An ID already
+  //      taken by an asset gets a suffix.
+  try {
+    const before = (await jobs()).length;
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('batch'));
+    await appIQ.page.waitForSelector('#iqBatchForm', { timeout: 5000 });
+    await appIQ.page.selectOption('#iqBatchType', 'surface');
+    let tr = await appIQ.page.evaluate(() => document.getElementById('iqBatchTransparent').checked);
+    assert(tr === false, 'expected a surface to default to an opaque background');
+    await appIQ.page.selectOption('#iqBatchType', 'billboard-cylindrical');
+    tr = await appIQ.page.evaluate(() => document.getElementById('iqBatchTransparent').checked);
+    assert(tr === true, 'expected a billboard to default to a transparent background');
+    await appIQ.page.fill('#iqBatchKeywords', 'kitchen');
+    await appIQ.page.fill('#iqBatchLines', 'queued clock\ntoaster\nmixer | a stand mixer');
+    const preview = await appIQ.page.evaluate(() => ({
+      rows: [...document.querySelectorAll('#iqBatchPreview .iq-plan code')].map(c => c.textContent),
+      btn: document.getElementById('iqBatchQueueBtn').textContent }));
+    assert(JSON.stringify(preview.rows) === '["queued-clock-2","toaster","mixer"]' && preview.btn === 'Queue 3 images',
+      `unexpected preview: ${JSON.stringify(preview)}`);
+    await appIQ.page.evaluate(() => document.getElementById('iqBatchQueueBtn').click());
+    await appIQ.page.waitForFunction(() => document.querySelector('.iq-tab.active')?.dataset.tab === 'queue', null, { timeout: 5000 });
+    const added = (await jobs()).slice(before);
+    assert(added.length === 3 && added.every(j => j.asset.type === 'billboard-cylindrical' && j.asset.keywords === 'kitchen' && j.transparent)
+      && added[2].asset.id === 'mixer' && added[2].prompt === 'a stand mixer',
+      `unexpected batch jobs: ${JSON.stringify(added.map(j => [j.asset.id, j.prompt, j.asset.type, j.transparent]))}`);
+    await waitCounts('c.queued === 0 && c.running === 0');
+    ok('Image Queue: the batch form previews, applies type defaults, and queues one job per line');
+  } catch(e){ bad('Image Queue: batch form', e); }
+
+  // 499. A batch of five or more asks first, naming the count and model.
+  try {
+    const before = (await jobs()).length;
+    let msg = null;
+    appIQ.page.once('dialog', d => { msg = d.message(); });   // the harness accepts it
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('batch'));
+    await appIQ.page.waitForSelector('#iqBatchForm', { timeout: 5000 });
+    await appIQ.page.fill('#iqBatchLines', 'a\nb\nc\nd\ne');
+    await appIQ.page.evaluate(() => document.getElementById('iqBatchQueueBtn').click());
+    await appIQ.page.waitForFunction(() => document.querySelector('.iq-tab.active')?.dataset.tab === 'queue', null, { timeout: 5000 });
+    assert(msg && /Queue 5 images with FLUX\.1 schnell/.test(msg), `expected a confirmation naming count and model, got ${JSON.stringify(msg)}`);
+    assert((await jobs()).length === before + 5, 'expected the five queued once confirmed');
+    await waitCounts('c.queued === 0 && c.running === 0');
+    await closeQueue();
+    ok('Image Queue: a large batch asks first');
+  } catch(e){ bad('Image Queue: batch confirmation', e); }
+
+  // 500. Quick approve saves through the editor's own Save and closes; the ID
+  //      can be corrected on the card first. A taken ID leaves the editor
+  //      open with the reason, and the job stays.
+  try {
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector('#iqBody .iq-card', { timeout: 5000 });
+    const reviewBefore = (await counts()).review;
+    const firstId = await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-card').dataset.id);
+    const card = `#iqBody .iq-card[data-id="${firstId}"]`;
+    await appIQ.page.fill(`${card} .iq-id`, 'quick-lamp');
+    await appIQ.page.evaluate((sel) => document.querySelector(`${sel} [data-act="quick"]`).click(), card);
+    await waitCounts(`c.review === ${reviewBefore - 1}`);
+    const st = await appIQ.page.evaluate(async () => ({
+      saved: (await getAllAssets()).some(a => a.id === 'quick-lamp'),
+      editorOpen: document.getElementById('assetNewOverlay')?.style.display === 'flex' }));
+    assert(st.saved && !st.editorOpen, `expected quick-lamp saved with no editor left open, got ${JSON.stringify(st)}`);
+
+    const secondId = await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-card').dataset.id);
+    const card2 = `#iqBody .iq-card[data-id="${secondId}"]`;
+    await appIQ.page.fill(`${card2} .iq-id`, 'queued-clock');   // approved in 491, so taken
+    await appIQ.page.evaluate((sel) => document.querySelector(`${sel} [data-act="quick"]`).click(), card2);
+    await appIQ.page.waitForFunction(() => /already exists/.test(document.querySelector('#assetNewOverlay #assetsError')?.textContent || ''),
+      null, { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.querySelector('#assetNewOverlay .modal-bar .mb-leave').click());
+    await appIQ.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    assert((await jobs()).some(j => j.id === secondId && j.status === 'review'), 'expected the job kept after a refused quick approve');
+    await closeQueue();
+    ok('Image Queue: Quick approve saves via the editor, and a taken ID stops it with the reason');
+  } catch(e){ bad('Image Queue: quick approve', e); }
 
   // 496. A restore discards the queue: unreviewed images are not backed up.
   try {

@@ -284,6 +284,8 @@ let QUEUE_GEN = 0;               // bumped by a restore, so in-flight jobs from 
 const running = new Set();
 let saveChain = Promise.resolve();
 let approver = null;
+let ASSET_TYPE_LIST = [];        // [{ id, label, kind }] from assets.js
+let RESOLUTIONS = ['low', 'normal', 'high'];
 
 function loadJobs(){
   if(JOBS) return Promise.resolve(JOBS);
@@ -333,7 +335,10 @@ export async function enqueueImageJob(draft){
     cost: null, note: '', error: null,
   };
   JOBS.push(job);
-  await saveJobs();
+  // Persistence is queued, not waited on: saveJobs() chains every write in
+  // order anyway, and holding the pump until the database write lands let a
+  // slow write leave a job sitting "queued" until the next 30s poll.
+  saveJobs();
   emit();
   pumpImageQueue();
   return job.id;
@@ -408,7 +413,7 @@ export async function retryImageJob(id){
   const job = findJob(id);
   if(!job || job.status !== 'failed') return;
   Object.assign(job, { status: 'queued', attempts: 0, error: null });
-  await saveJobs(); emit(); pumpImageQueue();
+  saveJobs(); emit(); pumpImageQueue();
 }
 // back to the queue with the same settings -- and optionally a new prompt
 export async function redoImageJob(id, prompt){
@@ -416,17 +421,19 @@ export async function redoImageJob(id, prompt){
   const job = findJob(id);
   if(!job || job.status !== 'review') return;
   if(prompt && prompt.trim()) job.prompt = prompt.trim();
-  try { await deleteMeta(IMAGE_QUEUE_IMG_PREFIX + id); } catch(_){}
   Object.assign(job, { status: 'queued', attempts: 0, error: null, cost: null, note: '' });
-  await saveJobs(); emit(); pumpImageQueue();
+  // The old image is NOT deleted here: the new result is written under the
+  // same key and simply replaces it, whereas a delete racing a fast
+  // regeneration could remove the NEW image. Discard/Remove clean it up.
+  saveJobs(); emit(); pumpImageQueue();
 }
 export async function removeImageJob(id){
   await loadJobs();
   const i = JOBS.findIndex(j => j.id === id);
   if(i < 0) return;
   JOBS.splice(i, 1);          // a running job's result is dropped when it lands (see runJob)
+  saveJobs(); emit();
   try { await deleteMeta(IMAGE_QUEUE_IMG_PREFIX + id); } catch(_){}
-  await saveJobs(); emit();
 }
 export async function getImageJobImage(id){
   try { return await getMeta(IMAGE_QUEUE_IMG_PREFIX + id); } catch(_){ return null; }
@@ -440,17 +447,73 @@ export function resetImageQueue(){
   running.clear();
   emit();
 }
-// (job, imageDataUrl) => Promise<savedAssetId|null> -- supplied by assets.js
-export function setImageQueueApprover(fn){ approver = fn; }
+/* From assets.js, which this module cannot import (see the header):
+     approve(job, image, { quick }) => Promise<savedAssetId|null>
+     assetTypes: [{ id, label, kind }], resolutions: ['low', ...] */
+export function configureImageQueue({ approve, assetTypes, resolutions }){
+  if(approve) approver = approve;
+  if(assetTypes) ASSET_TYPE_LIST = assetTypes;
+  if(resolutions) RESOLUTIONS = resolutions;
+}
 
-async function approveImageJob(id){
+async function approveImageJob(id, quick = false){
   const job = findJob(id);
   if(!job || !approver) return;
   const image = await getImageJobImage(id);
   if(!image) return;
-  const saved = await approver(job, image);
+  const saved = await approver(job, image, { quick });
   if(saved) await removeImageJob(id);
 }
+// the ID a review card shows can be corrected before approving
+async function setJobAssetId(id, assetId){
+  const job = findJob(id);
+  if(!job) return;
+  job.asset.id = assetId;
+  await saveJobs();
+}
+
+/* ---------- batch entry ----------
+   One subject per line; `id | prompt` names the asset explicitly, otherwise
+   the ID is slugged from the line. IDs are made unique against existing
+   assets, the queue itself and each other, so a batch never queues two
+   images that would fight over one asset. Pure, so the rules are testable. */
+const ASSET_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export function slugAssetId(text){
+  let base = String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 40).replace(/-+$/, '');
+  return ASSET_ID_RE.test(base) ? base : 'asset';
+}
+export function planBatch(text, takenIds){
+  const taken = new Set(takenIds || []);
+  const out = [];
+  for(const raw of String(text || '').split('\n')){
+    const line = raw.trim();
+    if(!line) continue;
+    const bar = line.indexOf('|');
+    const prompt = (bar >= 0 ? line.slice(bar + 1) : line).trim();
+    if(!prompt) continue;
+    const idPart = bar >= 0 ? line.slice(0, bar).trim() : '';
+    const base = slugAssetId(idPart || prompt);
+    let id = base, n = 2;
+    while(taken.has(id)) id = `${base}-${n++}`;
+    taken.add(id);
+    out.push({ id, prompt });
+  }
+  return out;
+}
+async function takenAssetIds(){
+  const ids = (JOBS || []).map(j => j.asset && j.asset.id).filter(Boolean);
+  try { for(const a of await getAllAssets()) ids.push(a.id); } catch(_){}
+  return ids;
+}
+// what each kind of asset usually wants: props cut out, surfaces opaque
+const TYPE_GEN_DEFAULTS = {
+  prop: { transparent: true, size: 'square' }, surface: { transparent: false, size: 'square' },
+  facade: { transparent: false, size: 'landscape' }, sign: { transparent: false, size: 'landscape' },
+  door: { transparent: false, size: 'portrait' },
+};
+const IQ_BATCH_TYPE_LS = 'repchess.iqBatchType';
+const IQ_CONFIRM_AT = 5;         // batches this size or larger ask first
 
 /* ---------- the Image Queue modal ---------- */
 let iqTab = 'queue';
@@ -477,6 +540,7 @@ export async function openImageQueue(tab){
             <div class="iq-tabs">
               <button type="button" class="iq-tab" data-tab="queue">Queue <span id="iqQueueCount"></span></button>
               <button type="button" class="iq-tab" data-tab="review">Review <span id="iqReviewCount"></span></button>
+              <button type="button" class="iq-tab" data-tab="batch">New batch…</button>
             </div>
             <span class="iq-spent" id="iqSpent"></span>
           </div>
@@ -487,6 +551,8 @@ export async function openImageQueue(tab){
     wireModalBar(ov.querySelector('.modal-bar'), { onLeave: () => { ov.style.display = 'none'; iqRedoId = null; } });
     ov.querySelectorAll('.iq-tab').forEach(b => b.onclick = () => { iqTab = b.dataset.tab; iqRedoId = null; renderImageQueue(); });
     ov.addEventListener('click', onIqClick);
+    ov.addEventListener('input', onIqInput);
+    ov.addEventListener('change', onIqInput);
   }
   if(tab) iqTab = tab;
   else if(imageQueueCounts().review) iqTab = 'review';   // what is waiting on you comes first
@@ -524,6 +590,12 @@ function renderImageQueue(){
     ? `Spent so far: $${spent.toFixed(4)} <button type="button" class="iq-link" data-act="reset-spent">reset</button>` : '';
   const body = ov.querySelector('#iqBody');
   if(iqRedoId && findJob(iqRedoId) && iqTab === 'review') return;   // don't wipe a prompt being edited
+  if(iqTab === 'batch'){
+    // built once per visit: a background job finishing must not wipe what
+    // is being typed
+    if(!body.querySelector('#iqBatchForm')){ body.innerHTML = batchFormHtml(); syncBatchForm(true); }
+    return;
+  }
   if(iqTab === 'queue'){
     const jobs = JOBS.filter(j => j.status !== 'review');
     body.innerHTML = jobs.length ? jobs.map(j => `
@@ -549,8 +621,11 @@ function renderImageQueue(){
           <div class="iq-prompt">${esc(j.prompt)}</div>
           <div class="iq-meta">${iqMeta(j)}${typeof j.cost === 'number' ? ` · $${j.cost.toFixed(4)}` : ''}</div>
           ${j.note ? `<div class="iq-note">${esc(j.note.trim())}</div>` : ''}
+          <label class="iq-id-row">Asset ID <input type="text" class="iq-id" value="${esc(j.asset.id || slugAssetId(j.prompt))}"
+                 autocomplete="off" spellcheck="false"></label>
           <div class="iq-actions">
-            <button type="button" data-act="approve">Approve…</button>
+            <button type="button" data-act="quick" title="Save it as this asset now, with the editor's defaults">Quick approve</button>
+            <button type="button" data-act="approve" title="Open it in the asset editor first, to crop, erase or adjust">Approve…</button>
             <button type="button" data-act="redo">Redo…</button>
             <button type="button" data-act="discard">Discard</button>
           </div>
@@ -562,17 +637,157 @@ function renderImageQueue(){
     }
   }
 }
+/* ---------- the batch form ---------- */
+function batchFormHtml(){
+  const groups = [...new Set(GEN_MODELS.map(m => m.group))];
+  const saved = genModelById(lsGet(GEN_MODEL_LS)).id;
+  const modelOptions = groups.map(g => `<optgroup label="${esc(g)}">` + GEN_MODELS.filter(m => m.group === g)
+    .map(m => `<option value="${esc(m.id)}"${m.id === saved ? ' selected' : ''}>${esc(m.label)}</option>`).join('')
+    + '</optgroup>').join('');
+  const savedType = lsGet(IQ_BATCH_TYPE_LS) || 'billboard-cylindrical';
+  const types = ASSET_TYPE_LIST.map(t =>
+    `<option value="${esc(t.id)}"${t.id === savedType ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
+  const res = RESOLUTIONS.map(r => `<option value="${esc(r)}"${r === 'normal' ? ' selected' : ''}>${esc(r[0].toUpperCase() + r.slice(1))}</option>`).join('');
+  return `
+    <div id="iqBatchForm" class="iq-batch">
+      <label class="iq-f">Subjects, one per line
+        <textarea id="iqBatchLines" rows="6" placeholder="brass grandfather clock&#10;copper kettle&#10;lamp-tall | a tall brass reading lamp"></textarea>
+      </label>
+      <div class="iq-hint">Each line becomes one image. The asset ID is made from the line; to choose it yourself,
+        write <code>id | prompt</code>.</div>
+      <div class="iq-grid">
+        <label class="iq-f">Model <select id="iqBatchModel">${modelOptions}</select></label>
+        <label class="iq-f" id="iqBatchCustomWrap">Runware model ID <input type="text" id="iqBatchCustomAir"
+          value="${esc(lsGet(GEN_CUSTOM_AIR_LS))}" autocomplete="off"></label>
+        <label class="iq-f" id="iqBatchQualityWrap">Quality <select id="iqBatchQuality">
+          <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+        <label class="iq-f">Size <select id="iqBatchSize">
+          <option value="square">Square</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
+        <label class="iq-f">Asset type <select id="iqBatchType">${types}</select></label>
+        <label class="iq-f">Resolution <select id="iqBatchRes">${res}</select></label>
+        <label class="iq-f">Keywords (every image) <input type="text" id="iqBatchKeywords" autocomplete="off"></label>
+        <label class="iq-f iq-check"><input type="checkbox" id="iqBatchTransparent"> Transparent background</label>
+      </div>
+      <label class="iq-f"><span id="iqBatchKeyLabel">API key</span>
+        <input type="password" id="iqBatchKey" autocomplete="off"></label>
+      <label class="iq-f">Standing instructions (added to every prompt)
+        <textarea id="iqBatchStanding" rows="2">${esc(lsGet(OPENAI_STANDING_LS))}</textarea></label>
+      <div id="iqBatchPreview" class="iq-preview"></div>
+      <div class="iq-actions">
+        <button type="button" data-act="batch-queue" id="iqBatchQueueBtn">Queue</button>
+        <button type="button" data-act="batch-cancel">Cancel</button>
+      </div>
+      <div id="iqBatchStatus" class="iq-hint"></div>
+    </div>`;
+}
+let batchTaken = [];
+let batchKeyProvider = null;
+async function syncBatchForm(first){
+  const f = document.getElementById('iqBatchForm');
+  if(!f) return;
+  const q = (id) => f.querySelector('#' + id);
+  const spec = genModelById(q('iqBatchModel').value);
+  const prov = GEN_PROVIDERS[spec.provider];
+  if(batchKeyProvider !== spec.provider){
+    q('iqBatchKey').value = lsGet(prov.keyLs);
+    batchKeyProvider = spec.provider;
+  }
+  q('iqBatchKeyLabel').textContent = `${prov.name} API key`;
+  q('iqBatchCustomWrap').style.display = spec.custom ? '' : 'none';
+  q('iqBatchQualityWrap').style.display = spec.quality ? '' : 'none';
+  if(first){
+    batchKeyProvider = spec.provider;
+    q('iqBatchKey').value = lsGet(prov.keyLs);
+    q('iqBatchQuality').value = lsGet(GEN_QUALITY_LS) || GEN_QUALITY_DEFAULT;
+    applyTypeDefaults();
+    const savedSize = lsGet(GEN_SIZE_LS);
+    if(['square', 'portrait', 'landscape'].includes(savedSize)) q('iqBatchSize').value = savedSize;
+    batchTaken = await takenAssetIds();
+  }
+  const plan = planBatch(q('iqBatchLines').value, batchTaken);
+  q('iqBatchQueueBtn').textContent = plan.length ? `Queue ${plan.length} image${plan.length === 1 ? '' : 's'}` : 'Queue';
+  q('iqBatchPreview').innerHTML = plan.length
+    ? plan.map(p => `<div class="iq-plan"><code>${esc(p.id)}</code> ${esc(p.prompt)}</div>`).join('') : '';
+}
+function applyTypeDefaults(){
+  const f = document.getElementById('iqBatchForm');
+  if(!f) return;
+  const type = ASSET_TYPE_LIST.find(t => t.id === f.querySelector('#iqBatchType').value);
+  const d = TYPE_GEN_DEFAULTS[(type && type.kind) || 'prop'] || TYPE_GEN_DEFAULTS.prop;
+  f.querySelector('#iqBatchTransparent').checked = d.transparent;
+  f.querySelector('#iqBatchSize').value = d.size;
+}
+function onIqInput(e){
+  if(e.target.classList && e.target.classList.contains('iq-id')){
+    if(e.type !== 'change') return;
+    const card = e.target.closest('[data-id]');
+    const v = e.target.value.trim().toLowerCase();
+    e.target.value = v;
+    if(card) setJobAssetId(card.dataset.id, v);
+    return;
+  }
+  if(!e.target.closest || !e.target.closest('#iqBatchForm')) return;
+  if(e.target.id === 'iqBatchType' && e.type === 'change'){
+    lsSet(IQ_BATCH_TYPE_LS, e.target.value);
+    applyTypeDefaults();
+  }
+  syncBatchForm(false);
+}
+async function queueBatch(){
+  const f = document.getElementById('iqBatchForm');
+  const q = (id) => f.querySelector('#' + id);
+  const status = (t) => { q('iqBatchStatus').textContent = t; };
+  const spec = genModelById(q('iqBatchModel').value);
+  const prov = GEN_PROVIDERS[spec.provider];
+  const key = q('iqBatchKey').value.trim();
+  const customAir = q('iqBatchCustomAir').value.trim();
+  if(spec.custom && !customAir) return status('Enter the Runware model ID.');
+  batchTaken = await takenAssetIds();
+  const plan = planBatch(q('iqBatchLines').value, batchTaken);
+  if(!plan.length) return status('Enter at least one subject.');
+  const quality = spec.quality ? q('iqBatchQuality').value : null;
+  if(plan.length >= IQ_CONFIRM_AT){
+    const what = `${spec.custom ? customAir : spec.label}${quality ? `, ${quality} quality` : ''}`;
+    if(!confirm(`Queue ${plan.length} images with ${what}?`)) return;
+  }
+  // the same memory the Generate dialog keeps, so the two stay in step
+  if(key) lsSet(prov.keyLs, key);
+  lsSet(GEN_MODEL_LS, spec.id);
+  if(spec.custom) lsSet(GEN_CUSTOM_AIR_LS, customAir);
+  if(quality) lsSet(GEN_QUALITY_LS, quality);
+  lsSet(GEN_SIZE_LS, q('iqBatchSize').value);
+  const standing = q('iqBatchStanding').value.trim();
+  lsSet(OPENAI_STANDING_LS, standing);
+  const common = {
+    standing, model: spec.id, customAir: spec.custom ? customAir : '', quality,
+    size: q('iqBatchSize').value, transparent: q('iqBatchTransparent').checked,
+  };
+  const asset = { type: q('iqBatchType').value, keywords: q('iqBatchKeywords').value.trim(), resolution: q('iqBatchRes').value };
+  for(const p of plan){
+    await enqueueImageJob({ ...common, prompt: p.prompt, asset: { ...asset, id: p.id }, target: { kind: 'asset' } });
+  }
+  iqTab = 'queue';
+  renderImageQueue();
+}
+
 async function onIqClick(e){
   const btn = e.target.closest('button[data-act]');
   if(!btn) return;
   const act = btn.dataset.act;
   if(act === 'reset-spent'){ lsSet(IMAGE_QUEUE_SPENT_LS, '0'); renderImageQueue(); return; }
+  if(act === 'batch-queue') return queueBatch();
+  if(act === 'batch-cancel'){ iqTab = 'queue'; renderImageQueue(); return; }
   const card = btn.closest('[data-id]');
   const id = card && card.dataset.id;
   if(!id) return;
   if(act === 'retry') return retryImageJob(id);
   if(act === 'remove' || act === 'discard') return removeImageJob(id);
-  if(act === 'approve') return approveImageJob(id);
+  if(act === 'approve' || act === 'quick'){
+    // an ID typed into the card and not yet committed by a change event
+    const idInput = card.querySelector('.iq-id');
+    if(idInput) await setJobAssetId(id, idInput.value.trim().toLowerCase());
+    return approveImageJob(id, act === 'quick');
+  }
   if(act === 'redo'){
     const job = findJob(id);
     if(!job) return;
@@ -601,6 +816,7 @@ if(localStorage.getItem('threeTestDebug')) window.__imageQueueTestHooks = {
   jobs: async () => (await loadJobs()).map(j => ({ ...j })),
   pump: () => pumpImageQueue(),
   enqueue: (draft) => enqueueImageJob(draft),
+  planBatch: (text, taken) => planBatch(text, taken),
   open: (tab) => openImageQueue(tab),
   counts: () => imageQueueCounts(),
   running: () => running.size,

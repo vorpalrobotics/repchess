@@ -1,7 +1,24 @@
 # Image generation queue — design
 
-**Status: phase 1 built** (`js/imageQueue.js`, tests 489–496, phase IQ).
-Phases 2–4 are not started.
+**Status: phases 1 and 2 built** (`js/imageQueue.js`, tests 489–500, phase IQ).
+Phases 3–4 are not started.
+
+Phase 2's implementation choices:
+- **Quick approve runs the editor's own Save.** It opens the pre-filled New
+  Asset editor with `autoSave`. It either saves and closes, or stays open
+  showing the reason. There is no second path that writes assets, so size
+  defaults, aspect snapping, WebP conversion and duplicate-ID checks cannot
+  drift between the two.
+- **The pure parser is `planBatch(text, takenIds)`.** It reads one subject
+  per line, with optional `id | prompt`. It suffixes IDs to be unique against
+  existing assets, queued jobs and the batch itself.
+- **Asset types and resolutions come from `assets.js`** through
+  `configureImageQueue` (which replaces `setImageQueueApprover`). The queue
+  keeps no second copy of them.
+- **Writes are not awaited before pumping.** `saveJobs()` already orders
+  writes, and waiting on them could leave a job "queued" until the 30-second
+  poll. Redo overwrites the old image rather than deleting it: a delete racing
+  a fast regeneration could remove the new one.
 
 Built as designed, with two implementation choices:
 - **Storage is the meta store, not a new object store.** The key is
