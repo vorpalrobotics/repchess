@@ -6604,6 +6604,18 @@ try {
     ok('VR walk: pinned to the top of the visible viewport');
   } catch(e){ bad('VR walk: viewport height', e); }
 
+  // 518. A message (e.g. the next-review note after a self-grade) appears
+  //      below the toolbar on a phone, not hidden behind its buttons.
+  try {
+    await appMV.page.evaluate(() => window.__threeTestEdit.toast('Next review in 3 days'));
+    const pos = await appMV.page.evaluate(() => ({
+      toast: window.__threeTestEdit.toastRect(),
+      barBottom: Math.max(...[...document.querySelectorAll('#threeTestCanvasWrap [data-three-toolbar] button')]
+        .filter(b => getComputedStyle(b).display !== 'none').map(b => b.getBoundingClientRect().bottom)) }));
+    assert(pos.toast && pos.toast.top >= pos.barBottom, `expected the message below the toolbar, got ${JSON.stringify(pos)}`);
+    ok('VR walk: messages appear below the toolbar on a phone');
+  } catch(e){ bad('VR walk: message position', e); }
+
   // 474. Widening the window restores the full-size buttons.
   try {
     await appMV.page.setViewportSize({ width: 1100, height: 760 });
