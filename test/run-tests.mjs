@@ -14643,13 +14643,22 @@ try {
       const nudged = dbg.posOf('mnem-C1');
       const depthAfterDrag = dbg.undoDepth();
 
+      // Wait for the position to actually arrive rather than a fixed 200ms:
+      // under a full suite's load the undo sometimes landed after that, and
+      // the test read the still-dragged position (seen once, not
+      // reproducible when the vr-decorating phase ran alone).
+      const settle = async (targetX) => {
+        for(let t = 0; t < 60; t++){
+          if(Math.abs(dbg.posOf('mnem-C1').x - targetX) < 0.01) break;
+          await new Promise(res => setTimeout(res, 50));
+        }
+        return dbg.posOf('mnem-C1');
+      };
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }));
-      await new Promise(res => setTimeout(res, 200));
-      const afterCtrlZ = dbg.posOf('mnem-C1');
+      const afterCtrlZ = await settle(before.x);
 
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true }));
-      await new Promise(res => setTimeout(res, 200));
-      const afterCtrlShiftZ = dbg.posOf('mnem-C1');
+      const afterCtrlShiftZ = await settle(nudged.x);
 
       return { before, nudged, depthBefore, depthAfterDrag, afterCtrlZ, afterCtrlShiftZ };
     });
