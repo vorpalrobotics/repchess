@@ -26018,6 +26018,35 @@ try {
     await appRM.page.evaluate(() => document.querySelector('#aboutOverlay .mb-leave').click());
     ok('menu: a chosen item flashes before its action runs, keeping modifier keys');
   } catch(e){ bad('menu: item flash', e); }
+  // 520. The slowdown recorder: a stall of over a second is noticed after
+  //      the fact, with the tracked job that overlapped it, and listed in
+  //      Settings.
+  try {
+    await appRM.page.evaluate(() => window.__slowdownTestHooks.track('test busy job', 1500));
+    await appRM.page.waitForFunction(() => window.__slowdownTestHooks.stalls().some(x => x.during.includes('test busy job')),
+      null, { timeout: 5000 });
+    const st = (await appRM.page.evaluate(() => window.__slowdownTestHooks.stalls())).find(x => x.during.includes('test busy job'));
+    assert(st.ms >= 1000, `expected the stall measured at over a second, got ${st.ms}ms`);
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    await appRM.page.waitForFunction(() => /test busy job/.test(document.getElementById('setStalls').textContent), null, { timeout: 5000 });
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    ok('slowdowns: a stall is recorded with the job that caused it, and shown in Settings');
+  } catch(e){ bad('slowdowns: recorder', e); }
+
+  // 521. The new-transpositions scan (a full castle rebuild) waits for the
+  //      user to go quiet rather than landing 1.5s after an edit, on top of
+  //      their next click.
+  try {
+    const scanRan = () => appRM.page.evaluate(() => window.__slowdownTestHooks.activities().some(l => /new-transpositions scan/.test(l)));
+    await appRM.page.mouse.click(5, 5);                       // real input: the user is active
+    await appRM.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
+    await appRM.page.waitForTimeout(3000);                    // past the old 1.5s trigger
+    assert(!(await scanRan()), 'expected the scan held back while the user was recently active');
+    const quiet = await appRM.page.evaluate(() => window.__slowdownTestHooks.quietMs);
+    await appRM.page.waitForFunction(() => window.__slowdownTestHooks.activities().some(l => /new-transpositions scan/.test(l)),
+      null, { timeout: quiet + 3000 });
+    ok('slowdowns: the castle-rebuilding scan waits until the user has been idle');
+  } catch(e){ bad('slowdowns: scan waits for quiet', e); }
 } finally {
   await appRM.close();
 }

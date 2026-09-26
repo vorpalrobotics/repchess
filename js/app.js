@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-463';
+const BUILD_TAG = '-464';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -129,6 +129,46 @@ const logDl = (m,e=false)=>{ $('downloadProgress').textContent=m; $('downloadPro
    same reason: a timeout long enough to be read is long enough to be in the
    way. Returns the element so a caller can close it early. */
 const APP_TOAST_MS = 9000;
+/* ---------- slowdown recorder ----------
+   The page sometimes stops responding for seconds at a time; a click made
+   then waits, and nothing says why. This notices it after the fact -- a
+   250ms heartbeat that fires late was blocked for the difference -- and
+   notes which tracked background jobs overlapped the stall, so a report says
+   WHAT was running, not just that something was. Shown in Settings; logged to
+   the console. Memory only; nothing is stored. */
+const ACTIVITY_LOG = [];            // { label, start, end } for recent tracked jobs
+const STALLS = [];                  // { at, ms, during: [labels] }, most recent last
+const STALL_MIN_MS = 1000;
+function trackActivity(label, fn){
+  const rec = { label, start: performance.now(), end: null };
+  ACTIVITY_LOG.push(rec);
+  if(ACTIVITY_LOG.length > 200) ACTIVITY_LOG.shift();
+  const done = () => { rec.end = performance.now(); };
+  try {
+    const r = fn();
+    if(r && typeof r.then === 'function') return r.finally(done);
+    done();
+    return r;
+  } catch(err){ done(); throw err; }
+}
+{
+  const BEAT = 250;
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const lag = now - last - BEAT;
+    last = now;
+    if(lag < STALL_MIN_MS || document.hidden) return;   // a hidden tab's timers are throttled, not stalled
+    const from = now - lag;
+    const during = [...new Set(ACTIVITY_LOG
+      .filter(a => a.start <= now && (a.end === null || a.end >= from)).map(a => a.label))];
+    STALLS.push({ at: Date.now(), ms: Math.round(lag), during });
+    if(STALLS.length > 20) STALLS.shift();
+    console.warn(`[slowdown] the page did not respond for ${(lag / 1000).toFixed(1)}s`
+      + (during.length ? ` -- during: ${during.join(', ')}` : ' -- no tracked job was running'));
+  }, BEAT);
+}
+
 function showAppToast(msg, { timeout = APP_TOAST_MS } = {}){
   const stack = $('toastStack');
   if(!stack) return null;
@@ -3754,6 +3794,14 @@ if(localStorage.getItem('threeTestDebug')) window.__disambigProbe = (fen, san) =
 if(localStorage.getItem('threeTestDebug')) window.__accuracyReport = (stats, gradeLog, quizLog) => buildAccuracyReport(stats, gradeLog, quizLog);
 // the reminder engine: the pure due check, one tick on demand, and the state
 // it keeps -- so a test can drive it without waiting a minute per step
+if(localStorage.getItem('threeTestDebug')) window.__slowdownTestHooks = {
+  stalls: () => STALLS.map(x => ({ ...x })),
+  track: (label, ms) => trackActivity(label, () => { const t = performance.now(); while(performance.now() - t < ms){} }),
+  // a getter: this object is built earlier in the file than that constant is
+  // declared, so reading it here directly throws (TDZ) and the app never boots
+  get quietMs(){ return TRANSP_SCAN_QUIET_MS; },
+  activities: () => ACTIVITY_LOG.map(a => a.label),
+};
 if(localStorage.getItem('threeTestDebug')) window.__reminderTestHooks = {
   learningDueNow: (reviews, now) => learningDueNow(reviews, now),
   tick: () => reminderTick(),
@@ -8425,7 +8473,7 @@ async function gatherBuiltCastles(lines){
     return _builtCastlesCache;
   }
   if(_builtCastlesBuildPromise) return _builtCastlesBuildPromise;
-  _builtCastlesBuildPromise = (async () => {
+  _builtCastlesBuildPromise = trackActivity('building castles', () => (async () => {
     try {
       // the persisted copy is checked at most once per page load -- once we know
       // one way or the other, _builtCastlesCache itself (null or populated) is
@@ -8533,7 +8581,7 @@ async function gatherBuiltCastles(lines){
     } finally {
       _builtCastlesBuildPromise = null;
     }
-  })();
+  })());
   return _builtCastlesBuildPromise;
 }
 
@@ -9322,7 +9370,16 @@ $('setLearningReminders').onchange = async () => {
   refreshReminderSetting();
   if(perm === 'granted') reminderTick();
 };
+function renderStalls(){
+  const el = $('setStalls');
+  if(!el) return;
+  el.innerHTML = [...STALLS].reverse().map(st => `<li><strong>${(st.ms / 1000).toFixed(1)}s</strong> at `
+    + `${new Date(st.at).toLocaleTimeString()} &mdash; `
+    + (st.during.length ? `during: ${escapeHtml(st.during.join(', '))}` : 'no tracked job was running')
+    + '</li>').join('');
+}
 function openSettings(){
+  renderStalls();
   refreshReminderSetting();
   $('settingsOverlay').style.display = 'flex';
 }
@@ -9979,14 +10036,34 @@ function resumeTranspositionScan(){
   scheduleTranspositionScan();
 }
 const TRANSP_SCAN_DEBOUNCE_MS = 1500;
+/* The scan rebuilds every castle (gatherBuiltCastles), which can hold the page
+   for several seconds -- and it cannot yield part-way, since each line's build
+   swaps the global PREFS for the duration. Armed 1.5s after ANY edit, it used
+   to land squarely on the user's next click: a menu item clicked moments
+   after an edit sat unanswered for 5s or more. So it also waits for the user
+   to be idle -- no pointer, key or wheel input for TRANSP_SCAN_QUIET_MS --
+   before it starts. */
+const TRANSP_SCAN_QUIET_MS = 6000;
+let lastUserInputAt = 0;
+for(const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']){
+  document.addEventListener(type, () => { lastUserInputAt = performance.now(); }, { capture: true, passive: true });
+}
 let transpScanDebounceHandle = null;
 function scheduleTranspositionScan(){
   if(transpScanSuspended) return;
   clearTimeout(transpScanDebounceHandle);
-  transpScanDebounceHandle = setTimeout(async () => {
-    await checkTranspositionsAtBoot();   // no-op once already run
-    await scanForNewTranspositions();
-  }, TRANSP_SCAN_DEBOUNCE_MS);
+  const runWhenQuiet = () => {
+    const quietFor = lastUserInputAt ? performance.now() - lastUserInputAt : Infinity;
+    if(quietFor < TRANSP_SCAN_QUIET_MS){
+      transpScanDebounceHandle = setTimeout(runWhenQuiet, TRANSP_SCAN_QUIET_MS - quietFor);
+      return;
+    }
+    trackActivity('new-transpositions scan (rebuilds every castle)', async () => {
+      await checkTranspositionsAtBoot();   // no-op once already run
+      await scanForNewTranspositions();
+    });
+  };
+  transpScanDebounceHandle = setTimeout(runWhenQuiet, TRANSP_SCAN_DEBOUNCE_MS);
 }
 
 $('newTranspToastShowBtn').onclick = async () => {
@@ -13891,7 +13968,7 @@ async function maybeResumePerfectOpening(){
       let result;
       const startedAt = Date.now();
       try {
-        result = await processPerfectOpeningJob(job, config);
+        result = await trackActivity('Perfect Opening search', () => processPerfectOpeningJob(job, config));
       } catch(err){
         console.error('[perfectOpening] job failed', err);
         break;
