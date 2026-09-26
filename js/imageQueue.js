@@ -263,28 +263,55 @@ export async function generateRunware(key, spec, prompt, [w, h], transparent, on
 
 /* Runware text generation (textInference) over the same session code as the
    images -- one key for both. Used by the object-list brainstorm
-   (js/listBrainstorm.js). With a jsonSchema, the reply is asked for as
-   schema-conforming JSON (outputFormat 'JSON'); a model that refuses that
-   gets the request again without it, and the caller's own parsing and
-   checking take over -- the same fallback shape as refused native
-   transparency above. Returns { text, finishReason, cost, structured }. */
+   (js/listBrainstorm.js).
+
+   Technical parameters go INSIDE `settings` (systemPrompt, maxTokens,
+   jsonSchema); only outputFormat sits at the top level beside model and
+   messages. The first release put them all at the top level and Runware
+   refused it ("Unsupported use of 'maxTokens' parameter").
+
+   The optional extras -- the length cap, structured JSON output, the cost
+   report -- are dropped one at a time if Runware refuses the one it names,
+   rather than failing the whole request: its docs were not reachable when
+   this was written, and a model that does not support structured output
+   still works through the caller's own parsing. Returns
+   { text, finishReason, cost, structured }. */
+const RUNWARE_TEXT_OPTIONAL = ['maxTokens', 'jsonSchema', 'outputFormat', 'includeCost'];
 export async function runwareText(key, { model, systemPrompt, messages, maxTokens = 6000, jsonSchema = null }){
   const session = await runwareSession(key);
   try {
-    const base = { taskType: 'textInference', model, messages, maxTokens, includeCost: true };
-    if(systemPrompt) base.systemPrompt = systemPrompt;
-    let structured = !!jsonSchema;
+    const settings = { maxTokens };
+    if(systemPrompt) settings.systemPrompt = systemPrompt;
+    if(jsonSchema) settings.jsonSchema = jsonSchema;
+    const task = { taskType: 'textInference', model, messages, settings, includeCost: true };
+    if(jsonSchema) task.outputFormat = 'JSON';
+    const drop = (name) => {
+      if(name === 'jsonSchema' || name === 'outputFormat'){
+        // one without the other means nothing: structured output is off
+        const had = 'jsonSchema' in settings || 'outputFormat' in task;
+        delete settings.jsonSchema; delete task.outputFormat;
+        return had;
+      }
+      if(name in settings){ delete settings[name]; return true; }
+      if(name in task){ delete task[name]; return true; }
+      return false;
+    };
     let res;
-    try {
-      res = await session.run(jsonSchema ? { ...base, outputFormat: 'JSON', jsonSchema } : base);
-    } catch(err){
-      if(!jsonSchema || !/outputFormat|jsonSchema|schema|json/i.test((err && err.message) || '')) throw err;
-      console.warn('[runwareText] structured output refused, retrying as plain text', err);
-      structured = false;
-      res = await session.run(base);
+    for(let attempt = 0; ; attempt++){
+      try { res = await session.run(task); break; }
+      catch(err){
+        const msg = (err && err.message) || '';
+        // the parameter Runware names, e.g. 'maxTokens' or 'settings.jsonSchema'
+        const named = ((msg.match(/'([\w.]+)'/) || [])[1] || '').split('.').pop();
+        let dropped = RUNWARE_TEXT_OPTIONAL.includes(named) && drop(named);
+        if(!dropped && /schema|json/i.test(msg)) dropped = drop('jsonSchema');   // an unnamed refusal of structured output
+        if(!dropped || attempt >= RUNWARE_TEXT_OPTIONAL.length) throw err;
+        console.warn(`[runwareText] Runware refused ${named || 'structured output'}, retrying without it`, msg);
+      }
     }
     return { text: typeof res.text === 'string' ? res.text : '', finishReason: res.finishReason || '',
-             cost: typeof res.cost === 'number' ? res.cost : null, structured };
+             cost: typeof res.cost === 'number' ? res.cost : null,
+             structured: 'jsonSchema' in settings };
   } finally {
     session.close();
   }

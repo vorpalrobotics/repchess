@@ -26894,16 +26894,34 @@ try {
           if(t.taskType === 'authentication'){
             this.reply({ data: [{ taskType: 'authentication', connectionSessionUUID: 's' }] });
           } else if(t.taskType === 'textInference'){
+            // Runware's real rule, which the first release broke: technical
+            // parameters belong inside settings, and a top-level one is refused
+            // with exactly this message
+            const topLevel = ['maxTokens', 'systemPrompt', 'jsonSchema'].find(k => k in t);
+            if(topLevel){
+              this.reply({ errors: [{ taskUUID: t.taskUUID,
+                message: `Unsupported use of '${topLevel}' parameter. This parameter is not supported for text inference.` }] });
+              continue;
+            }
+            const st = t.settings || {};
+            if(window.__rwRefuseMaxTokens && 'maxTokens' in st){
+              this.reply({ errors: [{ taskUUID: t.taskUUID,
+                message: "Unsupported use of 'settings.maxTokens' parameter. This parameter is not supported for this model." }] });
+              continue;
+            }
             calls++;
             const mode = window.__rwTextMode || 'good';
             const ok = (text, extra) => this.reply({ data: [{ taskType: 'textInference', taskUUID: t.taskUUID,
               text, finishReason: 'stop', cost: 0.002, ...(extra || {}) }] });
-            if(mode === 'no-schema' && t.jsonSchema){
+            if(mode === 'no-schema' && st.jsonSchema){
               this.reply({ errors: [{ taskUUID: t.taskUUID, message: "Invalid value for 'jsonSchema' parameter." }] });
             } else if(mode === 'no-schema'){
               ok('Here you go:\n```json\n' + window.__rwGood() + '\n```\nEnjoy!');
             } else if(mode === 'bad-then-good'){
-              ok(calls % 2 === 1 ? 'Some ideas: forge, anvil, hammer.' : window.__rwGood());
+              // one bad reply, then good ones: an explicit one-shot, not call
+              // parity, which any test added earlier would shift
+              if(window.__rwBadOnce){ window.__rwBadOnce = false; ok('Some ideas: forge, anvil, hammer.'); }
+              else ok(window.__rwGood());
             } else if(mode === 'bad-always'){
               ok('Some ideas: forge, anvil, hammer.');
             } else if(mode === 'cut'){
@@ -26985,9 +27003,9 @@ try {
     await appLB.page.fill('#lbDesc', "things in a blacksmith's forge");
     await go();
     const t = (await texts())[0];
-    assert(t && t.model === 'anthropic:claude@haiku-4.5' && t.outputFormat === 'JSON'
-      && t.jsonSchema && t.jsonSchema.schema.properties.candidates
-      && /Reply with JSON only/.test(t.systemPrompt) && /Never weaken a strong ordering/.test(t.systemPrompt)
+    assert(t && t.model === 'anthropic:claude@haiku-4.5' && t.outputFormat === 'JSON' && t.settings
+      && t.settings.jsonSchema && t.settings.jsonSchema.schema.properties.candidates && t.settings.maxTokens
+      && /Reply with JSON only/.test(t.settings.systemPrompt) && /Never weaken a strong ordering/.test(t.settings.systemPrompt)
       && /blacksmith's forge/.test(t.messages[0].content) && /Kitchen Fixtures/.test(t.messages[0].content),
       `unexpected text task: ${JSON.stringify(t && { model: t.model, outputFormat: t.outputFormat, msg: t.messages })}`);
     const c = await cards();
@@ -27016,16 +27034,31 @@ try {
     await appLB.page.evaluate(() => { window.__rwTextMode = 'no-schema'; });
     await go();
     const t = await texts();
-    assert(t.length === 2 && t[0].jsonSchema && !t[1].jsonSchema && !t[1].outputFormat, `expected a retry without the schema: ${t.length}`);
+    assert(t.length === 2 && t[0].settings.jsonSchema && !t[1].settings.jsonSchema && !t[1].outputFormat
+      && t[1].settings.systemPrompt, `expected a retry without the schema (system prompt kept): ${t.length}`);
     assert((await cards()).length === 3, 'expected the candidates read from the fenced reply');
     ok('List brainstorm: a refused schema falls back to plain text, still parsed');
   } catch(e){ bad('List brainstorm: schema fallback', e); }
+
+  // 512. A model that refuses an optional setting Runware names (here the
+  //      length cap) is asked again without just that one, not failed.
+  try {
+    await resetTasks();
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'good'; window.__rwRefuseMaxTokens = true; });
+    await go();
+    const t = await texts();
+    assert(t.length === 2 && 'maxTokens' in t[0].settings && !('maxTokens' in t[1].settings)
+      && t[1].settings.jsonSchema && t[1].outputFormat === 'JSON', `expected only maxTokens dropped: ${JSON.stringify(t.map(x => Object.keys(x.settings)))}`);
+    assert((await cards()).length === 3, 'expected the candidates after the retry');
+    await appLB.page.evaluate(() => { window.__rwRefuseMaxTokens = false; });
+    ok('List brainstorm: a refused optional setting is dropped and the request retried');
+  } catch(e){ bad('List brainstorm: refused setting', e); }
 
   // 509. An unusable reply gets one repair round naming the problem; one
   //      that stays unusable is shown with the raw reply, not dropped.
   try {
     await resetTasks();
-    await appLB.page.evaluate(() => { window.__rwTextMode = 'bad-then-good'; });
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'bad-then-good'; window.__rwBadOnce = true; });
     await go();
     let t = await texts();
     assert(t.length === 2 && /could not be used: the reply contained no JSON/.test(t[1].messages[t[1].messages.length - 1].content),
