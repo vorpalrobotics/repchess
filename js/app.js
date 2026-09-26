@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-467';
+const BUILD_TAG = '-468';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -270,6 +270,7 @@ let GAMES=null, PREFS={}, CURRENT_LINE=null;
 // isn't reading these bindings before their own `let` would otherwise have run.
 let ANALYSIS_QUEUE = [];         // mirrors the IDB store, createdAt order
 let AQ_LINE_NAMES = new Map();   // lineId -> line name, for the queue modal's Position column
+let AQ_LINE_COLORS = new Map();  // lineId -> 'white'/'black', for flagging transpositions in its live lines
 let aqProcessing = false;        // true while processAnalysisQueueLoop's loop is actively running
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
@@ -5442,6 +5443,156 @@ const MOVE_QUALITY_CLASS = {
 };
 const moveQualityFor = (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.moveQuality || '';
 
+/* ---------- transpositions into the repertoire, flagged on engine lines ----------
+   When it is OUR move and an engine line's first move lands on a position the
+   repertoire already reaches somewhere -- this opening system or another, any
+   move order -- the line gets a small "↪ <where>" badge. A reply that
+   transposes into material already learned saves memorizing a new branch,
+   and one scoring close to the engine's best is worth choosing on purpose.
+   Only the FIRST move counts: later transpositions depend on the opponent
+   playing along.
+
+   The index maps positionKey -> where the repertoire has it: every position
+   reached right after one of our replies (and after our own moves inside a
+   line's fixed opening), across all opening systems. Only replies actually
+   reachable are indexed -- every earlier reply on the path must match, and
+   nothing hidden or behind a redirected room -- so stale prefs left over from
+   a changed reply cannot claim a position. positionKey carries the side to
+   move, so a white system's positions (black to move) can never match a
+   black system's. Built from the prefs alone (no castle build), cached, and
+   dropped by invalidateBuiltCastlesCache, which every write that can change
+   a room already calls. */
+let _repPosIndex = null, _repPosIndexPromise = null, _repPosIndexGen = 0;
+function invalidateRepertoirePositionIndex(){
+  _repPosIndex = null; _repPosIndexPromise = null; _repPosIndexGen++;
+}
+function repertoirePrefReachable(prefs, line, seq){
+  const opening = line.openingMoves || [];
+  for(let i = 0; i < Math.min(opening.length, seq.length); i++) if(seq[i] !== opening[i]) return false;
+  for(let k = seq.length; k >= 1; k -= 2){
+    const p = prefs[prefKey(line.id, seq.slice(0, k))];
+    if(p?.hidden) return false;
+    if(k === seq.length || k < opening.length) continue;   // seq[k] is fixed by the opening itself
+    if(p?.reply !== seq[k] || p?.redirectToCastle) return false;
+  }
+  return true;
+}
+function addLineToRepertoireIndex(map, line, prefs){
+  const add = (seq, pref) => {
+    const fen = fenForSeq(seq);
+    if(_FEN_BROKEN.has(seq.join('\x1f'))) return;   // a move that doesn't apply -- no real position here
+    const key = positionKey(fen);
+    let castle = (pref?.castleOwner || '').trim();
+    for(let s = seq.slice(); !castle && s.length; s = s.slice(0, -1)){
+      const p = prefs[prefKey(line.id, s)];
+      if(p?.isCastleRoot && p.castleName?.trim()) castle = p.castleName.trim();
+    }
+    const entry = { lineId: line.id, lineName: line.name || '', seq, castle, roomName: (pref?.name || '').trim() };
+    const list = map.get(key) || [];
+    // one entry per system+castle: the shortest move order stands for them all
+    const same = list.findIndex(e => e.lineId === entry.lineId && e.castle === entry.castle);
+    if(same < 0) list.push(entry);
+    else if(seq.length < list[same].seq.length) list[same] = { ...entry, roomName: entry.roomName || list[same].roomName };
+    else if(!list[same].roomName && entry.roomName) list[same].roomName = entry.roomName;
+    map.set(key, list);
+  };
+  const opening = line.openingMoves || [];
+  for(let i = line.color === 'black' ? 1 : 0; i < opening.length; i += 2) add(opening.slice(0, i + 1), null);
+  for(const k in prefs){
+    const p = prefs[k];
+    if(!p?.reply || !Array.isArray(p.seq)) continue;
+    if(!repertoirePrefReachable(prefs, line, p.seq)) continue;
+    add([...p.seq, p.reply], p);
+  }
+}
+function repertoirePositionIndex(){
+  if(_repPosIndex) return Promise.resolve(_repPosIndex);
+  if(_repPosIndexPromise) return _repPosIndexPromise;
+  const gen = _repPosIndexGen;
+  const p = (async () => {
+    const map = new Map();
+    try {
+      const lines = await getLines(LOCAL_USER);
+      const prefsPerLine = await Promise.all(lines.map(l => getAllPrefs(l.id)));
+      trackActivity('indexing repertoire positions', () =>
+        lines.forEach((line, i) => addLineToRepertoireIndex(map, line, prefsPerLine[i])));
+    } catch(e){ console.warn('[transposition badges] could not index the repertoire', e); }
+    if(gen === _repPosIndexGen) _repPosIndex = map;
+    return map;
+  })();
+  _repPosIndexPromise = p;
+  p.finally(() => { if(_repPosIndexPromise === p) _repPosIndexPromise = null; });
+  return p;
+}
+/* A placeholder for one engine line's badge. `firstMove` is the line's first
+   move, as UCI or SAN. Empty unless it is `lineColor`'s move at startFen --
+   a flagged OPPONENT move would mean nothing. `rowSeq`, when known, is the
+   path to startFen in `lineId`, so the reply already chosen there is not
+   flagged as a transposition into itself. fillTranspBadges fills it in. */
+function transpSlotHtml(startFen, firstMove, lineId, lineColor, rowSeq){
+  if(!startFen || !firstMove || !lineColor || startFen.split(' ')[1] !== lineColor[0]) return '';
+  let san, fen;
+  try {
+    const chess = new Chess(startFen);
+    const mv = /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(firstMove)
+      ? chess.move({ from: firstMove.slice(0, 2), to: firstMove.slice(2, 4), promotion: firstMove.slice(4, 5) || undefined })
+      : chess.move(firstMove.replace(/^\d+\.(\.\.)?/, ''), { sloppy: true });
+    if(!mv) return '';
+    san = mv.san; fen = chess.fen();
+  } catch(_){ return ''; }
+  const self = rowSeq ? `${lineId}|${[...rowSeq, san].join(',')}` : '';
+  return `<span class="pv-transp" data-fen="${escapeHtml(fen)}" data-self="${escapeHtml(self)}"></span>`;
+}
+// genRoom by "<instanceId>|<posKey>" over the built-castles cache, when one is
+// already loaded -- for a transposition's memorized flag and room name. Never
+// builds castles itself; without a cache the badge falls back to the pref's
+// own name and to treating the position as its room's anchor.
+let _transpRoomLookup = { cache: null, map: null };
+function transpGenRoom(instanceId, posKey){
+  if(!_builtCastlesCache) return null;
+  if(_transpRoomLookup.cache !== _builtCastlesCache){
+    const map = new Map();
+    for(const c of _builtCastlesCache) for(const gr of c?.genRooms || []) for(const k of genRoomPosKeys(gr)) map.set(`${c.instanceId}|${k}`, gr);
+    _transpRoomLookup = { cache: _builtCastlesCache, map };
+  }
+  return _transpRoomLookup.map.get(`${instanceId}|${posKey}`) || null;
+}
+function describeTransposition(e, posKey){
+  let roomName = e.roomName, memorized = false;
+  if(e.castle){
+    const instanceId = castleInstanceId(e.lineId, e.castle);
+    const gr = transpGenRoom(instanceId, posKey);
+    roomName = roomName || (gr?.name || '').trim();
+    memorized = !!MEMORIZED_ROOMS[castleRoomKey(instanceId, gr?.posKey || posKey)];
+  }
+  const where = e.castle ? (roomName ? `${e.castle} · ${roomName}` : e.castle) : e.lineName;
+  const detail = [e.lineName, e.castle ? `castle ${e.castle}` : '', roomName ? `room "${roomName}"` : ''].filter(Boolean).join(' › ') +
+    ` — via ${seqToNotation(e.seq)}${memorized ? ' (memorized)' : ''}`;
+  return { where, detail, memorized };
+}
+function fillTranspBadges(root, index = _repPosIndex){
+  if(!root) return;
+  const slots = root.querySelectorAll('.pv-transp:not([data-done])');
+  if(!slots.length) return;
+  if(!index){ repertoirePositionIndex().then(map => fillTranspBadges(root, map)); return; }
+  for(const slot of slots){
+    slot.dataset.done = '1';
+    const posKey = positionKey(slot.dataset.fen);
+    const found = (index.get(posKey) || []).filter(e => `${e.lineId}|${e.seq.join(',')}` !== slot.dataset.self);
+    if(!found.length) continue;
+    const described = found.map(e => describeTransposition(e, posKey))
+      .sort((a, b) => (b.memorized - a.memorized));
+    const first = described[0];
+    slot.textContent = `↪ ${first.where}${described.length > 1 ? ` +${described.length - 1}` : ''}`;
+    slot.classList.toggle('pv-transp-memorized', first.memorized);
+    slot.title = 'Transposes into your repertoire:\n' + described.map(d => d.detail).join('\n');
+    slot.onclick = e => {
+      e.stopPropagation();
+      showGraphCtxMenu(e.clientX || 0, e.clientY || 0, described.map(d => ({ label: '↪ ' + d.detail, onClick: () => {} })));
+    };
+  }
+}
+
 /* a "More" three-dot menu (mirrors the live engine panel's own pvMenu
    button/icon) offering "Import this variation" for one saved PV -- idx -1
    for the single-eval case, else its index into evalLines. Only rendered
@@ -5470,14 +5621,16 @@ function evalContinuationHtml(saved, lineSeq){
     const startFen = ev.pvFen || fenForSeq(lineSeq);
     const chips = (ev.pvUci?.length && pvChipsFromUci(startFen, ev.pvUci, ev.pvUci.length))
       || pvChipsFromSan(startFen, ev.pv);
-    return `${pvImportMenuHtml(-1, ev.pvUci)}<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
+    const transp = transpSlotHtml(startFen, ev.pvUci?.[0] || ev.pv.trim().split(/\s+/)[0], CURRENT_LINE.id, CURRENT_LINE.color, lineSeq);
+    return `${pvImportMenuHtml(-1, ev.pvUci)}${transp}<span class="meta-pv">${chips || escapeHtml(ev.pv)}</span>`;
   }
   return lines.map((line, idx) => {
     const startFen = line.pvFen || fenForSeq(lineSeq);
     const chips = (line.pvUci?.length && pvChipsFromUci(startFen, line.pvUci, line.pvUci.length))
       || pvChipsFromSan(startFen, line.pv);
     const scoreTag = `<span class="meta-pv-score ${evalClass(line, CURRENT_LINE.color)}">${formatEvalTag(line)}</span>`;
-    return `<div class="meta-pv-row">${pvImportMenuHtml(idx, line.pvUci)}${scoreTag}<span class="meta-pv">${chips || escapeHtml(line.pv)}</span></div>`;
+    const transp = transpSlotHtml(startFen, line.pvUci?.[0] || (line.pv || '').trim().split(/\s+/)[0], CURRENT_LINE.id, CURRENT_LINE.color, lineSeq);
+    return `<div class="meta-pv-row">${pvImportMenuHtml(idx, line.pvUci)}${scoreTag}${transp}<span class="meta-pv">${chips || escapeHtml(line.pv)}</span></div>`;
   }).join('');
 }
 // Wires up the "Import this variation" menu(s) evalContinuationHtml just
@@ -5488,6 +5641,7 @@ function evalContinuationHtml(saved, lineSeq){
 // uses elsewhere), so a rebuild between render and click can't hand a
 // stale PV to the importer.
 function wireEvalContinuationMenus(metaTd, lineSeq, currentSaved){
+  fillTranspBadges(metaTd);
   metaTd.querySelectorAll('.meta-pv-menu').forEach(btn => {
     const idx = parseInt(btn.dataset.pvIdx, 10);
     btn.onclick = e => {
@@ -8382,6 +8536,7 @@ let _builtCastlesIdbChecked = false;   // have we tried loading the persisted co
 let _builtCastlesBuildCount = 0;       // real (non-cache-hit) builds this page load -- test-only signal
 function invalidateBuiltCastlesCache(){
   _builtCastlesCache = null;
+  invalidateRepertoirePositionIndex();
   _builtCastlesIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
@@ -13361,6 +13516,7 @@ async function refreshAnalysisQueue(){
   ANALYSIS_QUEUE = await getAnalysisQueue(LOCAL_USER);
   const lines = await getLines(LOCAL_USER);
   AQ_LINE_NAMES = new Map(lines.map(l => [l.id, l.name]));
+  AQ_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
   refreshAnalysisQueueRowMarkers();
 }
 
@@ -13412,7 +13568,8 @@ function aqProgressHtml(item){
     const line = lines[idx];
     const scoreTag = `<span class="meta-pv-score">${escapeHtml(formatScore(line.score, turn))}</span>`;
     const pvHtml = line.pv?.length ? pvChipsFromUci(fen, line.pv, ENGINE_PV_PLIES) : '';
-    return `<div class="meta-pv-row">${scoreTag}<span class="meta-pv">${pvHtml}</span></div>`;
+    const transp = line.pv?.length ? transpSlotHtml(fen, line.pv[0], item.lineId, AQ_LINE_COLORS.get(item.lineId), item.seq) : '';
+    return `<div class="meta-pv-row">${scoreTag}${transp}<span class="meta-pv">${pvHtml}</span></div>`;
   }).join('');
   return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}</div>` +
     `<div class="aq-progress">${pvRows}</div>`;
@@ -13534,6 +13691,7 @@ function renderAnalysisQueueModal(){
   body.querySelectorAll('.aq-del').forEach(btn => {
     btn.onclick = () => cancelAnalysisQueueItem(btn.closest('tr').dataset.id);
   });
+  fillTranspBadges(body);
   body.querySelectorAll('.aq-grab').forEach(handle => {
     handle.addEventListener('pointerdown', aqGrabPointerDown);
   });
@@ -14398,7 +14556,9 @@ function renderEngineLines(fen, depth, lines, multipv){
       `<button class="iconbtn pvToggle" title="${expanded ? 'Show fewer moves' : 'Show full line'}">` +
         `<i class="fa-solid fa-caret-${expanded ? 'down' : 'right'}"></i>` +
       `</button>` +
-      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ${pvChipsFromUci(fen,line.pv,showFull ? Infinity : ENGINE_PV_PLIES)}` +
+      `<span class="pvText">${escapeHtml(formatScore(line.score,turn))}  ` +
+        (CURRENT_LINE ? transpSlotHtml(fen, line.pv[0], CURRENT_LINE.id, CURRENT_LINE.color, currentEngineSeq) : '') +
+        `${pvChipsFromUci(fen,line.pv,showFull ? Infinity : ENGINE_PV_PLIES)}` +
       (expanded && !pvComplete ? ' <i>(still calculating…)</i>' : '') +
       `</span>`;
     li.querySelector('.pvToggle').onclick = () => {
@@ -14420,6 +14580,7 @@ function renderEngineLines(fen, depth, lines, multipv){
     }
     ol.appendChild(li);
   }
+  fillTranspBadges(ol);
 }
 
 const STARTING_FEN = new Chess().fen();
@@ -14513,6 +14674,17 @@ if(localStorage.getItem('threeTestDebug')){
       recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
       return bag;
     },
+  };
+}
+
+// test-only hook for the repertoire transposition index behind the "↪" badges
+// on engine lines (see repertoirePositionIndex).
+if(localStorage.getItem('threeTestDebug')){
+  window.__transpTestHooks = {
+    entriesAfter: async (seq) => ((await repertoirePositionIndex()).get(positionKey(fenForSeq(seq))) || [])
+      .map(e => ({ lineId: e.lineId, seq: e.seq, castle: e.castle, roomName: e.roomName })),
+    roomKey: (lineId, castle, seq) => castleRoomKey(castleInstanceId(lineId, castle), positionKey(fenForSeq(seq))),
+    refreshAnalysisQueue: () => refreshAnalysisQueue(),
   };
 }
 

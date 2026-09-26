@@ -6699,6 +6699,116 @@ try {
 }
 } catch(e){ bad('Phase MW: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase TB: engine lines whose first move -- our reply -- transposes
+//     into a position the repertoire already reaches elsewhere get a "↪"
+//     badge naming where, so a reply that reuses learned material can be
+//     chosen on purpose. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appTB = await launchApp();
+try {
+  const fens = await appTB.page.evaluate(() => {
+    const at = seq => { const c = new Chess(); for(const m of seq) c.move(m, { sloppy: true }); return c.fen(); };
+    return { nf6: at(['d4','Nf6']), d5: at(['d4','d5']) };
+  });
+  const ev = (value, pv, pvFen, pvUci) => ({ type: 'cp', value, depth: 20, pv, pvFen, pvUci });
+  await seedBackup(appTB.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Queens Pawn', color: 'white', openingMoves: ['d4'], prefs: [
+        // no reply chosen yet: 2.c4 transposes into the English castle, 2.Nf3 goes nowhere known
+        { seq: ['d4','Nf6'], eval: ev(35, '2.c4 e6', fens.nf6, ['c2c4','e7e6']),
+          evalLines: [ev(35, '2.c4 e6', fens.nf6, ['c2c4','e7e6']), ev(30, '2.Nf3 e6', fens.nf6, ['g1f3','e7e6'])] },
+        // 2.c4 is already the reply here, and reaches a position nothing else does
+        { seq: ['d4','d5'], reply: 'c4', eval: ev(30, '2.c4 e6', fens.d5, ['c2c4','e7e6']),
+          evalLines: [ev(30, '2.c4 e6', fens.d5, ['c2c4','e7e6']), ev(20, '2.Nf3 Nf6', fens.d5, ['g1f3','g8f6'])] },
+      ]},
+      { id: 'L2', name: 'English', color: 'white', openingMoves: ['c4'], prefs: [
+        { seq: ['c4','Nf6'], reply: 'd4', isCastleRoot: true, castleName: 'Eng', castleStreetNumber: 1, name: 'Hall' },
+        // stale: its parent [c4,e5] has no reply, so this is unreachable
+        { seq: ['c4','e5','Nc3','Nf6'], reply: 'Nf3' },
+        // hidden
+        { seq: ['c4','c5'], reply: 'Nc3', hidden: true },
+      ]},
+    ],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 c4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'c4 Nf6 d4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  // the English room counts as memorized
+  const memKey = await appTB.page.evaluate(() => window.__transpTestHooks.roomKey('L2', 'Eng', ['c4','Nf6','d4']));
+  await appTB.page.evaluate(k => setMeta('threeMemorizedRooms', JSON.stringify({ [k]: true })), memKey);
+  await appTB.page.locator('.line-row', { hasText: 'Queens Pawn' }).click();
+  const nf6Row = 'tr.data-row[data-opp="Nf6"]', d5Row = 'tr.data-row[data-opp="d5"]';
+  await appTB.page.waitForSelector(nf6Row, { timeout: 40000 });
+  const badges = sel => appTB.page.evaluate(sel => [...document.querySelector(sel).nextElementSibling.querySelectorAll('.meta-pv-row')]
+    .map(r => { const b = r.querySelector('.pv-transp'); return b ? { slot: true, done: b.dataset.done === '1', text: b.textContent,
+      memorized: b.classList.contains('pv-transp-memorized'), title: b.title } : { slot: false }; }), sel);
+  const openLines = async sel => {
+    await appTB.page.evaluate(sel => document.querySelector(sel).querySelector('.evaltag').click(), sel);
+    await appTB.page.waitForSelector(`${sel} + tr.meta-row .meta-pv-row`, { timeout: 5000 });
+    for(let i = 0; i < 50; i++){
+      const b = await badges(sel);
+      if(b.every(x => !x.slot || x.done)) return b;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return badges(sel);
+  };
+
+  // 526. Saved analysis lines: the reply that transposes into another system's
+  //      castle is badged with where it lands (green: that room is memorized);
+  //      the line that reaches nothing known is not.
+  try {
+    const b = await openLines(nf6Row);
+    assert(b.length === 2, `setup: expected two saved lines, got ${JSON.stringify(b)}`);
+    assert(b[0].slot && /Eng · Hall/.test(b[0].text) && b[0].memorized, `expected 2.c4 badged "Eng · Hall" as memorized, got ${JSON.stringify(b[0])}`);
+    assert(/English/.test(b[0].title) && /1\.c4 Nf6 2\.d4/.test(b[0].title), `expected the badge's detail to name the system and its move order, got ${JSON.stringify(b[0].title)}`);
+    assert(b[1].slot && b[1].text === '', `expected 2.Nf3 unbadged, got ${JSON.stringify(b[1])}`);
+    ok('transposition badges: a reply landing in another system\'s castle is flagged, with where and whether memorized');
+  } catch(e){ bad('transposition badges: saved analysis lines', e); }
+
+  // 527. The reply already chosen on a row is not flagged as transposing
+  //      into itself.
+  try {
+    const b = await openLines(d5Row);
+    assert(b.length === 2 && b.every(x => !x.slot || x.text === ''), `expected no badges on the chosen reply's own position, got ${JSON.stringify(b)}`);
+    ok('transposition badges: the chosen reply does not match itself');
+  } catch(e){ bad('transposition badges: self match', e); }
+
+  // 528. Only reachable replies are indexed: not one under a parent with no
+  //      reply, and not one on a hidden branch. An opponent's move is never
+  //      a candidate.
+  try {
+    const r = await appTB.page.evaluate(async () => ({
+      eng: await window.__transpTestHooks.entriesAfter(['c4','Nf6','d4']),
+      stale: await window.__transpTestHooks.entriesAfter(['c4','e5','Nc3','Nf6','Nf3']),
+      hidden: await window.__transpTestHooks.entriesAfter(['c4','c5','Nc3']),
+      oppSlot: window.__evalTestHooks.evalContinuationHtml({ eval: { type: 'cp', value: 0, depth: 20, pv: '2...e6', pvUci: ['e7e6'] } }, ['d4','Nf6','c4']),
+    }));
+    assert(r.eng.length === 1 && r.eng[0].castle === 'Eng' && r.eng[0].roomName === 'Hall', `expected the English room indexed, got ${JSON.stringify(r.eng)}`);
+    assert(!r.stale.length && !r.hidden.length, `expected unreachable and hidden replies left out, got ${JSON.stringify(r)}`);
+    assert(!r.oppSlot.includes('pv-transp'), `expected no badge slot on an opponent's move, got ${r.oppSlot}`);
+    ok('transposition badges: only reachable, visible replies are indexed, and only our own moves are checked');
+  } catch(e){ bad('transposition badges: index contents', e); }
+
+  // 529. The Analysis Queue's live lines get the same slots.
+  try {
+    await appTB.page.evaluate(() => window.__transpTestHooks.refreshAnalysisQueue());
+    const html = await appTB.page.evaluate(() => {
+      const item = { id: 'x', lineId: 'L1', seq: ['d4','Nf6'], depth: 30, multipv: 2 };
+      return window.__aqTestHooks.aqProgressHtml(item, item, { depth: 12, lines: {
+        1: { score: { type: 'cp', value: 30 }, pv: ['c2c4','e7e6'] }, 2: { score: { type: 'cp', value: 25 }, pv: ['g1f3','e7e6'] } } });
+    });
+    assert((html.match(/class="pv-transp"/g) || []).length === 2, `expected a badge slot per live line, got ${html}`);
+    ok('transposition badges: the Analysis Queue\'s live lines are checked too');
+  } catch(e){ bad('transposition badges: Analysis Queue', e); }
+} finally {
+  await appTB.close();
+}
+} catch(e){ bad('Phase TB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---

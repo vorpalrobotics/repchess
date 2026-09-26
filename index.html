@@ -191,6 +191,13 @@
   tr.meta-row .meta-pv em{color:#999}
   tr.meta-row i{margin-right:.35em;color:#888}
   tr.meta-row .meta-pv-row{margin-bottom:.2em}
+  /* "↪ <where>": this engine line's first move transposes into the repertoire
+     (fillTranspBadges). Green when the room it lands in is memorized. */
+  .pv-transp{display:inline-block;max-width:16em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;
+    font-size:.8em;line-height:1.5;padding:0 .45em;margin-right:.45em;border-radius:.8em;background:#f3e5f5;color:#6a1b9a;
+    border:1px solid #ce93d8;cursor:pointer;font-style:normal;font-weight:600}
+  .pv-transp:empty{display:none}
+  .pv-transp.pv-transp-memorized{background:#e8f5e9;color:#2e7d32;border-color:#81c784}
   tr.meta-row .meta-pv-row:last-child{margin-bottom:0}
   tr.meta-row .meta-pv-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.5em}
   tr.meta-row .meta-pv-score.eval-neutral  {color:#777}
@@ -2213,6 +2220,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260926-467"></script>
+<script type="module" src="js/app.js?v=20260926-468"></script>
 </body>
 </html>
