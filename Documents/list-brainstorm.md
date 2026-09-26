@@ -67,6 +67,20 @@ takes the correct ID.
 
 Each response's reported `cost` is summed and shown.
 
+**Where the parameters go (fixed in build -459).** The first release sent
+`systemPrompt`, `maxTokens` and `jsonSchema` at the top level of the task.
+Runware refused that in real use: "Unsupported use of 'maxTokens' parameter.
+This parameter is not supported for text inference."
+
+- **The fix:** technical parameters go inside `settings`, and only
+  `outputFormat` stays at the top level.
+- **Retry without optional extras:** if Runware still refuses an optional
+  parameter it names (`maxTokens`, `jsonSchema` or `outputFormat`, or
+  `includeCost`), `runwareText` drops just that one and retries.
+- **Test guard:** the test fake now enforces the `settings` rule with
+  Runware's exact error text. The original fake accepted anything, which is
+  why the tests did not catch this.
+
 ## Module boundaries
 
 - **Imports.** `listBrainstorm.js` imports only `modalBar.js`.
