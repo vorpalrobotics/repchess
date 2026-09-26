@@ -499,6 +499,17 @@
   .iq-thumb img{max-width:100%;max-height:100%}
   .iq-redo-text{width:100%;box-sizing:border-box;font:inherit}
   .iq-empty{color:#666}
+  .iq-id-row{display:flex;align-items:center;gap:.4rem;font-size:.8rem;margin-top:.25rem}
+  .iq-id{flex:1 1 auto;min-width:0;font:inherit;padding:.1rem .3rem}
+  .iq-batch{display:flex;flex-direction:column;gap:.55rem}
+  .iq-f{display:flex;flex-direction:column;gap:.15rem;font-size:.82rem}
+  .iq-f textarea,.iq-f input[type=text],.iq-f input[type=password]{font:inherit;box-sizing:border-box;width:100%}
+  .iq-check{flex-direction:row;align-items:center;gap:.35rem}
+  .iq-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(12em,1fr));gap:.5rem .8rem;align-items:end}
+  .iq-hint{font-size:.75rem;color:#666}
+  .iq-preview{max-height:10em;overflow:auto;font-size:.8rem;border:1px solid #e5e5e5;border-radius:4px;padding:.2rem .4rem}
+  .iq-preview:empty{display:none}
+  .iq-plan code{background:#f1f1f1;padding:0 .25rem;border-radius:3px;margin-right:.35rem}
 
   /* ---------- Accuracy Report ---------- */
   .acc-h{margin:1.1rem 0 .3rem;font-size:.95rem;color:#1f4e79}
@@ -2164,6 +2175,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-455"></script>
+<script type="module" src="js/app.js?v=20260804-456"></script>
 </body>
 </html>

@@ -142,9 +142,9 @@ const AUTO_CROP_ALPHA = 24;
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { OPENAI_STANDING_LS, GEN_MODEL_LS, GEN_CUSTOM_AIR_LS, GEN_QUALITY_LS, GEN_SIZE_LS, GEN_QUALITY_DEFAULT,
          GEN_MODELS, GEN_PROVIDERS, genModelById, lsGet, lsSet, generateOpenAI, generateRunware,
-         enqueueImageJob, setImageQueueApprover } from './imageQueue.js?v=20260804-1';
+         enqueueImageJob, configureImageQueue } from './imageQueue.js?v=20260804-2';
 // app.js reaches the queue through here, so imageQueue.js has a single importer
-export { openImageQueue, resetImageQueue, imageQueueCounts } from './imageQueue.js?v=20260804-1';
+export { openImageQueue, resetImageQueue, imageQueueCounts } from './imageQueue.js?v=20260804-2';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one
@@ -1715,17 +1715,21 @@ export async function openNewAssetModal(initialType, allowTypes, preset = null){
     // openEditor -> renderBar has just mounted the FULL-MANAGER bar, whose
     // Leave/Save return to a grid this modal doesn't have. Re-point both at
     // this promise instead, keeping the baseline openEditor just captured.
+    const onSave = async () => { const id = await saveEditor(); if(id) finish(id); };
     BAR_CTL = wireModalBar(BAR_HOST.querySelector('.modal-bar'), {
       snapshot: editorSnapshot,
       watch: ov,
       thing: 'this new asset',
       onLeave: () => finish(null),
-      onSave: async () => { const id = await saveEditor(); if(id) finish(id); },
+      onSave,
     });
     BAR_CTL.rebase(EDIT_BASELINE);
     // the backdrop is a way out too, so it goes through the same confirm
     wireBackdropClose(ov, () => BAR_CTL.leave());
-    if(preset) applyEditorPreset(preset);
+    // autoSave is the Image Queue's Quick approve: the editor's own Save, run
+    // for you. It either saves and closes, or leaves the editor open showing
+    // what is wrong (a taken ID, say) -- never a second path that writes assets.
+    if(preset) applyEditorPreset(preset).then(() => { if(preset.autoSave) onSave(); });
   });
 }
 async function applyEditorPreset(preset){
@@ -1743,11 +1747,17 @@ async function applyEditorPreset(preset){
   if(BAR_CTL) BAR_CTL.refresh();             // programmatic changes: the watch saw none of them
 }
 
-// Approve in the Image Queue: open the New Asset editor filled in from the job
-setImageQueueApprover((job, image) => openNewAssetModal(job.asset.type || 'billboard-cylindrical', null, {
-  image, id: job.asset.id, keywords: job.asset.keywords, resolution: job.asset.resolution,
-  hint: String(job.prompt || '').split(/\s+/).slice(0, 5).join(' '),
-}));
+// Approve / Quick approve in the Image Queue: the New Asset editor filled in
+// from the job (and, for Quick approve, saved for you); plus the asset types
+// the batch form offers, so the queue needs no second copy of them
+configureImageQueue({
+  approve: (job, image, { quick = false } = {}) => openNewAssetModal(job.asset.type || 'billboard-cylindrical', null, {
+    image, id: job.asset.id, keywords: job.asset.keywords, resolution: job.asset.resolution,
+    hint: String(job.prompt || '').split(/\s+/).slice(0, 5).join(' '), autoSave: quick,
+  }),
+  assetTypes: Object.entries(ASSET_TYPES).map(([id, t]) => ({ id, label: t.label, kind: t.kind })),
+  resolutions: RESOLUTION_TIERS,
+});
 
 /* ---------- export ----------
    No real filesystem access from a static site, so "export" downloads

@@ -78,14 +78,26 @@ models, still looks like a set.</p>
 leaves the dialog open for the next one. The queue takes the asset ID, type
 and keywords from the editor you opened it from, along with the dialog's
 model, quality, size and transparency settings.</p>
-<p>Menu &rarr; <strong>Image Queue</strong> shows two lists:</p>
+<p>To queue many at once, open Menu &rarr; <strong>Image Queue</strong> &rarr;
+<strong>New batch&hellip;</strong> and type one subject per line. Each line
+becomes one image. Its asset ID is made from the line, or you can choose it
+by writing <code>id | prompt</code>. IDs already in use get a number added,
+and a preview shows exactly what will be queued. The model, quality, size,
+asset type, keywords and standing instructions apply to the whole batch.
+Choosing an asset type sets sensible defaults: a transparent background for
+props, an opaque one for surfaces and facades. A batch of five or more asks
+you to confirm first.</p>
+<p>The Image Queue screen shows two lists:</p>
 <ul>
   <li><strong>Queue:</strong> images still being made, two at a time. A
   network hiccup is retried once by itself; any other failure keeps its error
   message and gets a <strong>Retry</strong> button. If a model's API key is
   missing, its images wait rather than fail. Enter the key in the Generate
   dialog and they carry on.</li>
-  <li><strong>Review:</strong> finished images. <strong>Approve&hellip;</strong>
+  <li><strong>Review:</strong> finished images, each with its asset ID, which
+  you can correct. <strong>Quick approve</strong> saves the image as that
+  asset straight away. If something is wrong, say the ID is already taken,
+  the editor opens showing why instead. <strong>Approve&hellip;</strong>
   opens the New Asset editor already filled in, so you can crop or erase and
   then Save. <strong>Redo&hellip;</strong> queues the image again, with the
   prompt edited if you like. <strong>Discard</strong> throws it away.</li>
