@@ -1,11 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-324';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-325';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
-         openImageQueue, resetImageQueue } from './assets.js?v=20260804-96';
+         openImageQueue, resetImageQueue } from './assets.js?v=20260804-97';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-73';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-74';
 import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-457';
+const BUILD_TAG = '-458';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 

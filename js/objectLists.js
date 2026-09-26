@@ -21,7 +21,8 @@
    module here -- but assets.js IS a real ES module, so its own standalone
    New Asset modal needs an actual import.
 */
-import { openNewAssetModal, openImageQueueForList } from './assets.js?v=20260804-96';
+import { openNewAssetModal, openImageQueueForList, runwareText, RUNWARE_KEY_LS } from './assets.js?v=20260804-97';
+import { openListBrainstorm } from './listBrainstorm.js?v=20260804-1';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 const ORDERING_TYPES = {
@@ -53,6 +54,7 @@ let LISTS = [];        // cached array of all objectLists records
 let ASSETS = [];       // cached array of all asset records (for the picker + thumbnails)
 let EDIT = null;       // working copy of the list being edited, or null when showing the index
 let EDIT_IS_NEW = false;
+let EDIT_FROM_BRAINSTORM = false;   // filled in by "Use this" -- Save then offers to queue its images
 let PICK_CB = null;    // pending asset-picker callback
 let FILTER_TEXT = '';
 // listId -> [{lineName, castleName}, ...] -- every castle (deduped, one entry
@@ -447,6 +449,7 @@ function shapeItem(it){
 function openEditor(id){
   const src = id ? LISTS.find(l => l.id === id) : null;
   EDIT_IS_NEW = !src;
+  EDIT_FROM_BRAINSTORM = false;
   // deep-ish clone so edits are staged until Save
   EDIT = src ? JSON.parse(JSON.stringify(src)) : {
     id:'', name:'', roomName:'', category:'',
@@ -477,6 +480,10 @@ function renderEditor(){
   const l = EDIT;
   const editor = $('objlistEditor');
   editor.innerHTML = `
+    ${EDIT_IS_NEW ? `<div class="objlist-brainstorm">
+      <button type="button" id="ol_brainstorm"><i class="fa-solid fa-wand-magic-sparkles"></i> Brainstorm with AI…</button>
+      <span class="objlist-hint">Describe the list you want and choose from three suggestions.</span>
+    </div>` : ''}
     <div class="field">
       <label>List id</label>
       <input type="text" id="ol_id" placeholder="kitchen_major_fixtures (lowercase, unique)" value="${esc(l.id)}" ${EDIT_IS_NEW ? '' : 'disabled'}>
@@ -564,6 +571,7 @@ function renderEditor(){
   $('ol_mphrase').oninput = e => { EDIT.mnemonic.phrase = e.target.value; };
   $('ol_msource').oninput = e => { EDIT.mnemonic.source = e.target.value; };
 
+  if(EDIT_IS_NEW) $('ol_brainstorm').onclick = startBrainstorm;
   $('ol_additembtn').onclick = addItem;
   $('ol_newitem').onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); addItem(); } };
   if(l.items.length) $('ol_quiz').onclick = () => openListQuiz(l);
@@ -571,6 +579,40 @@ function renderEditor(){
   // re-mounted on every editor render, because the bar's Delete… depends on
   // EDIT_IS_NEW and its title on the list's name
   renderBar();
+}
+
+/* ---------- AI brainstorm (js/listBrainstorm.js) ----------
+   "Use this" fills in THIS new list's editor; the ordinary Save, with every
+   check it makes, is still what creates the list. */
+function startBrainstorm(){
+  openListBrainstorm({
+    runwareText, keyLs: RUNWARE_KEY_LS,
+    orderingTypes: ORDERING_TYPES, mnemonicTypes: MNEMONIC_TYPES,
+    existingNames: LISTS.map(l => l.name).filter(Boolean),
+    onUse: useBrainstormCandidate,
+  });
+}
+// a list id from its name, unique among existing lists
+function listIdFromName(name){
+  let base = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'list';
+  if(!/^[a-z0-9]/.test(base)) base = 'list_' + base;
+  let id = base, n = 2;
+  while(LISTS.some(l => l.id === id)) id = `${base}_${n++}`;
+  return id;
+}
+function useBrainstormCandidate(c){
+  if(!EDIT || !EDIT_IS_NEW) return;
+  const started = EDIT.name.trim() || EDIT.items.length;
+  if(started && !confirm('Replace what you have entered in this list with the suggestion?')) return;
+  Object.assign(EDIT, {
+    id: EDIT.id.trim() || listIdFromName(c.name),
+    name: c.name, roomName: c.roomName, category: c.category,
+    orderingType: c.orderingType, orderingRule: c.orderingRule,
+    items: c.items.map(shapeItem),
+    mnemonic: { type: c.mnemonic.type, initialism: c.mnemonic.initialism, phrase: c.mnemonic.phrase, source: 'AI brainstorm' },
+  });
+  EDIT_FROM_BRAINSTORM = true;
+  renderEditor();
 }
 
 /* Generate missing images: hand the list's imageless items to the Image
@@ -1099,8 +1141,18 @@ async function saveEditor(){
     }
   });
   const savedId = l.id;
+  const fromBrainstorm = EDIT_FROM_BRAINSTORM;
   EDIT = null;
+  EDIT_FROM_BRAINSTORM = false;
   await refresh();
+  // a brainstormed list arrives with Image instructions for every item: the
+  // natural next step is its pictures
+  const missing = l.items.filter(it => !it.assetId);
+  if(fromBrainstorm && missing.length
+     && confirm(`Queue images for the ${missing.length} item${missing.length === 1 ? '' : 's'} in "${l.name.trim()}"?`)){
+    openImageQueueForList({ id: savedId, name: l.name.trim(), roomName: l.roomName.trim(),
+      items: missing.map(it => shapeItem(it)) });
+  }
   return savedId;   // lets a standalone caller (e.g. openNewObjectListModal) know the save succeeded
 }
 

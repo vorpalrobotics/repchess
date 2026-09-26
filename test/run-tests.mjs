@@ -26860,6 +26860,237 @@ try {
 } catch(e){ bad('Phase IQ: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase LB: AI brainstorm for new object lists (js/listBrainstorm.js,
+//     Documents/list-brainstorm.md). A model on Runware (textInference over
+//     the same socket as images) suggests three lists; "Use this" fills the
+//     new list's editor, and Save offers to queue its images. Runware is
+//     faked in the page; __rwTextMode picks how the "model" replies. ---
+if(shouldRunPhase(['object-lists'])){
+try {
+const appLB = await launchApp();
+try {
+  await appLB.page.addInitScript(() => {
+    window.__rwTasks = [];
+    const item = (name, imagePrompt) => ({ name, imagePrompt });
+    const cand = (name, extra) => ({ name, roomName: 'Forge', category: 'Medieval', orderingType: 'procedural',
+      orderingRule: 'Heat, shape, cool', whyThisOrder: 'The order a smith works in.',
+      items: [item('Bellows', 'leather bellows'), item('Furnace', 'glowing coals'), item('Tongs', ''),
+              item('Anvil', 'black iron anvil'), item('Hammer', ''), item('Quench Tub', 'wooden water barrel')],
+      mnemonic: { type: 'generated_phrase', initialism: 'BFTAHQ', phrase: '' }, ...(extra || {}) });
+    window.__rwGood = () => JSON.stringify({ candidates: [
+      cand('Forge Tools'),
+      cand('Smithy Workflow', { items: [item('Ore', ''), item('Smelter', ''), item('Ore', 'dup'), item('Ingot', '')] }),
+      cand('Kitchen Fixtures'),
+    ] });
+    let calls = 0;
+    const RealWS = window.WebSocket;
+    class FakeRunware {
+      constructor(url){ this.url = url; this.readyState = 0;
+        setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 0); }
+      reply(obj){ setTimeout(() => this.onmessage && this.onmessage({ data: JSON.stringify(obj) }), 5); }
+      send(str){
+        for(const t of JSON.parse(str)){
+          window.__rwTasks.push(t);
+          if(t.taskType === 'authentication'){
+            this.reply({ data: [{ taskType: 'authentication', connectionSessionUUID: 's' }] });
+          } else if(t.taskType === 'textInference'){
+            calls++;
+            const mode = window.__rwTextMode || 'good';
+            const ok = (text, extra) => this.reply({ data: [{ taskType: 'textInference', taskUUID: t.taskUUID,
+              text, finishReason: 'stop', cost: 0.002, ...(extra || {}) }] });
+            if(mode === 'no-schema' && t.jsonSchema){
+              this.reply({ errors: [{ taskUUID: t.taskUUID, message: "Invalid value for 'jsonSchema' parameter." }] });
+            } else if(mode === 'no-schema'){
+              ok('Here you go:\n```json\n' + window.__rwGood() + '\n```\nEnjoy!');
+            } else if(mode === 'bad-then-good'){
+              ok(calls % 2 === 1 ? 'Some ideas: forge, anvil, hammer.' : window.__rwGood());
+            } else if(mode === 'bad-always'){
+              ok('Some ideas: forge, anvil, hammer.');
+            } else if(mode === 'cut'){
+              ok('{"candidates":[{"name":"Forge', { finishReason: 'length' });
+            } else {
+              ok(window.__rwGood());
+            }
+          }
+        }
+      }
+      close(){ this.readyState = 3; }
+    }
+    window.WebSocket = function(url, protocols){
+      return /runware\.ai/.test(url) ? new FakeRunware(url) : new RealWS(url, protocols);
+    };
+  });
+  await appLB.page.reload({ waitUntil: 'domcontentloaded' });
+  await appLB.page.waitForFunction(() => !!window.__listBrainstormTestHooks, null, { timeout: 15000 });
+  await seedBackup(appLB.page, { version: 6, user: 'tester', lines: [],
+    objectLists: [{ id: 'kitchen', name: 'Kitchen Fixtures', roomName: 'Kitchen', items: [{ name: 'Oven', assetId: null }] }] });
+  await appLB.page.evaluate(() => localStorage.setItem('repchess.runwareApiKey', 'rw-good'));
+
+  const texts = () => appLB.page.evaluate(() => window.__rwTasks.filter(t => t.taskType === 'textInference'));
+  const resetTasks = () => appLB.page.evaluate(() => { window.__rwTasks.length = 0; });
+  const openBrainstorm = async () => {
+    await appLB.page.evaluate(() => document.getElementById('menuObjectLists').click());
+    await appLB.page.waitForSelector('#objlistNewBtn', { timeout: 5000 });
+    await appLB.page.evaluate(() => document.getElementById('objlistNewBtn').click());
+    await appLB.page.waitForSelector('#ol_brainstorm', { timeout: 5000 });
+    await appLB.page.evaluate(() => document.getElementById('ol_brainstorm').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay #lbDesc', { state: 'visible', timeout: 5000 });
+  };
+  const go = async (sel = '#lbGo') => {
+    await appLB.page.evaluate((s) => document.querySelector(s).click(), sel);
+    await appLB.page.waitForFunction(() => !document.getElementById('lbGo').disabled
+      && !/…/.test(document.getElementById('lbStatus').textContent), null, { timeout: 10000 });
+  };
+  const cards = () => appLB.page.evaluate(() => [...document.querySelectorAll('#lbResults .lb-card')].map(c => ({
+    name: c.querySelector('.lb-card-head strong').textContent,
+    items: [...c.querySelectorAll('.lb-items li strong')].map(x => x.textContent),
+    warn: c.querySelector('.lb-warn')?.textContent || '' })));
+
+  // 505. Reading a reply: code fences and chatter are tolerated; content is
+  //      checked strictly -- an unknown ordering type drops that candidate,
+  //      duplicates and out-of-range lengths travel as warnings.
+  try {
+    const r = await appLB.page.evaluate(() => {
+      const H = window.__listBrainstormTestHooks;
+      const opts = { orderingKeys: ['procedural', 'natural_ordering'], mnemonicKeys: ['generated_phrase'],
+        minItems: 3, maxItems: 4, existingNames: ['Kitchen Fixtures'] };
+      const fenced = H.extractJson('Sure!\n```json\n{"candidates":[]}\n```\nThanks');
+      let noJson = null; try { H.extractJson('no json here'); } catch(e){ noJson = e.message; }
+      const v = H.validate({ candidates: [
+        { name: 'A', orderingType: 'procedural', items: [{ name: 'x' }, { name: 'X' }, { name: 'y' }, { name: 'z' }, { name: 'w' }], mnemonic: {} },
+        { name: 'B', orderingType: 'spatial', items: [{ name: 'x' }, { name: 'y' }] },
+        { name: 'Kitchen Fixtures', orderingType: 'natural_ordering', items: [{ name: 'p' }, { name: 'q' }, { name: 'r' }] },
+      ] }, opts);
+      const none = H.validate({ candidates: [{ name: 'B', orderingType: 'spatial', items: [] }] }, opts);
+      return { fenced, noJson, names: v.candidates.map(c => c.name), warnA: v.candidates[0].warnings,
+               warnK: v.candidates[1].warnings, noneErrors: none.errors };
+    });
+    assert(JSON.stringify(r.fenced) === '{"candidates":[]}' && /no JSON/.test(r.noJson), `extraction: ${JSON.stringify(r)}`);
+    assert(JSON.stringify(r.names) === '["A","Kitchen Fixtures"]', `expected the unknown ordering dropped: ${JSON.stringify(r.names)}`);
+    // x, X (duplicate, dropped), y, z, w: four unique items, inside 3-4
+    assert(r.warnA.some(w => /duplicate item "X"/.test(w)) && !r.warnA.some(w => /outside/.test(w)),
+      `candidate A warnings: ${JSON.stringify(r.warnA)}`);
+    assert(r.warnK.some(w => /already have a list/.test(w)), `expected the existing-name warning: ${JSON.stringify(r.warnK)}`);
+    assert(r.noneErrors.length && /orderingType/.test(r.noneErrors[0]), `expected a reason when nothing is usable: ${JSON.stringify(r.noneErrors)}`);
+    ok('List brainstorm: replies are read forgivingly and checked strictly');
+  } catch(e){ bad('List brainstorm: reading replies', e); }
+
+  // 506. The dialog: an informational modal opened from a NEW list's editor;
+  //      Brainstorm asks the cheap default model for schema-shaped JSON, with
+  //      the design principles as the system prompt and the user's existing
+  //      lists named, and shows three candidates with their warnings.
+  try {
+    await openBrainstorm();
+    await assertInfoBar(appLB.page, 'listBrainstormOverlay', 'Brainstorm a list');
+    await appLB.page.fill('#lbDesc', "things in a blacksmith's forge");
+    await go();
+    const t = (await texts())[0];
+    assert(t && t.model === 'anthropic:claude@haiku-4.5' && t.outputFormat === 'JSON'
+      && t.jsonSchema && t.jsonSchema.schema.properties.candidates
+      && /Reply with JSON only/.test(t.systemPrompt) && /Never weaken a strong ordering/.test(t.systemPrompt)
+      && /blacksmith's forge/.test(t.messages[0].content) && /Kitchen Fixtures/.test(t.messages[0].content),
+      `unexpected text task: ${JSON.stringify(t && { model: t.model, outputFormat: t.outputFormat, msg: t.messages })}`);
+    const c = await cards();
+    assert(c.length === 3 && c[0].name === 'Forge Tools' && c[0].items.length === 6, `unexpected cards: ${JSON.stringify(c)}`);
+    assert(/duplicate item "Ore"/.test(c[1].warn) && /already have a list/.test(c[2].warn), `expected warnings: ${JSON.stringify(c.map(x => x.warn))}`);
+    const st = await appLB.page.evaluate(() => document.getElementById('lbStatus').textContent);
+    assert(/\$0\.0020/.test(st), `expected the cost shown, got ${JSON.stringify(st)}`);
+    ok('List brainstorm: asks the cheap default model for structured candidates and shows them');
+  } catch(e){ bad('List brainstorm: the dialog', e); }
+
+  // 507. Refine continues the same conversation with the feedback.
+  try {
+    await resetTasks();
+    await appLB.page.fill('#lbRefineText', 'fewer items');
+    await go('#lbRefine');
+    const t = (await texts())[0];
+    assert(t && t.messages.length === 3 && t.messages[1].role === 'assistant' && /fewer items/.test(t.messages[2].content),
+      `expected the conversation continued, got ${JSON.stringify(t && t.messages.map(m => [m.role, m.content.slice(0, 40)]))}`);
+    ok('List brainstorm: Refine continues the conversation');
+  } catch(e){ bad('List brainstorm: refine', e); }
+
+  // 508. A model that refuses the JSON schema is asked again without it,
+  //      and its fenced, chatty reply is still read.
+  try {
+    await resetTasks();
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'no-schema'; });
+    await go();
+    const t = await texts();
+    assert(t.length === 2 && t[0].jsonSchema && !t[1].jsonSchema && !t[1].outputFormat, `expected a retry without the schema: ${t.length}`);
+    assert((await cards()).length === 3, 'expected the candidates read from the fenced reply');
+    ok('List brainstorm: a refused schema falls back to plain text, still parsed');
+  } catch(e){ bad('List brainstorm: schema fallback', e); }
+
+  // 509. An unusable reply gets one repair round naming the problem; one
+  //      that stays unusable is shown with the raw reply, not dropped.
+  try {
+    await resetTasks();
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'bad-then-good'; });
+    await go();
+    let t = await texts();
+    assert(t.length === 2 && /could not be used: the reply contained no JSON/.test(t[1].messages[t[1].messages.length - 1].content),
+      `expected a repair round naming the problem, got ${JSON.stringify(t.map(x => x.messages.length))}`);
+    assert((await cards()).length === 3, 'expected the repaired reply shown');
+    await resetTasks();
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'bad-always'; });
+    await go();
+    t = await texts();
+    const fail = await appLB.page.evaluate(() => document.querySelector('#lbResults .lb-fail')?.textContent || '');
+    assert(t.length === 2 && /could not be used/.test(fail) && /Some ideas: forge/.test(fail), `expected the failure shown with the raw reply: ${JSON.stringify(fail)}`);
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'cut'; });
+    await go();
+    const st = await appLB.page.evaluate(() => document.getElementById('lbStatus').textContent);
+    assert(/cut off/.test(st), `expected a cut-off reply reported, got ${JSON.stringify(st)}`);
+    ok('List brainstorm: one repair round, then a visible failure with the raw reply');
+  } catch(e){ bad('List brainstorm: repair', e); }
+
+  // 510. Use this fills the new list's editor (ID from the name, items with
+  //      their Image instructions); Save offers to queue the images, which
+  //      opens the Image Queue on that list.
+  try {
+    await appLB.page.evaluate(() => { window.__rwTextMode = 'good'; });
+    await go();
+    await appLB.page.evaluate(() => document.querySelector('#lbResults [data-use="0"]').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay', { state: 'hidden', timeout: 5000 });
+    const ed = await appLB.page.evaluate(() => ({ id: document.getElementById('ol_id').value, name: document.getElementById('ol_name').value,
+      room: document.getElementById('ol_room').value, prompts: [...document.querySelectorAll('#ol_items [data-imgprompt]')].map(i => i.value) }));
+    assert(ed.id === 'forge_tools' && ed.name === 'Forge Tools' && ed.room === 'Forge' && ed.prompts.length === 6
+      && ed.prompts[0] === 'leather bellows', `unexpected editor contents: ${JSON.stringify(ed)}`);
+    let msg = null;
+    appLB.page.once('dialog', d => { msg = d.message(); });   // the harness accepts it
+    await appLB.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
+    await appLB.page.waitForSelector('#imageQueueOverlay #iqBatchTemplate', { state: 'visible', timeout: 5000 });
+    assert(msg && /Queue images for the 6 items in "Forge Tools"/.test(msg), `expected the offer to queue images, got ${JSON.stringify(msg)}`);
+    const rows = await appLB.page.evaluate(() => document.querySelectorAll('#iqBatchPreview .iq-plan').length);
+    const stored = await appLB.page.evaluate(async () => (await getAllObjectLists()).find(l => l.id === 'forge_tools'));
+    assert(rows === 6 && stored && stored.items[0].imagePrompt === 'leather bellows' && stored.mnemonic.source === 'AI brainstorm',
+      `expected the saved list and its image batch, got rows=${rows} ${JSON.stringify(stored && stored.items[0])}`);
+    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]').click());
+    await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
+    ok('List brainstorm: Use this fills the editor, and Save offers to queue its images');
+  } catch(e){ bad('List brainstorm: use and save', e); }
+
+  // 511. Closing with suggestions you have not used asks first.
+  try {
+    await appLB.page.evaluate(() => document.getElementById('objlistNewBtn').click());
+    await appLB.page.waitForSelector('#ol_brainstorm', { timeout: 5000 });
+    await appLB.page.evaluate(() => document.getElementById('ol_brainstorm').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay #lbDesc', { state: 'visible', timeout: 5000 });
+    await appLB.page.fill('#lbDesc', 'bakery');
+    await go();
+    let msg = null;
+    appLB.page.once('dialog', d => { msg = d.message(); });
+    await appLB.page.evaluate(() => document.querySelector('#listBrainstormOverlay .mb-leave').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay', { state: 'hidden', timeout: 5000 });
+    assert(msg && /without using any of the 3 suggestions/.test(msg), `expected a confirmation, got ${JSON.stringify(msg)}`);
+    ok('List brainstorm: closing with unused suggestions asks first');
+  } catch(e){ bad('List brainstorm: close guard', e); }
+} finally {
+  await appLB.close();
+}
+} catch(e){ bad('Phase LB: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower
