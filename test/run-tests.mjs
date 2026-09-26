@@ -6630,6 +6630,75 @@ try {
 }
 } catch(e){ bad('Phase MV: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase MW: the move table on a phone. A deep line made the table's
+//     column wider than the screen (the layout's align-items:flex-start kept
+//     it from stretching to the screen instead), so the whole page grew wide;
+//     a phone zoomed out to fit and every modal centred on the wider page,
+//     off to one side. The table now scrolls inside its own column, and row
+//     menus open pinned to the screen so that column cannot clip them. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appMW = await launchApp();
+try {
+  const deep = ['d4','Nf6','c4','e6','Nc3','Bb4','Qc2','O-O','a3','Bxc3+','Qxc3','b6','Bg5','Bb7','f3','h6','Bh4','d5','e3','Nbd7'];
+  const prefs = [];
+  for(let i = 2; i < deep.length; i += 2)
+    prefs.push({ seq: deep.slice(0, i), reply: deep[i], ...(i === 2 ? { isCastleRoot: true, castleName: 'A castle with quite a long name indeed', castleStreetNumber: 1 } : {}) });
+  await seedBackup(appMW.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Nimzo-Indian Defence, Classical Variation, main line', color: 'white', openingMoves: ['d4'], prefs }],
+    games: [{ id: 'g1', moves: deep.join(' '), white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appMW.page.setViewportSize({ width: 390, height: 760 });
+  await appMW.page.click('.line-row');
+  await appMW.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+
+  // 523. With the opening open, the page is no wider than the screen.
+  try {
+    const w = await appMW.page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth,
+      rows: document.querySelectorAll('tr.data-row').length }));
+    assert(w.rows > 3, `setup: expected the deep line's rows in the table, got ${w.rows}`);
+    assert(w.scroll <= w.client, `expected no sideways page overflow at 390px, got ${JSON.stringify(w)}`);
+    ok('move table on a phone: the page stays screen-width with an opening open');
+  } catch(e){ bad('move table on a phone: page width', e); }
+
+  // 524. A modal opened from the menu is centred on the screen.
+  try {
+    await appMW.page.click('#menuBtn');
+    await appMW.page.click('#menuAbout');
+    await appMW.page.waitForSelector('#aboutOverlay', { state: 'visible', timeout: 5000 });
+    const r = await appMW.page.evaluate(() => {
+      const m = document.querySelector('#aboutOverlay .modal').getBoundingClientRect();
+      return { left: m.left, right: document.documentElement.clientWidth - m.right };
+    });
+    assert(r.left >= 0 && r.right >= 0 && Math.abs(r.left - r.right) <= 2, `expected the About modal centred on screen, gaps ${JSON.stringify(r)}`);
+    await appMW.page.evaluate(() => { document.getElementById('aboutOverlay').style.display = 'none'; });
+    ok('move table on a phone: a menu modal is centred with an opening open');
+  } catch(e){ bad('move table on a phone: modal centring', e); }
+
+  // 525. A deep row's ⋮ menu opens wholly on screen and on top, not clipped
+  //      by the table's scrolling column; scrolling the table closes it.
+  try {
+    await appMW.page.evaluate(() => { const rows = document.querySelectorAll('tr.data-row .rowMenuBtn'); rows[rows.length - 1].click(); });
+    const m = await appMW.page.evaluate(() => {
+      const menu = document.querySelector('.row-menu.show');
+      if(!menu) return null;
+      const r = menu.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height, 40) / 2);
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: document.documentElement.clientWidth,
+        h: window.innerHeight, onTop: !!(hit && menu.contains(hit)) };
+    });
+    assert(m, 'expected a row menu to open');
+    assert(m.left >= 0 && m.right <= m.w && m.top >= 0 && m.bottom <= m.h && m.onTop, `expected the row menu on screen and on top, got ${JSON.stringify(m)}`);
+    await appMW.page.evaluate(() => { const c = document.getElementById('tree-col'); c.scrollLeft = 40; c.dispatchEvent(new Event('scroll')); });
+    await appMW.page.waitForFunction(() => !document.querySelector('.row-menu.show'), null, { timeout: 3000 });
+    ok('move table on a phone: row menus open on screen and close when the table scrolls');
+  } catch(e){ bad('move table on a phone: row menu', e); }
+} finally {
+  await appMW.close();
+}
+} catch(e){ bad('Phase MW: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---

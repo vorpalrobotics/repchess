@@ -692,6 +692,14 @@
 
   @media (max-width:700px){
     .main-layout{flex-direction:column}
+    /* The move table's column is the screen's width, and a table wider than
+       that scrolls sideways INSIDE it. The column used to take the table's
+       own width (the layout's align-items:flex-start stops it stretching), so
+       the page grew wider than the screen; a phone then zoomed out to fit, and
+       every modal centred on the wider page, off to one side. (Row menus open
+       pinned to the screen -- openRowMenu -- so this column cannot clip them.) */
+    #tree-col{align-self:stretch;width:100%;max-width:100%;overflow-x:auto}
+    #tableCastleSelect{max-width:62vw}
     #board-col{width:100%;max-width:420px;margin:0 auto}
     #board{width:100%;height:auto;aspect-ratio:1/1}
     #engine-panel{width:100%}
@@ -2205,6 +2213,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-466"></script>
+<script type="module" src="js/app.js?v=20260926-467"></script>
 </body>
 </html>
