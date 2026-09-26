@@ -27083,7 +27083,7 @@ try {
   try {
     await appLB.page.evaluate(() => { window.__rwTextMode = 'good'; });
     await go();
-    await appLB.page.evaluate(() => document.querySelector('#lbResults [data-use="0"]').click());
+    await appLB.page.evaluate(() => document.querySelector('#lbResults .lb-card [data-act="use"]').click());
     await appLB.page.waitForSelector('#listBrainstormOverlay', { state: 'hidden', timeout: 5000 });
     const ed = await appLB.page.evaluate(() => ({ id: document.getElementById('ol_id').value, name: document.getElementById('ol_name').value,
       room: document.getElementById('ol_room').value, prompts: [...document.querySelectorAll('#ol_items [data-imgprompt]')].map(i => i.value) }));
@@ -27103,7 +27103,17 @@ try {
     ok('List brainstorm: Use this fills the editor, and Save offers to queue its images');
   } catch(e){ bad('List brainstorm: use and save', e); }
 
-  // 511. Closing with suggestions you have not used asks first.
+  // 511. Suggestions are kept as Saved ideas: closing no longer asks, and
+  //      List ideas… in the manager's toolbar opens them, grouped by request.
+  const ideas = () => appLB.page.evaluate(() => window.__listBrainstormTestHooks.ideas());
+  const openIdeas = async () => {
+    await appLB.page.evaluate(() => document.getElementById('objlistIdeasBtn').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay #lbIdeasView .lb-card', { state: 'visible', timeout: 5000 });
+  };
+  const closeBrainstorm = async () => {
+    await appLB.page.evaluate(() => document.querySelector('#listBrainstormOverlay .mb-leave').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay', { state: 'hidden', timeout: 5000 });
+  };
   try {
     await appLB.page.evaluate(() => document.getElementById('objlistNewBtn').click());
     await appLB.page.waitForSelector('#ol_brainstorm', { timeout: 5000 });
@@ -27111,13 +27121,124 @@ try {
     await appLB.page.waitForSelector('#listBrainstormOverlay #lbDesc', { state: 'visible', timeout: 5000 });
     await appLB.page.fill('#lbDesc', 'bakery');
     await go();
+    let asked = false;
+    const onDialog = () => { asked = true; };
+    appLB.page.on('dialog', onDialog);
+    await closeBrainstorm();
+    appLB.page.off('dialog', onDialog);
+    assert(!asked, 'expected closing to keep the suggestions without asking');
+    const bakery = (await ideas()).filter(i => i.request === 'bakery');
+    assert(bakery.length === 3, `expected the three suggestions kept as ideas, got ${bakery.length}`);
+    await appLB.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-leave').click());
+    await appLB.page.waitForSelector('#objlistIdeasBtn', { timeout: 5000 });
+    await openIdeas();
+    const view = await appLB.page.evaluate(() => ({
+      tab: document.querySelector('#listBrainstormOverlay .iq-tab.active').dataset.tab,
+      heads: [...document.querySelectorAll('#lbIdeasView .lb-batch-head strong')].map(h => h.textContent) }));
+    assert(view.tab === 'ideas' && view.heads[0] === 'bakery', `expected the ideas tab, newest request first: ${JSON.stringify(view)}`);
+    ok('List brainstorm: suggestions are kept as Saved ideas, opened from the manager');
+  } catch(e){ bad('List brainstorm: saved ideas', e); }
+
+  // 513. Save as list: saved as it stands under a fresh unique ID, its images
+  //      offered, and the idea gone.
+  try {
+    const before = (await ideas()).length;
+    const first = await appLB.page.evaluate(() => {
+      const card = document.querySelector('#lbIdeasView .lb-card');
+      return { id: card.dataset.idea, name: card.querySelector('.lb-card-head strong').textContent };
+    });
     let msg = null;
-    appLB.page.once('dialog', d => { msg = d.message(); });
-    await appLB.page.evaluate(() => document.querySelector('#listBrainstormOverlay .mb-leave').click());
+    appLB.page.once('dialog', d => { msg = d.message(); });   // accepted by the harness
+    await appLB.page.evaluate((id) => document.querySelector(`#lbIdeasView .lb-card[data-idea="${id}"] [data-act="save"]`).click(), first.id);
+    await appLB.page.waitForFunction(() => /Saved "/.test(document.getElementById('lbNotice').textContent), null, { timeout: 5000 });
+    const lists = await appLB.page.evaluate(async () => (await getAllObjectLists()).filter(l => l.mnemonic && l.mnemonic.source === 'AI brainstorm').map(l => l.id));
+    assert((await ideas()).length === before - 1 && !(await ideas()).some(i => i.id === first.id), 'expected the idea removed');
+    assert(msg && /Queue images for the/.test(msg), `expected the image offer, got ${JSON.stringify(msg)}`);
+    assert(lists.includes('forge_tools_2') || lists.some(id => /^forge_tools|^smithy|^kitchen_fixtures/.test(id)),
+      `expected the suggestion saved under a unique id, got ${JSON.stringify(lists)}`);
+    // the offer opened the Image Queue on it; put it away
+    await appLB.page.waitForSelector('#imageQueueOverlay #iqBatchTemplate', { state: 'visible', timeout: 5000 });
+    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]').click());
+    await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
+    ok('List brainstorm: Save as list saves it under a unique ID and offers its images');
+  } catch(e){ bad('List brainstorm: save as list', e); }
+
+  // 514. Use this from Saved ideas, with the manager on its index: a new
+  //      list's editor opens filled in, and saving it removes the idea.
+  try {
+    const target = await appLB.page.evaluate(() => {
+      const card = document.querySelector('#lbIdeasView .lb-card');
+      return { id: card.dataset.idea, name: card.querySelector('.lb-card-head strong').textContent };
+    });
+    await appLB.page.evaluate((id) => document.querySelector(`#lbIdeasView .lb-card[data-idea="${id}"] [data-act="use"]`).click(), target.id);
     await appLB.page.waitForSelector('#listBrainstormOverlay', { state: 'hidden', timeout: 5000 });
-    assert(msg && /without using any of the 3 suggestions/.test(msg), `expected a confirmation, got ${JSON.stringify(msg)}`);
-    ok('List brainstorm: closing with unused suggestions asks first');
-  } catch(e){ bad('List brainstorm: close guard', e); }
+    await appLB.page.waitForSelector('#ol_name', { timeout: 5000 });
+    const name = await appLB.page.evaluate(() => document.getElementById('ol_name').value);
+    assert(name === target.name, `expected the editor filled from the idea, got ${JSON.stringify(name)}`);
+    appLB.page.once('dialog', () => {});   // the image offer, accepted
+    await appLB.page.evaluate(() => document.querySelector('#objectListsOverlay .modal-bar .mb-save').click());
+    await appLB.page.waitForSelector('#objlistGrid', { state: 'visible', timeout: 5000 });
+    assert(!(await ideas()).some(i => i.id === target.id), 'expected the idea removed once its list was saved');
+    await appLB.page.waitForSelector('#imageQueueOverlay', { state: 'visible', timeout: 5000 });
+    await appLB.page.evaluate(() => document.querySelector('#iqBody [data-act="batch-cancel"]')?.click());
+    await appLB.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
+    ok('List brainstorm: Use this from Saved ideas opens a new list, and saving removes the idea');
+  } catch(e){ bad('List brainstorm: use from ideas', e); }
+
+  // 515. Discard removes one idea; Discard all removes a whole request's.
+  try {
+    await openIdeas();
+    const before = await ideas();
+    const one = await appLB.page.evaluate(() => document.querySelector('#lbIdeasView .lb-card').dataset.idea);
+    await appLB.page.evaluate((id) => document.querySelector(`#lbIdeasView .lb-card[data-idea="${id}"] [data-act="discard"]`).click(), one);
+    await appLB.page.waitForFunction((id) => !document.querySelector(`#lbIdeasView .lb-card[data-idea="${id}"]`), one, { timeout: 5000 });
+    const batch = await appLB.page.evaluate(() => document.querySelector('#lbIdeasView .lb-batch').dataset.batch);
+    const inBatch = (await ideas()).filter(i => i.batchId === batch).length;
+    await appLB.page.evaluate(() => document.querySelector('#lbIdeasView .lb-batch [data-act="discard-batch"]').click());
+    await appLB.page.waitForFunction((b) => !document.querySelector(`#lbIdeasView .lb-batch[data-batch="${b}"]`), batch, { timeout: 5000 });
+    const after = await ideas();
+    assert(after.length === before.length - 1 - inBatch && !after.some(i => i.batchId === batch),
+      `expected one idea then a whole batch gone: ${before.length} -> ${after.length} (batch had ${inBatch})`);
+    await closeBrainstorm();
+    ok('List brainstorm: Discard and Discard all');
+  } catch(e){ bad('List brainstorm: discard', e); }
+
+  // 516. A castle's set: one list per named room, a longer reply allowed,
+  //      and repeated objects across the set flagged.
+  try {
+    await resetTasks();
+    await appLB.page.evaluate(() => document.getElementById('objlistIdeasBtn').click());
+    await appLB.page.waitForSelector('#listBrainstormOverlay .iq-tab', { timeout: 5000 });
+    await appLB.page.evaluate(() => document.querySelector('#listBrainstormOverlay .iq-tab[data-tab="brainstorm"]').click());
+    await appLB.page.evaluate(() => { const r = document.querySelector('input[name="lbMode"][value="castle"]'); r.checked = true; r.dispatchEvent(new Event('change')); });
+    const shown = await appLB.page.evaluate(() => ({ rooms: getComputedStyle(document.getElementById('lbRooms').closest('label')).display,
+      go: document.getElementById('lbGo').textContent }));
+    assert(shown.rooms !== 'none' && /set/.test(shown.go), `expected the castle fields shown: ${JSON.stringify(shown)}`);
+    await appLB.page.fill('#lbDesc', 'a medieval castle');
+    await appLB.page.fill('#lbRooms', 'Kitchen, Armory, Chapel');
+    await go();
+    const t = (await texts())[0];
+    assert(t && /Rooms to cover, one list each, in this order: Kitchen; Armory; Chapel/.test(t.messages[0].content)
+      && /a medieval castle/.test(t.messages[0].content) && t.settings.maxTokens === 16000,
+      `unexpected castle request: ${JSON.stringify(t && { msg: t.messages[0].content, max: t.settings.maxTokens })}`);
+    const c = await cards();
+    assert(c.length === 3 && c.some(x => /also in another suggestion/.test(x.warn)), `expected shared objects flagged: ${JSON.stringify(c.map(x => x.warn))}`);
+    const castleIdeas = (await ideas()).filter(i => i.mode === 'castle');
+    assert(castleIdeas.length === 3, `expected the set kept as castle ideas, got ${castleIdeas.length}`);
+    await closeBrainstorm();
+    ok('List brainstorm: a castle set, one list per room, with shared objects flagged');
+  } catch(e){ bad('List brainstorm: castle set', e); }
+
+  // 517. Ideas survive a reload, and a restore discards them.
+  try {
+    const n = (await ideas()).length;
+    await appLB.page.reload({ waitUntil: 'domcontentloaded' });
+    await appLB.page.waitForFunction(() => !!window.__listBrainstormTestHooks, null, { timeout: 15000 });
+    assert((await ideas()).length === n && n > 0, `expected ${n} ideas after a reload`);
+    await seedBackup(appLB.page, { version: 6, user: 'tester', lines: [] });
+    assert((await ideas()).length === 0, 'expected a restore to discard the ideas');
+    ok('List brainstorm: ideas survive a reload, and a restore discards them');
+  } catch(e){ bad('List brainstorm: ideas persistence', e); }
 } finally {
   await appLB.close();
 }

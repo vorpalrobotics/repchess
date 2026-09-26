@@ -22,7 +22,7 @@
    New Asset modal needs an actual import.
 */
 import { openNewAssetModal, openImageQueueForList, runwareText, RUNWARE_KEY_LS } from './assets.js?v=20260804-98';
-import { openListBrainstorm } from './listBrainstorm.js?v=20260804-1';
+import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260804-2';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 const ORDERING_TYPES = {
@@ -55,6 +55,7 @@ let ASSETS = [];       // cached array of all asset records (for the picker + th
 let EDIT = null;       // working copy of the list being edited, or null when showing the index
 let EDIT_IS_NEW = false;
 let EDIT_FROM_BRAINSTORM = false;   // filled in by "Use this" -- Save then offers to queue its images
+let EDIT_FROM_IDEA = null;          // the saved idea it came from, removed once the list is saved
 let PICK_CB = null;    // pending asset-picker callback
 let FILTER_TEXT = '';
 // listId -> [{lineName, castleName}, ...] -- every castle (deduped, one entry
@@ -195,6 +196,7 @@ function buildShell(){
       <span class="assets-spacer"></span>
       <button id="objlistNewBtn"><i class="fa-solid fa-plus"></i> New List</button>
       <button id="objlistImportBtn" title="Import a room-database JSON (preserves existing image bindings by item name)"><i class="fa-solid fa-file-import"></i> Import JSON</button>
+      <button id="objlistIdeasBtn" title="Lists suggested by AI brainstorms, waiting to be used"><i class="fa-solid fa-wand-magic-sparkles"></i> List ideas…</button>
       <button id="objlistCastleQuizBtn" title="Quiz every object list assigned anywhere in a chosen castle"><i class="fa-solid fa-graduation-cap"></i> Quiz a Castle…</button>
       <input type="file" id="objlistImportFile" accept="application/json,.json" style="display:none">
     </div>
@@ -220,6 +222,7 @@ function buildShell(){
   $('objlistNewBtn').onclick = () => openEditor(null);
   $('objlistImportBtn').onclick = () => $('objlistImportFile').click();
   $('objlistCastleQuizBtn').onclick = () => openCastleQuizPicker();
+  $('objlistIdeasBtn').onclick = () => startBrainstorm('ideas');
   $('objlistImportFile').addEventListener('change', onImportFile);
   wirePickerBar();
   $('objlistPickNone').onclick = () => closePicker(null);
@@ -450,6 +453,7 @@ function openEditor(id){
   const src = id ? LISTS.find(l => l.id === id) : null;
   EDIT_IS_NEW = !src;
   EDIT_FROM_BRAINSTORM = false;
+  EDIT_FROM_IDEA = null;
   // deep-ish clone so edits are staged until Save
   EDIT = src ? JSON.parse(JSON.stringify(src)) : {
     id:'', name:'', roomName:'', category:'',
@@ -584,13 +588,50 @@ function renderEditor(){
 /* ---------- AI brainstorm (js/listBrainstorm.js) ----------
    "Use this" fills in THIS new list's editor; the ordinary Save, with every
    check it makes, is still what creates the list. */
-function startBrainstorm(){
+function startBrainstorm(tab){
   openListBrainstorm({
     runwareText, keyLs: RUNWARE_KEY_LS,
     orderingTypes: ORDERING_TYPES, mnemonicTypes: MNEMONIC_TYPES,
     existingNames: LISTS.map(l => l.name).filter(Boolean),
-    onUse: useBrainstormCandidate,
+    onUse: useBrainstormCandidate, saveAsList: saveCandidateAsList,
+    tab: tab === 'ideas' ? 'ideas' : 'brainstorm',
   });
+}
+/* The stored form of a brainstormed candidate -- shared by "Use this" (into
+   the editor) and "Save as list" (straight to storage), so the two cannot
+   disagree about what a suggestion becomes. */
+function listFromCandidate(c){
+  return {
+    name: c.name, roomName: c.roomName || '', category: c.category || '',
+    orderingType: c.orderingType, orderingRule: c.orderingRule || '',
+    items: c.items.map(shapeItem),
+    mnemonic: { type: c.mnemonic.type, initialism: c.mnemonic.initialism || '', phrase: c.mnemonic.phrase || '', source: 'AI brainstorm' },
+  };
+}
+// Offer the pictures for a brainstormed list's imageless items -- its items
+// arrive with Image instructions, so they are the natural next step.
+function offerImagesFor(id, list){
+  const missing = (list.items || []).filter(it => !it.assetId);
+  if(missing.length && confirm(`Queue images for the ${missing.length} item${missing.length === 1 ? '' : 's'} in "${list.name}"?`)){
+    openImageQueueForList({ id, name: list.name, roomName: list.roomName || '', items: missing.map(it => shapeItem(it)) });
+  }
+}
+/* "Save as list": a suggestion saved as it stands, with the same checks the
+   editor's Save makes that could apply to it -- a fresh unique ID, unique
+   item names (the brainstorm's own checking already guarantees those). */
+async function saveCandidateAsList(c){
+  const id = listIdFromName(c.name);
+  const list = listFromCandidate(c);
+  const seen = new Set();
+  for(const it of list.items){
+    const k = it.name.toLowerCase();
+    if(seen.has(k)) throw new Error(`"${it.name}" appears more than once`);
+    seen.add(k);
+  }
+  await setObjectList(id, list);
+  await refresh();
+  offerImagesFor(id, list);
+  return id;
 }
 // a list id from its name, unique among existing lists
 function listIdFromName(name){
@@ -600,18 +641,20 @@ function listIdFromName(name){
   while(LISTS.some(l => l.id === id)) id = `${base}_${n++}`;
   return id;
 }
-function useBrainstormCandidate(c){
-  if(!EDIT || !EDIT_IS_NEW) return;
-  const started = EDIT.name.trim() || EDIT.items.length;
-  if(started && !confirm('Replace what you have entered in this list with the suggestion?')) return;
-  Object.assign(EDIT, {
-    id: EDIT.id.trim() || listIdFromName(c.name),
-    name: c.name, roomName: c.roomName, category: c.category,
-    orderingType: c.orderingType, orderingRule: c.orderingRule,
-    items: c.items.map(shapeItem),
-    mnemonic: { type: c.mnemonic.type, initialism: c.mnemonic.initialism, phrase: c.mnemonic.phrase, source: 'AI brainstorm' },
-  });
+function useBrainstormCandidate(c, ideaId){
+  // From Saved ideas the manager may be on its index, or editing an EXISTING
+  // list: either way the suggestion needs a new list's editor of its own
+  if(!EDIT || !EDIT_IS_NEW){
+    if(EDIT && JSON.stringify(EDIT) !== EDIT_BASELINE
+       && !confirm('Leave the unsaved changes to this list, to start a new one from the suggestion?')) return;
+    openEditor(null);
+  } else {
+    const started = EDIT.name.trim() || EDIT.items.length;
+    if(started && !confirm('Replace what you have entered in this list with the suggestion?')) return;
+  }
+  Object.assign(EDIT, listFromCandidate(c), { id: EDIT.id.trim() || listIdFromName(c.name) });
   EDIT_FROM_BRAINSTORM = true;
+  EDIT_FROM_IDEA = ideaId || null;
   renderEditor();
 }
 
@@ -1142,17 +1185,13 @@ async function saveEditor(){
   });
   const savedId = l.id;
   const fromBrainstorm = EDIT_FROM_BRAINSTORM;
+  const fromIdea = EDIT_FROM_IDEA;
   EDIT = null;
   EDIT_FROM_BRAINSTORM = false;
+  EDIT_FROM_IDEA = null;
   await refresh();
-  // a brainstormed list arrives with Image instructions for every item: the
-  // natural next step is its pictures
-  const missing = l.items.filter(it => !it.assetId);
-  if(fromBrainstorm && missing.length
-     && confirm(`Queue images for the ${missing.length} item${missing.length === 1 ? '' : 's'} in "${l.name.trim()}"?`)){
-    openImageQueueForList({ id: savedId, name: l.name.trim(), roomName: l.roomName.trim(),
-      items: missing.map(it => shapeItem(it)) });
-  }
+  if(fromIdea) await removeListIdea(fromIdea);   // it is a list now, not an idea
+  if(fromBrainstorm) offerImagesFor(savedId, { name: l.name.trim(), roomName: l.roomName.trim(), items: l.items });
   return savedId;   // lets a standalone caller (e.g. openNewObjectListModal) know the save succeeded
 }
 
