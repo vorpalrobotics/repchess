@@ -31,6 +31,8 @@ export const BRAINSTORM_MODELS = [
 ];
 export const BRAINSTORM_CANDIDATES = 3;
 const MAX_TOKENS = 6000;
+const MAX_TOKENS_CASTLE = 16000;   // a dozen lists is a long reply
+export const CASTLE_MAX_LISTS = 12;
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ return ''; } }
@@ -149,21 +151,72 @@ export function validateCandidates(obj, { orderingKeys, mnemonicKeys, minItems =
       mnemonic: { type: mType, initialism: s(m.initialism), phrase: s(m.phrase) }, warnings,
     });
   });
+  // Within one set of suggestions -- which matters most for a castle's set --
+  // a repeated list name or a repeated object is worth knowing about: the
+  // point of a castle is that each room is distinct.
+  const nameCount = {}, itemOwners = {};
+  for(const c of out){
+    const k = c.name.toLowerCase();
+    nameCount[k] = (nameCount[k] || 0) + 1;
+    for(const it of c.items) (itemOwners[it.name.toLowerCase()] ||= new Set()).add(c.name);
+  }
+  for(const c of out){
+    if(nameCount[c.name.toLowerCase()] > 1) c.warnings.push('same name as another suggestion');
+    const shared = c.items.filter(it => itemOwners[it.name.toLowerCase()].size > 1).map(it => it.name);
+    if(shared.length) c.warnings.push(`also in another suggestion: ${shared.join(', ')}`);
+  }
   if(!out.length && !errors.length) errors.push('the reply had no candidates');
   return { candidates: out, errors: out.length ? [] : errors };
+}
+
+/* ---------- saved ideas ----------
+   Every brainstorm's suggestions are kept, so closing the dialog loses
+   nothing: they wait under Saved ideas until used, saved as a list, or
+   discarded. Stored in the meta store, which -- like the image queue's jobs
+   -- is left out of backups (app.js's BACKUP_EXCLUDED_META) and emptied by
+   every restore. Read fresh on each open, so a restore needs no reset here.
+
+   An idea: { id, batchId, createdAt, request, mode, model, candidate }.
+   A batch is one Brainstorm press; Refine replaces its own batch rather than
+   piling up the suggestions it was asked to improve on. */
+const LIST_IDEAS_KEY = 'listIdeas';
+let IDEAS = [];
+async function loadIdeas(){
+  try {
+    const v = JSON.parse(await getMeta(LIST_IDEAS_KEY) || '[]');
+    IDEAS = Array.isArray(v) ? v : [];
+  } catch(_){ IDEAS = []; }
+  return IDEAS;
+}
+async function saveIdeas(){
+  try { await setMeta(LIST_IDEAS_KEY, JSON.stringify(IDEAS)); }
+  catch(err){ console.error('[listBrainstorm] could not save ideas', err); }
+}
+// used by objectLists.js once an idea has become a saved list
+export async function removeListIdea(id){
+  if(!id) return;
+  await loadIdeas();
+  IDEAS = IDEAS.filter(i => i.id !== id);
+  await saveIdeas();
+  if(document.getElementById('listBrainstormOverlay')?.style.display === 'flex') renderAll();
 }
 
 /* ---------- the dialog ---------- */
 let DEPS = null;           // what objectLists.js handed in
 let HISTORY = [];          // the conversation so far, for Refine
-let CANDS = [];
+let BATCH = null;          // { batchId, request, mode } of the suggestions on screen
 let SPENT = 0;
 let BUSY = false;
+let TAB = 'brainstorm';
 
-/* deps: { runwareText, keyLs, orderingTypes, mnemonicTypes, existingNames, onUse(candidate) } */
-export function openListBrainstorm(deps){
+/* deps: { runwareText, keyLs, orderingTypes, mnemonicTypes, existingNames,
+           onUse(candidate, ideaId), saveAsList(candidate) => Promise<savedId>,
+           tab: 'brainstorm' | 'ideas' } */
+export async function openListBrainstorm(deps){
   DEPS = deps;
-  HISTORY = []; CANDS = []; SPENT = 0; BUSY = false;
+  HISTORY = []; BATCH = null; SPENT = 0; BUSY = false;
+  await loadIdeas();
+  TAB = deps.tab === 'ideas' && IDEAS.length ? 'ideas' : 'brainstorm';
   let ov = document.getElementById('listBrainstormOverlay');
   if(!ov){
     ov = document.createElement('div');
@@ -181,60 +234,82 @@ export function openListBrainstorm(deps){
     <div class="modal" style="width:min(48em,94vw);max-height:90vh;display:flex;flex-direction:column">
       <div class="modal-bar-host">${modalBarHtml({ title: 'Brainstorm a list', prefix: 'lb' })}</div>
       <div class="modal-body lb-body">
-        <label class="iq-f">What is the list for?
-          <textarea id="lbDesc" rows="3" placeholder="e.g. things in a blacksmith's forge, for a medieval castle; or: the stages of making bread"></textarea></label>
-        <div class="iq-grid">
-          <label class="iq-f">Preferred ordering <select id="lbOrdering"><option value="">Any (the strongest that fits)</option>${orderingOpts}</select></label>
-          <label class="iq-f">Items, from <input type="number" id="lbMin" min="2" max="20" value="5"></label>
-          <label class="iq-f">to <input type="number" id="lbMax" min="2" max="20" value="9"></label>
-          <label class="iq-f">Room (optional) <input type="text" id="lbRoom" autocomplete="off"></label>
-          <label class="iq-f">Category (optional) <input type="text" id="lbCategory" autocomplete="off"></label>
-          <label class="iq-f">Model <select id="lbModel">${BRAINSTORM_MODELS.map(m =>
-            `<option value="${esc(m.id)}"${m.id === savedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select></label>
-          <label class="iq-f" id="lbCustomWrap">Runware model ID <input type="text" id="lbCustom" value="${esc(lsGet(BRAINSTORM_CUSTOM_LS))}" autocomplete="off"></label>
+        <div class="iq-tabs">
+          <button type="button" class="iq-tab" data-tab="brainstorm">Brainstorm</button>
+          <button type="button" class="iq-tab" data-tab="ideas">Saved ideas <span id="lbIdeaCount"></span></button>
         </div>
-        <label class="iq-f">Runware API key (the same one as image generation)
-          <input type="password" id="lbKey" value="${esc(lsGet(deps.keyLs))}" autocomplete="off"></label>
-        <div class="iq-actions"><button type="button" id="lbGo">Brainstorm ${BRAINSTORM_CANDIDATES} lists</button></div>
-        <div id="lbStatus" class="iq-hint"></div>
-        <div id="lbResults"></div>
-        <div id="lbRefineWrap" class="lb-refine" style="display:none">
-          <label class="iq-f">Not quite? Say what to change
-            <textarea id="lbRefineText" rows="2" placeholder="e.g. fewer items, more tools and fewer furnishings"></textarea></label>
-          <div class="iq-actions"><button type="button" id="lbRefine">Refine</button></div>
+        <div id="lbNotice" class="iq-hint"></div>
+        <div id="lbBrainstormView" class="lb-body">
+          <div class="lb-mode">
+            <label><input type="radio" name="lbMode" value="one" checked> One list (${BRAINSTORM_CANDIDATES} suggestions)</label>
+            <label><input type="radio" name="lbMode" value="castle"> A set of lists for a castle</label>
+          </div>
+          <label class="iq-f"><span id="lbDescLabel">What is the list for?</span>
+            <textarea id="lbDesc" rows="3"></textarea></label>
+          <div class="iq-grid">
+            <label class="iq-f lb-castle-only">How many lists <input type="number" id="lbCount" min="2" max="${CASTLE_MAX_LISTS}" value="6"></label>
+            <label class="iq-f lb-castle-only" style="grid-column:span 2">Rooms (optional, comma-separated)
+              <input type="text" id="lbRooms" placeholder="e.g. Kitchen, Armory, Chapel" autocomplete="off"></label>
+            <label class="iq-f">Preferred ordering <select id="lbOrdering"><option value="">Any (the strongest that fits)</option>${orderingOpts}</select></label>
+            <label class="iq-f">Items, from <input type="number" id="lbMin" min="2" max="20" value="5"></label>
+            <label class="iq-f">to <input type="number" id="lbMax" min="2" max="20" value="9"></label>
+            <label class="iq-f lb-one-only">Room (optional) <input type="text" id="lbRoom" autocomplete="off"></label>
+            <label class="iq-f lb-one-only">Category (optional) <input type="text" id="lbCategory" autocomplete="off"></label>
+            <label class="iq-f">Model <select id="lbModel">${BRAINSTORM_MODELS.map(m =>
+              `<option value="${esc(m.id)}"${m.id === savedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select></label>
+            <label class="iq-f" id="lbCustomWrap">Runware model ID <input type="text" id="lbCustom" value="${esc(lsGet(BRAINSTORM_CUSTOM_LS))}" autocomplete="off"></label>
+          </div>
+          <label class="iq-f">Runware API key (the same one as image generation)
+            <input type="password" id="lbKey" value="${esc(lsGet(deps.keyLs))}" autocomplete="off"></label>
+          <div class="iq-actions"><button type="button" id="lbGo"></button></div>
+          <div id="lbStatus" class="iq-hint"></div>
+          <div id="lbResults"></div>
+          <div id="lbRefineWrap" class="lb-refine" style="display:none">
+            <label class="iq-f">Not quite? Say what to change
+              <textarea id="lbRefineText" rows="2" placeholder="e.g. fewer items, more tools and fewer furnishings"></textarea></label>
+            <div class="iq-actions"><button type="button" id="lbRefine">Refine</button></div>
+          </div>
         </div>
+        <div id="lbIdeasView"></div>
       </div>
     </div>`;
   ov.style.display = 'flex';
   const q = (id) => ov.querySelector('#' + id);
-  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: closeBrainstorm });
+  // suggestions are kept as Saved ideas, so closing never loses them
+  wireModalBar(ov.querySelector('.modal-bar'), { onLeave: () => { if(!BUSY) hide(); } });
   const syncModel = () => {
     q('lbCustomWrap').style.display = q('lbModel').value === 'custom' ? '' : 'none';
     lsSet(BRAINSTORM_MODEL_LS, q('lbModel').value);
   };
   q('lbModel').onchange = syncModel;
   syncModel();
+  ov.querySelectorAll('input[name="lbMode"]').forEach(r => r.onchange = syncMode);
+  syncMode();
   q('lbGo').onclick = () => brainstorm(false);
   q('lbRefine').onclick = () => brainstorm(true);
-  ov.querySelector('#lbResults').onclick = (e) => {
-    const b = e.target.closest('[data-use]');
-    if(!b) return;
-    const cand = CANDS[+b.dataset.use];
-    if(!cand) return;
-    CANDS = [];               // used: nothing left to warn about on close
-    hide();
-    DEPS.onUse(cand);
-  };
+  ov.querySelectorAll('.iq-tab').forEach(b => b.onclick = () => { TAB = b.dataset.tab; renderAll(); });
+  ov.addEventListener('click', onCardClick);
+  renderAll();
+}
+function mode(){
+  const r = document.querySelector('#listBrainstormOverlay input[name="lbMode"]:checked');
+  return r ? r.value : 'one';
+}
+function syncMode(){
+  const ov = document.getElementById('listBrainstormOverlay');
+  if(!ov) return;
+  const castle = mode() === 'castle';
+  ov.querySelectorAll('.lb-castle-only').forEach(el => { el.style.display = castle ? '' : 'none'; });
+  ov.querySelectorAll('.lb-one-only').forEach(el => { el.style.display = castle ? 'none' : ''; });
+  ov.querySelector('#lbDescLabel').textContent = castle ? "What is the castle's theme?" : 'What is the list for?';
+  ov.querySelector('#lbDesc').placeholder = castle
+    ? 'e.g. a medieval castle with working rooms; or: a haunted Victorian mansion'
+    : "e.g. things in a blacksmith's forge, for a medieval castle; or: the stages of making bread";
+  ov.querySelector('#lbGo').textContent = castle ? 'Brainstorm the set' : `Brainstorm ${BRAINSTORM_CANDIDATES} lists`;
 }
 function hide(){
   const ov = document.getElementById('listBrainstormOverlay');
   if(ov){ ov.style.display = 'none'; ov.innerHTML = ''; }
-}
-function closeBrainstorm(){
-  if(BUSY) return;
-  if(CANDS.length && !confirm(`Close without using any of the ${CANDS.length} suggestions?`)) return;
-  CANDS = [];
-  hide();
 }
 
 function modelId(q){
@@ -254,30 +329,44 @@ async function brainstorm(refine){
   const model = modelId(q);
   const orderingKeys = Object.keys(DEPS.orderingTypes);
   const mnemonicKeys = Object.keys(DEPS.mnemonicTypes);
-  let min = Math.max(2, parseInt(q('lbMin').value, 10) || 5);
-  let max = Math.max(min, parseInt(q('lbMax').value, 10) || 9);
+  const min = Math.max(2, parseInt(q('lbMin').value, 10) || 5);
+  const max = Math.max(min, parseInt(q('lbMax').value, 10) || 9);
+  const castle = refine ? (BATCH && BATCH.mode === 'castle') : mode() === 'castle';
+  const count = castle ? Math.min(CASTLE_MAX_LISTS, Math.max(2, parseInt(q('lbCount').value, 10) || 6)) : BRAINSTORM_CANDIDATES;
   if(!key) return status('Enter your Runware API key.');
   if(!model) return status('Enter the Runware model ID.');
   lsSet(DEPS.keyLs, key);
-  let userMsg;
+  const ord = q('lbOrdering').value;
+  const ordLine = `Preferred ordering: ${ord ? `${ord} (${DEPS.orderingTypes[ord]})` : 'any -- choose the strongest that fits'}`;
+  const have = `Lists the user already has (do not duplicate these): ${(DEPS.existingNames || []).slice(0, 60).join('; ') || 'none'}`;
+  let userMsg, request;
   if(refine){
     const fb = q('lbRefineText').value.trim();
     if(!fb) return status('Say what to change first.');
-    if(!HISTORY.length) return status('Brainstorm first, then refine.');
-    userMsg = `Feedback on those candidates: ${fb}\nReply with ${BRAINSTORM_CANDIDATES} new candidates in the same JSON shape.`;
+    if(!HISTORY.length || !BATCH) return status('Brainstorm first, then refine.');
+    userMsg = `Feedback on those candidates: ${fb}\nReply with ${count} new candidates in the same JSON shape.`;
+    request = BATCH.request;
   } else {
     const desc = q('lbDesc').value.trim();
-    if(!desc) return status('Describe the list you want.');
-    const ord = q('lbOrdering').value;
-    userMsg = [
-      `Suggest ${BRAINSTORM_CANDIDATES} candidate object lists.`,
-      `What the list is for: ${desc}`,
-      `Preferred ordering: ${ord ? `${ord} (${DEPS.orderingTypes[ord]})` : 'any -- choose the strongest that fits'}`,
-      `Number of items: between ${min} and ${max}.`,
-      `Room: ${q('lbRoom').value.trim() || '(your choice)'}`,
-      `Category: ${q('lbCategory').value.trim() || '(your choice)'}`,
-      `Lists the user already has (do not duplicate these): ${(DEPS.existingNames || []).slice(0, 60).join('; ') || 'none'}`,
-    ].join('\n');
+    if(!desc) return status(castle ? "Describe the castle's theme." : 'Describe the list you want.');
+    request = desc;
+    if(castle){
+      const rooms = q('lbRooms').value.split(',').map(r => r.trim()).filter(Boolean).slice(0, CASTLE_MAX_LISTS);
+      userMsg = [
+        `Suggest ${rooms.length || count} object lists for one castle.`,
+        `The castle's theme: ${desc}`,
+        'Each list belongs to a different room of the castle. Together they should feel like one building, and no object should appear in more than one list.',
+        rooms.length ? `Rooms to cover, one list each, in this order: ${rooms.join('; ')}` : `Choose ${count} distinct rooms that suit the theme.`,
+        ordLine, `Number of items in each list: between ${min} and ${max}.`, have,
+      ].join('\n');
+    } else {
+      userMsg = [
+        `Suggest ${BRAINSTORM_CANDIDATES} candidate object lists.`, `What the list is for: ${desc}`, ordLine,
+        `Number of items: between ${min} and ${max}.`,
+        `Room: ${q('lbRoom').value.trim() || '(your choice)'}`,
+        `Category: ${q('lbCategory').value.trim() || '(your choice)'}`, have,
+      ].join('\n');
+    }
     HISTORY = [];
   }
   const systemPrompt = brainstormSystemPrompt(DEPS.orderingTypes, DEPS.mnemonicTypes);
@@ -289,9 +378,10 @@ async function brainstorm(refine){
     } catch(err){ return { candidates: [], errors: [err.message] }; }
   };
   const ask = async (messages) => {
-    const res = await DEPS.runwareText(key, { model, systemPrompt, messages, maxTokens: MAX_TOKENS, jsonSchema });
+    const res = await DEPS.runwareText(key, { model, systemPrompt, messages,
+      maxTokens: castle ? MAX_TOKENS_CASTLE : MAX_TOKENS, jsonSchema });
     if(typeof res.cost === 'number') SPENT += res.cost;
-    if(res.finishReason === 'length') throw new Error('the reply was cut off before it finished -- ask for fewer items, or try a stronger model');
+    if(res.finishReason === 'length') throw new Error('the reply was cut off before it finished -- ask for fewer lists or items, or try a stronger model');
     return res;
   };
   BUSY = true;
@@ -316,10 +406,19 @@ async function brainstorm(refine){
       return;
     }
     HISTORY = [...conv, { role: 'assistant', content: res.text }];
-    CANDS = got.candidates;
-    renderCandidates(q);
+    // keep them as ideas; a refine replaces the batch it improved on
+    await loadIdeas();
+    if(refine && BATCH) IDEAS = IDEAS.filter(i => i.batchId !== BATCH.batchId);
+    else BATCH = { batchId: crypto.randomUUID(), request, mode: castle ? 'castle' : 'one' };
+    const now = Date.now();
+    for(const c of got.candidates){
+      IDEAS.push({ id: crypto.randomUUID(), batchId: BATCH.batchId, createdAt: now, request: BATCH.request,
+                   mode: BATCH.mode, model, candidate: c });
+    }
+    await saveIdeas();
     q('lbRefineWrap').style.display = '';
     q('lbRefineText').value = '';
+    renderAll();
     status(SPENT ? `Cost so far: $${SPENT.toFixed(4)}` : '');
   } catch(err){
     console.error('[listBrainstorm] failed', err);
@@ -330,9 +429,10 @@ async function brainstorm(refine){
   }
 }
 
-function renderCandidates(q){
-  q('lbResults').innerHTML = CANDS.map((c, i) => `
-    <div class="lb-card" data-cand="${i}">
+function cardHtml(idea){
+  const c = idea.candidate;
+  return `
+    <div class="lb-card" data-idea="${esc(idea.id)}">
       <div class="lb-card-head"><strong>${esc(c.name)}</strong>
         <span class="iq-meta">${esc([c.roomName, c.category].filter(Boolean).join(' · '))}</span></div>
       <div class="lb-order"><span class="lb-tag">${esc(DEPS.orderingTypes[c.orderingType] || c.orderingType)}</span>
@@ -342,9 +442,79 @@ function renderCandidates(q){
         ? ` <span class="iq-hint">— ${esc(it.imagePrompt)}</span>` : ''}</li>`).join('')}</ol>
       ${c.mnemonic.phrase ? `<div class="lb-mnem">Mnemonic: “${esc(c.mnemonic.phrase)}”${c.mnemonic.initialism
         ? ` (${esc(c.mnemonic.initialism)})` : ''}</div>` : ''}
-      ${c.warnings.length ? `<div class="lb-warn">${c.warnings.map(esc).join(' · ')}</div>` : ''}
-      <div class="iq-actions"><button type="button" data-use="${i}">Use this</button></div>
-    </div>`).join('');
+      ${c.warnings && c.warnings.length ? `<div class="lb-warn">${c.warnings.map(esc).join(' · ')}</div>` : ''}
+      <div class="iq-actions">
+        <button type="button" data-act="use" title="Fill in a new list's editor with it, to adjust before saving">Use this</button>
+        <button type="button" data-act="save" title="Save it as a list now, as it stands">Save as list</button>
+        <button type="button" data-act="discard">Discard</button>
+      </div>
+    </div>`;
+}
+function renderAll(){
+  const ov = document.getElementById('listBrainstormOverlay');
+  if(!ov || !ov.querySelector('#lbIdeasView')) return;
+  ov.querySelectorAll('.iq-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === TAB));
+  ov.querySelector('#lbIdeaCount').textContent = IDEAS.length ? `(${IDEAS.length})` : '';
+  ov.querySelector('#lbBrainstormView').style.display = TAB === 'brainstorm' ? '' : 'none';
+  ov.querySelector('#lbIdeasView').style.display = TAB === 'ideas' ? '' : 'none';
+  // this brainstorm's own suggestions, still waiting
+  const mine = BATCH ? IDEAS.filter(i => i.batchId === BATCH.batchId) : [];
+  const results = ov.querySelector('#lbResults');
+  if(BATCH) results.innerHTML = mine.length ? mine.map(cardHtml).join('')
+    : '<p class="iq-hint">All of these have been used or discarded.</p>';
+  // every saved idea, newest brainstorm first
+  const batches = [];
+  for(const i of [...IDEAS].sort((a, b) => b.createdAt - a.createdAt)){
+    let bt = batches.find(x => x.batchId === i.batchId);
+    if(!bt) batches.push(bt = { batchId: i.batchId, request: i.request, mode: i.mode, createdAt: i.createdAt, ideas: [] });
+    bt.ideas.push(i);
+  }
+  ov.querySelector('#lbIdeasView').innerHTML = batches.length ? batches.map(bt => `
+    <div class="lb-batch" data-batch="${esc(bt.batchId)}">
+      <div class="lb-batch-head"><span><strong>${esc(bt.request)}</strong>
+        <span class="iq-meta">${bt.mode === 'castle' ? 'castle set · ' : ''}${new Date(bt.createdAt).toLocaleDateString()}</span></span>
+        <button type="button" data-act="discard-batch">Discard all</button></div>
+      ${bt.ideas.map(cardHtml).join('')}
+    </div>`).join('')
+    : '<p class="iq-empty">No saved ideas. Brainstorm some, and any you don\'t use straight away wait here.</p>';
+}
+
+async function onCardClick(e){
+  const btn = e.target.closest('button[data-act]');
+  if(!btn || BUSY) return;
+  const act = btn.dataset.act;
+  if(act === 'discard-batch'){
+    const bid = btn.closest('[data-batch]').dataset.batch;
+    await loadIdeas();
+    IDEAS = IDEAS.filter(i => i.batchId !== bid);
+    await saveIdeas();
+    return renderAll();
+  }
+  const card = btn.closest('[data-idea]');
+  const idea = card && IDEAS.find(i => i.id === card.dataset.idea);
+  if(!idea) return;
+  if(act === 'discard'){
+    IDEAS = IDEAS.filter(i => i.id !== idea.id);
+    await saveIdeas();
+    return renderAll();
+  }
+  if(act === 'use'){
+    // removed once the list it fills is actually saved (objectLists.js calls
+    // removeListIdea) -- cancelling that editor keeps the idea
+    hide();
+    return DEPS.onUse(idea.candidate, idea.id);
+  }
+  if(act === 'save'){
+    const status = document.querySelector('#listBrainstormOverlay #lbNotice');   // seen from either tab
+    try {
+      const id = await DEPS.saveAsList(idea.candidate);
+      if(!id) return;
+      await removeListIdea(idea.id);
+      if(status) status.textContent = `Saved "${idea.candidate.name}" as a list.`;
+    } catch(err){
+      if(status) status.textContent = 'Could not save it: ' + ((err && err.message) || err);
+    }
+  }
 }
 
 if(localStorage.getItem('threeTestDebug')) window.__listBrainstormTestHooks = {
@@ -352,4 +522,5 @@ if(localStorage.getItem('threeTestDebug')) window.__listBrainstormTestHooks = {
   validate: (obj, opts) => validateCandidates(obj, opts),
   systemPrompt: (o, m) => brainstormSystemPrompt(o, m),
   schema: (o, m) => brainstormSchema(o, m),
+  ideas: async () => (await loadIdeas()).map(i => ({ ...i })),
 };

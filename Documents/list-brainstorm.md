@@ -1,8 +1,35 @@
 # Object list brainstorm: design
 
-**Status: phase 1 built.** The code is `js/listBrainstorm.js`, with
-`runwareText` in `js/imageQueue.js`. Tests 505–511 are in phase LB. Phases 2
-and 3 are not started.
+**Status: phases 1 and 2 built.** The code is `js/listBrainstorm.js`, with
+`runwareText` in `js/imageQueue.js`. Tests 505–517 are in phase LB. Phase 3 is
+not started.
+
+Phase 2's implementation choices:
+- **Saved ideas.**
+  - Suggestions are stored in meta key `listIdeas` as `{ id, batchId,
+    createdAt, request, mode, model, candidate }`.
+  - They are excluded from backups (`BACKUP_EXCLUDED_META`), so a restore
+    clears them, and they are read fresh on each open, so no in-memory reset
+    is needed.
+  - A **batch** is one Brainstorm press. Refine replaces its own batch rather
+    than piling up the suggestions it was asked to improve.
+  - Closing the dialog no longer asks, because nothing is lost.
+- **Tabs.** The dialog has **Brainstorm** and **Saved ideas**. **List
+  ideas…** in the manager's toolbar opens the second.
+- **Card actions.** Every suggestion offers:
+  - **Use this.** It opens a new list's editor, from anywhere. The idea is
+    removed only once that list is SAVED (`EDIT_FROM_IDEA` →
+    `removeListIdea`), so cancelling the editor keeps it.
+  - **Save as list.** It saves straight to storage under a fresh unique ID.
+  - **Discard,** plus **Discard all** for a whole batch.
+
+  Use this and Save as list share `listFromCandidate`, so the two cannot
+  disagree about what a suggestion becomes. Both offer its images afterwards
+  (`offerImagesFor`).
+- **Castle sets.** There is a mode toggle. Castle mode takes a theme, a count
+  (2–12) or named rooms, and allows a longer reply (`maxTokens` 16000).
+  Checking a batch flags duplicate list names and objects shared across the
+  set.
 
 ## What it is
 
