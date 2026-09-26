@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-466';
+const BUILD_TAG = '-467';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3988,6 +3988,34 @@ function closeAllRowMenus(){
   document.querySelectorAll('.row-menu-quality.expanded').forEach(q=>q.classList.remove('expanded'));
 }
 document.addEventListener('click', closeAllRowMenus);
+/* Open a row's "more" menu pinned to the SCREEN, just under its button,
+   rather than positioned inside the row. On a phone the move table scrolls
+   sideways inside its own column (so the page itself stays screen-width --
+   a page wider than the screen let the browser zoom out, and every modal
+   then centred on the wider page, off to the side). A scrolling column clips
+   anything positioned inside it, which would have cut these menus off at its
+   edge. Pinned, they cannot be clipped; nudged to stay on screen, opened
+   upward when there is no room below, and scrollable if taller than the
+   screen. Scrolling the page or the table closes them, since a pinned menu
+   would otherwise stay put while its row moved away. */
+function openRowMenu(menu, btn){
+  menu.classList.add('show');
+  const r = btn.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  Object.assign(menu.style, { position: 'fixed', left: '0px', top: '0px', maxHeight: '', overflowY: '' });
+  const m = menu.getBoundingClientRect();
+  const left = Math.max(4, Math.min(r.left, vw - m.width - 4));
+  const below = vh - r.bottom - 4, above = r.top - 4;
+  let top = r.bottom + 2;
+  if(m.height > below && above > below) top = Math.max(4, r.top - m.height - 2);
+  const room = top >= r.bottom ? below : r.top - 6;
+  if(m.height > room){ menu.style.maxHeight = Math.max(120, room) + 'px'; menu.style.overflowY = 'auto'; }
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+}
+document.addEventListener('scroll', e => {
+  if(!(e.target instanceof Element && e.target.closest('.row-menu'))) closeAllRowMenus();
+}, { capture: true, passive: true });
 
 /* ---------- canonicalize move-input case (castling + piece letters) ----------
    O/Q/N/K/R never collide with file letters (a-h), so they're safe to
@@ -5564,7 +5592,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       const showing = ctxRowMenu.classList.contains('show');
       closeAllRowMenus();
-      if(!showing) ctxRowMenu.classList.add('show');
+      if(!showing) openRowMenu(ctxRowMenu, ctxRowMenuBtn);
     };
     ctxRowMenu.querySelector('[data-act="nodeStats"]').onclick = e => {
       e.stopPropagation();
@@ -5912,7 +5940,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       const showing = rowMenu.classList.contains('show');
       closeAllRowMenus();
-      if(!showing) rowMenu.classList.add('show');
+      if(!showing) openRowMenu(rowMenu, rowMenuBtn);
     };
     rowMenu.querySelector('[data-act="focus"]').onclick = e => {
       e.stopPropagation();
@@ -6361,7 +6389,7 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     const showing = rowMenu.classList.contains('show');
     closeAllRowMenus();
-    if(!showing) rowMenu.classList.add('show');
+    if(!showing) openRowMenu(rowMenu, rowMenuBtn);
   };
   rowMenu.querySelector('[data-act="focus"]').onclick = e => {
     e.stopPropagation();
