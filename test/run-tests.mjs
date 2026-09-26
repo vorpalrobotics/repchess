@@ -22518,7 +22518,8 @@ try {
   try {
     const bucketIds = await appEF.page.evaluate(() => window.__reviewForecastTestHooks.buckets().map(b => b.id));
     const f = await run([], {}, {});
-    assert(bucketIds.length === 8, `expected the eight documented buckets, got ${JSON.stringify(bucketIds)}`);
+    assert(bucketIds.length === 9 && bucketIds.includes('today'),
+      `expected the nine documented buckets (with "Later today"), got ${JSON.stringify(bucketIds)}`);
     assert(bucketIds.every(id => f.buckets[id] && f.buckets[id].moves === 0 && f.buckets[id].rooms === 0),
       `expected every bucket present and zeroed for an empty scope: ${JSON.stringify(f.buckets)}`);
     assert(f.ladder.length === LADDER.length && f.perDay.length === 0 && f.castles === 0,
@@ -22693,7 +22694,7 @@ try {
       window.__reviewForecastTestHooks.ladder(),
       await window.__reviewForecastTestHooks.forecast(),
     ]);
-    // 8 buckets + one rung per ladder step + 2 totals rows
+    // 9 buckets + one rung per ladder step + 2 totals rows
     assert(shown.length === buckets.length + ladder.length + 2,
       `expected a row per bucket, per ladder rung, plus the two totals: got ${shown.length}`);
     for(const b of buckets){
@@ -22730,6 +22731,36 @@ try {
       () => document.querySelectorAll('#reviewForecastBody .rf-row').length > 0, { timeout: 20000 });
     ok('Review Forecast: the scope dropdown re-scopes to a castle and back to all');
   } catch(e){ bad('Review Forecast: scope dropdown', e); }
+
+  // 522. The rooms behind "Due now" are listed, so a count that disagrees
+  //      with the walk's review list can be checked room by room: a due room
+  //      and a same-day review later today are listed (the latter apart), a
+  //      room not due is not.
+  try {
+    const r = await appEF.page.evaluate(() => {
+      const H = window.__reviewForecastTestHooks;
+      const now = Date.now();
+      const room = (posKey, name, seq, moveCount) => ({ posKey, name, seq, moveCount, exits: [{ to: 'x' }], pairs: [] });
+      const castles = [{ castleName: 'Alpha', lineId: 'L1', instanceId: 'L1_Alpha', entryPosKey: 'p0',
+        genRooms: [room('p1', 'Gallery', ['d4', 'Nf6'], 3), room('p2', '', ['d4', 'd5', 'c4'], 2), room('p3', 'Attic', ['e4'], 4)] }];
+      const k = (p) => H.roomKeyFor('L1_Alpha', p);
+      const reviews = {
+        [k('p1')]: { due: now - 3600e3, step: 1, last: now - 4 * 86400e3 },
+        [k('p2')]: { due: now + 3 * 3600e3, step: 0, learning: true, last: now },
+        [k('p3')]: { due: now + 10 * 86400e3, step: 3, last: now },
+      };
+      const f = H.build(castles, reviews, {}, { now });
+      const box = document.createElement('div');
+      box.innerHTML = H.dueRoomsHtml(f.dueRooms);
+      return { rooms: f.dueRooms.map(x => [x.name || x.seq.join(' '), x.bucket]), summary: box.querySelector('summary').textContent,
+               items: [...box.querySelectorAll('li')].map(li => li.textContent.replace(/\s+/g, ' ').trim()) };
+    });
+    assert(JSON.stringify(r.rooms) === '[["Gallery","due"],["d4 d5 c4","today"]]', `unexpected due rooms: ${JSON.stringify(r.rooms)}`);
+    assert(/1 due now, 1 later today/.test(r.summary), `unexpected summary: ${JSON.stringify(r.summary)}`);
+    assert(/Gallery Alpha · 3 moves · due/.test(r.items[0]) && /same-day review, around/.test(r.items[1]),
+      `unexpected list items: ${JSON.stringify(r.items)}`);
+    ok('VR Schedule: the rooms behind "Due now" are listed, same-day reviews later today apart');
+  } catch(e){ bad('VR Schedule: due rooms list', e); }
 
   // 278. The never-reviewed callout. A castle memorized long ago and never
   //      graded is legitimately ALL overdue at step 0, which looks like
@@ -23125,8 +23156,11 @@ try {
       'expected a learning review not yet due halfway through its step');
     assert(await H('state', rec, T0 + LMS) === 'due', 'expected it due at its real timestamp');
     assert(await H('state', rec, T0 + LMS + 2 * DAY) === 'overdue', 'expected it overdue once left for days');
-    assert(await H('bucket', rec, T0 + LMS / 2) === 'due',
-      'expected a learning review due later TODAY to count as today\'s work, not "tomorrow"');
+    // today's work, but not due NOW: "Later today", so the VR Schedule's
+    // "Due now" agrees with the walk's review list (it once said 'due')
+    assert(await H('bucket', rec, T0 + LMS / 2) === 'today',
+      'expected a learning review due later today in "Later today" -- not "Due now", not "Tomorrow"');
+    assert(await H('bucket', rec, T0 + LMS) === 'due', 'expected it "Due now" once its time comes');
     const phrase = await H('duePhrase', rec, T0);
     assert(/in 6 hours \(around .+\)/.test(phrase),
       `expected the due phrase in hours with a time of day, got ${JSON.stringify(phrase)}`);

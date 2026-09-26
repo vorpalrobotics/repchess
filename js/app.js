@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-464';
+const BUILD_TAG = '-466';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8742,6 +8742,10 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
      this feature would be silently dropping moves from every total. A number
      you can see beats an assumption you can't. */
   const locked = { moves: 0, rooms: 0 };
+  /* Which rooms make up "due now" and "later today" -- listed under the load
+     cards, so a number that disagrees with the walk's review list can be
+     checked room by room rather than taken on trust. */
+  const dueRooms = [];
   let castleCount = 0;
 
   for(const c of (castles || [])){
@@ -8765,6 +8769,10 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
       const rec = effectiveRoomReview(reviews, memorized, roomKey);
       const bucket = reviewForecastBucket(rec, now);
       buckets[bucket].rooms++; buckets[bucket].moves += moves;
+      if(bucket === 'overdue' || bucket === 'due' || bucket === 'today'){
+        dueRooms.push({ key: roomKey, castle: c.castleName, name: gr.name || '', seq: gr.seq || null,
+                        moves, bucket, learning: !!rec.learning, due: rec.due });
+      }
       if(!rec) continue;
 
       totals.memorizedRooms++; totals.memorizedMoves += moves;
@@ -8799,8 +8807,8 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
      worst. */
   const WINDOWS = {
     now:      ['overdue', 'due'],
-    tomorrow: ['overdue', 'due', 'tomorrow'],
-    week:     ['overdue', 'due', 'tomorrow', 'week'],
+    tomorrow: ['overdue', 'due', 'today', 'tomorrow'],
+    week:     ['overdue', 'due', 'today', 'tomorrow', 'week'],
   };
   const load = {};
   for(const [name, ids] of Object.entries(WINDOWS)){
@@ -8832,6 +8840,7 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
   return {
     buckets, ladder, totals, neverReviewed, locked,
     load, tomorrowOnly, busiestDay,
+    dueRooms: dueRooms.sort((a, b) => a.due - b.due || a.castle.localeCompare(b.castle)),
     castles: castleCount,
     perDay,
     generatedAt: now,
@@ -8945,7 +8954,25 @@ function rfPacingHtml(f){
       ${rfLoadCard('By tomorrow', load.tomorrow)}
       ${rfLoadCard('Next 7 days', load.week, true)}
     </div>
+    ${rfDueRoomsHtml(f.dueRooms || [])}
     <p class="rf-pacing">${pacing}${wall}</p>`;
+}
+/* The rooms behind "Due now" (and any same-day reviews later today), by name
+   -- the number alone gave no way to see WHICH rooms it meant, so when it
+   disagreed with the walk's review list there was nothing to compare. */
+function rfDueRoomsHtml(rooms){
+  if(!rooms.length) return '';
+  const nowRooms = rooms.filter(r => r.bucket !== 'today');
+  const label = (r) => r.name || (r.seq && r.seq.length ? formatMoveListPgn(r.seq) : 'unnamed room');
+  const tag = (r) => r.bucket === 'overdue' ? 'overdue'
+    : r.bucket === 'today' ? `same-day review, around ${new Date(r.due).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    : r.learning ? 'same-day review, due now' : 'due';
+  return `
+    <details class="rf-due-rooms">
+      <summary>Which rooms? (${nowRooms.length} due now${rooms.length > nowRooms.length ? `, ${rooms.length - nowRooms.length} later today` : ''})</summary>
+      <ul>${rooms.map(r => `<li data-bucket="${escapeHtml(r.bucket)}"><strong>${escapeHtml(label(r))}</strong>
+        <span class="rf-due-meta">${escapeHtml(r.castle)} · ${r.moves} move${r.moves === 1 ? '' : 's'} · ${escapeHtml(tag(r))}</span></li>`).join('')}</ul>
+    </details>`;
 }
 
 /* ---------- the donut (Phase 4) ----------
@@ -14939,6 +14966,7 @@ if(localStorage.getItem('threeTestDebug')){
      `forecast` is the real end-to-end path over whatever is actually in IDB. */
   window.__reviewForecastTestHooks = {
     build: (castles, reviews, memorized, opts) => buildReviewForecast(castles, reviews, memorized, opts),
+    dueRoomsHtml: (rooms) => rfDueRoomsHtml(rooms),
     forecast: (opts) => reviewForecast(opts),
     buckets: () => REVIEW_FORECAST_BUCKETS,
     ladder: () => ROOM_REVIEW_LADDER,
