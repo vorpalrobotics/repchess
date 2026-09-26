@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260804-98';
-import { openNewObjectListModal } from './objectLists.js?v=20260804-76';
+import { openAssetPicker } from './assets.js?v=20260804-99';
+import { openNewObjectListModal } from './objectLists.js?v=20260804-77';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let THREE = null;
@@ -6913,6 +6913,15 @@ function rebuildMoveObjectChainLive(roomKey){
 // so a silent data correction isn't invisible to the user; fades after ~3.5s.
 function showToast(msg){
   if(!toastEl) return;
+  // Just below the toolbar's real bottom edge, measured now: it sat at a
+  // fixed 10px, under the buttons, and on a phone -- where the toolbar spans
+  // the whole width -- the message was hidden behind them. Measured rather
+  // than a constant because the buttons shrink on a narrow screen and the
+  // left group can wrap to a second row.
+  if(toolbarEl && container){
+    const tb = toolbarEl.getBoundingClientRect(), cb = container.getBoundingClientRect();
+    toastEl.style.top = Math.max(10, Math.round(tb.bottom - cb.top + 6)) + 'px';
+  }
   toastEl.textContent = msg;
   toastEl.style.display = 'block';
   toastEl.style.opacity = '1';
@@ -10943,6 +10952,8 @@ export async function openThreeTest(containerEl, opts){
          and the rendered rows are separate hooks on purpose: the first is what
          dueRoomList decided, the second is what actually reached the screen,
          and they fail differently. */
+      toast: (msg) => showToast(msg),
+      toastRect: () => { const r = toastEl && toastEl.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null; },
       reviewList: (order) => dueRoomList(Date.now(), order || reviewListOrder).map(r => ({ key: r.key, state: r.state, learning: r.learning, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
       reviewListOrder: () => reviewListOrder,

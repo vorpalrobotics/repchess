@@ -507,10 +507,13 @@ async function onCardClick(e){
   if(act === 'save'){
     const status = document.querySelector('#listBrainstormOverlay #lbNotice');   // seen from either tab
     try {
-      const id = await DEPS.saveAsList(idea.candidate);
+      const res = await DEPS.saveAsList(idea.candidate);
+      const id = res && typeof res === 'object' ? res.id : res;
       if(!id) return;
+      const queued = (res && res.queued) || 0;
       await removeListIdea(idea.id);
-      if(status) status.textContent = `Saved "${idea.candidate.name}" as a list.`;
+      if(status) status.textContent = `Saved "${idea.candidate.name}" as a list`
+        + (queued ? `, and queued ${queued} image${queued === 1 ? '' : 's'} (Menu → Image Queue).` : '.');
     } catch(err){
       if(status) status.textContent = 'Could not save it: ' + ((err && err.message) || err);
     }
