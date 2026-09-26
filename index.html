@@ -480,6 +480,8 @@
   .set-note{font-size:.8rem;color:#666;margin:.35rem 0 0 1.6rem;line-height:1.45}
   .set-note:empty{display:none}
   .set-note.is-warn{color:#b26a00}
+  .set-stalls{margin:.2rem 0 0 1.1rem;padding:0;font-size:.82rem}
+  .set-stalls:empty::before{content:"None so far.";color:#888;margin-left:-1.1rem}
   /* Image Queue (js/imageQueue.js) */
   .iq-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.6rem;flex-wrap:wrap}
   .iq-tabs{display:flex;gap:.3rem}
@@ -1599,6 +1601,10 @@
       <p class="set-note" id="setLearningRemindersNote"></p>
       <p class="set-note">The tab title always shows how many are due, e.g. &ldquo;(2) REPchess&rdquo;,
         whether or not notifications are on.</p>
+      <h3 class="set-h">Slowdowns</h3>
+      <p class="set-note">Times the page stopped responding for more than a second since it was
+        opened, and what was running then. Useful when a click seems to take ages.</p>
+      <ul id="setStalls" class="set-stalls"></ul>
     </div>
   </div>
 </div>
@@ -2195,6 +2201,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260804-463"></script>
+<script type="module" src="js/app.js?v=20260804-464"></script>
 </body>
 </html>
