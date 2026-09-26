@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-462';
+const BUILD_TAG = '-463';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7340,6 +7340,40 @@ document.querySelectorAll('#menuList .menu-parent').forEach(parent=>{
 document.addEventListener('click', e=>{
   if(!$('menuList').contains(e.target) && e.target!==$('menuBtn')) $('menuList').style.display='none';
 });
+
+/* A menu item flashes when chosen. Some actions start with a long
+   synchronous stretch (building a castle, reading the database), and a
+   handler that hides the menu and then does that work never gives the
+   browser a frame to draw: nothing on screen said the click had registered.
+   So a real click highlights the item, lets that frame paint, and only then
+   runs the action -- held long enough (MENU_FLASH_MS) that the flash is seen
+   even when the action is quick, and during a slow one the highlighted item
+   stays on screen until the work yields.
+
+   Only for REAL clicks (isTrusted): a scripted el.click() still gets the
+   highlight but runs at once, so nothing that drives the menu from code has
+   to wait. Submenu headings are not held back -- they only expand in place.
+   The replayed click carries the original's modifier keys, which Run VR's
+   Shift+click (force a rebuild) depends on. */
+const MENU_FLASH_MS = 90;
+$('menuList').addEventListener('click', e=>{
+  const btn = e.target.closest('#menuList button');
+  if(!btn || btn.classList.contains('menu-parent')) return;
+  btn.classList.add('menu-flash');
+  setTimeout(()=>btn.classList.remove('menu-flash'), 700);
+  if(!e.isTrusted || btn.dataset.menuReplay) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  const replay = ()=>{
+    btn.dataset.menuReplay = '1';
+    try {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window,
+        shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey }));
+    } finally { delete btn.dataset.menuReplay; }
+  };
+  // two frames guarantee the highlight has painted; the timer makes it visible
+  requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(replay, MENU_FLASH_MS)));
+}, true);
 
 /* ---------- import games modal ----------
    Both platforms shown at once (not a source dropdown picking one) so the
