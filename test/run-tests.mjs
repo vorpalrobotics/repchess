@@ -26422,6 +26422,222 @@ try {
 } catch(e){ bad('Phase GN: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 
+// --- Phase IQ: the image generation queue (js/imageQueue.js,
+//     Documents/image-queue.md). Jobs persist in the meta store, run in the
+//     background two at a time, and land in a review list whose Approve opens
+//     the New Asset editor pre-filled. Runware is faked in the page, installed
+//     as an init script so it survives the reload the persistence test needs;
+//     __rwDelay / __rwFail let a test hold jobs in flight or make them fail. ---
+if(shouldRunPhase(['assets'])){
+try {
+const appIQ = await launchApp();
+try {
+  const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  await appIQ.page.addInitScript((PNG1) => {
+    window.__rwTasks = [];
+    const RealWS = window.WebSocket;
+    class FakeRunware {
+      constructor(url){ this.url = url; this.readyState = 0;
+        setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 0); }
+      reply(obj, ms){ setTimeout(() => this.onmessage && this.onmessage({ data: JSON.stringify(obj) }), ms || 5); }
+      send(str){
+        for(const t of JSON.parse(str)){
+          window.__rwTasks.push(t);
+          if(t.taskType === 'authentication'){
+            this.reply({ data: [{ taskType: 'authentication', connectionSessionUUID: 's' }] });
+          } else if(t.taskType === 'imageInference'){
+            const fail = window.__rwFail;
+            if(fail === 'param'){
+              this.reply({ errors: [{ taskUUID: t.taskUUID, message: "Invalid value for 'positivePrompt' parameter." }] });
+            } else if(fail === 'network-once'){
+              window.__rwFail = null;
+              this.reply({ errors: [{ taskUUID: t.taskUUID, message: 'Could not reach Runware (network?)' }] });
+            } else {
+              this.reply({ data: [{ taskType: 'imageInference', taskUUID: t.taskUUID,
+                imageUUID: 'img-' + t.taskUUID, imageBase64Data: PNG1, cost: 0.005 }] }, window.__rwDelay || 5);
+            }
+          }
+        }
+      }
+      close(){ this.readyState = 3; }
+    }
+    window.WebSocket = function(url, protocols){
+      return /runware\.ai/.test(url) ? new FakeRunware(url) : new RealWS(url, protocols);
+    };
+  }, PNG1);
+  await appIQ.page.reload({ waitUntil: 'domcontentloaded' });
+  await appIQ.page.waitForFunction(() => !!window.__imageQueueTestHooks, null, { timeout: 15000 });
+  await seedBackup(appIQ.page, { version: 6, user: 'tester', lines: [] });
+
+  const counts = () => appIQ.page.evaluate(() => window.__imageQueueTestHooks.counts());
+  const jobs = () => appIQ.page.evaluate(() => window.__imageQueueTestHooks.jobs());
+  const waitCounts = (pred, timeout = 15000) => appIQ.page.waitForFunction(
+    (src) => (new Function('c', 'return ' + src))(window.__imageQueueTestHooks.counts()), pred, { timeout });
+  const draft = (prompt, id) => ({ prompt, standing: '', model: 'runware:flux1-schnell', quality: null, size: 'square',
+    transparent: false, asset: { id, type: 'billboard-cylindrical', keywords: '', resolution: 'normal' } });
+  const enqueue = (d) => appIQ.page.evaluate((d) => window.__imageQueueTestHooks.enqueue(d), d);
+  const closeQueue = () => appIQ.page.evaluate(() => document.querySelector('#imageQueueOverlay .mb-leave').click());
+
+  // 489. Add to queue in the Generate dialog: the job takes the editor's asset
+  //      ID and type, the dialog stays open, the job runs in the background
+  //      and lands in review -- and the menu item and a toast say so.
+  try {
+    await appIQ.page.evaluate(() => document.getElementById('menuAssets').click());
+    await appIQ.page.waitForSelector('#assetsNewBtn', { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.getElementById('assetsNewBtn').click());
+    await appIQ.page.waitForSelector('#assetIdInput', { timeout: 5000 });
+    await appIQ.page.fill('#assetIdInput', 'queued-clock');
+    await appIQ.page.selectOption('#assetTypeInput', 'billboard-cylindrical');
+    await appIQ.page.evaluate(() => document.getElementById('assetGenBtn').click());
+    await appIQ.page.waitForSelector('#assetGenOverlay #genModel', { state: 'visible', timeout: 5000 });
+    await appIQ.page.selectOption('#genModel', 'runware:flux1-schnell');
+    await appIQ.page.fill('#genApiKey', 'rw-good');
+    await appIQ.page.fill('#genPrompt', 'a brass clock');
+    await appIQ.page.evaluate(() => { document.getElementById('genTransparent').checked = false; });
+    await appIQ.page.evaluate(() => document.getElementById('genQueueBtn').click());
+    await waitCounts('c.review === 1');
+    const st = await appIQ.page.evaluate(() => ({
+      dialogOpen: document.getElementById('assetGenOverlay').style.display === 'flex',
+      status: document.getElementById('genStatus').textContent,
+      menu: document.getElementById('menuImageQueue').textContent,
+      toasts: [...document.querySelectorAll('#toastStack .app-toast')].map(t => t.textContent) }));
+    const [job] = await jobs();
+    assert(st.dialogOpen && /Queued/.test(st.status), `expected the dialog to stay open saying Queued, got ${JSON.stringify(st)}`);
+    assert(job && job.asset.id === 'queued-clock' && job.asset.type === 'billboard-cylindrical' && job.status === 'review'
+      && job.model === 'runware:flux1-schnell', `unexpected job: ${JSON.stringify(job)}`);
+    assert(/1 to review/.test(st.menu), `expected the menu item to show the review count, got ${JSON.stringify(st.menu)}`);
+    assert(st.toasts.some(t => /ready for review/.test(t)), `expected a ready-for-review toast, got ${JSON.stringify(st.toasts)}`);
+    await appIQ.page.evaluate(() => document.getElementById('genCloseBtn').click());
+    await appIQ.page.evaluate(() => document.querySelector('#assetNewOverlay .modal-bar .mb-leave, #assetsOverlay .modal-bar .mb-leave')?.click());
+    ok('Image Queue: Add to queue carries the asset details, runs in the background and announces the result');
+  } catch(e){ bad('Image Queue: add to queue', e); }
+
+  // 490. The Image Queue screen: an informational modal that opens on Review
+  //      when something is waiting, with the finished image shown.
+  try {
+    await appIQ.page.evaluate(() => { document.getElementById('assetsOverlay').style.display = 'none'; });
+    await appIQ.page.evaluate(() => document.getElementById('menuImageQueue').click());
+    await appIQ.page.waitForSelector('#imageQueueOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appIQ.page, 'imageQueueOverlay', 'Image Queue');
+    await appIQ.page.waitForFunction(() => {
+      const img = document.querySelector('#iqBody .iq-card img');
+      return img && /^data:image\//.test(img.src);
+    }, null, { timeout: 5000 });
+    const tab = await appIQ.page.evaluate(() => document.querySelector('.iq-tab.active').dataset.tab);
+    assert(tab === 'review', `expected the Review tab first when images are waiting, got ${tab}`);
+    ok('Image Queue: an informational screen opening on Review, showing the finished image');
+  } catch(e){ bad('Image Queue: the screen', e); }
+
+  // 491. Approve opens the New Asset editor filled in from the job; saving it
+  //      creates the asset and removes the job.
+  try {
+    await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-card [data-act="approve"]').click());
+    await appIQ.page.waitForSelector('#assetNewOverlay #assetImgPreview', { timeout: 5000 });
+    const pre = await appIQ.page.evaluate(() => ({ id: document.getElementById('assetIdInput').value,
+      type: document.getElementById('assetTypeInput').value }));
+    assert(pre.id === 'queued-clock' && pre.type === 'billboard-cylindrical', `expected the editor pre-filled, got ${JSON.stringify(pre)}`);
+    await appIQ.page.evaluate(() => document.querySelector('#assetNewOverlay .modal-bar .mb-save').click());
+    await appIQ.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await waitCounts('c.review === 0');
+    const saved = await appIQ.page.evaluate(async () => (await getAllAssets()).some(a => a.id === 'queued-clock'));
+    assert(saved, 'expected the approved image saved as asset queued-clock');
+    const menu = await appIQ.page.evaluate(() => document.getElementById('menuImageQueue').textContent);
+    assert(menu === 'Image Queue', `expected the review count gone from the menu, got ${JSON.stringify(menu)}`);
+    await closeQueue();
+    ok('Image Queue: Approve lands the image through the pre-filled asset editor');
+  } catch(e){ bad('Image Queue: approve', e); }
+
+  // 492. Two at a time, and the queue survives a reload: a job that was
+  //      running when the page went away runs again afterwards.
+  try {
+    await appIQ.page.evaluate(() => { window.__rwDelay = 1500; });
+    for(const n of [1, 2, 3]) await enqueue(draft('lamp ' + n, 'lamp-' + n));
+    await appIQ.page.waitForFunction(() => window.__imageQueueTestHooks.running() === 2, null, { timeout: 5000 });
+    const c = await counts();
+    assert(c.running === 2 && c.queued === 1, `expected two running and one waiting, got ${JSON.stringify(c)}`);
+    await appIQ.page.reload({ waitUntil: 'domcontentloaded' });
+    await appIQ.page.waitForFunction(() => !!window.__imageQueueTestHooks, null, { timeout: 15000 });
+    await appIQ.page.evaluate(() => { window.__rwDelay = 5; window.__imageQueueTestHooks.pump(); });
+    await waitCounts('c.review === 3 && c.queued === 0 && c.running === 0', 20000);
+    ok('Image Queue: runs two at a time, and picks up interrupted jobs after a reload');
+  } catch(e){ bad('Image Queue: concurrency and persistence', e); }
+
+  // 493. No key: the job waits and says why, rather than failing; entering
+  //      the key lets it run.
+  try {
+    await appIQ.page.evaluate(() => localStorage.removeItem('repchess.runwareApiKey'));
+    await enqueue(draft('a teapot', 'teapot'));
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('queue'));
+    await appIQ.page.waitForFunction(() => /Waiting for your Runware API key/.test(document.getElementById('iqBody').textContent),
+      null, { timeout: 5000 });
+    const c = await counts();
+    assert(c.queued === 1 && c.failed === 0, `expected the job waiting, not failed, got ${JSON.stringify(c)}`);
+    await appIQ.page.evaluate(() => { localStorage.setItem('repchess.runwareApiKey', 'rw-good'); window.__imageQueueTestHooks.pump(); });
+    await waitCounts('c.review === 4');
+    await closeQueue();
+    ok('Image Queue: a missing API key holds the job instead of failing it');
+  } catch(e){ bad('Image Queue: missing key', e); }
+
+  // 494. A network hiccup is retried once automatically; a real refusal
+  //      fails with the provider's message and can be retried by hand.
+  try {
+    await appIQ.page.evaluate(() => { window.__rwFail = 'network-once'; window.__rwTasks.length = 0; });
+    await enqueue(draft('a vase', 'vase'));
+    await waitCounts('c.review === 5');
+    const tries = await appIQ.page.evaluate(() => window.__rwTasks.filter(t => t.taskType === 'imageInference').length);
+    assert(tries === 2, `expected one automatic retry after a network failure, got ${tries} attempts`);
+    await appIQ.page.evaluate(() => { window.__rwFail = 'param'; });
+    await enqueue(draft('a broken one', 'broken'));
+    await waitCounts('c.failed === 1');
+    const failed = (await jobs()).find(j => j.status === 'failed');
+    assert(failed && /positivePrompt/.test(failed.error), `expected the provider's error kept, got ${JSON.stringify(failed)}`);
+    await appIQ.page.evaluate(() => { window.__rwFail = null; });
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('queue'));
+    await appIQ.page.evaluate(() => document.querySelector('#iqBody [data-act="retry"]').click());
+    await waitCounts('c.review === 6 && c.failed === 0');
+    await closeQueue();
+    ok('Image Queue: one automatic retry for a network failure, a manual Retry for a real one');
+  } catch(e){ bad('Image Queue: failures', e); }
+
+  // 495. Redo re-queues with an edited prompt; Discard removes a review item.
+  try {
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector('#iqBody .iq-card', { timeout: 5000 });
+    const firstId = await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-card').dataset.id);
+    await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-card [data-act="redo"]').click());
+    await appIQ.page.fill('#iqBody .iq-redo-text', 'a brass lamp, taller');
+    await appIQ.page.evaluate(() => document.querySelector('#iqBody [data-act="redo-go"]').click());
+    // wait on THIS job: the counts read 6 in review both before the redo
+    // lands and after it finishes, so they cannot tell the two apart
+    // (polled from here: page.waitForFunction does not await an async predicate)
+    for(let t = 0; t < 150; t++){
+      const j = (await jobs()).find(x => x.id === firstId);
+      if(j && j.status === 'review' && j.prompt === 'a brass lamp, taller') break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    const redone = (await jobs()).find(j => j.id === firstId);
+    assert(redone && redone.prompt === 'a brass lamp, taller' && redone.status === 'review',
+      `expected the redo generated with the edited prompt, got ${JSON.stringify(redone)}`);
+    await appIQ.page.evaluate((id) => document.querySelector(`#iqBody .iq-card[data-id="${id}"] [data-act="discard"]`).click(), firstId);
+    await waitCounts('c.review === 5');
+    await closeQueue();
+    ok('Image Queue: Redo re-queues with an edited prompt, Discard removes');
+  } catch(e){ bad('Image Queue: redo and discard', e); }
+
+  // 496. A restore discards the queue: unreviewed images are not backed up.
+  try {
+    await seedBackup(appIQ.page, { version: 6, user: 'tester', lines: [] });
+    const left = await jobs();
+    const stored = await appIQ.page.evaluate(() => getMeta('imageQueue'));
+    assert(left.length === 0 && !stored, `expected the queue gone after a restore, got ${left.length} jobs, stored=${JSON.stringify(stored)}`);
+    ok('Image Queue: a restore discards queued and unreviewed images');
+  } catch(e){ bad('Image Queue: restore discards', e); }
+} finally {
+  await appIQ.close();
+}
+} catch(e){ bad('Phase IQ: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+
 // --- Phase EM: in a PIECE view of Manage Mnemonics, a selected scope greys
 //     out the squares that piece never lands on inside it. The words view
 //     has always coloured by coverage; a piece view answers a narrower

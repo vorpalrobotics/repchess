@@ -140,6 +140,11 @@ const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const AUTO_CROP_ALPHA = 24;
 
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
+import { OPENAI_STANDING_LS, GEN_MODEL_LS, GEN_CUSTOM_AIR_LS, GEN_QUALITY_LS, GEN_SIZE_LS, GEN_QUALITY_DEFAULT,
+         GEN_MODELS, GEN_PROVIDERS, genModelById, lsGet, lsSet, generateOpenAI, generateRunware,
+         enqueueImageJob, setImageQueueApprover } from './imageQueue.js?v=20260804-1';
+// app.js reaches the queue through here, so imageQueue.js has a single importer
+export { openImageQueue, resetImageQueue, imageQueueCounts } from './imageQueue.js?v=20260804-1';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one
@@ -940,247 +945,9 @@ async function handleImageFile(file){
 function setError(msg){ $('assetsError').textContent = msg || ''; }
 function setCropHint(msg){ const el = $('assetCropHint'); if(el) el.textContent = msg || ''; }
 
-/* ---------- AI image generation (OpenAI, or Runware's model catalogue) ----------
-   A small modal launched from the editor's "Generate…" button: model, API key
-   (per provider, kept in localStorage so it's typed once), prompt + standing
-   instructions; calls the provider straight from the browser, previews the
-   result, and on "Use this image" stages it into the editor exactly like a
-   dropped file.
-
-   Two providers, each one self-contained function, so a third (fal.ai was the
-   runner-up when this was evaluated) is an entry in GEN_MODELS plus one
-   request function:
-
-   - OpenAI over plain fetch -- its images endpoint allows browser calls.
-   - Runware over its WebSocket API. A WebSocket handshake is not a CORS
-     request, so this works from a static page whether or not Runware's REST
-     endpoint sends CORS headers (unverified when this was written).
-
-   Transparency differs per model, and props need it: OpenAI's models and
-   FLUX.1 [dev] (LayerDiffuse) produce it natively; every other Runware model
-   gets a second removeBackground task on the image it just generated -- by
-   the image's UUID, so nothing is uploaded back. */
-const OPENAI_KEY_LS = 'repchess.openaiApiKey';
-const RUNWARE_KEY_LS = 'repchess.runwareApiKey';
-const GEN_MODEL_LS = 'repchess.genModel';
-const GEN_CUSTOM_AIR_LS = 'repchess.genCustomAir';
-const GEN_QUALITY_LS = 'repchess.genQuality';
-const GEN_SIZE_LS = 'repchess.genSize';       // 'square' | 'portrait' | 'landscape'
-const GEN_QUALITY_DEFAULT = 'high';
-const OPENAI_STANDING_LS = 'repchess.genStandingInstructions';
-const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
-const RUNWARE_WS_URL = 'wss://ws-api.runware.ai/v1';
-const RUNWARE_BG_MODEL = 'runware:110@1';      // Bria RMBG 2.0 -- clean edges on illustrations
-const RUNWARE_TASK_TIMEOUT_MS = 180000;
-
-// Size choices are named, and each model maps them to dimensions it accepts:
-// OpenAI has three fixed sizes; FLUX-family models want multiples of 64;
-// Seedream is a 2K-native model. Unverified sizes surface Runware's own error.
-const SIZES_OPENAI   = { square: [1024, 1024], portrait: [1024, 1536], landscape: [1536, 1024] };
-const SIZES_64       = { square: [1024, 1024], portrait: [832, 1216],  landscape: [1216, 832] };
-const SIZES_SEEDREAM = { square: [2048, 2048], portrait: [1728, 2304], landscape: [2304, 1728] };
-// GPT Image 2 takes any size with sides in multiples of 16 and at least ~655k
-// pixels, and is billed by size -- 848x848 costs about half of 1024x1024, and
-// assets are scaled far below either, so the smallest sizes are the right ones.
-const SIZES_GPT2     = { square: [848, 848],   portrait: [704, 1056],  landscape: [1056, 704] };
-const GEN_MODELS = [
-  { id: 'openai:gpt-image-1',      group: 'OpenAI',  label: 'GPT Image 1',
-    provider: 'openai', model: 'gpt-image-1', sizes: SIZES_OPENAI, alpha: 'native', quality: true },
-  { id: 'openai:gpt-image-1-mini', group: 'OpenAI',  label: 'GPT Image 1 mini (cheaper)',
-    provider: 'openai', model: 'gpt-image-1-mini', sizes: SIZES_OPENAI, alpha: 'native', quality: true },
-  // alpha 'openaiNative': transparency asked of the model itself through
-  // Runware's providerSettings.openai, falling back to removeBackground if the
-  // provider refuses it (GPT Image 2's transparency was a preview at OpenAI)
-  { id: 'runware:gpt-image-2',     group: 'Runware', label: 'GPT Image 2',
-    provider: 'runware', air: 'openai:gpt-image@2', sizes: SIZES_GPT2, alpha: 'openaiNative', quality: true },
-  // Mini is asked for the same small sizes; whether it takes them is
-  // unconfirmed, so a size refusal retries at OpenAI's own fixed sizes
-  { id: 'runware:gpt-image-1-mini', group: 'Runware', label: 'GPT Image 1 mini',
-    provider: 'runware', air: 'openai:1@2', sizes: SIZES_GPT2, fallbackSizes: SIZES_OPENAI,
-    alpha: 'openaiNative', quality: true },
-  { id: 'runware:flux1-schnell',   group: 'Runware', label: 'FLUX.1 schnell (fastest, cheapest)',
-    provider: 'runware', air: 'runware:100@1', sizes: SIZES_64, alpha: 'remove' },
-  { id: 'runware:flux1-dev',       group: 'Runware', label: 'FLUX.1 dev',
-    provider: 'runware', air: 'runware:101@1', sizes: SIZES_64, alpha: 'layerDiffuse' },
-  { id: 'runware:flux2-dev',       group: 'Runware', label: 'FLUX.2 dev',
-    provider: 'runware', air: 'runware:400@1', sizes: SIZES_64, alpha: 'remove' },
-  { id: 'runware:seedream4',       group: 'Runware', label: 'Seedream 4.0',
-    provider: 'runware', air: 'bytedance:5@0', sizes: SIZES_SEEDREAM, alpha: 'remove' },
-  { id: 'runware:ideogram3',       group: 'Runware', label: 'Ideogram 3.0 (good with text)',
-    provider: 'runware', air: 'ideogram:4@1', sizes: SIZES_64, alpha: 'remove' },
-  { id: 'runware:custom',          group: 'Runware', label: 'Other Runware model (enter its ID)…',
-    provider: 'runware', custom: true, sizes: SIZES_64, alpha: 'remove' },
-];
-const GEN_PROVIDERS = {
-  openai:  { name: 'OpenAI',  keyLs: OPENAI_KEY_LS,  placeholder: 'sk-…' },
-  runware: { name: 'Runware', keyLs: RUNWARE_KEY_LS, placeholder: 'Runware API key' },
-};
-function genModelById(id){ return GEN_MODELS.find(m => m.id === id) || GEN_MODELS[0]; }
-function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ return ''; } }
-function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_){} }
-
-/* OpenAI: one fetch, image back as base64. */
-async function generateOpenAI(key, spec, prompt, [w, h], transparent, quality){
-  const body = { model: spec.model, prompt, n: 1, size: `${w}x${h}` };
-  if(quality) body.quality = quality;
-  if(transparent) body.background = 'transparent';   // png cutout, ideal for props
-  const res = await fetch(OPENAI_IMAGES_URL, {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const json = await res.json().catch(() => ({}));
-  if(!res.ok) throw new Error((json && json.error && json.error.message) || ('HTTP ' + res.status));
-  const b64 = json.data && json.data[0] && json.data[0].b64_json;
-  if(!b64) throw new Error('No image returned.');
-  return { dataUrl: 'data:image/png;base64,' + b64, cost: null };
-}
-
-/* A Runware WebSocket session: authenticate once, then run tasks one at a time
-   (the background removal needs the generated image's UUID, so they cannot
-   go in one batch). Messages are JSON; results arrive as { data: [...] } and
-   failures as { errors: [...] } -- matched to their task by taskUUID. */
-function runwareSession(key){
-  return new Promise((resolve, reject) => {
-    let ws;
-    try { ws = new WebSocket(RUNWARE_WS_URL); } catch(err){ reject(err); return; }
-    const pending = new Map();   // taskUUID -> { resolve, reject, timer }
-    let authed = false;
-    const failAll = (err) => {
-      if(!authed){ authed = true; reject(err); }
-      for(const p of pending.values()){ clearTimeout(p.timer); p.reject(err); }
-      pending.clear();
-    };
-    const errText = (e) => (e && (e.message || e.errorMessage || e.code)) || 'Runware error';
-    ws.onopen = () => ws.send(JSON.stringify([{ taskType: 'authentication', apiKey: key }]));
-    ws.onerror = () => failAll(new Error('Could not reach Runware (network?)'));
-    ws.onclose = () => failAll(new Error('Runware closed the connection'));
-    ws.onmessage = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch(_){ return; }
-      const errors = msg.errors || (msg.error ? [msg] : []);
-      for(const e of errors){
-        const p = e.taskUUID && pending.get(e.taskUUID);
-        if(p){ clearTimeout(p.timer); pending.delete(e.taskUUID); p.reject(new Error(errText(e))); }
-        else if(!authed){ authed = true; reject(new Error(errText(e))); try { ws.close(); } catch(_){} }
-      }
-      for(const d of (msg.data || [])){
-        if(d.taskType === 'authentication'){
-          if(!authed){ authed = true; resolve(session); }
-          continue;
-        }
-        const p = d.taskUUID && pending.get(d.taskUUID);
-        if(p){ clearTimeout(p.timer); pending.delete(d.taskUUID); p.resolve(d); }
-      }
-    };
-    const session = {
-      run(task){
-        return new Promise((res, rej) => {
-          const taskUUID = crypto.randomUUID();
-          const timer = setTimeout(() => {
-            pending.delete(taskUUID);
-            rej(new Error('Runware took too long to answer'));
-          }, RUNWARE_TASK_TIMEOUT_MS);
-          pending.set(taskUUID, { resolve: res, reject: rej, timer });
-          ws.send(JSON.stringify([{ ...task, taskUUID }]));
-        });
-      },
-      close(){ ws.onclose = null; try { ws.close(); } catch(_){} },
-    };
-  });
-}
-function runwareImageDataUrl(d){
-  if(d.imageDataURI) return d.imageDataURI;
-  if(d.imageBase64Data) return 'data:image/png;base64,' + d.imageBase64Data;
-  return null;
-}
-async function generateRunware(key, spec, prompt, [w, h], transparent, onStatus, quality, sizeName){
-  const session = await runwareSession(key);
-  try {
-    const task = { taskType: 'imageInference', model: spec.air, positivePrompt: prompt,
-                   width: w, height: h, numberResults: 1,
-                   outputType: 'base64Data', outputFormat: 'PNG', includeCost: true };
-    let native = transparent && (spec.alpha === 'layerDiffuse' || spec.alpha === 'openaiNative');
-    if(native && spec.alpha === 'layerDiffuse') task.advancedFeatures = { layerDiffuse: true };
-    // OpenAI's own settings travel in providerSettings.openai
-    if(spec.alpha === 'openaiNative' || (spec.quality && quality)){
-      const openai = {};
-      if(spec.quality && quality) openai.quality = quality;
-      if(native && spec.alpha === 'openaiNative') openai.background = 'transparent';
-      task.providerSettings = { openai };
-    }
-    let img, note = '';
-    // One retry at the model's fallback size if the first size is refused --
-    // for models whose accepted sizes could not be confirmed up front.
-    const runSized = async () => {
-      try {
-        return await session.run(task);
-      } catch(err){
-        const fb = spec.fallbackSizes && spec.fallbackSizes[sizeName];
-        if(!fb || !/width|height|dimension|size|resolution/i.test((err && err.message) || '')) throw err;
-        console.warn('[assets] size refused, retrying at', fb, err);
-        [task.width, task.height] = fb;
-        note += ` (${w}×${h} was refused, so this is ${fb[0]}×${fb[1]}.)`;
-        return await session.run(task);
-      }
-    };
-    try {
-      img = await runSized();
-    } catch(err){
-      // The provider refused native transparency: generate opaque instead and
-      // let the removeBackground step below cut it out.
-      const bgRefused = native && spec.alpha === 'openaiNative'
-        && /background|transparen|providerSettings/i.test((err && err.message) || '');
-      if(!bgRefused) throw err;
-      console.warn('[assets] native transparency refused, falling back to removeBackground', err);
-      delete task.providerSettings.openai.background;
-      native = false;
-      note += ' (Native transparency was refused.)';
-      img = await runSized();
-    }
-    let dataUrl = runwareImageDataUrl(img);
-    if(!dataUrl) throw new Error('No image returned.');
-    let cost = typeof img.cost === 'number' ? img.cost : null;
-    if(transparent && !native){
-      onStatus && onStatus('Removing the background…');
-      /* The generated image's UUID is the cheap way to point at it (nothing is
-         sent back up), but Runware does not always accept it: in real use a
-         second generation in the same dialog was refused with "Invalid value
-         for 'inputImage'" -- plausibly because a base64Data result is not
-         kept server-side, or not yet. So fall back to sending the image
-         itself, as a data URI and then as bare base64, both of which that
-         error lists as accepted. */
-      const b64 = dataUrl.replace(/^data:[^,]*,/, '');
-      const inputs = [img.imageUUID, dataUrl, b64].filter(Boolean);
-      let cut = null, lastErr = null;
-      for(const inputImage of inputs){
-        try {
-          const bg = await session.run({ taskType: 'removeBackground', model: RUNWARE_BG_MODEL,
-            inputImage, outputType: 'base64Data', outputFormat: 'PNG', includeCost: true });
-          cut = runwareImageDataUrl(bg);
-          if(!cut){ lastErr = new Error('Background removal returned no image.'); continue; }
-          if(typeof bg.cost === 'number') cost = (cost || 0) + bg.cost;
-          break;
-        } catch(err){
-          lastErr = err;
-          console.warn('[assets] removeBackground refused input', inputImage === img.imageUUID ? 'uuid' : inputImage === dataUrl ? 'dataURI' : 'base64', err);
-        }
-      }
-      if(cut){
-        dataUrl = cut;
-        note += ' Background removed as a second step.';
-      } else {
-        // The generation succeeded and has been paid for: keep it, with its
-        // background, rather than throwing it away over the second step.
-        note += ` Background removal failed (${(lastErr && lastErr.message) || 'unknown error'}), so this still has`
-          + ' its background -- Crop/Erase BG can remove it, or generate again.';
-      }
-    }
-    return { dataUrl, cost, note };
-  } finally {
-    session.close();
-  }
-}
+/* ---------- AI image generation ----------
+   The providers (OpenAI, Runware), their model list and the background
+   queue live in js/imageQueue.js; this is the one-at-a-time dialog. */
 
 function openGenerateModal(){
   let ov = document.getElementById('assetGenOverlay');
@@ -1238,6 +1005,7 @@ function openGenerateModal(){
       </div>
       <div style="display:flex;gap:.4rem">
         <button type="button" id="genRunBtn">Generate</button>
+        <button type="button" id="genQueueBtn" title="Generate in the background and review it later in Menu → Image Queue">Add to queue</button>
         <button type="button" id="genCloseBtn">Cancel</button>
       </div>
       <div id="genStatus" style="font-size:.78rem;color:#9aa;min-height:1.1em;margin-top:.5rem"></div>
@@ -1295,7 +1063,10 @@ function openGenerateModal(){
   q('genSize').onchange = () => lsSet(GEN_SIZE_LS, q('genSize').value);
   syncModel();
 
-  q('genRunBtn').onclick = async () => {
+  /* The form, checked and its settings saved -- shared by Generate and Add to
+     queue, so the two can never disagree about what counts as ready. Returns
+     null (with the reason in the status line) when something is missing. */
+  const readForm = () => {
     const spec = { ...genModelById(q('genModel').value) };
     const prov = GEN_PROVIDERS[spec.provider];
     const key = q('genApiKey').value.trim();
@@ -1303,20 +1074,44 @@ function openGenerateModal(){
     const standing = q('genStanding').value.trim();
     if(spec.custom){
       spec.air = q('genCustomAir').value.trim();
-      if(!spec.air){ q('genStatus').textContent = 'Enter the Runware model ID.'; return; }
+      if(!spec.air){ q('genStatus').textContent = 'Enter the Runware model ID.'; return null; }
       lsSet(GEN_CUSTOM_AIR_LS, spec.air);
     }
-    if(!key){ q('genStatus').textContent = `Enter your ${prov.name} API key.`; return; }
-    if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return; }
+    if(!key){ q('genStatus').textContent = `Enter your ${prov.name} API key.`; return null; }
+    if(!prompt){ q('genStatus').textContent = 'Enter a prompt.'; return null; }
     lsSet(prov.keyLs, key);
     lsSet(OPENAI_STANDING_LS, standing);
     lsSet(GEN_SIZE_LS, q('genSize').value);
     if(spec.quality) lsSet(GEN_QUALITY_LS, q('genQuality').value);
-    const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
     const sizeName = spec.sizes[q('genSize').value] ? q('genSize').value : 'square';
-    const dims = spec.sizes[sizeName];
-    const transparent = q('genTransparent').checked;
-    const quality = spec.quality ? q('genQuality').value : null;
+    return { spec, key, prompt, standing, sizeName, dims: spec.sizes[sizeName],
+             transparent: q('genTransparent').checked,
+             quality: spec.quality ? q('genQuality').value : null };
+  };
+
+  /* Add to queue: the job carries this editor's asset ID, type, keywords and
+     resolution with it, so approving it later lands the same asset this
+     editor would have made. The dialog stays open for the next one. */
+  q('genQueueBtn').onclick = async () => {
+    const f = readForm();
+    if(!f) return;
+    const asset = {
+      id: (($('assetIdInput') || {}).value || '').trim().toLowerCase(),
+      type: editorType(),
+      keywords: (($('assetKeywords') || {}).value || '').trim(),
+      resolution: EDIT_RESOLUTION,
+    };
+    await enqueueImageJob({ prompt: f.prompt, standing: f.standing, model: f.spec.id,
+      customAir: f.spec.custom ? f.spec.air : '', quality: f.quality, size: f.sizeName,
+      transparent: f.transparent, asset, target: { kind: 'asset' } });
+    q('genStatus').textContent = 'Queued. It will be waiting for you in Menu → Image Queue → Review.';
+  };
+
+  q('genRunBtn').onclick = async () => {
+    const f = readForm();
+    if(!f) return;
+    const { spec, key, prompt, standing, sizeName, dims, transparent, quality } = f;
+    const fullPrompt = standing ? `${prompt}\n\n${standing}` : prompt;   // per-image subject + standing style
     q('genRunBtn').disabled = true;
     q('genStatus').textContent = `Generating with ${genModelById(spec.id).label}…`;
     try {
@@ -1864,7 +1659,11 @@ async function deleteEditor(id){
    no-op when there's no #assetsGrid in the current container, so saveEditor's
    normal post-save calls stay harmless here. Resolves the new asset's id on
    Save, or null on Cancel. */
-export async function openNewAssetModal(initialType, allowTypes){
+/* preset (optional): { image, id, keywords, resolution, hint } -- a New
+   Asset editor that opens already filled in, which is how the Image Queue's
+   Approve lands a generated image: the normal editor and every check its
+   Save makes, rather than a second path that writes assets. */
+export async function openNewAssetModal(initialType, allowTypes, preset = null){
   // saveEditor's duplicate-id check reads the module-level ASSETS cache,
   // which is only ever populated by openAssetManager -- a caller that
   // reaches this modal without the full Asset Manager having been opened
@@ -1926,8 +1725,29 @@ export async function openNewAssetModal(initialType, allowTypes){
     BAR_CTL.rebase(EDIT_BASELINE);
     // the backdrop is a way out too, so it goes through the same confirm
     wireBackdropClose(ov, () => BAR_CTL.leave());
+    if(preset) applyEditorPreset(preset);
   });
 }
+async function applyEditorPreset(preset){
+  const idInput = $('assetIdInput');
+  if(idInput && preset.id) idInput.value = preset.id;
+  const kw = $('assetKeywords');
+  if(kw && preset.keywords) kw.value = preset.keywords;
+  const res = $('assetResolution');
+  if(res && preset.resolution && RESOLUTION_TIERS.includes(preset.resolution)){
+    res.value = preset.resolution;
+    EDIT_RESOLUTION = preset.resolution;     // before staging: the down-conversion reads it
+    updateResHint();
+  }
+  if(preset.image) await stageFullImage(preset.image, preset.id || preset.hint || 'generated');
+  if(BAR_CTL) BAR_CTL.refresh();             // programmatic changes: the watch saw none of them
+}
+
+// Approve in the Image Queue: open the New Asset editor filled in from the job
+setImageQueueApprover((job, image) => openNewAssetModal(job.asset.type || 'billboard-cylindrical', null, {
+  image, id: job.asset.id, keywords: job.asset.keywords, resolution: job.asset.resolution,
+  hint: String(job.prompt || '').split(/\s+/).slice(0, 5).join(' '),
+}));
 
 /* ---------- export ----------
    No real filesystem access from a static site, so "export" downloads

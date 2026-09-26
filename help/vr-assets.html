@@ -72,6 +72,33 @@ Put your style there ("flat cartoon style, thick outlines, bright colors, no
 text") so a set of assets generated over many sessions, even with different
 models, still looks like a set.</p>
 
+<h3>Queueing images</h3>
+<p>You don't have to wait for each image. In the Generate dialog,
+<strong>Add to queue</strong> hands the image to a background queue and
+leaves the dialog open for the next one. The queue takes the asset ID, type
+and keywords from the editor you opened it from, along with the dialog's
+model, quality, size and transparency settings.</p>
+<p>Menu &rarr; <strong>Image Queue</strong> shows two lists:</p>
+<ul>
+  <li><strong>Queue:</strong> images still being made, two at a time. A
+  network hiccup is retried once by itself; any other failure keeps its error
+  message and gets a <strong>Retry</strong> button. If a model's API key is
+  missing, its images wait rather than fail. Enter the key in the Generate
+  dialog and they carry on.</li>
+  <li><strong>Review:</strong> finished images. <strong>Approve&hellip;</strong>
+  opens the New Asset editor already filled in, so you can crop or erase and
+  then Save. <strong>Redo&hellip;</strong> queues the image again, with the
+  prompt edited if you like. <strong>Discard</strong> throws it away.</li>
+</ul>
+<p>The queue keeps working while you do other things, including walking and
+decorating in VR. The menu item shows how many images are waiting for review,
+and a message tells you when one is ready. The queue is saved, so closing the
+tab loses nothing, and an image interrupted mid-way is made again when you
+return. It only runs while <span class="repchess-brand">REPchess</span> is
+open.</p>
+<p>Queued and unreviewed images are <em>not</em> part of a backup. Restoring
+one clears the queue.</p>
+
 <h3>Using them</h3>
 <p>Assets are offered wherever the VR walk needs art -- clicking an empty
 move-object slot in a room, skinning a floor or wall, choosing a door or sign

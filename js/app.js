@@ -1,10 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-321';
-import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl } from './assets.js?v=20260804-93';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-322';
+import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
+         openImageQueue, resetImageQueue } from './assets.js?v=20260804-94';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-70';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-71';
 import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
@@ -106,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-454';
+const BUILD_TAG = '-455';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -7520,6 +7521,7 @@ const BACKUP_EXCLUDED_META = {
   gamesPositionIndexCache: 'derived cache, same',
   mnemDefaultOffered: 'a one-time "we already offered you the default mnemonics" flag -- re-offering on a fresh browser is the better behaviour, so this should NOT travel',
   assetsDefaultOffered: 'same, for the default asset pack',
+  imageQueue: 'image-generation jobs awaiting generation or review (js/imageQueue.js), plus one imageQueueImg:<id> key per finished image -- agreed not to travel in a backup, so a restore discards them',
 };
 async function exportBackup(){
   const data = await buildBackupData();
@@ -7568,6 +7570,8 @@ async function applyBackupData(data, onMnemProgress){
     // mirror so a lingering background loop can't keep processing/saving
     // against lineIds this restore just replaced.
     ANALYSIS_QUEUE = [];
+    // same for the image queue, whose jobs and images also lived in meta
+    resetImageQueue();
     // a restore replaces the whole repertoire without a page reload -- drop the
     // cached VR world-build result so the next "Run VR" rebuilds against the
     // restored data instead of showing whatever was cached from before the
@@ -10044,6 +10048,25 @@ function closeAssets(){
   }
 }
 const assetManagerOpts = () => ({ bar: $('assetsBar'), onClose: closeAssets });
+
+/* ---------- Image Queue (js/imageQueue.js) ----------
+   The menu item carries the review count, and a finished image says so --
+   the queue runs in the background, so nothing else would tell you. */
+$('menuImageQueue').onclick = () => {
+  $('menuList').style.display = 'none';
+  openImageQueue();
+};
+let imageQueueReviewSeen = null;
+window.addEventListener('imagequeue:change', (e) => {
+  const n = (e.detail && e.detail.review) || 0;
+  $('menuImageQueue').textContent = n ? `Image Queue (${n} to review)` : 'Image Queue';
+  // the first report is what an earlier visit left behind, not news
+  if(imageQueueReviewSeen !== null && n > imageQueueReviewSeen){
+    showAppToast(n === 1 ? 'An image is ready for review in Menu → Image Queue.'
+                         : `${n} images are ready for review in Menu → Image Queue.`);
+  }
+  imageQueueReviewSeen = n;
+});
 $('menuAssets').onclick = ()=>{
   $('menuList').style.display='none';
   assetsOpenedFromThreeTest = false;
