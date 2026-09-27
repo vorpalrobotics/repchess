@@ -7012,6 +7012,27 @@ try {
     assert(t === '+0.3/21' || t === '+0.2/21', `expected the new analysis at once (one ply on, 21 deep), got ${JSON.stringify(t)}`);
     ok('board evals: a newly saved analysis shows up at once');
   } catch(e){ bad('board evals: live update', e); }
+
+  // 540. On a phone the Position & Note modal stacks the board above the note
+  //      and story, which take the modal's full width, not their text's.
+  try {
+    await appPE.page.setViewportSize({ width: 390, height: 760 });
+    await appPE.page.evaluate(() => { if(window.__notesTestHooks.positionNoteOpen()) window.__notesTestHooks.closePositionNote(); });
+    await appPE.page.evaluate(() => window.__notesTestHooks.openPositionNote(['d4','e6','c4'], {}));
+    await appPE.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    const m = await appPE.page.evaluate(() => {
+      const body = document.querySelector('#positionNoteOverlay .position-note-body').getBoundingClientRect();
+      const w = id => document.getElementById(id).getBoundingClientRect().width;
+      const board = document.getElementById('positionNoteBoard').getBoundingClientRect();
+      return { body: body.width, note: w('positionNoteView'), story: w('positionStoryView'),
+        boardGapL: board.left - body.left, boardGapR: body.right - board.right, page: document.documentElement.clientWidth };
+    });
+    assert(m.note >= m.body - 2 && m.story >= m.body - 2, `expected the note and story at full width, got ${JSON.stringify(m)}`);
+    assert(Math.abs(m.boardGapL - m.boardGapR) <= 2, `expected the board centred above them, got ${JSON.stringify(m)}`);
+    await appPE.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    await appPE.page.setViewportSize({ width: 1280, height: 800 });
+    ok('position modal: on a phone the note and story panes are full width under the board');
+  } catch(e){ bad('position modal: phone layout', e); }
 } finally {
   await appPE.close();
 }
