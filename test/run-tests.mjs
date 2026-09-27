@@ -6978,6 +6978,40 @@ try {
     await appPE.page.evaluate(() => window.__notesTestHooks.closePositionNote());
     ok('position modal: no eval shown when none is saved; other systems\' evals are found too');
   } catch(e){ bad('position modal: no eval / other line', e); }
+
+  // 537. The move table's hover board (the row's Analyse button) shows the
+  //      row position's own saved eval under it.
+  try {
+    await appPE.page.dispatchEvent('tr.data-row[data-opp="Nf6"] td.resp > button', 'mouseenter');
+    await appPE.page.waitForFunction(() => document.getElementById('hoverPreview').style.display === 'block', null, { timeout: 5000 });
+    await appPE.page.waitForFunction(() => document.getElementById('hoverPreviewEval').style.display !== 'none', null, { timeout: 5000 });
+    const t = await appPE.page.evaluate(() => document.getElementById('hoverPreviewEval').textContent);
+    assert(/\+0\.4\/20/.test(t) && /2\.c4 e6 3\.Nc3/.test(t), `expected "+0.4/20 2.c4 e6 3.Nc3" under the hover board, got ${JSON.stringify(t)}`);
+    await appPE.page.dispatchEvent('tr.data-row[data-opp="Nf6"] td.resp > button', 'mouseleave');
+    ok('board evals: the move table\'s hover board shows the position\'s saved eval');
+  } catch(e){ bad('board evals: hover board', e); }
+
+  // 538. The VR mini board gets the same line, for a room in any system.
+  try {
+    await appPE.page.evaluate(() => window.__boardEvalTestHooks.ready());
+    const html = await appPE.page.evaluate(() => window.__boardEvalTestHooks.vrHtml(['e4','e5','Nf3'], 'L2'));
+    assert(/-0\.2\/15/.test(html) && /board-eval-score/.test(html), `expected the VR board's eval line for another system's room, got ${JSON.stringify(html)}`);
+    const none = await appPE.page.evaluate(() => window.__boardEvalTestHooks.vrHtml(['d4','e6','c4'], 'L1'));
+    assert(none === '', `expected nothing for an unanalysed room, got ${JSON.stringify(none)}`);
+    ok('board evals: the VR mini board gets the saved eval of its room\'s position');
+  } catch(e){ bad('board evals: VR mini board', e); }
+
+  // 539. A newly saved analysis reaches the boards without a rebuild.
+  try {
+    await appPE.page.evaluate(() => {
+      const c = new Chess(); for(const m of ['d4','e6']) c.move(m);
+      return window.__aqTestHooks.saveAnalysisQueueResult({ lineId: 'L1', seq: ['d4','e6'] }, c.fen(),
+        { depth: 22, lines: { 1: { score: { type: 'cp', value: 25 }, depth: 22, pv: ['c2c4','g8f6'] } } });
+    });
+    const t = await appPE.page.evaluate(() => window.__boardEvalTestHooks.forSeq(['d4','e6','c4']));
+    assert(t === '+0.3/21' || t === '+0.2/21', `expected the new analysis at once (one ply on, 21 deep), got ${JSON.stringify(t)}`);
+    ok('board evals: a newly saved analysis shows up at once');
+  } catch(e){ bad('board evals: live update', e); }
 } finally {
   await appPE.close();
 }
