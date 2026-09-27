@@ -6911,6 +6911,78 @@ try {
 }
 } catch(e){ bad('Phase UA: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase PE: the Position & Note modal shows the saved engine eval of its
+//     position (after our reply) under the caption, from whatever analysis
+//     already exists: the position's own, or the parent row's engine line
+//     through our reply. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appPE = await launchApp();
+try {
+  const f = await appPE.page.evaluate(() => {
+    const at = seq => { const c = new Chess(); for(const m of seq) c.move(m, { sloppy: true }); return c.fen(); };
+    return { nf6: at(['d4','Nf6']), d5: at(['d4','d5']), d5c4: at(['d4','d5','c4']), e5: at(['e4','e5']) };
+  });
+  const ev = (value, depth, pvFen, pvUci) => ({ type: 'cp', value, depth, pv: '', pvFen, pvUci });
+  await seedBackup(appPE.page, {
+    version: 6, user: 'tester',
+    lines: [
+      { id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+        { seq: ['d4','Nf6'], reply: 'c4', eval: ev(40, 20, f.nf6, ['c2c4','e7e6','b1c3']) },
+        { seq: ['d4','d5'], reply: 'c4', eval: ev(30, 18, f.d5, ['c2c4','e7e6']) },
+        { seq: ['d4','d5','c4'], eval: ev(10, 25, f.d5c4, ['e7e6','b1c3']) },   // the position itself, deeper
+        { seq: ['d4','e6'], reply: 'c4' },                                       // never analysed
+      ]},
+      { id: 'L2', name: 'Other', color: 'white', openingMoves: ['e4'], prefs: [
+        { seq: ['e4','e5'], reply: 'Nf3', eval: ev(-20, 16, f.e5, ['g1f3','b8c6']) },
+      ]},
+    ],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appPE.page.locator('.line-row', { hasText: 'Test' }).click();
+  await appPE.page.waitForSelector('tr.data-row[data-opp="Nf6"]', { timeout: 40000 });
+  const evalAt = async (seq, opts) => {
+    await appPE.page.evaluate(() => { if(window.__notesTestHooks.positionNoteOpen()) window.__notesTestHooks.closePositionNote(); });
+    await appPE.page.evaluate(([s, o]) => window.__notesTestHooks.openPositionNote(s, o), [seq, opts || {}]);
+    await appPE.page.waitForFunction(() => window.__notesTestHooks.positionNoteOpen(), { timeout: 10000 });
+    for(let i = 0; i < 30; i++){
+      const r = await appPE.page.evaluate(() => { const el = document.getElementById('positionNoteEval'); return el.style.display === 'none' ? null : el.textContent; });
+      if(r) return r;
+      await new Promise(res => setTimeout(res, 100));
+    }
+    return null;
+  };
+
+  // 534. From the parent row's engine line through our reply: its score, one
+  //      ply shallower, and the moves after our reply.
+  try {
+    const t = await evalAt(['d4','Nf6','c4']);
+    assert(t && /\+0\.4\/19/.test(t) && /2\.\.\.e6 3\.Nc3/.test(t), `expected "+0.4/19 2...e6 3.Nc3", got ${JSON.stringify(t)}`);
+    ok('position modal: the eval of the position, from the parent row\'s line through our reply');
+  } catch(e){ bad('position modal: eval via parent line', e); }
+
+  // 535. A deeper eval saved on the position itself wins.
+  try {
+    const t = await evalAt(['d4','d5','c4']);
+    assert(t && /\+0\.1\/25/.test(t) && /2\.\.\.e6/.test(t), `expected the position's own +0.1/25, got ${JSON.stringify(t)}`);
+    ok('position modal: the deepest saved eval of the position wins');
+  } catch(e){ bad('position modal: deepest eval', e); }
+
+  // 536. Nothing analysed: nothing shown. And a line that isn't the open one
+  //      is read from storage.
+  try {
+    const none = await evalAt(['d4','e6','c4']);
+    assert(none === null, `expected no eval line for an unanalysed position, got ${JSON.stringify(none)}`);
+    const other = await evalAt(['e4','e5','Nf3'], { lineId: 'L2' });
+    assert(other && /-0\.2\/15/.test(other) && /2\.\.\.Nc6/.test(other), `expected another line's eval read from storage, got ${JSON.stringify(other)}`);
+    await appPE.page.evaluate(() => window.__notesTestHooks.closePositionNote());
+    ok('position modal: no eval shown when none is saved; other systems\' evals are found too');
+  } catch(e){ bad('position modal: no eval / other line', e); }
+} finally {
+  await appPE.close();
+}
+} catch(e){ bad('Phase PE: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---

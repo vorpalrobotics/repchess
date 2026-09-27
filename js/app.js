@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-469';
+const BUILD_TAG = '-470';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4196,6 +4196,7 @@ function buildPositionNoteOverlay(){
           <div class="position-note-left">
             <div id="positionNoteBoard" class="room-info-board"></div>
             <div id="positionNoteCap" class="room-info-board-cap"></div>
+            <div id="positionNoteEval" class="position-note-eval" style="display:none"></div>
           </div>
           <div class="position-note-right">
             <div class="position-note-label">Note</div>
@@ -4271,6 +4272,65 @@ async function editPositionText(field){
   renderPositionNoteBody();
 }
 
+/* The engine's view of the modal's position (after our reply, so the
+   opponent is to move), from whatever analysis is already saved -- nothing
+   is run here. Three places can hold it, and the deepest wins:
+   - an eval saved on this exact seq (e.g. Compare Games' "Analyze Others",
+     which analyses the position after each candidate reply);
+   - an eval saved on any other row of the line whose position is this one,
+     by another move order;
+   - the row one ply back (the position before our reply), when one of its
+     engine lines starts with our reply: that line's score is this position's
+     score, one ply shallower, and its remaining moves are the continuation.
+   Scores are stored White-relative, so none of these needs flipping. */
+async function positionEvalFor(lineId, seq){
+  const prefs = (CURRENT_LINE && lineId === CURRENT_LINE.id) ? PREFS : await getAllPrefs(lineId);
+  const fen = fenForSeq(seq), key = positionKey(fen);
+  let best = null;
+  const offer = cand => { if(cand && (!best || (cand.depth || 0) > (best.depth || 0))) best = cand; };
+  for(const p of Object.values(prefs || {})){
+    const ev = p?.eval;
+    if(!ev) continue;
+    const at = ev.pvFen || (Array.isArray(p.seq) ? fenForSeq(p.seq) : null);
+    if(at && positionKey(at) === key) offer({ ...ev, pvFen: at });
+  }
+  const parent = prefs?.[prefKey(lineId, seq.slice(0, -1))];
+  const reply = seq[seq.length - 1];
+  const parentFen = fenForSeq(seq.slice(0, -1));
+  const lines = parent?.evalLines?.length ? parent.evalLines : (parent?.eval ? [parent.eval] : []);
+  for(const line of lines){
+    const startFen = line.pvFen || parentFen;
+    let first = null;
+    try {
+      const c = new Chess(startFen);
+      const mv = line.pvUci?.length
+        ? c.move({ from: line.pvUci[0].slice(0, 2), to: line.pvUci[0].slice(2, 4), promotion: line.pvUci[0].slice(4, 5) || undefined })
+        : c.move((line.pv || '').trim().split(/\s+/)[0]?.replace(/^\d+\.(\.\.)?/, '') || '', { sloppy: true });
+      first = mv?.san || null;
+    } catch(_){ first = null; }
+    if(first !== reply) continue;
+    const rest = line.pvUci?.length > 1 ? pvToSan(fen, line.pvUci.slice(1), 8)
+      : (line.pv || '').trim().split(/\s+/).slice(1).join(' ');
+    offer({ type: line.type, value: line.value, depth: Math.max(0, (line.depth || 0) - 1), pv: rest, pvFen: fen });
+  }
+  return best;
+}
+async function renderPositionEval(){
+  const st = positionNoteState, el = $('positionNoteEval');
+  if(!st || !el) return;
+  const token = positionNoteToken;
+  el.style.display = 'none'; el.innerHTML = '';
+  let ev = null;
+  try { ev = await positionEvalFor(st.lineId, st.seq); } catch(e){ console.warn('[position modal] eval lookup failed', e); }
+  if(token !== positionNoteToken || !ev) return;
+  const color = st.flip ? 'black' : 'white';
+  const pvText = ev.pvUci?.length && ev.pvFen ? pvToSan(ev.pvFen, ev.pvUci, 8) : (ev.pv || '');
+  el.innerHTML = `<span class="position-note-eval-score ${evalClass(ev, color)}">${escapeHtml(formatEvalTag(ev))}</span>`
+    + (pvText ? `<span class="position-note-eval-pv">${escapeHtml(pvText)}</span>` : '');
+  el.title = 'Engine evaluation of this position (score/depth), from saved analysis';
+  el.style.display = '';
+}
+
 function closePositionNote(){
   const ov = document.getElementById('positionNoteOverlay');
   if(ov) ov.style.display = 'none';
@@ -4317,6 +4377,7 @@ function openPositionNote(seq, opts = {}){
   ov.style.display = 'flex';
   setForeignModalOpen(true);
   renderPositionNoteBody();
+  renderPositionEval();
 }
 
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------

@@ -346,6 +346,14 @@
   .position-note-modal{width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column}
   .position-note-body{display:flex;gap:1rem;align-items:flex-start}
   .position-note-left{flex:none}
+  /* the saved engine eval of the modal's position, under its caption */
+  .position-note-eval{margin-top:.25rem;max-width:208px;font-size:.8rem;color:#555;line-height:1.35}
+  .position-note-eval-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.4em}
+  .position-note-eval-score.eval-neutral  {color:#777}
+  .position-note-eval-score.eval-inferior {color:#e65100}
+  .position-note-eval-score.eval-losing   {color:#c62828}
+  .position-note-eval-score.eval-superior {color:#1565c0}
+  .position-note-eval-score.eval-winning  {color:#2e7d32}
   .position-note-right{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.5rem;align-items:flex-start}
   /* taller than the Attributes preview -- here the note is the point of the
      modal rather than one field among several */
@@ -2220,6 +2228,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260927-469"></script>
+<script type="module" src="js/app.js?v=20260927-470"></script>
 </body>
 </html>
