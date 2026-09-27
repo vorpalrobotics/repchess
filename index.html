@@ -370,8 +370,14 @@
      rather than two modals stacked */
   .position-note-label{font-size:.72rem;font-weight:600;color:#1f4e79;text-transform:uppercase;letter-spacing:.04em}
   .position-note-label:not(:first-child){margin-top:.35rem}
+  /* a phone: board on top, centred, then the note and story at the modal's
+     full width. Stacking alone left align-items:flex-start in charge, which
+     shrank the right column -- and so both text panes -- to their content. */
   @media (max-width:640px){
-    .position-note-body{flex-direction:column}
+    .position-note-body{flex-direction:column;align-items:stretch}
+    .position-note-left{align-self:center}
+    .position-note-right{width:100%;align-items:stretch}
+    .position-note-right > button{align-self:flex-start}
     .position-note-view{min-height:8em}
   }
   /* a converted modal must be a flex column, and the bar (or the host div a
@@ -2237,6 +2243,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260927-471"></script>
+<script type="module" src="js/app.js?v=20260927-472"></script>
 </body>
 </html>
