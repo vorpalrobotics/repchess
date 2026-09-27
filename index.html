@@ -1642,6 +1642,11 @@
         <span>Notify me when a same-day review is due</span>
       </label>
       <p class="set-note" id="setLearningRemindersNote"></p>
+      <p class="set-note"><button type="button" id="setLearningRemindersTest" style="display:none">Send a test notification</button>
+        <span id="setLearningRemindersTestResult"></span></p>
+      <p class="set-note" id="setLearningRemindersLast"></p>
+      <p class="set-note">Reminders can only come while REPchess is open in a tab. On a phone a tab in
+        the background is paused, so a reminder waits until you come back to it, and then shows on the page.</p>
       <p class="set-note">The tab title always shows how many are due, e.g. &ldquo;(2) REPchess&rdquo;,
         whether or not notifications are on.</p>
       <h3 class="set-h">Slowdowns</h3>
@@ -2244,6 +2249,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260927-474"></script>
+<script type="module" src="js/app.js?v=20260927-475"></script>
 </body>
 </html>
