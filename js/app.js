@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260804-329';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260927-469';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
          openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-468';
+const BUILD_TAG = '-469';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -2085,7 +2085,14 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
         continue;
       }
       if(leafIds.has(e.target)){
-        exits.push({ opp: e.label, to: null, track, occurrence, fromSide: from?.side, fromOrder: from?.order });
+        // an opponent move with no reply chosen yet: no door, but the VR shows
+        // it as a faint on-screen reminder (threeVR.js's refreshUnansweredHud),
+        // so it carries what that needs -- its seq (for Hide / Open in move
+        // table), its image's move descriptor, and how often it was played
+        // (0 = added by hand).
+        const oppInfo = lastMoveInfo(e.seq);
+        exits.push({ opp: e.label, to: null, track, occurrence, fromSide: from?.side, fromOrder: from?.order,
+                     seq: e.seq.slice(), count: e.count || 0, move: oppInfo ? CONV(oppInfo, e.seq.length) : null });
         continue;
       }
       const tgt = genIdOf(e.target);
@@ -3951,9 +3958,49 @@ $('castleWalkBtn').onclick = async () => {
     onRoomStory: openRoomStory,
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
+    onHideUnanswered: hideUnansweredFromVr,
+    onOpenUnanswered: openUnansweredFromVr,
     onAssets: openThreeTestAssets
   });
 };
+
+/* ---------- the VR's unanswered-move reminder: its two actions ----------
+   (threeVR.js's refreshUnansweredHud.) Hide is the move table's own "Hide
+   this Variation", for a line that may not be the open one. An unanswered
+   move has no subtree, so nothing can redirect into it and there is no
+   redirect confirm to ask. Open closes the walk exactly as its Close button
+   does, opens that move's system if another one is showing, and reveals and
+   focuses the move's row, ready to analyse and answer. */
+async function hideUnansweredFromVr(lineId, seq){
+  invalidateBuiltCastlesCache();   // which opponent replies are visible decides which exits exist
+  if(CURRENT_LINE && lineId === CURRENT_LINE.id){ await savePrefField(seq, 'hidden', true); refreshSystemStats(); }
+  else await setPref(lineId, seq, { hidden: true });
+}
+async function openUnansweredFromVr(lineId, seq){
+  $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard();
+  if($('graphOverlay').style.display !== 'none') closeGraphOverlay();   // the row is in the move table, not the graph
+  const line = (!CURRENT_LINE || CURRENT_LINE.id !== lineId) ? (await getLines(LOCAL_USER)).find(l => l.id === lineId) : null;
+  if(line) await openLine(line); else await refreshMemorizedRoomsAndTree();
+  if(CURRENT_LINE?.id === lineId) revealSeqInTree(seq);
+}
+/* expands every row on the way down to `seq` (an opponent-move row seq) and
+   focuses that row, scrolled into view -- the menu search's reveal, for a
+   seq known to exist. Rows hoisted into a compact run are simply skipped. */
+function revealSeqInTree(seq){
+  let lastRow = null;
+  for(let i = 1; i <= seq.length; i++){
+    const key = seq.slice(0, i).join(',');
+    const row = [...$('tree').querySelectorAll('.data-row')].find(r => r.dataset.seq === key);
+    if(!row) continue;
+    if(i < seq.length) expandRowBranch(row);
+    lastRow = row;
+  }
+  if(!lastRow || lastRow.dataset.seq !== seq.join(',')) return false;
+  focusOnLine(lastRow);
+  rememberShowScope();
+  lastRow.scrollIntoView({ block: 'center' });
+  return true;
+}
 
 /* ---------- toggle helper ----------
    `seq`, when given, is this row's own pref seq (ends in the opponent's
@@ -10338,6 +10385,8 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     onRoomStory: openRoomStory,
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
+    onHideUnanswered: hideUnansweredFromVr,
+    onOpenUnanswered: openUnansweredFromVr,
     onAssets: openThreeTestAssets
   });
 }

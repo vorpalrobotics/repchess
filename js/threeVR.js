@@ -626,7 +626,11 @@ function registerOneCastle(castle, instanceId, opts = {}){
       // this generation's live shape snapshot (member/exit position keys) --
       // see MEMORIZED_SHAPES for what captures it and why.
       shape: r.shape,
-      castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt }
+      castleSign: { title: (r.castle ? r.castle + ': ' : '') + (r.name || r.id), type: r.type, moves, doors, unbuilt },
+      // the same unbuilt exits, with what the on-screen reminder needs (see
+      // refreshUnansweredHud)
+      unanswered: r.exits.filter(ex => !ex.to && !ex.foreignKey)
+        .map(ex => ({ san: ex.opp, move: ex.move || null, seq: ex.seq || null, count: ex.count || 0 }))
     };
   }
   const s = ROOMS[entryKey].size;
@@ -6909,6 +6913,133 @@ function rebuildMoveObjectChainLive(roomKey){
     if(chain) scene.add(chain);
   }
 }
+/* ---------- unanswered opponent moves ----------
+   An opponent move seen in games (or added by hand) with no reply chosen yet
+   gets no door: a stray blunder with an obvious answer should not reshape a
+   room. The room still has a decision waiting, though -- answer the move (a
+   new door) or hide it -- and this is the reminder. The move's image appears
+   faintly in the bottom-left corner of the SCREEN, never in the room, so it
+   moves nothing and is no part of what gets memorized. Hints or edit mode
+   only: during self-test it would be a distraction. Tapping it lists the
+   room's unanswered moves, each with Hide (the move table's own Hide this
+   Variation) and Open in move table (closes the walk on that move's row, to
+   analyse and choose a reply there). */
+let unansweredEl = null, unansweredListEl = null, unansweredGen = 0;
+function unansweredLabel(u){
+  if(!u.seq || !u.seq.length) return u.san;
+  const n = Math.ceil(u.seq.length / 2);
+  return `${n}${u.seq.length % 2 ? '.' : '\u2026'}${u.san}`;
+}
+function roomUnanswered(){
+  const room = ROOMS[currentRoomKey];
+  return ((room && room.unanswered) || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
+}
+function refreshUnansweredHud(){
+  if(!container) return;
+  closeUnansweredList();
+  const list = roomUnanswered();
+  // the prop pad's left cluster (touch devices) sits in this same corner
+  const padOpen = !!(editTouchEl && selectedProp);
+  if(!list.length || !(hintsOn || editMode) || padOpen){
+    if(unansweredEl) unansweredEl.style.display = 'none';
+    return;
+  }
+  if(!unansweredEl || !container.contains(unansweredEl)){
+    unansweredEl = document.createElement('button');
+    unansweredEl.type = 'button';
+    unansweredEl.dataset.unanswered = '1';
+    unansweredEl.style.cssText = 'position:absolute;left:10px;bottom:14px;z-index:3;display:none;'
+      + 'flex-direction:column;align-items:center;gap:2px;padding:4px;background:none;border:none;'
+      + 'cursor:pointer;opacity:.3;color:#fff;font:600 .75rem sans-serif;text-shadow:0 1px 2px #000;transition:opacity .2s';
+    unansweredEl.onmouseenter = () => { unansweredEl.style.opacity = '.85'; };
+    unansweredEl.onmouseleave = () => { unansweredEl.style.opacity = '.3'; };
+    // blurred straight away so a later Space/Enter walks rather than re-clicking it
+    unansweredEl.onclick = e => { e.stopPropagation(); unansweredEl.blur(); toggleUnansweredList(); };
+    container.appendChild(unansweredEl);
+  }
+  const top = list[0];
+  unansweredEl.title = `${list.length} opponent move${list.length === 1 ? '' : 's'} here with no reply yet -- tap to answer or hide`;
+  unansweredEl.innerHTML = '';
+  const img = document.createElement('canvas');
+  img.width = img.height = MNEM_QUADRANT;
+  img.style.cssText = 'width:64px;height:64px;border-radius:6px;background:rgba(255,255,255,.12)';
+  const label = document.createElement('span');
+  label.dataset.unansweredLabel = '1';
+  label.textContent = unansweredLabel(top) + (list.length > 1 ? ` +${list.length - 1}` : '');
+  unansweredEl.append(img, label);
+  unansweredEl.style.display = 'flex';
+  // notation straight away, the move's own picture once it resolves
+  const ctx = img.getContext('2d');
+  drawMnemQuadrant(ctx, 0, 0, { text: top.san });
+  const gen = ++unansweredGen, roomKey = currentRoomKey;
+  if(top.move){
+    Promise.all([getMnemonicsCached(), loadBeardImage()])
+      .then(([bySquare, beard]) => resolveMoveContent(top.move, bySquare).then(content => {
+        if(gen !== unansweredGen || roomKey !== currentRoomKey) return;
+        ctx.clearRect(0, 0, img.width, img.height);
+        drawMnemQuadrant(ctx, 0, 0, content);
+        drawMoveMarks(ctx, 0, 0, content, beard);
+      }))
+      .catch(() => {});
+  }
+}
+function closeUnansweredList(){
+  if(unansweredListEl){ unansweredListEl.remove(); unansweredListEl = null; }
+}
+function toggleUnansweredList(){
+  if(unansweredListEl){ closeUnansweredList(); return; }
+  const room = ROOMS[currentRoomKey];
+  const list = roomUnanswered();
+  if(!room || !list.length) return;
+  const box = document.createElement('div');
+  box.dataset.unansweredList = '1';
+  box.style.cssText = 'position:absolute;left:10px;bottom:112px;z-index:7;min-width:15rem;'
+    + 'max-width:min(24rem,calc(100% - 20px));max-height:50%;overflow:auto;background:rgba(20,24,34,.94);'
+    + 'color:#eee;border:1px solid #556;border-radius:8px;padding:.5rem .6rem;'
+    + 'font:400 .82rem/1.35 sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  box.onclick = e => e.stopPropagation();
+  box.innerHTML = `<div style="font-weight:600;margin-bottom:.15rem">No reply chosen yet</div>`
+    + `<div style="font-size:.72rem;opacity:.7;margin-bottom:.4rem">Answer it to add a door here, or hide it.</div>`;
+  const btnCss = 'font:600 .72rem sans-serif;padding:.2rem .5rem;border-radius:4px;cursor:pointer;'
+    + 'border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:#fff';
+  for(const u of list){
+    const row = document.createElement('div');
+    row.dataset.unansweredRow = u.san;
+    row.style.cssText = 'display:flex;align-items:center;gap:.4rem;padding:.3rem 0;border-top:1px solid rgba(255,255,255,.1)';
+    const text = document.createElement('div');
+    text.style.cssText = 'flex:1 1 auto;min-width:0';
+    text.innerHTML = `<div style="font-weight:600">${escHtml(unansweredLabel(u))}</div>`
+      + `<div style="font-size:.7rem;opacity:.65">${u.count ? `played in ${u.count} of your game${u.count === 1 ? '' : 's'}` : 'added by hand'}</div>`;
+    row.appendChild(text);
+    const canAct = !!(u.seq && room.lineId);
+    if(canAct && threeOpts.onHideUnanswered){
+      const hide = document.createElement('button');
+      hide.type = 'button'; hide.dataset.act = 'hide'; hide.textContent = 'Hide'; hide.style.cssText = btnCss;
+      hide.title = 'Hide this opponent move, as the move table\u2019s Hide this Variation does';
+      hide.onclick = async () => {
+        hide.disabled = true;
+        try { await threeOpts.onHideUnanswered(room.lineId, u.seq); }
+        catch(err){ console.warn('[unanswered] hide failed', err); showToast(`Could not hide ${unansweredLabel(u)}`); hide.disabled = false; return; }
+        room.unanswered = room.unanswered.filter(x => x.seq !== u.seq);
+        showToast(`${unansweredLabel(u)} hidden`);
+        refreshUnansweredHud();
+        if(room.unanswered.length && unansweredEl) toggleUnansweredList();
+      };
+      row.appendChild(hide);
+    }
+    if(canAct && threeOpts.onOpenUnanswered){
+      const open = document.createElement('button');
+      open.type = 'button'; open.dataset.act = 'open'; open.textContent = 'Open in move table'; open.style.cssText = btnCss;
+      open.title = 'Close the walk and go to this move in the move table, to analyse it and choose a reply';
+      open.onclick = () => threeOpts.onOpenUnanswered(room.lineId, u.seq);
+      row.appendChild(open);
+    }
+    box.appendChild(row);
+  }
+  container.appendChild(box);
+  unansweredListEl = box;
+}
+
 // briefly shows a status message top-center (e.g. the bounds-auto-fix notice)
 // so a silent data correction isn't invisible to the user; fades after ~3.5s.
 function showToast(msg){
@@ -7567,6 +7698,7 @@ function buildRoom(roomKey){
   }
 
   currentRoomKey = roomKey;
+  refreshUnansweredHud();
   if(selectedProp && selectedProp.roomKey === roomKey) attachSelectionVisuals();
   updateToolbar();   // wall-lists button visibility depends on the room having pairs
   refreshMiniBoard();   // update/hide the mini board if it's open and the room changed
@@ -9068,6 +9200,7 @@ function buildHelpOverlay(){
       <h2 style="margin:.1rem 0 .7rem;font-size:1.1rem">Walking the memory palace</h2>
       <p style="margin:.4rem 0"><strong>Move:</strong> arrows or W/A/S/D. Q/E strafe (sidestep) left and right. Walk forward through a doorway to enter the room beyond. Press R to reset to this room's own entrance, H to return all the way to Main Street, B to instantly take the room's own back door.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-lightbulb"></i> Hints:</strong> show/hide room names, the move hint beside each door, and the in-room move billboards — turn them off to self-test your recall.</p>
+      <p style="margin:.4rem 0"><strong>Faint move image, bottom-left:</strong> an opponent move in this room with no reply chosen yet (hints or edit mode only). Tap it to hide the move or open it in the move table and answer it.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-chess-board"></i> Board:</strong> show a mini board of the current room's position (castle rooms only).</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-brain"></i> Memorized &amp; reviews:</strong> mark a room memorized once you can recall it. After that the brain turns amber when a review is due and red once it's well overdue — quiz yourself on the room, then grade how it went: <strong>1</strong> recalled perfectly, <strong>2</strong> mostly correct, <strong>3</strong> failed. Clicking the brain offers the same three (plus unmarking). A newly memorized room first gets a <strong>same-day review</strong> about 6 hours later; passing it (1 or 2) puts the room on the review ladder, and each later grade moves it along: 1 → 3 → 7 → 21 → 60 → 180 days. A fail, at any point, sends the room back for another same-day review. A door whose room is due (or overdue) carries a coloured <strong>DUE</strong> / <strong>OVERDUE</strong> tag on its sign, and one you have never memorized carries a dim grey brain 🧠 — so a sign says either “never learned this”, “a review is waiting”, or nothing at all, which means learned and up to date. Elevator panels mark their floors the same way, and a castle's entry room shows its marker on the stat strip out on the street.</p>
       <p style="margin:.4rem 0"><strong><i class="fa-solid fa-list-check"></i> Review list:</strong> every room due for review, most urgent first (same-day reviews at the top), or grouped by castle. Pick one to walk to its door. Rooms due soon are listed dimmed below a line, as optional extras.</p>
@@ -9206,6 +9339,7 @@ function buildEditTouch(){
 }
 function updateEditTouchControls(){
   if(!editTouchEl) return;
+  refreshUnansweredHud();   // the prop pad's left cluster takes its corner
   // the move/scale pad and the walk joystick would overlap on a phone, so the
   // joystick steps aside while a prop is being edited (it returns on deselect)
   if(joystickEl){
@@ -11314,6 +11448,7 @@ export function closeThreeTest(){
   selectionGear = null;
   selectionAnchor = null;
   editHud = null;
+  unansweredEl = null; unansweredListEl = null;
   if(toastTimer){ clearTimeout(toastTimer); toastTimer = null; }
   toastEl = null;
   joystickEl = null; joyKnob = null; joyPointerId = null;
