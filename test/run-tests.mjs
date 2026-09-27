@@ -6809,6 +6809,108 @@ try {
 }
 } catch(e){ bad('Phase TB: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase UA: an opponent move with no reply yet gets no door, but a faint
+//     on-screen reminder in its room (hints or edit mode only) whose list can
+//     hide the move or open it in the move table. ---
+if(shouldRunPhase(['vr-ui'])){
+try {
+const appUA = await launchApp();
+try {
+  await seedBackup(appUA.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4'], manualReplies: ['c5'] },   // added by hand, never played
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await openVR(appUA.page);
+  const entryKey = await appUA.page.evaluate(() => {
+    const c = new Chess(); for(const m of ['d4','Nf6','c4']) c.move(m);
+    return 'cas:L1_Alpha:' + window.__positionKey(c.fen()).replace(/[^a-zA-Z0-9]/g,'_');
+  });
+  await appUA.page.evaluate(k => window.__threeTestEdit.enter(k), entryKey);
+  const hud = () => appUA.page.evaluate(() => {
+    const el = document.querySelector('#threeTestCanvasWrap [data-unanswered]');
+    if(!el || el.style.display === 'none') return null;
+    const r = el.getBoundingClientRect(), c = document.getElementById('threeTestCanvasWrap').getBoundingClientRect();
+    return { label: el.querySelector('[data-unanswered-label]').textContent, opacity: el.style.opacity,
+      left: r.left - c.left, bottomGap: c.bottom - r.bottom };
+  });
+  const hintsBtn = () => appUA.page.evaluate(() =>
+    [...document.querySelectorAll('#threeTestCanvasWrap [data-three-toolbar] button')].find(b => b.querySelector('.fa-lightbulb')).click());
+
+  // 530. The room shows its most-played unanswered move, faint, bottom-left.
+  try {
+    await appUA.page.waitForFunction(() => {
+      const el = document.querySelector('#threeTestCanvasWrap [data-unanswered]');
+      return el && el.style.display !== 'none';
+    }, null, { timeout: 5000 });
+    const h = await hud();
+    assert(h.label === '2\u2026g6 +1', `expected "2…g6 +1" (the move played twice, plus one more), got ${JSON.stringify(h)}`);
+    assert(h.opacity === '0.3' && h.left < 40 && h.bottomGap < 40, `expected a faint bottom-left indicator, got ${JSON.stringify(h)}`);
+    const doors = await appUA.page.evaluate(() => window.__threeTestEdit.exits().filter(e => !e.back).length);
+    assert(doors <= 1, `expected the unanswered moves to add no doors, got ${doors} forward exits`);
+    ok('unanswered moves: a faint reminder of the most-played one, and no extra doors');
+  } catch(e){ bad('unanswered moves: indicator', e); }
+
+  // 531. Self-test (hints off) hides it; edit mode shows it again.
+  try {
+    await hintsBtn();
+    assert((await hud()) === null, 'expected no reminder with hints off');
+    await appUA.page.evaluate(() => window.__threeTestEdit.toggle());
+    assert((await hud()) !== null, 'expected the reminder back in edit mode');
+    await appUA.page.evaluate(() => window.__threeTestEdit.toggle());
+    await hintsBtn();
+    assert((await hud()) !== null, 'expected the reminder with hints back on');
+    ok('unanswered moves: shown only with hints on or in edit mode');
+  } catch(e){ bad('unanswered moves: hints / edit gating', e); }
+
+  // 532. Tapping it lists them, with how often each was played; Hide hides
+  //      the move for real and drops it from the list.
+  try {
+    await appUA.page.evaluate(() => document.querySelector('#threeTestCanvasWrap [data-unanswered]').click());
+    const rows = await appUA.page.evaluate(() => [...document.querySelectorAll('[data-unanswered-list] [data-unanswered-row]')]
+      .map(r => ({ san: r.dataset.unansweredRow, text: r.textContent })));
+    assert(rows.length === 2 && rows[0].san === 'g6' && /2 of your games/.test(rows[0].text) && rows[1].san === 'c5' && /added by hand/.test(rows[1].text),
+      `expected g6 (played twice) then c5 (added by hand), got ${JSON.stringify(rows)}`);
+    await appUA.page.evaluate(() => document.querySelector('[data-unanswered-list] [data-unanswered-row="c5"] [data-act="hide"]').click());
+    await appUA.page.waitForFunction(() => {
+      const el = document.querySelector('#threeTestCanvasWrap [data-unanswered-label]');
+      return el && el.textContent === '2\u2026g6';
+    }, null, { timeout: 5000 });
+    const after = await appUA.page.evaluate(async () => ({
+      hidden: (await getPref('L1', ['d4','Nf6','c4','c5']))?.hidden,
+      rows: [...document.querySelectorAll('[data-unanswered-list] [data-unanswered-row]')].map(r => r.dataset.unansweredRow),
+    }));
+    assert(after.hidden === true, `expected c5 hidden in the repertoire, got ${JSON.stringify(after)}`);
+    assert(after.rows.length === 1 && after.rows[0] === 'g6', `expected the list left with g6, got ${JSON.stringify(after.rows)}`);
+    ok('unanswered moves: the list shows each move\'s frequency, and Hide hides it for real');
+  } catch(e){ bad('unanswered moves: list and Hide', e); }
+
+  // 533. Open in move table closes the walk, opens the system and focuses
+  //      that move's row.
+  try {
+    await appUA.page.evaluate(() => document.querySelector('[data-unanswered-list] [data-unanswered-row="g6"] [data-act="open"]').click());
+    await appUA.page.waitForFunction(() => document.getElementById('threeTestOverlay').style.display === 'none', null, { timeout: 5000 });
+    await appUA.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,g6"]', { timeout: 40000 });
+    await appUA.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,g6"]');
+      const other = document.querySelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]');
+      return row && row.offsetParent && !row.classList.contains('focus-hidden') && other && other.classList.contains('focus-hidden');
+    }, null, { timeout: 10000 });
+    ok('unanswered moves: Open in move table lands on that move\'s row, focused');
+  } catch(e){ bad('unanswered moves: Open in move table', e); }
+} finally {
+  await appUA.close();
+}
+} catch(e){ bad('Phase UA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AJ: a room's own name on the floor, a little way in from the
 //     entrance -- hint-gated, clamped to stay clear of the far wall in a
 //     shallow room, and spins to keep facing the camera as you walk. ---
