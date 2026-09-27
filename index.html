@@ -346,6 +346,22 @@
   .position-note-modal{width:min(46em,94vw);max-height:88vh;display:flex;flex-direction:column}
   .position-note-body{display:flex;gap:1rem;align-items:flex-start}
   .position-note-left{flex:none}
+  /* a mini board's saved engine eval: score/depth then the engine's line
+     (fillBoardEval). Every board uses it; -dark is the VR's dark panel. */
+  .board-eval{margin-top:.25rem;max-width:240px;font-size:.8rem;color:#555;line-height:1.35}
+  .board-eval-score{font-family:'Courier New',monospace;font-weight:700;margin-right:.4em}
+  .board-eval-score.eval-neutral  {color:#777}
+  .board-eval-score.eval-inferior {color:#e65100}
+  .board-eval-score.eval-losing   {color:#c62828}
+  .board-eval-score.eval-superior {color:#1565c0}
+  .board-eval-score.eval-winning  {color:#2e7d32}
+  .board-eval.board-eval-dark{color:#aab;max-width:220px}
+  .board-eval-dark .board-eval-score.eval-neutral  {color:#ccc}
+  .board-eval-dark .board-eval-score.eval-inferior {color:#ffb74d}
+  .board-eval-dark .board-eval-score.eval-losing   {color:#ef9a9a}
+  .board-eval-dark .board-eval-score.eval-superior {color:#90caf9}
+  .board-eval-dark .board-eval-score.eval-winning  {color:#a5d6a7}
+  .position-note-eval{max-width:208px}
   .position-note-right{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.5rem;align-items:flex-start}
   /* taller than the Attributes preview -- here the note is the point of the
      modal rather than one field among several */
@@ -1573,6 +1589,7 @@
     <div id="roomInfoExits" class="room-info-exits"></div>
     <div id="roomInfoBoard" class="room-info-board"></div>
     <div id="roomInfoBoardCap" class="room-info-board-cap"></div>
+    <div id="roomInfoBoardEval" class="board-eval" style="display:none"></div>
     <div class="modal-actions">
       <button id="roomInfoJumpBtn"><i class="fa-solid fa-person-walking"></i> Jump to VR</button>
     </div>
@@ -2177,7 +2194,7 @@
 </div>
 
 <!-- hover preview mini-board (shown on dwell over an analyse icon) -->
-<div id="hoverPreview"><div id="hoverPreviewBoard"></div></div>
+<div id="hoverPreview"><div id="hoverPreviewBoard"></div><div id="hoverPreviewEval" class="board-eval" style="display:none"></div></div>
 <div id="pvFloat">
   <div id="pvFloatBoard"></div>
   <div id="pvFloatActions">
@@ -2220,6 +2237,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260927-469"></script>
+<script type="module" src="js/app.js?v=20260927-471"></script>
 </body>
 </html>

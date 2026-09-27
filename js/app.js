@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260927-469';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260927-471';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
          openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-469';
+const BUILD_TAG = '-471';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3629,6 +3629,13 @@ function attachGraphContextMenu(cy, scopeKey){
    position" menu item (hover was too easy to trigger by accident). The virtual
    'start' node has no fen and is skipped. Dismissed by tapping the board, tapping
    empty graph space, or closing the graph. */
+// the shared #hoverPreview board's eval line; the fen it shows is remembered
+// so a late index build doesn't paint onto a board that has moved on
+let hoverPreviewFen = null;
+function showHoverPreviewEval(fen){
+  hoverPreviewFen = fen;
+  showBoardEval($('hoverPreviewEval'), fen, CURRENT_LINE?.color, () => hoverPreviewFen);
+}
 function hideGraphHoverPreview(){
   $('hoverPreview').style.display = 'none';
 }
@@ -3637,6 +3644,7 @@ function showGraphNodePosition(cy, el){
   if(!fen) return;
   hoverPreviewBoard?.setPosition(fen);
   hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+  showHoverPreviewEval(fen);
   const containerRect = $('graphContainer').getBoundingClientRect();
   let pos;
   if(el.isEdge()){
@@ -3658,19 +3666,20 @@ function showGraphNodePosition(cy, el){
   }
   const cx = containerRect.left + pos.x;
   const cyy = containerRect.top + pos.y;
-  const size = 252; // preview box incl. border/padding (240 board + padding/border)
+  const size = 276; // preview box incl. border/padding (240 board + padding/border) and its eval line
   const left = Math.min(Math.max(8, cx - size/2), window.innerWidth - size - 8);
   const top = cyy + size + 20 <= window.innerHeight ? cyy + 20 : cyy - size - 20;
   preview.style.left = `${Math.round(left)}px`;
   preview.style.top = `${Math.round(Math.max(8,top))}px`;
 }
+let roomInfoEvalFen = null;
 /* keeps the hover-preview board from covering the room info modal: parks it
    just outside the modal's right edge (or left, if there's no room on the
    right) instead of next to the cursor */
 function positionHoverPreviewBesideRoomModal(){
   const preview = $('hoverPreview');
   const modalRect = document.querySelector('#roomInfoOverlay .modal').getBoundingClientRect();
-  const size = 252;
+  const size = 276;
   const gap = 12;
   const left = modalRect.right + gap + size <= window.innerWidth
     ? modalRect.right + gap
@@ -3857,9 +3866,13 @@ async function showRoomInfoPanel(roomEl){
     boardEl.style.display = 'grid';
     capEl.textContent = (fen.split(' ')[1] === 'b' ? 'Black' : 'White') + ' to move';
     capEl.style.display = 'block';
+    roomInfoEvalFen = fen;
+    showBoardEval($('roomInfoBoardEval'), fen, CURRENT_LINE?.color, () => roomInfoEvalFen);
   } else {
     boardEl.style.display = 'none';
     capEl.style.display = 'none';
+    roomInfoEvalFen = null;
+    fillBoardEval($('roomInfoBoardEval'), null);
   }
 
   $('roomInfoOverlay').style.display = 'flex';
@@ -3941,6 +3954,7 @@ $('castleWalkBtn').onclick = async () => {
   ]);
   VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
   VR_ROOM_NAME_INDEX = roomNameIndex;
+  savedEvalIndex();   // so the VR mini board's eval line is ready when opened
   await buildVrNoteIndex(lines);
   enterVrCpuGuard();
   openThreeTest($('threeTestCanvasWrap'), {
@@ -3959,10 +3973,21 @@ $('castleWalkBtn').onclick = async () => {
     onRoomRename: makeRoomRenamer(roomNameIndex),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onHideUnanswered: hideUnansweredFromVr,
+    boardEvalHtml: vrBoardEvalHtml,
     onOpenUnanswered: openUnansweredFromVr,
     onAssets: openThreeTestAssets
   });
 };
+
+/* The VR mini board's eval line, as HTML (the VR has no repertoire data of its
+   own). Its board shows a room's position; `color` is that room's line's
+   side, for the good/bad colouring. Empty when nothing is saved -- or when the
+   index is still building, which the walk's own open starts in advance. */
+function vrBoardEvalHtml(posKey, lineId){
+  const el = document.createElement('div');
+  fillBoardEval(el, savedEvalForFen(posKey), (VR_LINE_COLORS && VR_LINE_COLORS.get(lineId)) || CURRENT_LINE?.color || 'white');
+  return el.innerHTML;
+}
 
 /* ---------- the VR's unanswered-move reminder: its two actions ----------
    (threeVR.js's refreshUnansweredHud.) Hide is the move table's own "Hide
@@ -4196,6 +4221,7 @@ function buildPositionNoteOverlay(){
           <div class="position-note-left">
             <div id="positionNoteBoard" class="room-info-board"></div>
             <div id="positionNoteCap" class="room-info-board-cap"></div>
+            <div id="positionNoteEval" class="board-eval position-note-eval" style="display:none"></div>
           </div>
           <div class="position-note-right">
             <div class="position-note-label">Note</div>
@@ -4271,6 +4297,20 @@ async function editPositionText(field){
   renderPositionNoteBody();
 }
 
+/* The engine's view of the modal's position, from whatever analysis is
+   already saved (nothing is run here) -- savedEvalIndex has the details. */
+async function renderPositionEval(){
+  const st = positionNoteState, el = $('positionNoteEval');
+  if(!st || !el) return;
+  const token = positionNoteToken;
+  el.style.display = 'none'; el.innerHTML = '';
+  const fen = fenForSeq(st.seq);
+  let ev = null;
+  try { ev = (await savedEvalIndex()).get(positionKey(fen)) || null; } catch(e){ console.warn('[position modal] eval lookup failed', e); }
+  if(token !== positionNoteToken) return;
+  fillBoardEval(el, ev, st.flip ? 'black' : 'white');
+}
+
 function closePositionNote(){
   const ov = document.getElementById('positionNoteOverlay');
   if(ov) ov.style.display = 'none';
@@ -4317,6 +4357,7 @@ function openPositionNote(seq, opts = {}){
   ov.style.display = 'flex';
   setForeignModalOpen(true);
   renderPositionNoteBody();
+  renderPositionEval();
 }
 
 /* ---------- node attributes modal ("Set Attributes" on a row) ----------
@@ -5489,6 +5530,104 @@ const MOVE_QUALITY_CLASS = {
   '?!': 'mq-dubious', '?': 'mq-bad', '??': 'mq-bad',
 };
 const moveQualityFor = (seq) => PREFS[prefKey(CURRENT_LINE.id, seq)]?.moveQuality || '';
+
+/* ---------- saved engine evals, by position ----------
+   Every mini board shows the engine's view of its position when one is
+   already saved (fillBoardEval) -- nothing is analysed for it. The index maps
+   positionKey -> the deepest saved eval of that position, across every
+   opening system and any move order, from two kinds of saved analysis:
+   - a row's own eval, which is of that row's position (eval.pvFen);
+   - each of a row's engine lines, one ply on: a line's score is also the
+     score of the position after its first move, one ply shallower, with the
+     rest of the line as its continuation. That is how the position after
+     OUR reply (a room, a move pair's board) gets an eval, since analysis is
+     run on the position before it.
+   Scores are stored White-relative, so they need no flipping whichever side
+   is to move. Built once from storage and then patched in place as evals are
+   saved (noteSavedEvals); dropped with the built-castles cache, which every
+   bulk change (a restore, an import) already clears. A stale entry for a
+   deleted variation is harmless: an eval is a fact about a position, not
+   about the repertoire. */
+let _evalIndex = null, _evalIndexPromise = null, _evalIndexGen = 0;
+function invalidateEvalIndex(){ _evalIndex = null; _evalIndexPromise = null; _evalIndexGen++; }
+function offerEvalFor(map, fen, ev){
+  const key = positionKey(fen), cur = map.get(key);
+  if(!cur || (ev.depth || 0) > (cur.depth || 0)) map.set(key, ev);
+}
+function indexPrefEvals(map, p){
+  const base = p?.eval;
+  if(!base) return;
+  const at = base.pvFen || (Array.isArray(p.seq) ? fenForSeq(p.seq) : null);
+  if(!at) return;
+  offerEvalFor(map, at, { ...base, pvFen: at });
+  for(const line of (p.evalLines?.length ? p.evalLines : [base])){
+    const from = line.pvFen || at;
+    let child = null;
+    try {
+      const c = new Chess(from);
+      const u = line.pvUci?.[0];
+      const mv = u ? c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u.slice(4, 5) || undefined })
+        : c.move(((line.pv || '').trim().split(/\s+/)[0] || '').replace(/^\d+\.(\.\.)?/, ''), { sloppy: true });
+      if(mv) child = c.fen();
+    } catch(_){ child = null; }
+    if(!child) continue;
+    offerEvalFor(map, child, { type: line.type, value: line.value, depth: Math.max(0, (line.depth || 0) - 1), pvFen: child,
+      pvUci: line.pvUci?.length > 1 ? line.pvUci.slice(1) : undefined,
+      pv: line.pvUci?.length ? '' : (line.pv || '').trim().split(/\s+/).slice(1).join(' ') });
+  }
+}
+function savedEvalIndex(){
+  if(_evalIndex) return Promise.resolve(_evalIndex);
+  if(_evalIndexPromise) return _evalIndexPromise;
+  const gen = _evalIndexGen;
+  const p = (async () => {
+    const map = new Map();
+    try {
+      const lines = await getLines(LOCAL_USER);
+      const prefsPerLine = await Promise.all(lines.map(l => getAllPrefs(l.id)));
+      trackActivity('indexing saved evals', () =>
+        prefsPerLine.forEach(prefs => { for(const k in prefs) indexPrefEvals(map, prefs[k]); }));
+    } catch(e){ console.warn('[board evals] could not index saved evals', e); }
+    if(gen === _evalIndexGen) _evalIndex = map;
+    return map;
+  })();
+  _evalIndexPromise = p;
+  p.finally(() => { if(_evalIndexPromise === p) _evalIndexPromise = null; });
+  return p;
+}
+// a freshly saved eval goes straight into an index that is already built
+function noteSavedEvals(p){ if(_evalIndex && p) indexPrefEvals(_evalIndex, p); }
+// synchronous lookup for boards that appear instantly; null until the index
+// is built (the first call starts that)
+function savedEvalForFen(fen){
+  if(!fen) return null;
+  if(!_evalIndex){ savedEvalIndex(); return null; }
+  return _evalIndex.get(positionKey(fen)) || null;
+}
+const BOARD_EVAL_PLIES = 6;
+/* One compact line under a board: score/depth, coloured by whether it is
+   good for `color` (the repertoire side), then the first few moves of the
+   engine's line. Hidden when there is no eval. */
+function fillBoardEval(el, ev, color){
+  if(!el) return;
+  if(!ev){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  let pvText = '';
+  try { pvText = ev.pvUci?.length && ev.pvFen ? pvToSan(ev.pvFen, ev.pvUci, BOARD_EVAL_PLIES)
+    : (ev.pv || '').trim().split(/\s+/).slice(0, BOARD_EVAL_PLIES).join(' '); } catch(_){ pvText = ''; }
+  el.innerHTML = `<span class="board-eval-score ${evalClass(ev, color || 'white')}">${escapeHtml(formatEvalTag(ev))}</span>`
+    + (pvText ? `<span class="board-eval-pv">${escapeHtml(pvText)}</span>` : '');
+  el.title = 'Engine evaluation of this position (score/depth), from saved analysis';
+  el.style.display = '';
+}
+/* The board-eval line for a board shown now, whose fen is known: filled at
+   once when the index is ready, otherwise as soon as it is -- if `stillFen()`
+   says the board still shows that position. */
+function showBoardEval(el, fen, color, stillFen){
+  if(!el) return;
+  if(_evalIndex || !fen){ fillBoardEval(el, savedEvalForFen(fen), color); return; }
+  fillBoardEval(el, null);
+  savedEvalIndex().then(map => { if(!stillFen || stillFen() === fen) fillBoardEval(el, map.get(positionKey(fen)) || null, color); });
+}
 
 /* ---------- transpositions into the repertoire, flagged on engine lines ----------
    When it is OUR move and an engine line's first move lands on a position the
@@ -8584,6 +8723,7 @@ let _builtCastlesBuildCount = 0;       // real (non-cache-hit) builds this page 
 function invalidateBuiltCastlesCache(){
   _builtCastlesCache = null;
   invalidateRepertoirePositionIndex();
+  invalidateEvalIndex();
   _builtCastlesIdbChecked = true;   // no need to re-check IDB -- we just made the persisted copy stale too
   setMeta(BUILT_CASTLES_CACHE_KEY, '');   // fire-and-forget, same pattern as persistLayout/persistMemorized
   console.log('[VR cache] Cleared');
@@ -10368,6 +10508,7 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     // line (see buildVrNoteIndex).
     VR_LINE_COLORS = new Map(lines.map(l => [l.id, l.color]));
     VR_ROOM_NAME_INDEX = buildRoomNameIndex(castles);
+    savedEvalIndex();   // so the VR mini board's eval line is ready when opened
     await buildVrNoteIndex(lines);
   } finally {
     hideSpinner(spinner);
@@ -10386,6 +10527,7 @@ async function openMainVRWorld(startRoomKey, forceRebuild){
     onRoomRename: makeRoomRenamer(buildRoomNameIndex(castles)),
     onClose: ()=>{ $('threeTestOverlay').style.display='none'; closeThreeTest(); exitVrCpuGuard(); refreshMemorizedRoomsAndTree(); },
     onHideUnanswered: hideUnansweredFromVr,
+    boardEvalHtml: vrBoardEvalHtml,
     onOpenUnanswered: openUnansweredFromVr,
     onAssets: openThreeTestAssets
   });
@@ -12657,10 +12799,11 @@ function attachHoverPreview(icon, seq){
       const fen = fenForSeq(seq);
       hoverPreviewBoard?.setPosition(fen);
       hoverPreviewBoard?.setOrientation(CURRENT_LINE?.color==='black' ? COLOR.black : COLOR.white);
+      showHoverPreviewEval(fen);
       const r = icon.getBoundingClientRect();
       const preview = $('hoverPreview');
       preview.style.display = 'block';
-      const size = 252; // preview box incl. border/padding (240 board + padding/border)
+      const size = 276; // preview box incl. border/padding (240 board + padding/border) and its eval line
       const left = Math.min(r.left, window.innerWidth - size - 8);
       const top  = r.bottom + size + 6 <= window.innerHeight ? r.bottom + 6 : r.top - size - 6;
       preview.style.left = `${Math.round(Math.max(8,left))}px`;
@@ -12706,7 +12849,8 @@ function findKnownPvFloatEval(fen){
   for(const saved of Object.values(PREFS)){
     if(saved?.eval?.pvFen === fen) return saved.eval;
   }
-  return null;
+  // ...or any saved analysis of this position, in any system, by any move order
+  return savedEvalForFen(fen);
 }
 
 function shortPvText(evalObj){
@@ -12737,6 +12881,9 @@ function showPvFloat(el){
   }
   pvFloatAnalysisFen = fen;
   renderPvFloatAnalysisText(findKnownPvFloatEval(fen));
+  if(!_evalIndex) savedEvalIndex().then(() => {
+    if(pvFloatAnalysisFen === fen && !PV_FLOAT_EVAL_CACHE.has(fen)) renderPvFloatAnalysisText(findKnownPvFloatEval(fen));
+  });
   // prefer above-and-to-the-right of the clicked move (its lower-left corner
   // offset from the move's upper-right corner) so the float doesn't cover the
   // lines below the one just tapped; fall back to below only if it wouldn't fit above.
@@ -13098,6 +13245,7 @@ function recordEvalIfDeeper(saveField, currentSaved, evalSpan, depth, rawScore, 
     if(evalLines.length > 1) saveField('evalLines', evalLines);
     else evalLines = null;
   }
+  noteSavedEvals({ eval: evalObj, evalLines });
   refreshEvalSpan(evalSpan, evalObj, (evalLines || currentSaved()?.evalLines)?.length);
 }
 
@@ -14310,6 +14458,7 @@ async function saveAnalysisQueueResult(item, fen, result){
       .map(l => toEvalLine(l.score, l.depth, l.pv, fen));
   }
   await setPref(item.lineId, item.seq, patch);
+  noteSavedEvals({ seq: item.seq, ...patch });
 
   if(CURRENT_LINE && CURRENT_LINE.id === item.lineId){
     const key = prefKey(item.lineId, item.seq);
@@ -14723,6 +14872,15 @@ if(localStorage.getItem('threeTestDebug')){
       recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
       return bag;
     },
+  };
+}
+
+// test-only hook for the saved-eval index behind every mini board's eval line
+if(localStorage.getItem('threeTestDebug')){
+  window.__boardEvalTestHooks = {
+    ready: async () => { await savedEvalIndex(); return true; },
+    forSeq: (seq) => { const ev = savedEvalForFen(fenForSeq(seq)); return ev ? formatEvalTag(ev) : null; },
+    vrHtml: (seq, lineId) => vrBoardEvalHtml(positionKey(fenForSeq(seq)), lineId),
   };
 }
 

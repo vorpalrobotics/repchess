@@ -9306,6 +9306,10 @@ function toggleMiniBoard(show){
     (container || document.body).appendChild(ov);
   }
   const name = (ROOMS[currentRoomKey] && ROOMS[currentRoomKey].castleSign && ROOMS[currentRoomKey].castleSign.title) || 'Position';
+  // the saved engine eval of this position, if any -- the app owns the
+  // analysis data, so it hands back the finished line
+  let evalHtml = '';
+  try { evalHtml = threeOpts.boardEvalHtml ? (threeOpts.boardEvalHtml(fen, (ROOMS[currentRoomKey] || {}).lineId || '') || '') : ''; } catch(_){ evalHtml = ''; }
   ov.innerHTML = `
     <div style="background:rgba(20,24,34,.92);border:1px solid #556;border-radius:8px;padding:.5rem;box-shadow:0 4px 16px rgba(0,0,0,.4);width:236px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-bottom:.35rem">
@@ -9316,6 +9320,7 @@ function toggleMiniBoard(show){
         ${miniBoardGridHtml(fen)}
       </div>
       <div style="color:#aab;font:400 .72rem/1.3 sans-serif;margin-top:.35rem">${fenSideToMove(fen)} to move</div>
+      ${evalHtml ? `<div class="board-eval board-eval-dark" data-mini-board-eval="1">${evalHtml}</div>` : ''}
     </div>`;
   ov.style.display = 'flex';
   ov.querySelector('#miniBoardClose').onclick = () => toggleMiniBoard(false);
