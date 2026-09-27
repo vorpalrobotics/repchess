@@ -26347,6 +26347,10 @@ try {
     }
     FakeNote.sent = []; FakeNote.asked = 0; FakeNote.permission = 'default'; FakeNote.answer = 'granted';
     window.Notification = FakeNote;
+    // no service worker registration unless a test hands one in (__fakeReg),
+    // so the page-constructor path these tests were written against is the
+    // default; the harness may well have the real coi worker registered
+    if(navigator.serviceWorker) navigator.serviceWorker.getRegistration = async () => window.__fakeReg || undefined;
     window.__focused = false;
     document.hasFocus = () => window.__focused;
   });
@@ -26449,6 +26453,64 @@ try {
     await appRM.page.evaluate(() => { window.__focused = false; });
     ok('reminders: a toast instead of a notification when the page is focused');
   } catch(e){ bad('reminders: focused toast', e); }
+
+  // 543. With a service worker registered, the reminder goes through it --
+  //      the only way Chrome on Android will show one -- and Settings says
+  //      when it went out and how.
+  try {
+    await appRM.page.evaluate(() => {
+      window.Notification.sent.length = 0; window.__reminderTestHooks.resetSeen();
+      window.__fakeReg = { showNotification: async (t, o) => { window.Notification.sent.push({ title: t, opts: o, via: 'sw' }); } };
+    });
+    await setReviews({ r3: { learning: true, due: Date.now() - 1000, step: 0 } });
+    await tick();
+    const r = await appRM.page.evaluate(() => ({ via: window.Notification.sent.map(n => n.via || 'page'),
+      body: window.Notification.sent[0]?.opts?.body, last: window.__reminderTestHooks.lastReminder() }));
+    assert(JSON.stringify(r.via) === '["sw"]' && /1 room ready/.test(r.body || ''), `expected one reminder via the service worker, got ${JSON.stringify(r)}`);
+    assert(r.last && r.last.how === 'notification' && r.last.via === 'service worker', `expected it recorded, got ${JSON.stringify(r.last)}`);
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    const note = await appRM.page.evaluate(() => document.getElementById('setLearningRemindersLast').textContent);
+    assert(/Last reminder: .* as a notification/.test(note), `expected Settings to report it, got ${JSON.stringify(note)}`);
+    ok('reminders: sent through the service worker when there is one, and reported in Settings');
+  } catch(e){ bad('reminders: service worker path', e); }
+
+  // 544. A browser that refuses the notification (Android Chrome's "Illegal
+  //      constructor" with no worker) is recorded and reported rather than
+  //      silently dropped, and the test button says the same; with a working
+  //      path the test button sends one.
+  try {
+    await appRM.page.evaluate(() => {
+      window.__fakeReg = null; window.__realFakeNote = window.Notification;
+      class Refusing { constructor(){ throw new TypeError("Failed to construct 'Notification': Illegal constructor."); } }
+      Refusing.permission = 'granted';
+      window.Notification = Refusing;
+      window.__reminderTestHooks.resetSeen();
+    });
+    await setReviews({ r4: { learning: true, due: Date.now() - 1000, step: 0 } });
+    await tick();
+    const last = await appRM.page.evaluate(() => window.__reminderTestHooks.lastReminder());
+    assert(last && last.how === 'failed' && /Illegal constructor/.test(last.error || ''), `expected the refusal recorded, got ${JSON.stringify(last)}`);
+    await appRM.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    await appRM.page.evaluate(() => document.getElementById('menuSettings').click());
+    const st = await appRM.page.evaluate(() => ({ last: document.getElementById('setLearningRemindersLast').textContent,
+      btn: getComputedStyle(document.getElementById('setLearningRemindersTest')).display }));
+    assert(/refused .*Illegal constructor/.test(st.last) && st.btn !== 'none', `expected the refusal shown and a test button, got ${JSON.stringify(st)}`);
+    await appRM.page.evaluate(() => document.getElementById('setLearningRemindersTest').click());
+    await appRM.page.waitForFunction(() => /refused|Sent/.test(document.getElementById('setLearningRemindersTestResult').textContent), null, { timeout: 5000 });
+    const refused = await appRM.page.evaluate(() => document.getElementById('setLearningRemindersTestResult').textContent);
+    assert(/refused.*Illegal constructor/.test(refused), `expected the test button to report the refusal, got ${JSON.stringify(refused)}`);
+    await appRM.page.evaluate(() => {
+      window.Notification = window.__realFakeNote; window.Notification.sent.length = 0;
+      window.__fakeReg = { showNotification: async (t, o) => { window.Notification.sent.push({ title: t, opts: o, via: 'sw' }); } };
+    });
+    await appRM.page.evaluate(() => document.getElementById('setLearningRemindersTest').click());
+    await appRM.page.waitForFunction(() => /^Sent/.test(document.getElementById('setLearningRemindersTestResult').textContent), null, { timeout: 5000 });
+    const sentTest = await appRM.page.evaluate(() => window.Notification.sent.map(n => n.opts.body));
+    assert(sentTest.length === 1 && /^Test:/.test(sentTest[0]), `expected one test notification, got ${JSON.stringify(sentTest)}`);
+    await appRM.page.evaluate(() => { window.__fakeReg = null; });
+    ok('reminders: a refused notification is reported, and Settings can send a test one');
+  } catch(e){ bad('reminders: refusal and test button', e); }
 
   // 471. Denied: the toggle is disabled, with the way back explained; and a
   //      browser without notifications gets a disabled toggle and says so.

@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-474';
+const BUILD_TAG = '-475';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -3825,6 +3825,7 @@ if(localStorage.getItem('threeTestDebug')) window.__reminderTestHooks = {
   baseTitle: () => BASE_TITLE,
   wanted: () => remindersWanted(),
   resetSeen: () => writeNotified({}),
+  lastReminder: () => readLastReminder(),
 };
 // the roomKey of whatever node showRoomInfoPanel most recently rendered --
 // read by roomInfoJumpBtn's click handler (kept as module state, same as
@@ -9651,6 +9652,7 @@ async function openReviewForecast(){
    behind it. */
 const REMINDERS_PREF_KEY = 'repchessLearningReminders';   // localStorage: '1' = on
 const REMINDERS_SEEN_KEY = 'repchessLearningNotified';    // localStorage: { roomKey: due }
+const REMINDERS_LAST_KEY = 'repchessLearningLastReminder'; // localStorage: the last reminder, for Settings
 const REMINDER_TICK_MS = 60000;
 const BASE_TITLE = document.title;   // nothing else in the app writes document.title
 
@@ -9682,6 +9684,42 @@ function readNotified(){
 }
 function writeNotified(map){
   try { localStorage.setItem(REMINDERS_SEEN_KEY, JSON.stringify(map)); } catch(_){}
+}
+
+/* Shows an OS notification. Through the service worker first: Chrome on
+   Android refuses `new Notification()` from a page outright ("Illegal
+   constructor") -- there a notification can ONLY come from a service worker
+   registration -- and that refusal used to be caught and dropped, so on a
+   phone reminders silently never appeared. The coi service worker index.html
+   registers is a perfectly good registration for this. The page constructor
+   stays as the fallback for a page with no worker. Returns what happened, so
+   the caller can record it and Settings can say so. */
+async function showSystemNotification(title, body){
+  const opts = { body, tag: 'repchess-learning', renotify: true };
+  let swError = null;
+  try {
+    const sw = navigator.serviceWorker;
+    const reg = sw && sw.getRegistration
+      ? await Promise.race([sw.getRegistration(), new Promise(res => setTimeout(() => res(null), 3000))])
+      : null;
+    if(reg && typeof reg.showNotification === 'function'){
+      await reg.showNotification(title, opts);
+      return { ok: true, via: 'service worker' };
+    }
+  } catch(e){ swError = e; }
+  try {
+    const note = new window.Notification(title, opts);
+    note.onclick = () => { window.focus(); note.close(); };
+    return { ok: true, via: 'page' };
+  } catch(e){
+    return { ok: false, error: String((e && e.message) || e) + (swError ? ` (service worker: ${(swError && swError.message) || swError})` : '') };
+  }
+}
+function readLastReminder(){
+  try { return JSON.parse(localStorage.getItem(REMINDERS_LAST_KEY) || 'null'); } catch(_){ return null; }
+}
+function writeLastReminder(rec){
+  try { localStorage.setItem(REMINDERS_LAST_KEY, JSON.stringify(rec)); } catch(_){}
 }
 
 /* Room names, if the castle build is ALREADY in memory -- never triggering
@@ -9731,12 +9769,13 @@ async function reminderTick(){
   // an OS notification sliding in over the page you are looking at.
   if(document.visibilityState === 'visible' && document.hasFocus()){
     showAppToast(body);
+    writeLastReminder({ at: Date.now(), how: 'toast', n });
   } else if(notificationsSupported() && window.Notification.permission === 'granted'){
-    try {
-      // one tag, so a newer reminder REPLACES an older one instead of stacking
-      const note = new window.Notification('REPchess', { body, tag: 'repchess-learning' });
-      note.onclick = () => { window.focus(); note.close(); };
-    } catch(_){}
+    // one tag, so a newer reminder REPLACES an older one instead of stacking
+    const r = await showSystemNotification('REPchess', body);
+    writeLastReminder(r.ok ? { at: Date.now(), how: 'notification', via: r.via, n } : { at: Date.now(), how: 'failed', error: r.error, n });
+  } else {
+    writeLastReminder({ at: Date.now(), how: 'blocked', n });
   }
   for(const d of due) live[d.key] = d.due;
   writeNotified(live);
@@ -9769,7 +9808,31 @@ function refreshReminderSetting(){
   box.disabled = false;
   box.checked = perm === 'granted' && remindersWanted();
   note.textContent = perm === 'granted' ? '' : 'Your browser will ask for permission when you turn this on.';
+  $('setLearningRemindersTest').style.display = box.checked ? '' : 'none';
+  refreshLastReminderNote();
 }
+/* When the last reminder went out, and how -- so "am I getting them?" has an
+   answer: a reminder shown as an on-page message because the page was in
+   front of you, a real notification, or one the browser refused. */
+function refreshLastReminderNote(){
+  const el = $('setLearningRemindersLast');
+  const last = readLastReminder();
+  if(!last){ el.textContent = 'No reminder has been due since this was set up.'; return; }
+  const when = new Date(last.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  el.textContent = `Last reminder: ${when}, `
+    + (last.how === 'toast' ? 'as a message on the page, since REPchess was in front of you.'
+      : last.how === 'notification' ? 'as a notification.'
+      : last.how === 'blocked' ? 'not sent: notifications were not allowed at the time.'
+      : `but the browser refused to show it (${last.error || 'no reason given'}).`);
+}
+$('setLearningRemindersTest').onclick = async () => {
+  const out = $('setLearningRemindersTestResult');
+  out.textContent = 'Sending…';
+  const r = await showSystemNotification('REPchess', 'Test: this is how a same-day review reminder will look.');
+  out.textContent = r.ok
+    ? 'Sent. If nothing appeared, check that your device allows notifications from this browser, and that Do Not Disturb / Focus is off.'
+    : `The browser refused to show it: ${r.error}`;
+};
 $('setLearningReminders').onchange = async () => {
   const box = $('setLearningReminders');
   if(!box.checked){ setRemindersWanted(false); refreshReminderSetting(); return; }
