@@ -23170,6 +23170,27 @@ try {
     ok('VR Schedule: the rooms behind "Due now" are listed, same-day reviews later today apart');
   } catch(e){ bad('VR Schedule: due rooms list', e); }
 
+  // 542. ...and a same-day review that is not due yet is named right under the
+  //      cards, with its time -- it was counted, but nothing near the top said so.
+  try {
+    const r = await appEF.page.evaluate(() => {
+      const H = window.__reviewForecastTestHooks;
+      const now = Date.now();
+      const rooms = [
+        { name: 'Gallery', castle: 'Alpha', seq: ['d4','Nf6'], moves: 3, bucket: 'due', due: now - 3600e3 },
+        { name: '', castle: 'Alpha', seq: ['d4','d5','c4'], moves: 2, bucket: 'today', learning: true, due: now + 3 * 3600e3 },
+      ];
+      const box = document.createElement('div');
+      box.innerHTML = H.laterTodayHtml(rooms);
+      const none = H.laterTodayHtml(rooms.slice(0, 1));
+      return { text: box.textContent.replace(/\s+/g, ' ').trim(), none };
+    });
+    assert(/^Later today: .*d5.*\(Alpha\) around \d/.test(r.text) && !/Gallery/.test(r.text),
+      `expected only the not-yet-due same-day review named, with its time, got ${JSON.stringify(r.text)}`);
+    assert(r.none === '', `expected nothing when no same-day review is pending, got ${JSON.stringify(r.none)}`);
+    ok('VR Schedule: a same-day review not due yet is named under the cards, with its time');
+  } catch(e){ bad('VR Schedule: later-today line', e); }
+
   // 278. The never-reviewed callout. A castle memorized long ago and never
   //      graded is legitimately ALL overdue at step 0, which looks like
   //      neglect of work that was never started -- so it is said in words
@@ -25982,6 +26003,24 @@ try {
       `expected memorizing to write a learning record, got ${JSON.stringify(rec)}`);
     const hrs = (rec.due - before) / 3600000;
     assert(hrs > 5.9 && hrs < 6.1, `expected the same-day review ~6h out, got ${hrs.toFixed(2)}h`);
+
+    /* 541. ...and from the moment it is memorized the list shows it, under
+            "Later today" with the time it falls due -- it used to be absent
+            until its last hour, as if it had no review at all. Listed, not
+            counted: the header still says nothing is due. */
+    const pending = (await list()).find(r => r.key === K.c5);
+    assert(pending && pending.state === 'later' && pending.learning,
+      `expected the just-memorized room listed as 'later', got ${JSON.stringify(pending)}`);
+    await openList();
+    const shown = await appRL.page.evaluate((k) => {
+      const box = document.querySelector('[data-review-list]');
+      const row = box.querySelector(`[data-review-room="${k}"]`);
+      return { rule: !!box.querySelector('[data-review-later-rule]'), text: row ? row.textContent : null,
+        afterRule: !!(row && box.querySelector('[data-review-later-rule]').compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) };
+    }, K.c5);
+    await closeList();
+    assert(shown.rule && shown.afterRule && /same-day, due (tomorrow )?\d/.test(shown.text || ''),
+      `expected the room under "Later today" with its due time, got ${JSON.stringify(shown)}`);
 
     // bring it due, and make sure there is ladder work due too for it to beat
     const now = Date.now();

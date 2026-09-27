@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260927-471';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260927-474';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
          openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-472';
+const BUILD_TAG = '-474';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9324,8 +9324,25 @@ function rfPacingHtml(f){
       ${rfLoadCard('By tomorrow', load.tomorrow)}
       ${rfLoadCard('Next 7 days', load.week, true)}
     </div>
+    ${rfLaterTodayHtml(f.dueRooms || [])}
     ${rfDueRoomsHtml(f.dueRooms || [])}
     <p class="rf-pacing">${pacing}${wall}</p>`;
+}
+/* Same-day reviews that are not due yet, named, right under the cards. They
+   were counted -- inside "By tomorrow", in the folded "Which rooms?" and in
+   the "Later today" bar further down -- but nothing near the top said so, and
+   a room memorized this afternoon read as if it had no review coming. */
+function rfLaterTodayHtml(rooms){
+  const later = rooms.filter(r => r.bucket === 'today');
+  if(!later.length) return '';
+  const SHOW = 4;
+  const label = (r) => r.name || (r.seq && r.seq.length ? formatMoveListPgn(r.seq) : 'unnamed room');
+  const time = (r) => new Date(r.due).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const items = later.slice(0, SHOW).map(r =>
+    `<b>${escapeHtml(label(r))}</b>${r.castle ? ` (${escapeHtml(r.castle)})` : ''} around ${escapeHtml(time(r))}`);
+  const more = later.length > SHOW ? `, and ${later.length - SHOW} more` : '';
+  return `<p class="rf-later-today" data-rf-later-today="1">Later today: ${items.join(', ')}${more} — `
+    + `same-day review${later.length === 1 ? '' : 's'}, not due yet.</p>`;
 }
 /* The rooms behind "Due now" (and any same-day reviews later today), by name
    -- the number alone gave no way to see WHICH rooms it meant, so when it
@@ -15374,6 +15391,7 @@ if(localStorage.getItem('threeTestDebug')){
   window.__reviewForecastTestHooks = {
     build: (castles, reviews, memorized, opts) => buildReviewForecast(castles, reviews, memorized, opts),
     dueRoomsHtml: (rooms) => rfDueRoomsHtml(rooms),
+    laterTodayHtml: (rooms) => rfLaterTodayHtml(rooms),
     forecast: (opts) => reviewForecast(opts),
     buckets: () => REVIEW_FORECAST_BUCKETS,
     ladder: () => ROOM_REVIEW_LADDER,

@@ -1829,8 +1829,14 @@ function dueRoomList(now = Date.now(), order = reviewListOrder){
     if(!key.startsWith('cas:')) continue;        // the street and the demo room have no schedule
     const rec = reviewFor(key);
     if(!rec) continue;                           // not memorized: nothing scheduled
-    const state = roomReviewState(rec, now);
-    if(state !== 'overdue' && state !== 'due' && state !== 'soon') continue;
+    let state = roomReviewState(rec, now);
+    /* A same-day (learning) review that is not due yet: 'later'. Only its
+       last 20% -- about an hour of the six -- counts as 'soon', so a room
+       memorized this afternoon used to be simply missing from the list until
+       then, which read as if it had no review at all. The forecast calls this
+       "Later today" (reviewForecastBucket's 'today'); the list now agrees. */
+    if(state === 'notdue' && rec.learning) state = 'later';
+    if(state !== 'overdue' && state !== 'due' && state !== 'soon' && state !== 'later') continue;
     if(isRoomEmpty(key) && !ROOMS[key].isCastleEntry) continue;
     out.push({
       key, state, due: rec.due, learning: !!rec.learning,
@@ -1850,12 +1856,19 @@ function dueRoomList(now = Date.now(), order = reviewListOrder){
      value decays in hours, where a ladder review due today has the whole day
      -- and by due date alone it would sort after this morning's midnight-due
      rooms, since its timestamp is later in the day. */
-  const byLearningDue = (a, b) =>
-    ((b.learning && b.state !== 'soon') ? 1 : 0) - ((a.learning && a.state !== 'soon') ? 1 : 0);
+  const dueLearning = r => r.learning && r.state !== 'soon' && r.state !== 'later';
+  const byLearningDue = (a, b) => (dueLearning(b) ? 1 : 0) - (dueLearning(a) ? 1 : 0);
   out.sort(order === 'castle'
     ? ((a, b) => byCastle(a, b) || byDue(a, b) || byName(a, b))
     : ((a, b) => byLearningDue(a, b) || byDue(a, b) || byCastle(a, b) || byName(a, b)));
   return out;
+}
+
+// "8:02 pm", or "tomorrow 1:15 am" when a same-day review runs past midnight
+function reviewDueTimeLabel(due, now){
+  const d = new Date(due);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date(now).toDateString() ? time : `tomorrow ${time}`;
 }
 
 function closeReviewList(){
@@ -1883,8 +1896,9 @@ function openReviewList(){
   closeReviewList();
   closeGradeMenu();
   const all = dueRoomList();
-  const working = all.filter(r => r.state !== 'soon');
+  const working = all.filter(r => r.state !== 'soon' && r.state !== 'later');
   const soon = all.filter(r => r.state === 'soon');
+  const later = all.filter(r => r.state === 'later');
 
   const box = document.createElement('div');
   box.dataset.reviewList = '1';
@@ -1933,9 +1947,10 @@ function openReviewList(){
     b.style.cssText = 'text-align:left;padding:.4rem .45rem;border-radius:6px;cursor:pointer;'
       + 'border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;'
       + 'font:inherit;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:1px;'
-      + (r.state === 'soon' ? 'opacity:.6;' : '');
+      + (r.state === 'soon' || r.state === 'later' ? 'opacity:.6;' : '');
     // a learning review says so, since it is a different kind of due: hours, not a day
-    const tag = (r.learning && r.state !== 'soon') ? REVIEW_STATE_TAG.learning
+    const tag = r.state === 'later' ? { ...REVIEW_STATE_TAG.learning, text: `same-day, due ${reviewDueTimeLabel(r.due, Date.now())}` }
+      : (r.learning && r.state !== 'soon') ? REVIEW_STATE_TAG.learning
       : (REVIEW_STATE_TAG[r.state] || REVIEW_STATE_TAG.due);
     const top = document.createElement('div');
     top.style.cssText = 'display:flex;align-items:center;gap:.4rem;';
@@ -1977,6 +1992,18 @@ function openReviewList(){
     rule.textContent = 'Due soon — optional, while you are here';
     box.appendChild(rule);
     for(const r of soon) row(r);
+  }
+  /* Same-day reviews not due yet, with the time each one is. Listed so a
+     room memorized this afternoon visibly HAS its review coming, not as work:
+     reviewing it early would shorten the gap the review is testing. */
+  if(later.length){
+    const rule = document.createElement('div');
+    rule.dataset.reviewLaterRule = '1';
+    rule.style.cssText = 'margin:.35rem .2rem .15rem;padding-top:.35rem;border-top:1px solid rgba(255,255,255,.18);'
+      + 'font-weight:400;font-size:.68rem;opacity:.6;';
+    rule.textContent = 'Later today — not due yet';
+    box.appendChild(rule);
+    for(const r of later) row(r);
   }
 
   const close = document.createElement('button');
