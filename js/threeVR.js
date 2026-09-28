@@ -1871,6 +1871,23 @@ function reviewDueTimeLabel(due, now){
   return d.toDateString() === new Date(now).toDateString() ? time : `tomorrow ${time}`;
 }
 
+/* Rooms READY TO MEMORIZE: fully decorated (the same stored flag that puts
+   the 🎨 on a digraph room -- see evaluateDecorated) and not memorized yet.
+   The other half of the day's workflow after reviews: offered below the
+   review work, never counted as it. A locked dead end is left out, as in the
+   review list -- there is nothing in one to learn. Ordered by castle, then
+   name, so one building's rooms come together. */
+function readyToMemorizeList(){
+  const out = [];
+  for(const key in ROOMS){
+    if(!key.startsWith('cas:')) continue;
+    if(!DECORATED[key] || MEMORIZED[key] || reviewFor(key)) continue;
+    if(isRoomEmpty(key) && !ROOMS[key].isCastleEntry) continue;
+    out.push({ key, state: 'ready', castle: ROOMS[key].ownerCastle || '', name: reviewRoomLabel(key), moves: ROOMS[key].moveCount || 0 });
+  }
+  return out.sort((a, b) => a.castle.localeCompare(b.castle) || a.name.localeCompare(b.name));
+}
+
 function closeReviewList(){
   if(!reviewListEl && !reviewListDismiss) return;
   if(reviewListDismiss && container) container.removeEventListener('pointerdown', reviewListDismiss, true);
@@ -1889,6 +1906,7 @@ const REVIEW_STATE_TAG = {
   due:     { text: 'due',     color: 'rgba(245,124,0,.7)' },
   soon:    { text: 'soon',    color: 'rgba(120,130,150,.6)' },
   learning:{ text: 'same-day', color: 'rgba(66,165,245,.8)' },
+  ready:   { text: 'ready to memorize', color: 'rgba(171,71,188,.85)' },
 };
 
 function openReviewList(){
@@ -1899,6 +1917,7 @@ function openReviewList(){
   const working = all.filter(r => r.state !== 'soon' && r.state !== 'later');
   const soon = all.filter(r => r.state === 'soon');
   const later = all.filter(r => r.state === 'later');
+  const ready = readyToMemorizeList();
 
   const box = document.createElement('div');
   box.dataset.reviewList = '1';
@@ -1922,7 +1941,7 @@ function openReviewList(){
      to one two-state toggle, at a fraction of the vertical space in a popup
      that is meant to be opened, clicked and gone. Hidden when there is nothing
      to reorder. */
-  if(all.length > 1){
+  if(all.length + ready.length > 1){
     const orderRow = document.createElement('div');
     orderRow.style.cssText = 'display:flex;gap:4px;padding:0 .2rem .35rem;';
     for(const [label, mode] of [['by priority', 'priority'], ['by castle', 'castle']]){
@@ -1992,6 +2011,16 @@ function openReviewList(){
     rule.textContent = 'Due soon — optional, while you are here';
     box.appendChild(rule);
     for(const r of soon) row(r);
+  }
+  /* Rooms ready to memorize: the next piece of work once reviews are done. */
+  if(ready.length){
+    const rule = document.createElement('div');
+    rule.dataset.reviewReadyRule = '1';
+    rule.style.cssText = 'margin:.35rem .2rem .15rem;padding-top:.35rem;border-top:1px solid rgba(255,255,255,.18);'
+      + 'font-weight:400;font-size:.68rem;opacity:.6;';
+    rule.textContent = `Ready to memorize — fully decorated, not memorized yet (${ready.length})`;
+    box.appendChild(rule);
+    for(const r of ready) row(r);
   }
   /* Same-day reviews not due yet, with the time each one is. Listed so a
      room memorized this afternoon visibly HAS its review coming, not as work:
@@ -11122,6 +11151,8 @@ export async function openThreeTest(containerEl, opts){
       toastRect: () => { const r = toastEl && toastEl.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null; },
       reviewList: (order) => dueRoomList(Date.now(), order || reviewListOrder).map(r => ({ key: r.key, state: r.state, learning: r.learning, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
+      readyList: () => readyToMemorizeList().map(r => ({ key: r.key, castle: r.castle, name: r.name, moves: r.moves })),
+      setDecorated: (k, on) => { if(on) DECORATED[k] = Date.now(); else delete DECORATED[k]; },
       reviewListOrder: () => reviewListOrder,
       // the lower-right room-story control: present, and styled by whether
       // this room has a story yet (see refreshRoomStoryIcon)

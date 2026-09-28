@@ -23191,6 +23191,30 @@ try {
     ok('VR Schedule: a same-day review not due yet is named under the cards, with its time');
   } catch(e){ bad('VR Schedule: later-today line', e); }
 
+  // 546. Ready to memorize: decorated and not memorized, named in the pacing
+  //      block; memorized or undecorated rooms are not.
+  try {
+    const r = await appEF.page.evaluate(() => {
+      const H = window.__reviewForecastTestHooks;
+      const now = Date.now();
+      const room = (posKey, name, seq, moveCount) => ({ posKey, name, seq, moveCount, exits: [{ to: 'x' }], pairs: [] });
+      const castles = [{ castleName: 'Alpha', lineId: 'L1', instanceId: 'L1_Alpha', entryPosKey: 'p0',
+        genRooms: [room('p1', 'Gallery', ['d4','Nf6'], 3), room('p2', 'Attic', ['d4','d5'], 2), room('p3', 'Cellar', ['e4'], 4)] }];
+      const k = (p) => H.roomKeyFor('L1_Alpha', p);
+      const reviews = { [k('p2')]: { due: now + 5 * 86400e3, step: 2, last: now } };
+      const decorated = { [k('p1')]: now, [k('p2')]: now };   // p2 decorated but memorized; p3 not decorated
+      const f = H.build(castles, reviews, { [k('p2')]: now }, { now, decorated });
+      const box = document.createElement('div');
+      box.innerHTML = H.readyRoomsHtml(f.readyRooms);
+      return { ready: f.readyRooms.map(x => x.name), summary: box.querySelector('summary')?.textContent.replace(/\s+/g, ' ').trim(),
+        none: H.readyRoomsHtml([]) };
+    });
+    assert(JSON.stringify(r.ready) === '["Gallery"]', `expected only Gallery ready, got ${JSON.stringify(r.ready)}`);
+    assert(/Ready to memorize: 1 room \(3 moves\)/.test(r.summary || ''), `unexpected summary: ${JSON.stringify(r.summary)}`);
+    assert(r.none === '', 'expected nothing rendered when no room is ready');
+    ok('VR Schedule: rooms ready to memorize are listed, decorated and not yet memorized');
+  } catch(e){ bad('VR Schedule: ready to memorize', e); }
+
   // 278. The never-reviewed callout. A castle memorized long ago and never
   //      graded is legitimately ALL overdue at step 0, which looks like
   //      neglect of work that was never started -- so it is said in words
@@ -25943,6 +25967,34 @@ try {
     await closeList();
     ok('review list: a two-state order toggle, which sticks');
   } catch(e){ bad('review list: order toggle', e); }
+
+  /* 545. Rooms READY TO MEMORIZE -- fully decorated (the digraph's 🎨 flag)
+          and not memorized -- are listed after the review work, and never
+          counted as it. A decorated room that is already memorized is not. */
+  try {
+    await E('setDecorated', K.c5, true);     // unmemorized
+    await E('setDecorated', K.e6, true);     // memorized (scheduled above)
+    const ready = await E('readyList');
+    assert(ready.length === 1 && ready[0].key === K.c5 && ready[0].castle === 'Alpha',
+      `expected only the unmemorized decorated room ready, got ${JSON.stringify(ready)}`);
+    await openList();
+    const shown = await appRL.page.evaluate((k) => {
+      const box = document.querySelector('[data-review-list]');
+      const rule = box.querySelector('[data-review-ready-rule]');
+      const row = box.querySelector(`[data-review-room="${k}"]`);
+      const soonRow = box.querySelector('[data-review-state="soon"]');
+      return { rule: rule ? rule.textContent : null, state: row && row.dataset.reviewState, text: row ? row.textContent : null,
+        afterSoon: !!(soonRow && row && (soonRow.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING)),
+        head: box.querySelector('[data-review-list-head]').textContent };
+    }, K.c5);
+    await closeList();
+    assert(shown.rule && /Ready to memorize/.test(shown.rule) && shown.state === 'ready' && /ready to memorize/.test(shown.text || '')
+      && shown.afterSoon, `expected the room under "Ready to memorize", after the due-soon rooms, got ${JSON.stringify(shown)}`);
+    assert(!/3 rooms/.test(shown.head), `expected ready rooms not counted as review work, got ${JSON.stringify(shown.head)}`);
+    await E('setDecorated', K.c5, false);
+    await E('setDecorated', K.e6, false);
+    ok('review list: rooms ready to memorize come after the review work, not counted as it');
+  } catch(e){ bad('review list: ready to memorize', e); }
 
   /* 452. Room stories. A room's door-chain narrative lives on the room's OWN
           pref -- the same one its Room Name is on -- because that is what
