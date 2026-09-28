@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260928-476';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260928-477';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
          openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-476';
+const BUILD_TAG = '-477';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -9123,6 +9123,12 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
      memorizing one is exactly the decision that block is about. */
   const decorated = opts.decorated || {};
   const readyRooms = [];
+  /* Rooms still TO DECORATE -- only when scoped to one castle: across the
+     whole repertoire the list would be far too long to be a to-do list.
+     Read from the stored 🎨 flag (the walk's full check needs its layout
+     data), so a room never checked in edit mode counts as undecorated until
+     it is; the VR list for that castle runs the live check and refreshes it. */
+  const toDecorate = wantCastle ? [] : null;
   let castleCount = 0;
 
   for(const c of (castles || [])){
@@ -9146,6 +9152,8 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
       const rec = effectiveRoomReview(reviews, memorized, roomKey);
       if(!rec && !(memorized && memorized[roomKey]) && decorated[roomKey])
         readyRooms.push({ key: roomKey, castle: c.castleName, name: gr.name || '', seq: gr.seq || null, moves });
+      if(toDecorate && !rec && !(memorized && memorized[roomKey]) && !decorated[roomKey])
+        toDecorate.push({ key: roomKey, castle: c.castleName, name: gr.name || '', seq: gr.seq || null, moves });
       const bucket = reviewForecastBucket(rec, now);
       buckets[bucket].rooms++; buckets[bucket].moves += moves;
       if(bucket === 'overdue' || bucket === 'due' || bucket === 'today'){
@@ -9221,6 +9229,9 @@ function buildReviewForecast(castles, reviews, memorized, opts = {}){
     load, tomorrowOnly, busiestDay,
     dueRooms: dueRooms.sort((a, b) => a.due - b.due || a.castle.localeCompare(b.castle)),
     readyRooms: readyRooms.sort((a, b) => a.castle.localeCompare(b.castle) || (a.name || '').localeCompare(b.name || '')),
+    // nearest the castle's front door first -- a room's move count from the
+    // start stands in for the walk's door count, which needs the VR's graph
+    toDecorate: toDecorate && toDecorate.sort((a, b) => ((a.seq || []).length - (b.seq || []).length) || (a.name || '').localeCompare(b.name || '')),
     castles: castleCount,
     perDay,
     generatedAt: now,
@@ -9304,7 +9315,7 @@ function rfPacingHtml(f){
   const { load, tomorrowOnly, busiestDay } = f;
   if(!f.totals.memorizedRooms){
     return `<p class="rf-pacing">Nothing is on the review schedule in this scope yet — memorize a room in VR
-      and it joins the ladder, first due the next day.</p>${rfReadyRoomsHtml(f.readyRooms || [])}`;
+      and it joins the ladder, first due the next day.</p>${rfReadyRoomsHtml(f.readyRooms || [])}${rfToDecorateHtml(f)}`;
   }
 
   /* The pacing sentence. A room you memorize today first falls due TOMORROW
@@ -9338,7 +9349,24 @@ function rfPacingHtml(f){
     ${rfLaterTodayHtml(f.dueRooms || [])}
     ${rfDueRoomsHtml(f.dueRooms || [])}
     <p class="rf-pacing">${pacing}${wall}</p>
-    ${rfReadyRoomsHtml(f.readyRooms || [])}`;
+    ${rfReadyRoomsHtml(f.readyRooms || [])}
+    ${rfToDecorateHtml(f)}`;
+}
+/* To decorate, when the scope is one castle. Names only, nearest the front
+   door first. */
+function rfToDecorateHtml(f){
+  const rooms = f.toDecorate;
+  if(!rooms) return '';
+  const label = (r) => r.name || (r.seq && r.seq.length ? formatMoveListPgn(r.seq) : 'unnamed room');
+  if(!rooms.length) return `<p class="rf-decorate-rooms rf-decorate-done" data-rf-decorate="1">Every room in this castle that
+    isn't memorized yet is decorated.</p>`;
+  return `
+    <details class="rf-decorate-rooms" data-rf-decorate="1">
+      <summary>To decorate: <b>${rooms.length} room${rooms.length === 1 ? '' : 's'}</b> in this castle</summary>
+      <ul>${rooms.map(r => `<li>${escapeHtml(label(r))}</li>`).join('')}</ul>
+      <p class="rf-section-note">From each room's last edit-mode check. Opening the review list inside this
+        castle in VR re-checks every room and updates this.</p>
+    </details>`;
 }
 /* Ready to memorize, right after the pacing sentence -- which is about exactly
    this decision: what memorizing a new room today would add to tomorrow. */
@@ -15481,6 +15509,7 @@ if(localStorage.getItem('threeTestDebug')){
     dueRoomsHtml: (rooms) => rfDueRoomsHtml(rooms),
     laterTodayHtml: (rooms) => rfLaterTodayHtml(rooms),
     readyRoomsHtml: (rooms) => rfReadyRoomsHtml(rooms),
+    toDecorateHtml: (f) => rfToDecorateHtml(f),
     forecast: (opts) => reviewForecast(opts),
     buckets: () => REVIEW_FORECAST_BUCKETS,
     ladder: () => ROOM_REVIEW_LADDER,

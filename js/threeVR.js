@@ -1888,6 +1888,62 @@ function readyToMemorizeList(){
   return out.sort((a, b) => a.castle.localeCompare(b.castle) || a.name.localeCompare(b.name));
 }
 
+/* Rooms still TO DECORATE in the castle you are standing in -- the step
+   before "ready to memorize". Scoped to that one castle (a whole repertoire's
+   worth would be far too long), and absent on the street. Memorized rooms and
+   locked dead ends are left out.
+
+   The check runs LIVE here (computeFullyDecorated), rather than reading the
+   stored 🎨 flag, which is only written when you leave edit mode in a room:
+   a room never opened in edit mode has no flag even with nothing left to do,
+   and one that has since gained a door keeps a flag it no longer deserves.
+   Each room checked has its stored flag brought up to date as a side effect,
+   so the digraph's 🎨 and the ready-to-memorize list agree with this one.
+
+   Walking order: nearest the castle's front door first, by doors walked
+   (breadth-first over forward exits), since that is how the castle will be
+   walked when it is memorized. Rooms the walk cannot reach from the entry
+   come last. */
+function castleInstancePrefix(roomKey){
+  if(!roomKey || !roomKey.startsWith('cas:')) return null;
+  const i = roomKey.indexOf(':', 4);
+  return i > 0 ? roomKey.slice(0, i + 1) : null;
+}
+function toDecorateList(){
+  const prefix = castleInstancePrefix(currentRoomKey);
+  if(!prefix) return [];
+  const keys = Object.keys(ROOMS).filter(k => k.startsWith(prefix));
+  // doors walked from the castle's entry
+  const depth = new Map();
+  const entry = keys.find(k => ROOMS[k].isCastleEntry);
+  if(entry){
+    depth.set(entry, 0);
+    const queue = [entry];
+    while(queue.length){
+      const k = queue.shift();
+      for(const ex of ((mergedRoom(k) || {}).exits || [])){
+        if(ex.back || !ex.target || depth.has(ex.target) || !ex.target.startsWith(prefix)) continue;
+        depth.set(ex.target, depth.get(k) + 1);
+        queue.push(ex.target);
+      }
+    }
+  }
+  const out = [];
+  let flagsChanged = false;
+  for(const key of keys){
+    if(MEMORIZED[key] || reviewFor(key)) continue;
+    if(isRoomEmpty(key) && !ROOMS[key].isCastleEntry) continue;
+    const full = computeFullyDecorated(key);
+    if(full && !DECORATED[key]){ DECORATED[key] = Date.now(); flagsChanged = true; }
+    else if(!full && DECORATED[key]){ delete DECORATED[key]; flagsChanged = true; }
+    if(full) continue;
+    out.push({ key, state: 'decorate', castle: ROOMS[key].ownerCastle || '', name: reviewRoomLabel(key),
+      moves: ROOMS[key].moveCount || 0, depth: depth.has(key) ? depth.get(key) : Infinity });
+  }
+  if(flagsChanged) persistDecorated();
+  return out.sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name));
+}
+
 function closeReviewList(){
   if(!reviewListEl && !reviewListDismiss) return;
   if(reviewListDismiss && container) container.removeEventListener('pointerdown', reviewListDismiss, true);
@@ -1907,6 +1963,7 @@ const REVIEW_STATE_TAG = {
   soon:    { text: 'soon',    color: 'rgba(120,130,150,.6)' },
   learning:{ text: 'same-day', color: 'rgba(66,165,245,.8)' },
   ready:   { text: 'ready to memorize', color: 'rgba(171,71,188,.85)' },
+  decorate:{ text: 'to decorate', color: 'rgba(255,193,7,.85)' },
 };
 
 function openReviewList(){
@@ -1917,6 +1974,8 @@ function openReviewList(){
   const working = all.filter(r => r.state !== 'soon' && r.state !== 'later');
   const soon = all.filter(r => r.state === 'soon');
   const later = all.filter(r => r.state === 'later');
+  // before the ready list: checking a room brings its decorated flag up to date
+  const toDecorate = toDecorateList();
   const ready = readyToMemorizeList();
 
   const box = document.createElement('div');
@@ -1941,7 +2000,7 @@ function openReviewList(){
      to one two-state toggle, at a fraction of the vertical space in a popup
      that is meant to be opened, clicked and gone. Hidden when there is nothing
      to reorder. */
-  if(all.length + ready.length > 1){
+  if(all.length + ready.length + toDecorate.length > 1){
     const orderRow = document.createElement('div');
     orderRow.style.cssText = 'display:flex;gap:4px;padding:0 .2rem .35rem;';
     for(const [label, mode] of [['by priority', 'priority'], ['by castle', 'castle']]){
@@ -2033,6 +2092,18 @@ function openReviewList(){
     rule.textContent = 'Later today — not due yet';
     box.appendChild(rule);
     for(const r of later) row(r);
+  }
+
+  /* Rooms still to decorate in THIS castle, last: the step before any of the
+     above can apply to them. */
+  if(toDecorate.length){
+    const rule = document.createElement('div');
+    rule.dataset.reviewDecorateRule = '1';
+    rule.style.cssText = 'margin:.35rem .2rem .15rem;padding-top:.35rem;border-top:1px solid rgba(255,255,255,.18);'
+      + 'font-weight:400;font-size:.68rem;opacity:.6;';
+    rule.textContent = `To decorate in ${toDecorate[0].castle || 'this castle'} (${toDecorate.length})`;
+    box.appendChild(rule);
+    for(const r of toDecorate) row(r);
   }
 
   const close = document.createElement('button');
@@ -11152,6 +11223,9 @@ export async function openThreeTest(containerEl, opts){
       reviewList: (order) => dueRoomList(Date.now(), order || reviewListOrder).map(r => ({ key: r.key, state: r.state, learning: r.learning, castle: r.castle, name: r.name, moves: r.moves })),
       reviewListOpen: () => !!reviewListEl,
       readyList: () => readyToMemorizeList().map(r => ({ key: r.key, castle: r.castle, name: r.name, moves: r.moves })),
+      toDecorateList: () => toDecorateList().map(r => ({ key: r.key, castle: r.castle, name: r.name, depth: r.depth })),
+      fullyDecorated: (k) => computeFullyDecorated(k),
+      decoratedFlag: (k) => !!DECORATED[k],
       setDecorated: (k, on) => { if(on) DECORATED[k] = Date.now(); else delete DECORATED[k]; },
       reviewListOrder: () => reviewListOrder,
       // the lower-right room-story control: present, and styled by whether
