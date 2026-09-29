@@ -26848,14 +26848,18 @@ try {
   //      user to go quiet rather than landing 1.5s after an edit, on top of
   //      their next click.
   try {
-    const scanRan = () => appRM.page.evaluate(() => window.__slowdownTestHooks.activities().some(l => /new-transpositions scan/.test(l)));
+    // only scans that START after this test schedules one count: the restore
+    // in this phase's setup arms a scan of its own (resumeTranspositionScan),
+    // which may already have run during an idle stretch of the tests above
+    const scanCount = () => appRM.page.evaluate(() => window.__slowdownTestHooks.activities().filter(l => /new-transpositions scan/.test(l)).length);
     await appRM.page.mouse.click(5, 5);                       // real input: the user is active
+    const before = await scanCount();
     await appRM.page.evaluate(() => window.__redirectTestHooks.scheduleNewTranspositionsScan());
     await appRM.page.waitForTimeout(3000);                    // past the old 1.5s trigger
-    assert(!(await scanRan()), 'expected the scan held back while the user was recently active');
+    assert((await scanCount()) === before, 'expected the scan held back while the user was recently active');
     const quiet = await appRM.page.evaluate(() => window.__slowdownTestHooks.quietMs);
-    await appRM.page.waitForFunction(() => window.__slowdownTestHooks.activities().some(l => /new-transpositions scan/.test(l)),
-      null, { timeout: quiet + 3000 });
+    await appRM.page.waitForFunction((n) => window.__slowdownTestHooks.activities().filter(l => /new-transpositions scan/.test(l)).length > n,
+      before, { timeout: quiet + 3000 });
     ok('slowdowns: the castle-rebuilding scan waits until the user has been idle');
   } catch(e){ bad('slowdowns: scan waits for quiet', e); }
 } finally {
@@ -27734,6 +27738,131 @@ try {
     ok('Image Queue: approving links the image to its list item, and the open editor keeps it');
   } catch(e){ bad('Image Queue: bind on approve', e); }
 
+  /* 556. The spend ledger: the approved queue images' costs are on their
+          assets and their entries are kept (the list item's carries its list);
+          a job redone then discarded leaves every attempt marked not used. */
+  try {
+    await appIQ.page.evaluate(() => spendLogSettled());
+    const r = await appIQ.page.evaluate(async () => {
+      const log = await getSpendLog();
+      const clock = (await getAllAssets()).find(a => a.id === 'queued-clock');
+      return { clock: clock && { genCost: clock.genCost, genTries: clock.genTries },
+        clockEntry: log.find(e => e.assetId === 'queued-clock'),
+        fridge: log.find(e => e.assetId === 'kitchen-refrigerator') };
+    });
+    assert(r.clock && r.clock.genCost === 0.005 && r.clock.genTries === 1, `expected the asset to carry its cost, got ${JSON.stringify(r.clock)}`);
+    assert(r.clockEntry && r.clockEntry.outcome === 'kept' && r.clockEntry.kind === 'image' && r.clockEntry.cost === 0.005,
+      `expected a kept ledger entry, got ${JSON.stringify(r.clockEntry)}`);
+    assert(r.fridge && r.fridge.purpose === 'listItem' && r.fridge.listId, `expected the list item's entry to carry its list, got ${JSON.stringify(r.fridge)}`);
+
+    const id = await enqueue(draft('a spare lamp', 'spare-lamp'));
+    await appIQ.page.waitForFunction((id) => window.__imageQueueTestHooks.jobs().then(js => js.find(j => j.id === id)?.status === 'review'), id, { timeout: 10000 }).catch(() => {});
+    for(let i = 0; i < 100; i++){ if((await jobs()).find(j => j.id === id)?.status === 'review') break; await new Promise(res => setTimeout(res, 100)); }
+    await appIQ.page.evaluate((id) => window.__imageQueueTestHooks.redo(id), id);
+    for(let i = 0; i < 100; i++){ if((await jobs()).find(j => j.id === id)?.status === 'review') break; await new Promise(res => setTimeout(res, 100)); }
+    await appIQ.page.evaluate((id) => window.__imageQueueTestHooks.remove(id), id);
+    await appIQ.page.evaluate(() => spendLogSettled());
+    const spare = await appIQ.page.evaluate(async (id) => (await getSpendLog()).filter(e => e.jobId === id).map(e => e.outcome), id);
+    assert(spare.length === 2 && spare.every(o => o === 'discarded'), `expected both attempts marked not used, got ${JSON.stringify(spare)}`);
+    ok('AI spend: queue images are costed onto their assets; discarded attempts are logged as not used');
+  } catch(e){ bad('AI spend: queue ledger', e); }
+
+  /* 557. The Generate dialog: two attempts then Use and Save -- both costs on
+          the new asset; an attempt in a dialog closed without Use, not used.
+          And OpenAI's own models get a published-price estimate. */
+  try {
+    await appIQ.page.evaluate(() => document.getElementById('menuAssets').click());
+    await appIQ.page.waitForSelector('#assetsNewBtn', { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.getElementById('assetsNewBtn').click());
+    await appIQ.page.waitForSelector('#assetIdInput', { timeout: 5000 });
+    await appIQ.page.fill('#assetIdInput', 'dialog-vase');
+    await appIQ.page.selectOption('#assetTypeInput', 'billboard-cylindrical');
+    const openGen = async () => {
+      await appIQ.page.evaluate(() => document.getElementById('assetGenBtn').click());
+      await appIQ.page.waitForSelector('#assetGenOverlay #genModel', { state: 'visible', timeout: 5000 });
+      await appIQ.page.selectOption('#genModel', 'runware:flux1-schnell');
+      await appIQ.page.fill('#genApiKey', 'rw-good');
+      await appIQ.page.fill('#genPrompt', 'a blue vase');
+      await appIQ.page.evaluate(() => { document.getElementById('genTransparent').checked = false; });
+    };
+    const generate = async () => {
+      await appIQ.page.evaluate(() => { document.getElementById('genStatus').textContent = ''; document.getElementById('genRunBtn').click(); });
+      await appIQ.page.waitForFunction(() => /^Done/.test(document.getElementById('genStatus').textContent), null, { timeout: 10000 });
+    };
+    // an abandoned dialog
+    await openGen(); await generate();
+    await appIQ.page.evaluate(() => document.getElementById('genCloseBtn').click());
+    // two attempts, then Use
+    await openGen(); await generate(); await generate();
+    await appIQ.page.evaluate(() => document.getElementById('genUseBtn').click());
+    await appIQ.page.waitForSelector('#assetGenOverlay', { state: 'hidden', timeout: 5000 }).catch(() => {});
+    await appIQ.page.waitForFunction(() => !document.querySelector('.modal-bar .mb-save:not([disabled])') ? false : true, null, { timeout: 5000 }).catch(() => {});
+    await appIQ.page.evaluate(() => document.querySelector('#assetNewOverlay .modal-bar .mb-save, #assetsOverlay .modal-bar .mb-save').click());
+    for(let i = 0; i < 50; i++){ if(await appIQ.page.evaluate(async () => (await getAllAssets()).some(a => a.id === 'dialog-vase' && a.genCost))) break; await new Promise(res => setTimeout(res, 100)); }
+    await appIQ.page.evaluate(() => spendLogSettled());
+    const r = await appIQ.page.evaluate(async () => {
+      const log = await getSpendLog();
+      const vase = (await getAllAssets()).find(a => a.id === 'dialog-vase');
+      const dialogEntries = log.filter(e => !e.jobId && e.kind === 'image' && /blue vase/.test(e.prompt || ''));
+      return { vase: vase && { genCost: vase.genCost, genTries: vase.genTries },
+        outcomes: dialogEntries.map(e => e.outcome).sort(),
+        est: window.__imageQueueTestHooks.estimateOpenAI('gpt-image-1-mini', 'low', [1024, 1024]) };
+    });
+    assert(r.vase && Math.abs(r.vase.genCost - 0.01) < 1e-9 && r.vase.genTries === 2, `expected both attempts costed onto the asset, got ${JSON.stringify(r.vase)}`);
+    assert(JSON.stringify(r.outcomes) === JSON.stringify(['discarded', 'kept', 'kept']), `expected two kept and one not used, got ${JSON.stringify(r.outcomes)}`);
+    assert(r.est === 0.005, `expected OpenAI's published low-quality mini price, got ${r.est}`);
+    await appIQ.page.evaluate(() => document.querySelector('#assetsOverlay .modal-bar .mb-leave, #assetNewOverlay .modal-bar .mb-leave')?.click());
+    await appIQ.page.evaluate(() => { document.getElementById('assetsOverlay').style.display = 'none'; });
+    ok('AI spend: Generate dialog attempts are costed onto the asset they became, or logged as not used');
+  } catch(e){ bad('AI spend: Generate dialog ledger', e); }
+
+  /* 558. Menu -> AI Spend: an informational modal whose totals are the
+          ledger's, split by what it went on. */
+  try {
+    await appIQ.page.evaluate(() => document.getElementById('menuAiSpend').click());
+    await appIQ.page.waitForSelector('#aiSpendOverlay', { state: 'visible', timeout: 5000 });
+    await assertInfoBar(appIQ.page, 'aiSpendOverlay', 'AI Spend');
+    await appIQ.page.waitForFunction(() => !!document.querySelector('#aiSpendBody [data-spend-all]'), null, { timeout: 15000 });
+    const r = await appIQ.page.evaluate(async () => {
+      const log = await getSpendLog();
+      const sum = log.reduce((n, e) => n + (typeof e.cost === 'number' ? e.cost : 0), 0);
+      return { shown: document.querySelector('#aiSpendBody [data-spend-all]').textContent, sum,
+        text: document.getElementById('aiSpendBody').textContent };
+    });
+    assert(r.shown === '$' + r.sum.toFixed(4), `expected the all-time total to be the ledger's, got ${r.shown} vs ${r.sum}`);
+    assert(/Images kept/.test(r.text) && /not used/.test(r.text) && /By object list/.test(r.text), `expected the breakdown sections, got ${r.text.slice(0, 300)}`);
+    await appIQ.page.evaluate(() => document.querySelector('#aiSpendOverlay .mb-leave').click());
+    ok('AI spend: the AI Spend view totals the ledger and splits it by what it went on');
+  } catch(e){ bad('AI spend: the view', e); }
+
+  /* 560. By castle: what the assets a castle uses TODAY cost -- in its rooms
+          (any field), on its walls' object lists, and on its street building
+          -- with an asset used by two castles counted toward both. */
+  try {
+    const r = await appIQ.page.evaluate(() => window.__spendTestHooks.build({
+      log: [{ kind: 'image', cost: 0.01, outcome: 'kept', at: Date.now() }, { kind: 'text', cost: 0.002, purpose: 'brainstorm', listIds: ['lst'], at: Date.now() }],
+      assets: [{ id: 'a1', genCost: 0.01 }, { id: 'a2', genCost: 0.02 }, { id: 'a3', genCost: 0.04 }, { id: 'fac', genCost: 0.1 }, { id: 'free' }],
+      lists: [{ id: 'lst', name: 'Tools', items: [{ name: 'x', assetId: 'a3' }] }],
+      castles: [{ instanceId: 'L1_Alpha', castleName: 'Alpha', lineId: 'L1' }, { instanceId: 'L1_Beta', castleName: 'Beta', lineId: 'L1' },
+                { instanceId: 'L1_Empty', castleName: 'Empty', lineId: 'L1' }],
+      layout: {
+        'cas:L1_Alpha:p1': { slots: { s1: 'a1', s2: 'free' }, wallLists: { left: { listId: 'lst' } } },
+        'cas:L1_Beta:p1': { floor: { id: 'a2' }, slots: { s1: 'a1' } },
+        mainStreet: { buildings: { 'cas:L1_Alpha:p0': 'fac' } },
+        __defaults: { _default: { floor: 'a2' } },
+      },
+      lineNames: { L1: 'London' } }));
+    const alpha = r.castles.find(c => c.castleName === 'Alpha'), beta = r.castles.find(c => c.castleName === 'Beta');
+    assert(alpha && Math.abs(alpha.cost - 0.15) < 1e-9 && alpha.assets === 4 && alpha.costed === 3 && alpha.shared === 1,
+      `Alpha: expected slot + list item + facade = $0.15 (4 assets, 3 costed, 1 shared), got ${JSON.stringify(alpha)}`);
+    assert(beta && Math.abs(beta.cost - 0.03) < 1e-9 && beta.shared === 1, `Beta: expected $0.03 with a1 shared, got ${JSON.stringify(beta)}`);
+    assert(!r.castles.some(c => c.castleName === 'Empty'), 'expected a castle using no assets left out');
+    const tools = r.lists.find(l => l.listId === 'lst');
+    assert(tools && Math.abs(tools.brainstorm - 0.002) < 1e-9, `expected the brainstorm counted toward its list, got ${JSON.stringify(tools)}`);
+    assert(Math.abs(r.byWhat.kept - 0.01) < 1e-9 && Math.abs(r.byWhat.brainstorm - 0.002) < 1e-9, `unexpected split: ${JSON.stringify(r.byWhat)}`);
+    ok('AI spend: a castle costs what the assets it uses today cost, shared assets counted toward each');
+  } catch(e){ bad('AI spend: by castle', e); }
+
   // 496. A restore discards the queue: unreviewed images are not backed up.
   try {
     await seedBackup(appIQ.page, { version: 6, user: 'tester', lines: [] });
@@ -28063,6 +28192,21 @@ try {
       `expected the suggestion saved under a unique id, got ${JSON.stringify(lists)}`);
     ok('List brainstorm: Save as list saves it under a unique ID and queues its images on yes');
   } catch(e){ bad('List brainstorm: save as list', e); }
+
+  // 559. Every brainstorm call is in the spend ledger, and a suggestion saved
+  //      as a list links that brainstorm's calls to the list.
+  try {
+    await appLB.page.evaluate(() => spendLogSettled());
+    const r = await appLB.page.evaluate(async () => {
+      const log = (await getSpendLog()).filter(e => e.kind === 'text');
+      const listIds = new Set((await getAllObjectLists()).map(l => l.id));
+      return { n: log.length, purposes: [...new Set(log.map(e => e.purpose))],
+        linked: log.filter(e => (e.listIds || []).length).map(e => e.listIds), exist: log.flatMap(e => e.listIds || []).every(id => listIds.has(id)) };
+    });
+    assert(r.n > 0 && JSON.stringify(r.purposes) === '["brainstorm"]', `expected brainstorm calls logged, got ${JSON.stringify(r)}`);
+    assert(r.linked.length > 0 && r.exist, `expected the saved list linked to its brainstorm's calls, got ${JSON.stringify(r)}`);
+    ok('AI spend: brainstorm calls are logged and linked to the lists they became');
+  } catch(e){ bad('AI spend: brainstorm ledger', e); }
 
   // 514. Use this from Saved ideas, with the manager on its index: a new
   //      list's editor opens filled in, and saving it removes the idea.

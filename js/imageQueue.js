@@ -1042,4 +1042,7 @@ if(localStorage.getItem('threeTestDebug')) window.__imageQueueTestHooks = {
   open: (tab) => openImageQueue(tab),
   counts: () => imageQueueCounts(),
   running: () => running.size,
+  remove: (id) => removeImageJob(id),
+  redo: (id) => redoImageJob(id),
+  estimateOpenAI: (model, quality, dims) => estimateOpenAICost(model, quality, dims),
 };

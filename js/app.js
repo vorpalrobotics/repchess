@@ -10377,6 +10377,9 @@ async function openAiSpend(){
     hideSpinner(spinner);
   }
 }
+if(localStorage.getItem('threeTestDebug')){
+  window.__spendTestHooks = { build: (input) => buildSpendReport(input) };
+}
 $('menuAiSpend').onclick = () => {
   $('menuList').style.display = 'none';
   openAiSpend();
