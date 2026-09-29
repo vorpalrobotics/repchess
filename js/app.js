@@ -1,11 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260929-478';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260929-479';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
-         openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
+         openImageQueue, resetImageQueue } from './assets.js?v=20260929-100';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260804-77';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260929-78';
 import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-478';
+const BUILD_TAG = '-479';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8070,6 +8070,7 @@ async function buildBackupData(){
     memorizedRooms: await getMeta('threeMemorizedRooms'),   // VR room progress: which rooms are marked memorized
     decoratedRooms: await getMeta('threeDecoratedRooms'),   // VR room progress: which rooms are flagged fully decorated
     roomReviews: await getMeta(ROOM_REVIEWS_KEY),           // VR room progress: spaced-repetition review history
+    aiSpendLog: await getMeta(AI_SPEND_KEY),                // every paid AI call and what it cost (db.js) -- history, not reconstructible
     /* Per-rung A/B/C tallies (db.js's REVIEW_GRADE_STATS_KEY). Months of
        accumulated evidence about how each interval actually performs for this
        user, and unlike a review schedule there is no way to reconstruct it
@@ -8252,6 +8253,7 @@ async function applyBackupData(data, onMnemProgress){
     // Every memorized room then re-bootstraps a schedule from its own
     // memorized timestamp (see bootstrapRoomReview), so nothing is stranded.
     if(typeof data.roomReviews === 'string') await setMeta(ROOM_REVIEWS_KEY, data.roomReviews);
+    if(typeof data.aiSpendLog === 'string') await setMeta(AI_SPEND_KEY, data.aiSpendLog);
     if(typeof data.reviewGradeStats === 'string') await setMeta(REVIEW_GRADE_STATS_KEY, data.reviewGradeStats);
     if(typeof data.reviewGradeLog === 'string') await setMeta(REVIEW_GRADE_LOG_KEY, data.reviewGradeLog);
     if(typeof data.quizLog === 'string') await setMeta(QUIZ_LOG_KEY, data.quizLog);
@@ -10202,6 +10204,187 @@ $('reviewForecastBody').addEventListener('click', (e) => {
    still describes the design under its original name. */
 mountInfoBar('reviewForecastBar', 'VR Schedule',
   () => { $('reviewForecastOverlay').style.display = 'none'; });
+
+/* ---------- AI Spend (Menu -> AI Spend) ----------
+   A view over the spend ledger (db.js's logSpend): every paid image
+   generation and brainstorm call, what it cost, and what came of it. The
+   per-castle figure is worked out from what the castle USES TODAY -- every
+   asset in its rooms (slot images, surfaces, doors, signs, wall-list items)
+   and on its street building (facade, sign, yard) -- summing each asset's own
+   genCost (stamped when a generated image became that asset). So it follows
+   the castle as it changes, and an asset used by two castles counts toward
+   both, which the table says. Building-wide defaults are shared by every
+   castle and are not attributed to any one. */
+
+// once per browser: the Image Queue's old running total (localStorage, never
+// itemised) becomes the ledger's opening entry, so all-time totals stay true.
+// At boot, before anything new can be generated and added to that total.
+const SPEND_OPENING_LS = 'repchess.spendOpeningLogged';
+const LEGACY_QUEUE_SPENT_LS = 'repchess.imageQueueSpent';   // imageQueue.js's IMAGE_QUEUE_SPENT_LS
+(function logSpendOpeningBalance(){
+  try {
+    if(localStorage.getItem(SPEND_OPENING_LS)) return;
+    localStorage.setItem(SPEND_OPENING_LS, '1');
+    const prior = parseFloat(localStorage.getItem(LEGACY_QUEUE_SPENT_LS)) || 0;
+    if(prior > 0) logSpend({ kind: 'image', provider: '', model: '', cost: Math.round(prior * 1e6) / 1e6,
+      purpose: 'opening', outcome: 'unknown', prompt: 'Image Queue spending before itemised logging began (this browser)' });
+  } catch(_){}
+})();
+
+// every string (and every {id: ...}) anywhere inside a layout value
+function collectLayoutStrings(v, out){
+  if(typeof v === 'string'){ out.add(v); return; }
+  if(!v || typeof v !== 'object') return;
+  for(const x of Object.values(v)) collectLayoutStrings(x, out);
+}
+/* The asset ids a castle uses today: its rooms' layout entries (keyed
+   cas:<instanceId>:...), the items of the object lists on its walls, and
+   its building's facade/sign/yard on the street (keyed by its entry room). */
+function castleAssetIds(instanceId, layout, listById, assetById){
+  const prefix = `cas:${instanceId}:`;
+  const found = new Set();
+  for(const [k, v] of Object.entries(layout || {})){
+    if(!k.startsWith(prefix)) continue;
+    collectLayoutStrings(v, found);
+    for(const b of Object.values((v && v.wallLists) || {})){
+      const list = b && b.listId && listById.get(b.listId);
+      for(const it of (list && list.items) || []) if(it.assetId) found.add(it.assetId);
+    }
+  }
+  const street = (layout && layout.mainStreet) || {};
+  for(const field of ['buildings', 'signs', 'yards'])
+    for(const [k, v] of Object.entries(street[field] || {})) if(k.startsWith(prefix)) collectLayoutStrings(v, found);
+  return [...found].filter(id => assetById.has(id));
+}
+/* Pure over its inputs, so the arithmetic is testable. */
+function buildSpendReport({ log = [], assets = [], lists = [], castles = [], layout = {}, lineNames = {}, now = Date.now() }){
+  const money = e => (typeof e.cost === 'number' ? e.cost : 0);
+  const month = new Date(now); month.setDate(1); month.setHours(0, 0, 0, 0);
+  const totals = { all: 0, month: 0, calls: 0, estimated: false };
+  const byWhat = { kept: 0, discarded: 0, pending: 0, brainstorm: 0, opening: 0 };
+  for(const e of log){
+    const c = money(e);
+    totals.all += c;
+    if(e.purpose !== 'opening') totals.calls++;
+    if(e.at >= +month) totals.month += c;
+    if(e.estimated && c) totals.estimated = true;
+    if(e.purpose === 'opening') byWhat.opening += c;
+    else if(e.kind === 'text') byWhat.brainstorm += c;
+    else if(e.outcome === 'kept') byWhat.kept += c;
+    else if(e.outcome === 'discarded') byWhat.discarded += c;
+    else byWhat.pending += c;
+  }
+  const assetById = new Map(assets.map(a => [a.id, a]));
+  const listById = new Map(lists.map(l => [l.id, l]));
+  const perCastle = castles.map(c => ({ c, ids: castleAssetIds(c.instanceId, layout, listById, assetById) }));
+  const usedBy = new Map();
+  for(const { c, ids } of perCastle) for(const id of ids){
+    if(!usedBy.has(id)) usedBy.set(id, new Set());
+    usedBy.get(id).add(c.instanceId);
+  }
+  const castleRows = perCastle.map(({ c, ids }) => {
+    let cost = 0, costed = 0, shared = 0, estimated = false;
+    for(const id of ids){
+      const a = assetById.get(id);
+      if(typeof a.genCost === 'number' && a.genCost > 0){ cost += a.genCost; costed++; if(a.genEstimated) estimated = true; }
+      if(usedBy.get(id).size > 1) shared++;
+    }
+    return { castleName: c.castleName, lineName: lineNames[c.lineId] || '', assets: ids.length, costed, cost, shared, estimated };
+  }).filter(r => r.assets).sort((a, b) => b.cost - a.cost || a.castleName.localeCompare(b.castleName));
+  const listRows = new Map();
+  const listRow = id => {
+    if(!listRows.has(id)) listRows.set(id, { listId: id, name: (listById.get(id) || {}).name || '', gone: !listById.has(id),
+      brainstorm: 0, imagesKept: 0, imagesOther: 0, estimated: false });
+    return listRows.get(id);
+  };
+  for(const e of log){
+    const ids = new Set([...(e.listIds || []), ...(e.listId ? [e.listId] : [])]);
+    for(const id of ids){
+      const r = listRow(id);
+      if(e.kind === 'text') r.brainstorm += money(e);
+      else if(e.outcome === 'kept') r.imagesKept += money(e);
+      else r.imagesOther += money(e);
+      if(e.estimated && money(e)) r.estimated = true;
+    }
+  }
+  const lists2 = [...listRows.values()].map(r => ({ ...r, total: r.brainstorm + r.imagesKept + r.imagesOther }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  const recent = log.filter(e => e.purpose !== 'opening').slice().sort((a, b) => b.at - a.at).slice(0, 60);
+  return { totals, byWhat, castles: castleRows, lists: lists2, recent };
+}
+const spendUsd = n => '$' + (Math.abs(n) >= 1 ? n.toFixed(2) : n.toFixed(4));
+function renderSpendReport(r){
+  const est = r.totals.estimated
+    ? `<p class="rf-section-note">Some costs are <span class="spend-est">estimated</span>: OpenAI reports no cost, so those come from its published prices.</p>` : '';
+  const row = (label, v) => `<tr><td>${label}</td><td class="num">${spendUsd(v)}</td></tr>`;
+  const what = `
+    <div class="rf-section"><h3>What it went on</h3>
+      <table class="spend-table"><tbody>
+        ${row('Images kept (became assets, redos included)', r.byWhat.kept)}
+        ${row('Images not used (discarded)', r.byWhat.discarded)}
+        ${r.byWhat.pending ? row('Images not decided yet (awaiting review)', r.byWhat.pending) : ''}
+        ${row('Brainstorming lists', r.byWhat.brainstorm)}
+        ${r.byWhat.opening ? row('Before itemised logging began', r.byWhat.opening) : ''}
+      </tbody></table></div>`;
+  const castles = r.castles.length ? `
+    <div class="rf-section"><h3>By castle</h3>
+      <p class="rf-section-note">What the images a castle uses today cost to make: every asset in its rooms, on its walls' object lists and on its building. An asset used by more than one castle counts toward each.</p>
+      <table class="spend-table"><thead><tr><th>Castle</th><th class="num">Assets (with a cost)</th><th class="num">Cost</th></tr></thead><tbody>
+        ${r.castles.map(c => `<tr><td>${escapeHtml(c.castleName)} <span class="spend-muted">${escapeHtml(c.lineName)}</span>`
+          + `${c.shared ? ` <span class="spend-muted">· ${c.shared} shared</span>` : ''}</td>`
+          + `<td class="num">${c.assets} (${c.costed})</td><td class="num">${spendUsd(c.cost)}${c.estimated ? ' <span class="spend-est">est.</span>' : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '';
+  const lists = r.lists.length ? `
+    <div class="rf-section"><h3>By object list</h3>
+      <table class="spend-table"><thead><tr><th>List</th><th class="num">Brainstorm</th><th class="num">Item images kept</th><th class="num">Not used</th><th class="num">Total</th></tr></thead><tbody>
+        ${r.lists.map(l => `<tr><td>${escapeHtml(l.name || l.listId)}${l.gone ? ' <span class="spend-muted">(deleted)</span>' : ''}</td>`
+          + `<td class="num">${spendUsd(l.brainstorm)}</td><td class="num">${spendUsd(l.imagesKept)}</td>`
+          + `<td class="num">${spendUsd(l.imagesOther)}</td><td class="num">${spendUsd(l.total)}${l.estimated ? ' <span class="spend-est">est.</span>' : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '';
+  const outcomeText = e => e.kind === 'text' ? 'brainstorm'
+    : e.outcome === 'kept' ? `kept${e.assetId ? ' → ' + e.assetId : ''}` : e.outcome === 'discarded' ? 'not used' : 'awaiting review';
+  const recent = r.recent.length ? `
+    <div class="rf-section"><h3>Recent</h3>
+      <table class="spend-table"><thead><tr><th>When</th><th>What</th><th class="num">Cost</th></tr></thead><tbody>
+        ${r.recent.map(e => `<tr><td class="spend-muted" style="white-space:nowrap">${escapeHtml(new Date(e.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</td>`
+          + `<td>${escapeHtml(outcomeText(e))} <span class="spend-muted">· ${escapeHtml(e.model || e.provider || '')}${e.prompt ? ' · ' + escapeHtml(e.prompt.slice(0, 60)) : ''}</span></td>`
+          + `<td class="num">${typeof e.cost === 'number' ? spendUsd(e.cost) : '<span class="spend-muted">—</span>'}${e.estimated ? ' <span class="spend-est">est.</span>' : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="rf-section-note">Nothing has been spent since logging began.</p>';
+  return `
+    <div class="spend-cards">
+      <div class="spend-card"><div class="spend-card-label">This month</div><div class="spend-card-value" data-spend-month>${spendUsd(r.totals.month)}</div></div>
+      <div class="spend-card"><div class="spend-card-label">All time</div><div class="spend-card-value" data-spend-all>${spendUsd(r.totals.all)}</div></div>
+      <div class="spend-card"><div class="spend-card-label">Paid calls</div><div class="spend-card-value">${r.totals.calls}</div></div>
+    </div>${est}${what}${castles}${lists}${recent}`;
+}
+async function openAiSpend(){
+  $('aiSpendOverlay').style.display = 'flex';
+  $('aiSpendBody').innerHTML = '';
+  const spinner = showSpinner('Adding up AI spending…');
+  await nextPaint();
+  try {
+    await spendLogSettled();
+    const lines = await getLines(LOCAL_USER);
+    const [log, assets, lists, castles, layoutRaw] = await Promise.all([
+      getSpendLog(), getAllAssets(), getAllObjectLists(), gatherBuiltCastles(lines), getMeta('threeLayout')]);
+    let layout = {}; try { layout = JSON.parse(layoutRaw || '{}') || {}; } catch(_){ layout = {}; }
+    const r = buildSpendReport({ log, assets, lists, castles, layout, lineNames: Object.fromEntries(lines.map(l => [l.id, l.name])) });
+    $('aiSpendBody').innerHTML = renderSpendReport(r);
+  } catch(err){
+    console.error('[AI Spend] failed', err);
+    $('aiSpendBody').innerHTML = `<p class="rf-empty">Could not add up the spending: ${escapeHtml((err && err.message) || String(err))}</p>`;
+  } finally {
+    hideSpinner(spinner);
+  }
+}
+if(localStorage.getItem('threeTestDebug')){
+  window.__spendTestHooks = { build: (input) => buildSpendReport(input) };
+}
+$('menuAiSpend').onclick = () => {
+  $('menuList').style.display = 'none';
+  openAiSpend();
+};
+mountInfoBar('aiSpendBar', 'AI Spend', () => { $('aiSpendOverlay').style.display = 'none'; });
 
 /* ---------- cross-castle transposition detector ----------
    Two different castles (different line and/or castle name) can each reach

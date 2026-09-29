@@ -142,10 +142,10 @@ const AUTO_CROP_ALPHA = 24;
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { OPENAI_STANDING_LS, GEN_MODEL_LS, GEN_CUSTOM_AIR_LS, GEN_QUALITY_LS, GEN_SIZE_LS, GEN_QUALITY_DEFAULT,
          GEN_MODELS, GEN_PROVIDERS, genModelById, lsGet, lsSet, generateOpenAI, generateRunware,
-         enqueueImageJob, configureImageQueue } from './imageQueue.js?v=20260804-6';
+         enqueueImageJob, configureImageQueue, logImageSpend } from './imageQueue.js?v=20260929-7';
 // app.js reaches the queue through here, so imageQueue.js has a single importer
 export { openImageQueue, openImageQueueForList, resetImageQueue, imageQueueCounts,
-         runwareText, RUNWARE_KEY_LS, queueImagesForList, describeListImageSettings } from './imageQueue.js?v=20260804-6';
+         runwareText, RUNWARE_KEY_LS, queueImagesForList, describeListImageSettings } from './imageQueue.js?v=20260929-7';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one
@@ -158,6 +158,15 @@ let EDIT_BASELINE = null;
 let ASSETS = [];          // cached array of all asset records
 let EDIT_ID = null;       // id of the asset currently open in the editor, or null = creating new
 let EDIT_IMAGE = '';      // staged (down-converted) data-URL for the editor — this is what gets saved
+/* Spend-ledger entries (db.js) behind the image staged from the Generate
+   dialog: every attempt made in that dialog visit. Saving the asset costs
+   them onto it (stampAssetCost); replacing the image, or leaving the editor
+   without saving, throws them away. */
+let EDIT_GEN_PENDING = [];
+function discardEditGen(){
+  if(EDIT_GEN_PENDING.length) discardPendingSpend(EDIT_GEN_PENDING);
+  EDIT_GEN_PENDING = [];
+}
 let EDIT_IMAGE_ORIG = ''; // full-res data-URL of a fresh upload, kept in memory only so changing the
                           // tier/type re-derives EDIT_IMAGE without re-reading the file. '' when editing
                           // an existing asset (we can't recover pixels already discarded on import).
@@ -252,7 +261,7 @@ function renderEditorBar(){
     snapshot: editorSnapshot,
     watch: containerEl,
     thing: EDIT_ID ? `"${EDIT_ID}"` : 'this new asset',
-    onLeave: () => { showList(); renderBar(); },
+    onLeave: () => { discardEditGen(); showList(); renderBar(); },
     onSave: async () => { await saveEditor(); },
     onDestructive: () => { if(EDIT_ID) deleteEditor(EDIT_ID); },
   });
@@ -346,6 +355,7 @@ function renderGrid(){
 
 /* ---------- editor ---------- */
 function openEditor(id, initialType, allowTypes){
+  discardEditGen();   // an earlier edit left without saving
   EDIT_ID = id;
   const a = id ? ASSETS.find(x => x.id === id) : null;
   EDIT_IMAGE = (a && a.image) || '';
@@ -405,6 +415,8 @@ function renderEditor(a, initialType, allowTypes){
         </div>
         <div class="asset-img-side">
           <div class="asset-img-info" id="assetImgInfo"></div>
+          ${a && typeof a.genCost === 'number' && a.genCost > 0
+            ? `<div class="asset-img-info" data-gen-cost title="What generating this image cost, every attempt included (Menu → AI Spend)">Generated for $${a.genCost.toFixed(a.genCost >= 1 ? 2 : 4)}${a.genEstimated ? ' (estimated)' : ''}${a.genTries > 1 ? ` · ${a.genTries} tries` : ''}</div>` : ''}
           <div class="asset-img-tools">
             <button type="button" id="assetGenBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate…</button>
             <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop / Erase BG…</button>
@@ -914,6 +926,7 @@ async function rederiveImage(){
 // id from `nameHint` when creating a new asset. Shared by the file drop and the
 // AI generate flow.
 async function stageFullImage(fullDataUrl, nameHint){
+  discardEditGen();   // a new image replaces any generated one (the Generate dialog re-attaches its own after)
   EDIT_IMAGE_ORIG = fullDataUrl;
   EDIT_IMAGE = await downscaleDataUrl(EDIT_IMAGE_ORIG, resolutionCap(editorType(), EDIT_RESOLUTION));
   setError('');
@@ -1024,7 +1037,13 @@ function openGenerateModal(){
   ov.style.display = 'flex';
   const q = id => ov.querySelector('#' + id);
   let lastDataUrl = null;
-  const close = () => { ov.style.display = 'none'; ov.innerHTML = ''; };
+  // this visit's generations, in the spend ledger; handed to the editor by
+  // "Use this image", thrown away if the dialog closes without it
+  let genIds = [], genUsed = false;
+  const close = () => {
+    if(!genUsed) discardPendingSpend(genIds);
+    ov.style.display = 'none'; ov.innerHTML = '';
+  };
   q('genCloseBtn').onclick = close;
   wireBackdropClose(ov, close);
 
@@ -1121,9 +1140,11 @@ function openGenerateModal(){
         : await generateRunware(key, spec, fullPrompt, dims, transparent,
             (s) => { q('genStatus').textContent = s; }, quality, sizeName);
       lastDataUrl = out.dataUrl;
+      genIds.push(logImageSpend(spec, out, prompt, { purpose: 'asset',
+        assetId: (($('assetIdInput') || {}).value || '').trim().toLowerCase() || undefined }));
       q('genResultImg').src = lastDataUrl;
       q('genResultWrap').style.display = '';
-      const cost = typeof out.cost === 'number' ? ` Cost: $${out.cost.toFixed(4)}.` : '';
+      const cost = typeof out.cost === 'number' ? ` Cost: $${out.cost.toFixed(4)}${out.estimated ? ' (estimated)' : ''}.` : '';
       q('genStatus').textContent = 'Done — use it, or edit the prompt and generate again.' + (out.note || '') + cost;
     } catch(err){
       console.error('[assets] generate failed', err);
@@ -1137,6 +1158,9 @@ function openGenerateModal(){
     if(!lastDataUrl) return;
     const hint = q('genPrompt').value.trim().split(/\s+/).slice(0, 5).join(' ');
     await stageFullImage(lastDataUrl, hint || 'generated');
+    // every attempt in this visit is what the image cost
+    EDIT_GEN_PENDING = genIds.slice();
+    genUsed = true;
     close();
   };
 }
@@ -1635,6 +1659,10 @@ async function saveEditor(){
   const image = await toWebpDataUrl(EDIT_IMAGE);   // shrink on save, alpha preserved
   const patch = { type, keywords, image, resolution: EDIT_RESOLUTION, ...readTypeFields(type) };
   await setAsset(id, patch);
+  if(EDIT_GEN_PENDING.length){
+    const ids = EDIT_GEN_PENDING; EDIT_GEN_PENDING = [];
+    await stampAssetCost(id, ids);
+  }
   await refreshGrid();
   showList();
   renderBar();
@@ -1701,6 +1729,7 @@ export async function openNewAssetModal(initialType, allowTypes, preset = null){
     const finish = (id) => {
       if(settled) return;
       settled = true;
+      if(!id) discardEditGen();   // left without saving
       ov.style.display = 'none';
       ov.innerHTML = '';
       containerEl = prevContainer;

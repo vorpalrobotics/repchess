@@ -22,8 +22,8 @@
    New Asset modal needs an actual import.
 */
 import { openNewAssetModal, openImageQueueForList, openImageQueue, runwareText, RUNWARE_KEY_LS,
-         queueImagesForList, describeListImageSettings } from './assets.js?v=20260804-99';
-import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260804-3';
+         queueImagesForList, describeListImageSettings } from './assets.js?v=20260929-100';
+import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260929-4';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 const ORDERING_TYPES = {
@@ -1198,7 +1198,7 @@ async function saveEditor(){
   EDIT_FROM_BRAINSTORM = false;
   EDIT_FROM_IDEA = null;
   await refresh();
-  if(fromIdea) await removeListIdea(fromIdea);   // it is a list now, not an idea
+  if(fromIdea) await removeListIdea(fromIdea, savedId);   // it is a list now, not an idea
   if(fromBrainstorm){
     const queued = await offerImagesFor(savedId, { name: l.name.trim(), roomName: l.roomName.trim(), items: l.items });
     if(queued) openImageQueue('queue');   // show what was just queued

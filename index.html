@@ -595,6 +595,17 @@
      buckets of a lopsided castle all render as slivers and the shape of the
      week is unreadable, which is the one thing this view is for. */
   .rf-section{margin:0 0 1.1rem}
+  /* AI Spend (Menu -> AI Spend) */
+  .spend-cards{display:flex;gap:.6rem;flex-wrap:wrap;margin:0 0 .9rem}
+  .spend-card{flex:1 1 9em;border:1px solid #ddd;border-radius:6px;padding:.45rem .6rem;background:#fafafa}
+  .spend-card-label{font-size:.72rem;color:#777;text-transform:uppercase;letter-spacing:.03em}
+  .spend-card-value{font-size:1.25rem;font-weight:700;color:#1f4e79}
+  .spend-table{width:100%;border-collapse:collapse;font-size:.8rem}
+  .spend-table th{text-align:left;font-weight:600;color:#555;border-bottom:1px solid #ddd;padding:.2rem .3rem}
+  .spend-table td{border-bottom:1px solid #f0f0f0;padding:.2rem .3rem;vertical-align:top}
+  .spend-table td.num,.spend-table th.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .spend-est{color:#8a6d3b;font-size:.72rem}
+  .spend-muted{color:#999}
   .rf-section h3{margin:0 0 .15rem;font-size:1rem;color:#1f4e79}
   .rf-section-note{margin:0 0 .5rem;font-size:.72rem;color:#888;line-height:1.35}
   .rf-row{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555;padding:.1rem 0}
@@ -1168,6 +1179,7 @@
       <hr class="row-menu-sep">
       <button id="menuAssets">VR Assets</button>
       <button id="menuImageQueue" title="Images generating in the background, and finished ones waiting for you to approve">Image Queue</button>
+      <button id="menuAiSpend" title="What AI image generation and brainstorming has cost, by castle and by object list">AI Spend</button>
       <button id="menuObjectLists">VR Object Lists</button>
       <button id="menuMnemonics">Mnemonics</button>
       <hr class="row-menu-sep">
@@ -1677,6 +1689,12 @@
      Documents/modal-buttons.md: nothing here is staged, so the bar is a title
      and a bare Done, and the scope dropdown is a view control that stays in
      the body. -->
+<div id="aiSpendOverlay" class="overlay">
+  <div class="modal" style="width:min(44em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div id="aiSpendBar" class="modal-bar-host"></div>
+    <div class="modal-body"><div id="aiSpendBody"></div></div>
+  </div>
+</div>
 <div id="reviewForecastOverlay" class="overlay">
   <div class="modal" style="width:min(42em,94vw);max-height:88vh;display:flex;flex-direction:column">
     <div id="reviewForecastBar" class="modal-bar-host"></div>
@@ -2243,7 +2261,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="js/version.js"></script>
-<script src="js/db.js?v=20260804-71"></script>
+<script src="js/db.js?v=20260929-72"></script>
 <!-- boot watchdog: if app.js never runs (e.g. a CDN serving a core ES-module
      dependency like three.js/cytoscape is down so its import fails), the
      default-visible spinner would spin forever. After 15s with no boot, replace
@@ -2260,6 +2278,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260929-478"></script>
+<script type="module" src="js/app.js?v=20260929-479"></script>
 </body>
 </html>

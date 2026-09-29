@@ -459,6 +459,15 @@ async function getAllAssets(){
   });
 }
 
+async function getAsset(id){
+  const db = await openDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction('assets','readonly').objectStore('assets').get(id);
+    req.onsuccess = () => resolve(req.result ? normalizeAssetType(req.result) : null);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
 async function setAsset(id, patch){
   const now = Date.now();
   return putMerged('assets', id, {...BLANK_ASSET, id, createdAt:now}, patch, {id, updatedAt:now});
@@ -1452,4 +1461,87 @@ function recordReviewGrade(step, grade, opts = {}){
   // with the same rejection
   gradeStatsQueue = next.catch(() => {});
   return next;
+}
+
+
+/* ---------- AI spend ledger ----------
+   One entry per paid AI call -- an image generation or a text (brainstorm)
+   request -- written the moment the call returns, and never removed. It
+   lives apart from the images and lists it paid for on purpose: deleting an
+   asset, discarding an image or throwing away a brainstormed list must not
+   make its cost disappear. Outcomes are updated in place as they become
+   known ('pending' -> 'kept' when an image becomes an asset, 'discarded'
+   when it is thrown away); nothing else about an entry changes.
+
+   Entry: { id, at, kind: 'image'|'text', provider, model, cost (USD, or null
+   when unknown), estimated (true when the provider reports no cost and it
+   was worked out from its published prices), purpose: 'asset' | 'listItem' |
+   'brainstorm' | 'opening', outcome: 'pending'|'kept'|'discarded'|'used',
+   prompt (first 160 chars), assetId, listId, listIds, jobId }.
+
+   Backed up and restored with everything else (app.js's buildBackupData): a
+   spending history cannot be reconstructed. Writes are chained so two calls
+   landing together cannot lose one another's entry. */
+const AI_SPEND_KEY = 'aiSpendLog';
+let _spendChain = Promise.resolve();
+async function getSpendLog(){
+  try { const a = JSON.parse(await getMeta(AI_SPEND_KEY) || '[]'); return Array.isArray(a) ? a : []; }
+  catch(_){ return []; }
+}
+function _spendWrite(mutate){
+  _spendChain = _spendChain.then(async () => {
+    const arr = await getSpendLog();
+    mutate(arr);
+    await setMeta(AI_SPEND_KEY, JSON.stringify(arr));
+  }).catch(err => console.error('[spend] ledger write failed', err));
+  return _spendChain;
+}
+// logs one paid call and returns its id at once (the write follows)
+function logSpend(entry){
+  const rec = { id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()),
+    at: Date.now(), outcome: 'pending', ...entry };
+  if(typeof rec.prompt === 'string') rec.prompt = rec.prompt.slice(0, 160);
+  _spendWrite(arr => arr.push(rec));
+  return rec.id;
+}
+function updateSpend(ids, patch){
+  const set = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean));
+  if(!set.size) return _spendChain;
+  return _spendWrite(arr => { for(const e of arr) if(set.has(e.id)) Object.assign(e, patch); });
+}
+function spendLogSettled(){ return _spendChain; }
+// a brainstorm batch's suggestion became object list `listId`: its calls
+// count toward that list (a batch saved as several lists counts toward each)
+function linkSpendToList(batchId, listId){
+  if(!batchId || !listId) return _spendChain;
+  return _spendWrite(arr => {
+    for(const e of arr) if(e.batchId === batchId) e.listIds = [...new Set([...(e.listIds || []), listId])];
+  });
+}
+// the entries among `ids` still pending were thrown away (a discarded image,
+// an abandoned Generate dialog); ones already kept are left alone
+function discardPendingSpend(ids){
+  const set = new Set((ids || []).filter(Boolean));
+  if(!set.size) return _spendChain;
+  return _spendWrite(arr => { for(const e of arr) if(set.has(e.id) && e.outcome === 'pending') e.outcome = 'discarded'; });
+}
+/* An image (or several attempts at one) became asset `assetId`: mark the
+   entries kept, and add their cost to the asset's own running total -- so an
+   asset carries what it cost, redos included, even if its entries are never
+   looked at again. Adds rather than overwrites: regenerating an existing
+   asset's image is more spending on the same asset. */
+async function stampAssetCost(assetId, ids){
+  ids = (ids || []).filter(Boolean);
+  if(!assetId || !ids.length) return;
+  await updateSpend(ids, { outcome: 'kept', assetId });
+  const set = new Set(ids);
+  const entries = (await getSpendLog()).filter(e => set.has(e.id));
+  const cost = entries.reduce((n, e) => n + (typeof e.cost === 'number' ? e.cost : 0), 0);
+  const a = await getAsset(assetId);
+  if(!a) return;
+  await setAsset(assetId, {
+    genCost: Math.round(((a.genCost || 0) + cost) * 1e6) / 1e6,
+    genTries: (a.genTries || 0) + entries.length,
+    genEstimated: !!(a.genEstimated || entries.some(e => e.estimated)),
+  });
 }
