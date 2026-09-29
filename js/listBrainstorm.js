@@ -193,9 +193,13 @@ async function saveIdeas(){
   catch(err){ console.error('[listBrainstorm] could not save ideas', err); }
 }
 // used by objectLists.js once an idea has become a saved list
-export async function removeListIdea(id){
+/* savedListId: the idea was saved as that object list -- the brainstorm calls
+   that produced it (its batch, in the spend ledger) count toward that list. */
+export async function removeListIdea(id, savedListId = null){
   if(!id) return;
   await loadIdeas();
+  const idea = IDEAS.find(i => i.id === id);
+  if(idea && savedListId) linkSpendToList(idea.batchId, savedListId);
   IDEAS = IDEAS.filter(i => i.id !== id);
   await saveIdeas();
   if(document.getElementById('listBrainstormOverlay')?.style.display === 'flex') renderAll();
@@ -377,10 +381,15 @@ async function brainstorm(refine){
         existingNames: DEPS.existingNames || [] });
     } catch(err){ return { candidates: [], errors: [err.message] }; }
   };
+  // the batch these calls belong to, known before the first call so each one
+  // is logged against it (a refine continues the batch it improves on)
+  const batchId = (refine && BATCH) ? BATCH.batchId : crypto.randomUUID();
   const ask = async (messages) => {
     const res = await DEPS.runwareText(key, { model, systemPrompt, messages,
       maxTokens: castle ? MAX_TOKENS_CASTLE : MAX_TOKENS, jsonSchema });
     if(typeof res.cost === 'number') SPENT += res.cost;
+    logSpend({ kind: 'text', provider: 'runware', model, cost: typeof res.cost === 'number' ? res.cost : null,
+      purpose: 'brainstorm', outcome: 'used', batchId, prompt: userMsg });
     if(res.finishReason === 'length') throw new Error('the reply was cut off before it finished -- ask for fewer lists or items, or try a stronger model');
     return res;
   };
@@ -409,7 +418,7 @@ async function brainstorm(refine){
     // keep them as ideas; a refine replaces the batch it improved on
     await loadIdeas();
     if(refine && BATCH) IDEAS = IDEAS.filter(i => i.batchId !== BATCH.batchId);
-    else BATCH = { batchId: crypto.randomUUID(), request, mode: castle ? 'castle' : 'one' };
+    else BATCH = { batchId, request, mode: castle ? 'castle' : 'one' };
     const now = Date.now();
     for(const c of got.candidates){
       IDEAS.push({ id: crypto.randomUUID(), batchId: BATCH.batchId, createdAt: now, request: BATCH.request,
@@ -511,7 +520,7 @@ async function onCardClick(e){
       const id = res && typeof res === 'object' ? res.id : res;
       if(!id) return;
       const queued = (res && res.queued) || 0;
-      await removeListIdea(idea.id);
+      await removeListIdea(idea.id, id);
       if(status) status.textContent = `Saved "${idea.candidate.name}" as a list`
         + (queued ? `, and queued ${queued} image${queued === 1 ? '' : 's'} (Menu → Image Queue).` : '.');
     } catch(err){

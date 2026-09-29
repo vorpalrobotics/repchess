@@ -97,6 +97,21 @@ export function genModelById(id){ return GEN_MODELS.find(m => m.id === id) || GE
 export function lsGet(k){ try { return localStorage.getItem(k) || ''; } catch(_){ return ''; } }
 export function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_){} }
 
+/* OpenAI's images API reports no cost, so the spend ledger records an
+   ESTIMATE from its published per-image prices (USD), by model, quality and
+   size -- marked estimated wherever it is shown. Square is 1024x1024; the
+   other two sizes are 1024x1536 / 1536x1024. Update when OpenAI's prices do. */
+const OPENAI_PRICES = {
+  'gpt-image-1':      { low: [0.011, 0.016], medium: [0.042, 0.063], high: [0.167, 0.25] },
+  'gpt-image-1-mini': { low: [0.005, 0.006], medium: [0.011, 0.015], high: [0.036, 0.052] },
+};
+export function estimateOpenAICost(model, quality, [w, h]){
+  const table = OPENAI_PRICES[model];
+  if(!table) return null;
+  const row = table[quality || GEN_QUALITY_DEFAULT] || table.high;
+  return w === h ? row[0] : row[1];
+}
+
 /* OpenAI: one fetch, image back as base64. */
 export async function generateOpenAI(key, spec, prompt, [w, h], transparent, quality){
   const body = { model: spec.model, prompt, n: 1, size: `${w}x${h}` };
@@ -111,7 +126,13 @@ export async function generateOpenAI(key, spec, prompt, [w, h], transparent, qua
   if(!res.ok) throw new Error((json && json.error && json.error.message) || ('HTTP ' + res.status));
   const b64 = json.data && json.data[0] && json.data[0].b64_json;
   if(!b64) throw new Error('No image returned.');
-  return { dataUrl: 'data:image/png;base64,' + b64, cost: null };
+  return { dataUrl: 'data:image/png;base64,' + b64, cost: estimateOpenAICost(spec.model, quality, [w, h]), estimated: true };
+}
+/* One paid image generation, into the spend ledger (db.js's logSpend).
+   Returns the entry's id. */
+export function logImageSpend(spec, out, prompt, extra = {}){
+  return logSpend({ kind: 'image', provider: spec.provider, model: spec.provider === 'openai' ? spec.model : (spec.air || spec.id),
+    cost: typeof out.cost === 'number' ? out.cost : null, estimated: !!out.estimated, prompt, ...extra });
 }
 
 /* A Runware WebSocket session: authenticate once, then run tasks one at a time
@@ -438,6 +459,13 @@ async function runJob(job, key){
     // a restore since this started, or the job was removed while it ran
     if(gen !== QUEUE_GEN || !findJob(job.id)) return;
     await setMeta(IMAGE_QUEUE_IMG_PREFIX + job.id, out.dataUrl);
+    // into the spend ledger straight away: every attempt a job makes (redos
+    // included) stays pending until the job is approved (all kept, costed
+    // onto the asset) or discarded
+    const listTarget = job.target && job.target.kind === 'objectListItem';
+    job.ledgerIds = [...(job.ledgerIds || []), logImageSpend(spec, out, job.prompt, {
+      purpose: listTarget ? 'listItem' : 'asset', listId: listTarget ? job.target.listId : undefined,
+      jobId: job.id, assetId: (job.asset && job.asset.id) || undefined })];
     job.status = 'review';
     job.cost = typeof out.cost === 'number' ? out.cost : null;
     job.note = out.note || '';
@@ -487,6 +515,8 @@ export async function removeImageJob(id){
   await loadJobs();
   const i = JOBS.findIndex(j => j.id === id);
   if(i < 0) return;
+  // a job removed without being approved: whatever it generated is thrown away
+  discardPendingSpend(JOBS[i].ledgerIds || []);
   JOBS.splice(i, 1);          // a running job's result is dropped when it lands (see runJob)
   saveJobs(); emit();
   try { await deleteMeta(IMAGE_QUEUE_IMG_PREFIX + id); } catch(_){}
@@ -519,6 +549,8 @@ async function approveImageJob(id, quick = false){
   if(!image) return;
   const saved = await approver(job, image, { quick });
   if(!saved) return;
+  // every attempt the job made becomes this asset's cost
+  await stampAssetCost(saved, job.ledgerIds || []);
   if(job.target && job.target.kind === 'objectListItem') await bindListItem(job.target, saved);
   await removeImageJob(id);
 }
