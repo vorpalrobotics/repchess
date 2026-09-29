@@ -23215,6 +23215,32 @@ try {
     ok('VR Schedule: rooms ready to memorize are listed, decorated and not yet memorized');
   } catch(e){ bad('VR Schedule: ready to memorize', e); }
 
+  // 548. To decorate: only when the scope is one castle; undecorated,
+  //      unmemorized rooms, nearest the front door first.
+  try {
+    const r = await appEF.page.evaluate(() => {
+      const H = window.__reviewForecastTestHooks;
+      const now = Date.now();
+      const room = (posKey, name, seq, moveCount) => ({ posKey, name, seq, moveCount, exits: [{ to: 'x' }], pairs: [] });
+      const castles = [{ castleName: 'Alpha', lineId: 'L1', instanceId: 'L1_Alpha', entryPosKey: 'p0',
+        genRooms: [room('p1', 'Deep', ['d4','Nf6','c4','e6','Nc3'], 2), room('p2', 'Hall', ['d4','Nf6','c4'], 3),
+                   room('p3', 'Done', ['d4','d5','c4'], 2), room('p4', 'Known', ['d4','e6','c4'], 1)] }];
+      const k = (p) => H.roomKeyFor('L1_Alpha', p);
+      const decorated = { [k('p3')]: now };
+      const memorized = { [k('p4')]: now };
+      const scoped = H.build(castles, {}, memorized, { now, decorated, castleName: 'Alpha', lineId: 'L1' });
+      const all = H.build(castles, {}, memorized, { now, decorated });
+      const box = document.createElement('div');
+      box.innerHTML = H.toDecorateHtml(scoped);
+      return { names: scoped.toDecorate.map(x => x.name), unscoped: all.toDecorate, html: H.toDecorateHtml(all),
+        summary: box.querySelector('summary')?.textContent.replace(/\s+/g, ' ').trim() };
+    });
+    assert(JSON.stringify(r.names) === '["Hall","Deep"]', `expected Hall then Deep, got ${JSON.stringify(r.names)}`);
+    assert(r.unscoped === null && r.html === '', `expected nothing across all castles, got ${JSON.stringify(r)}`);
+    assert(/To decorate: 2 rooms in this castle/.test(r.summary || ''), `unexpected summary: ${JSON.stringify(r.summary)}`);
+    ok('VR Schedule: rooms to decorate, only for a single castle, nearest the door first');
+  } catch(e){ bad('VR Schedule: to decorate', e); }
+
   // 278. The never-reviewed callout. A castle memorized long ago and never
   //      graded is legitimately ALL overdue at step 0, which looks like
   //      neglect of work that was never started -- so it is said in words
@@ -25902,7 +25928,9 @@ try {
     const head = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListHead());
     assert(/caught up/.test(head || ''), `expected an explicit caught-up message, got ${JSON.stringify(head)}`);
     // ...while the optional tail is still offered
-    const rendered = await appRL.page.evaluate(() => window.__threeTestEdit.reviewListRows());
+    // (rooms still to decorate in the castle you are in are listed too, since
+    // 547 -- a separate section, not review work)
+    const rendered = (await appRL.page.evaluate(() => window.__threeTestEdit.reviewListRows())).filter(r => r.state !== 'decorate');
     assert(rendered.length === 1 && rendered[0].state === 'soon',
       `expected only the soon tail left on offer, got ${JSON.stringify(rendered)}`);
     await closeList();
@@ -25971,7 +25999,12 @@ try {
   /* 545. Rooms READY TO MEMORIZE -- fully decorated (the digraph's 🎨 flag)
           and not memorized -- are listed after the review work, and never
           counted as it. A decorated room that is already memorized is not. */
+  const roomBefore545 = await E('room');
   try {
+    // from the street: inside a castle the list re-checks each of its rooms
+    // live (547), which would -- rightly -- clear this hand-set flag
+    await E('enter', 'mainStreet');
+    await appRL.page.waitForTimeout(200);
     await E('setDecorated', K.c5, true);     // unmemorized
     await E('setDecorated', K.e6, true);     // memorized (scheduled above)
     const ready = await E('readyList');
@@ -25995,6 +26028,40 @@ try {
     await E('setDecorated', K.e6, false);
     ok('review list: rooms ready to memorize come after the review work, not counted as it');
   } catch(e){ bad('review list: ready to memorize', e); }
+
+  /* 547. Rooms TO DECORATE, for the castle you are standing in only: the
+          live check, not the stored flag (which it refreshes), memorized and
+          locked rooms left out, last in the list. On the street, none. */
+  try {
+    await E('enter', K.root);
+    await appRL.page.waitForTimeout(200);
+    const list = await E('toDecorateList');
+    const keys = list.map(r => r.key);
+    assert(keys.includes(K.c5), `expected the undecorated c5 corridor listed, got ${JSON.stringify(list)}`);
+    assert(![K.root, K.e6, K.g6, K.locked, K.bravo].some(k => keys.includes(k)),
+      `expected memorized, locked and other-castle rooms left out, got ${JSON.stringify(keys)}`);
+    assert(keys.every(k => k.startsWith('cas:L1_Alpha:')), `expected only Alpha's rooms, got ${JSON.stringify(keys)}`);
+    assert((await E('fullyDecorated', K.c5)) === false && (await E('decoratedFlag', K.c5)) === false,
+      'expected the live check to agree and the stored flag to be brought into line');
+    await openList();
+    const shown = await appRL.page.evaluate((k) => {
+      const box = document.querySelector('[data-review-list]');
+      const rule = box.querySelector('[data-review-decorate-rule]');
+      const row = box.querySelector(`[data-review-room="${k}"]`);
+      const rows = [...box.querySelectorAll('[data-review-room]')];
+      return { rule: rule ? rule.textContent : null, state: row && row.dataset.reviewState, last: rows[rows.length - 1] === row };
+    }, K.c5);
+    await closeList();
+    assert(shown.rule && /To decorate in Alpha \(\d+\)/.test(shown.rule) && shown.state === 'decorate' && shown.last,
+      `expected c5 last, under "To decorate in Alpha", got ${JSON.stringify(shown)}`);
+    await E('enter', 'mainStreet');
+    await appRL.page.waitForTimeout(200);
+    const street = await E('toDecorateList');
+    assert(street.length === 0, `expected no decorating list on the street, got ${JSON.stringify(street)}`);
+    await E('enter', roomBefore545);   // back where the tests below expect to be
+    await appRL.page.waitForTimeout(200);
+    ok('review list: rooms to decorate, for the castle you are in only, last');
+  } catch(e){ bad('review list: to decorate', e); }
 
   /* 452. Room stories. A room's door-chain narrative lives on the room's OWN
           pref -- the same one its Room Name is on -- because that is what
