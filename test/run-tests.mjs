@@ -56,6 +56,7 @@ const SUBSYSTEMS = {
   'move-table':        'tree view: focus, node stats, badges, standard response, variation import',
   'digraph':           'Opening Graph modal: nodes, room-info panel, Jump to VR, coverage stats',
   'vr-castle':         'castle walking mechanics: doors, stairs, street, locked doors, memorized toggle',
+  'wings':             'castle wings: several roots under one castle name (build, Attributes, digraph, VR)',
   'vr-decorating':     'room decoration: move-object slots, geometry, wall lists, fully-decorated flag',
   'vr-ui':             'VR toolbar chrome (icon order, mini board)',
   'assets':            'asset picker, crop/erase editor, New Asset flow, color picker',
@@ -6910,6 +6911,154 @@ try {
   await appUA.close();
 }
 } catch(e){ bad('Phase UA: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase WG: castle wings. Several roots under ONE castle name build one
+//     castle; the street door opens into the main entrance, the other wings
+//     are reached by the teleport door from the castle above them, and a
+//     wing with no castle above it is flagged as having no way in. ---
+if(shouldRunPhase(['vr-castle', 'wings'])){
+try {
+const appWG = await launchApp();
+try {
+  const A = ['d4','d5','Bf4','c6','e3'];                 // Slav wing A (main entrance, by flag)
+  const B = ['d4','d5','Bf4','Nf6','e3','c5','c3'];      // Slav wing B, under Lon
+  const O = ['d4','e6','c4'];                            // Slav wing with no castle above it
+  await seedBackup(appWG.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','d5'], reply: 'Bf4', isCastleRoot: true, castleName: 'Lon', castleStreetNumber: 1, story: 'The LON story.', roomStory: 'Room story text.' },
+      { seq: A.slice(0, -1), reply: 'e3', isCastleRoot: true, castleName: 'Slav', castleStreetNumber: 2, castleMainEntrance: true, name: 'Slav Hall' },
+      { seq: [...A, 'Nf6'], reply: 'Nf3' },
+      { seq: ['d4','d5','Bf4','Nf6'], reply: 'e3' },
+      { seq: B.slice(0, -1), reply: 'c3', isCastleRoot: true, castleName: 'Slav' },
+      { seq: [...B, 'Nc6'], reply: 'Nd2' },
+      { seq: [...B, 'Nc6', 'Nd2', 'e6'], reply: 'Ngf3' },
+      { seq: O.slice(0, -1), reply: 'c4', isCastleRoot: true, castleName: 'Slav' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 d5 Bf4 c6 e3 Nf6 Nf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 d5 Bf4 Nf6 e3 c5 c3 Nc6 Nd2 e6 Ngf3', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 e6 c4', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appWG.page.click('.line-row');
+  await appWG.page.waitForSelector('tr.data-row[data-opp="d5"]', { timeout: 40000 });
+  const W = (fn, ...args) => appWG.page.evaluate(({ f, a }) => window.__wingTestHooks[f](...a), { f: fn, a: args });
+
+  // 549. A castle's roots, main entrance first: the flagged one, then by length.
+  try {
+    const roots = await W('roots', 'Slav');
+    assert(JSON.stringify(roots) === JSON.stringify([A, O, B]), `expected main (flagged) first then shortest, got ${JSON.stringify(roots)}`);
+    ok('castle wings: every root of a castle, main entrance first');
+  } catch(e){ bad('castle wings: roots order', e); }
+
+  // 555. A restore keeps every pref field it exports: the main-entrance flag
+  //      above, and the stories, which a restore used to drop entirely.
+  try {
+    const p = await appWG.page.evaluate(() => getPref('L1', ['d4','d5']));
+    assert(p && p.story === 'The LON story.' && p.roomStory === 'Room story text.',
+      `expected the stories restored, got ${JSON.stringify(p && { story: p.story, roomStory: p.roomStory })}`);
+    const m = await appWG.page.evaluate(() => getPref('L1', ['d4','d5','Bf4','c6']));
+    assert(m && m.castleMainEntrance === true, `expected the main-entrance flag restored, got ${JSON.stringify(m && m.castleMainEntrance)}`);
+    ok('backup restore: stories and the main-entrance flag survive');
+  } catch(e){ bad('backup restore: pref fields', e); }
+
+  // 550. One castle is built from all its wings, its first room the main
+  //      entrance; the castle above each wing gets a teleport door into it.
+  try {
+    const built = await W('built');
+    const slav = built.filter(c => c.castleName === 'Slav');
+    assert(slav.length === 1, `expected ONE Slav castle, got ${slav.length}`);
+    const pk = { A: await W('posKey', A), B: await W('posKey', B), O: await W('posKey', O), Bdeep: await W('posKey', [...B, 'Nc6', 'Nd2']) };
+    const posKeys = slav[0].rooms.map(r => r.posKey);
+    assert(slav[0].rooms[0].posKey === pk.A && slav[0].entryPosKey === pk.A, `expected the main entrance first, got ${JSON.stringify(posKeys.slice(0, 2))}`);
+    assert(posKeys.includes(pk.B) && posKeys.includes(pk.O), `expected every wing built, got ${JSON.stringify(posKeys)}`);
+    const lon = built.find(c => c.castleName === 'Lon');
+    const foreign = lon.rooms.flatMap(r => r.foreign);
+    const keyB = await W('roomKey', 'Slav', B), keyA = await W('roomKey', 'Slav', A);
+    assert(foreign.includes(keyA) && foreign.includes(keyB), `expected Lon to teleport into both of Slav's wings, got ${JSON.stringify(foreign)}`);
+    ok('castle wings: one castle built from every wing, entered from the castles above them');
+  } catch(e){ bad('castle wings: build', e); }
+
+  // 551. Attributes: a wing root shows the Main entrance choice and says how
+  //      the wing is reached; a wing with no castle above is flagged.
+  try {
+    const attr = async (seq) => {
+      await W('openAttributes', seq.slice(0, -1));
+      const r = await appWG.page.evaluate(() => ({
+        shown: document.getElementById('attrMainEntranceField').style.display !== 'none',
+        main: document.getElementById('attrMainEntrance').checked,
+        note: document.getElementById('attrWingNote').textContent,
+        street: document.getElementById('attrStreetNumberField').style.display !== 'none' }));
+      await W('closeAttributes');
+      return r;
+    };
+    const a = await attr(A), b = await attr(B), o = await attr(O);
+    assert(a.shown && a.main && a.street && /street door opens into this one/.test(a.note), `main wing: ${JSON.stringify(a)}`);
+    assert(b.shown && !b.main && !b.street && /door from "Lon"/.test(b.note), `wing under Lon: ${JSON.stringify(b)}`);
+    assert(o.shown && !o.main && /No way in/.test(o.note), `orphan wing: ${JSON.stringify(o)}`);
+    const noWay = await W('noWayIn', O, 'Slav'), wayB = await W('noWayIn', B, 'Slav');
+    assert(noWay === true && wayB === false, `expected only the orphan flagged, got ${noWay}/${wayB}`);
+    ok('castle wings: Attributes offers the main entrance and says how each wing is reached');
+  } catch(e){ bad('castle wings: attributes', e); }
+
+  // 552. The digraph's castle option draws every wing; each other wing has
+  //      its own option.
+  try {
+    const opts = await W('graphWingOptions');
+    const wings = opts.filter(o => o.value.startsWith('wing:'));
+    assert(wings.length === 2 && wings.every(w => /^Slav: wing/.test(w.text)), `expected two Slav wing options, got ${JSON.stringify(opts)}`);
+    const scope = await W('scopeRoots', A);
+    assert(Array.isArray(scope[0]) && scope.length === 3, `expected the main root to stand for all three wings, got ${JSON.stringify(scope)}`);
+    const own = await W('scopeRoots', B);
+    assert(!Array.isArray(own[0]), 'expected a wing\'s own root to stand for itself');
+    ok('castle wings: the digraph draws the whole castle, with an option per wing');
+  } catch(e){ bad('castle wings: digraph scope', e); }
+
+  // 553. Setting another root as the main entrance moves the flag.
+  try {
+    await W('setMain', B.slice(0, -1), 'Slav');
+    const roots = await W('roots', 'Slav');
+    assert(roots[0].join(',') === B.join(','), `expected B now the main entrance, got ${JSON.stringify(roots[0])}`);
+    await W('setMain', A.slice(0, -1), 'Slav');
+    assert((await W('roots', 'Slav'))[0].join(',') === A.join(','), 'expected the flag back on A, and only there');
+    ok('castle wings: one root at a time carries the main entrance');
+  } catch(e){ bad('castle wings: main entrance flag', e); }
+
+  // 554. In VR: one Slav building; a wing is reached through its teleport
+  //      door, has a back door of its own that leaves safely, and counts as
+  //      an entry in the to-decorate walking order.
+  try {
+    await openVR(appWG.page);
+    const E = (fn, ...args) => appWG.page.evaluate(({ f, a }) => window.__threeTestEdit[f](...a), { f: fn, a: args });
+    const keyB = await W('roomKey', 'Slav', B);
+    const buildings = await E('buildings');
+    assert(buildings.filter(b => b.sign === 'Slav').length === 1, `expected one Slav building, got ${JSON.stringify(buildings.map(b => b.sign))}`);
+    const backB = (await E('exits', keyB)).filter(e => e.back);
+    assert(backB.length === 1, `expected the wing's entry to have a back door, got ${JSON.stringify(backB)}`);
+    await E('jumpToRoom', keyB);
+    await appWG.page.waitForTimeout(250);
+    const at = await E('room');
+    assert(at.startsWith('cas:L1_Lon:') && (await E('exits', at)).some(e => e.target === keyB),
+      `expected to land in the Lon room holding the teleport door, got ${at}`);
+    const list = await E('toDecorateList');   // standing in Lon
+    await E('enter', keyB);
+    await appWG.page.waitForTimeout(250);
+    const slavList = await E('toDecorateList');
+    const b = slavList.find(r => r.key === keyB);
+    assert(b && b.depth === 0, `expected wing B's entry at walking depth 0, got ${JSON.stringify(slavList)}`);
+    assert(!list.some(r => r.key === keyB), 'expected Lon\'s to-decorate list to leave Slav\'s rooms out');
+    await appWG.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' })));
+    await appWG.page.waitForTimeout(400);
+    await appWG.page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'b' })));
+    const out = await E('room');
+    assert(out === 'mainStreet', `expected the wing's back door to leave onto the street, got ${out}`);
+    ok('castle wings: in VR, one building, a teleport way in, and a back door out');
+  } catch(e){ bad('castle wings: VR', e); }
+} finally {
+  await appWG.close();
+}
+} catch(e){ bad('Phase WG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase PE: the Position & Note modal shows the saved engine eval of its
 //     position (after our reply) under the caption, from whatever analysis

@@ -549,8 +549,14 @@ function registerOneCastle(castle, instanceId, opts = {}){
     // street when a matching street building exists (opts.backToStreet); in the
     // ephemeral report-preview walk there is no building, so no back door
     // (leave via the Close button).
+    // A castle with WINGS (app.js's castleRootRoomSeqs) has more than one room
+    // with no parent here: its other wings' entries, reached by a teleport
+    // door from whichever castle leads into them. They get the same back door
+    // as the main entry -- which, like every back door, leads to the room you
+    // actually came in from (roomEnteredFrom), and otherwise out onto the
+    // street by this castle's building.
     if(parent[r.posKey]) exits.push({ wall: 'south', offset: 0, target: keyOf(parent[r.posKey]), back: true });
-    else if(r === entry && opts.backToStreet) exits.push({ wall: 'south', offset: 0, target: 'mainStreet', back: true });
+    else if(opts.backToStreet) exits.push({ wall: 'south', offset: 0, target: 'mainStreet', back: true });
     for(const dp of doorPlacements) exits.push({ wall: dp.wall, offset: dp.offset,
                                                  // a foreign exit's key is already the OTHER castle's own
                                                  // room key (computed the same way its own walk would) --
@@ -1913,12 +1919,16 @@ function toDecorateList(){
   const prefix = castleInstancePrefix(currentRoomKey);
   if(!prefix) return [];
   const keys = Object.keys(ROOMS).filter(k => k.startsWith(prefix));
-  // doors walked from the castle's entry
+  // doors walked from the castle's entries: its front-door room, and -- a
+  // castle with wings -- each other wing's first room, which nothing inside
+  // this castle leads into (it is reached by a teleport from another castle)
   const depth = new Map();
-  const entry = keys.find(k => ROOMS[k].isCastleEntry);
-  if(entry){
-    depth.set(entry, 0);
-    const queue = [entry];
+  const reached = new Set();
+  for(const k of keys) for(const ex of ((mergedRoom(k) || {}).exits || [])) if(!ex.back && ex.target) reached.add(ex.target);
+  const entries = keys.filter(k => ROOMS[k].isCastleEntry || !reached.has(k));
+  if(entries.length){
+    for(const e of entries) depth.set(e, 0);
+    const queue = entries.slice();
     while(queue.length){
       const k = queue.shift();
       for(const ex of ((mergedRoom(k) || {}).exits || [])){
@@ -6778,8 +6788,14 @@ function computeSpawnForExit(fromKey, room, ex){
     return defaultEntrySpawn(room);
   }
   if(targetRoom.outdoor){
-    // walking out of a building's front door onto the street
-    const building = targetRoom.buildings.find(b => b.target === fromKey);
+    // walking out of a building's front door onto the street. A wing's entry
+    // (see registerOneCastle) is not the room the front door opens into, so it
+    // leaves by its own castle's building: the one whose entry shares its
+    // castle-instance prefix. No building at all: the street's own start.
+    const prefixOf = k => { const i = typeof k === 'string' && k.startsWith('cas:') ? k.indexOf(':', 4) : -1; return i > 0 ? k.slice(0, i + 1) : null; };
+    const building = targetRoom.buildings.find(b => b.target === fromKey)
+      || targetRoom.buildings.find(b => prefixOf(b.target) && prefixOf(b.target) === prefixOf(fromKey));
+    if(!building) return { x: START_SPAWN.x, z: START_SPAWN.z, yaw: START_SPAWN.yaw };
     return doorSpawn(room.size, ex.wall, ex.offset, building.origin, false);
   }
   // ordinary interior-to-interior transition: spawn just inside whichever of

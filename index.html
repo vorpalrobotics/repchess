@@ -1748,6 +1748,10 @@
       <label for="attrCastleName">Castle name</label>
       <input type="text" id="attrCastleName" placeholder="e.g. Queen's Gambit Castle">
     </div>
+    <div class="field" id="attrMainEntranceField" style="display:none">
+      <label><input type="checkbox" id="attrMainEntrance"> Main entrance &mdash; the castle's street door opens here</label>
+      <div id="attrWingNote" style="font-size:.72rem;color:#888;margin-top:.2rem"></div>
+    </div>
     <div class="field" id="attrStreetNumberField">
       <label for="attrStreetNumber">Street number</label>
       <input type="number" id="attrStreetNumber" min="1" step="1" style="width:6em" placeholder="auto">
@@ -2256,6 +2260,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260928-477"></script>
+<script type="module" src="js/app.js?v=20260929-478"></script>
 </body>
 </html>
