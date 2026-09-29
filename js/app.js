@@ -1,7 +1,7 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260928-477';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260929-478';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
          openImageQueue, resetImageQueue } from './assets.js?v=20260804-99';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-477';
+const BUILD_TAG = '-478';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1706,44 +1706,63 @@ function buildCastleGraph(line, games, rootSeq=null, leadIn=true, ownCastleName=
   }
 
   const entryRoomIds = [];
-  if(rootSeq && !leadIn){
-    /* generator mode: the mansion begins at its own root room. No ancestor
-       chain, no start node — just this room and its subtree. */
-    const room = getRoom(rootSeq);
-    entryRoomIds.push(room.id);
-    walk(rootSeq, room.id);
+  // rootSeq may be ONE root (a move list) or several (a list of move lists --
+  // a castle's wings, see castleRootRoomSeqs)
+  const rootList = (rootSeq && rootSeq.length && Array.isArray(rootSeq[0])) ? rootSeq : (rootSeq ? [rootSeq] : []);
+  if(rootList.length && !leadIn){
+    /* generator mode: the mansion begins at its own root room(s). No ancestor
+       chain, no start node -- just each root room and its subtree. Rooms are
+       keyed by position, so wings that DO meet somewhere share that room; a
+       root already reached from an earlier one is simply part of it. */
+    for(const rs of rootList){
+      if(rooms.has(positionKey(fenForSeq(rs)))) continue;
+      const room = getRoom(rs);
+      entryRoomIds.push(room.id);
+      walk(rs, room.id);
+    }
     return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode:false };
   }
-  if(rootSeq){
+  if(rootList.length){
     /* scoped to a focused room, but still show the chain of ancestor rooms
        (and the single move connecting each) leading down to it, so the
        focused branch's context is visible — just without the sibling
        branches that the whole-line view would otherwise include at each
-       ancestor level. */
+       ancestor level. Several roots (a castle's wings) each get their own
+       chain; where chains share ancestors, those rooms and edges are drawn
+       once. */
     const needsStartNode = line.color==='black';
     const step = 2;
     const start = needsStartNode ? 2 : 1;
-    const chain = [];
-    for(let l=start; l<=rootSeq.length; l+=step) chain.push(rootSeq.slice(0,l));
+    const chainEdges = new Set();
+    for(const rs of rootList){
+      // a root already reached from an earlier root's subtree is part of it
+      const alreadyBuilt = rooms.has(positionKey(fenForSeq(rs)));
+      const chain = [];
+      for(let l=start; l<=rs.length; l+=step) chain.push(rs.slice(0,l));
 
-    let fromRoomId = needsStartNode ? 'start' : null;
-    let fromSeq = [];
-    let finalRoomId = null;
-    chain.forEach((roomSeq,i)=>{
-      const room = getRoom(roomSeq);
-      if(i===0 && !needsStartNode){
-        entryRoomIds.push(room.id);
-      } else {
-        const opp = roomSeq[fromSeq.length];
-        const {counts: ancCounts, tot: ancTot} = replies(games, fromSeq);
-        addEdge(fromRoomId, room.id, [...fromSeq,opp], null, {count: ancCounts[opp]||0, tot: ancTot});
-        if(i===0) entryRoomIds.push(room.id);
-      }
-      fromRoomId = room.id;
-      fromSeq = roomSeq;
-      finalRoomId = room.id;
-    });
-    walk(rootSeq,finalRoomId);
+      let fromRoomId = needsStartNode ? 'start' : null;
+      let fromSeq = [];
+      let finalRoomId = null;
+      chain.forEach((roomSeq,i)=>{
+        const room = getRoom(roomSeq);
+        if(i===0 && !needsStartNode){
+          if(!entryRoomIds.includes(room.id)) entryRoomIds.push(room.id);
+        } else {
+          const opp = roomSeq[fromSeq.length];
+          const edgeKey = `${fromRoomId}|${room.id}|${opp}`;
+          if(!chainEdges.has(edgeKey)){
+            chainEdges.add(edgeKey);
+            const {counts: ancCounts, tot: ancTot} = replies(games, fromSeq);
+            addEdge(fromRoomId, room.id, [...fromSeq,opp], null, {count: ancCounts[opp]||0, tot: ancTot});
+          }
+          if(i===0 && !entryRoomIds.includes(room.id)) entryRoomIds.push(room.id);
+        }
+        fromRoomId = room.id;
+        fromSeq = roomSeq;
+        finalRoomId = room.id;
+      });
+      if(!alreadyBuilt) walk(rs,finalRoomId);
+    }
     return { rooms:[...rooms.values()], leaves:[...leaves.values()], edges, entryRoomIds, needsStartNode };
   }
 
@@ -1927,6 +1946,13 @@ function buildFrozenAdjacency(instanceId, idByPosKey){
 }
 
 function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
+  // a castle's root expands to ALL its roots (its wings, main entrance first),
+  // so every caller that builds "the castle at its root" builds the whole of
+  // it. A seq that is not one of its roots (a sub-castle preview) stays as is.
+  if(ownCastleName && rootSeq && rootSeq.length && !Array.isArray(rootSeq[0])){
+    const roots = castleRootRoomSeqs(ownCastleName);
+    if(roots.length > 1 && roots.some(r => r.join(',') === rootSeq.join(','))) rootSeq = roots;
+  }
   // leadIn=false: start the mansion at its root room, not at the opening moves
   // that lead into it (those would otherwise show as a lead-in corridor).
   const graph = buildCastleGraph(line, games, rootSeq, false, ownCastleName);
@@ -1953,11 +1979,16 @@ function buildGeneratedCastle(line, games, rootSeq, ownCastleName=null){
     groups.set('solo:' + r.id, { kind: (a.outDeg.get(r.id)||0) >= 2 ? 'branch' : 'room', members: [r.id] });
   }
 
-  // deterministic R1, R2, … numbering (entry room first)
-  const order = [...groups.keys()].sort((x,y)=>{
-    const ex = (graph.entryRoomIds||[]).some(id=>genIdOf(id)===x) ? 0 : 1;
-    const ey = (graph.entryRoomIds||[]).some(id=>genIdOf(id)===y) ? 0 : 1;
-    return ex - ey;
+  // deterministic R1, R2, … numbering: the entry room first -- the MAIN
+  // entrance, when the castle has wings, so genRooms[0] is always the room the
+  // street door opens into -- then the other wings' entries
+  const entryRank = gid => {
+    const i = (graph.entryRoomIds||[]).findIndex(id=>genIdOf(id)===gid);
+    return i < 0 ? Infinity : i;
+  };
+  const order = [...groups.keys()].sort((x,y)=> {
+    const rx = entryRank(x), ry = entryRank(y);
+    return rx === ry ? 0 : (rx < ry ? -1 : 1);
   });
   const labelOf = new Map(order.map((gid,i)=>[gid, 'R'+(i+1)]));
   const moveOf = id => nodeById.get(id)?.label || '?';
@@ -2854,7 +2885,7 @@ async function showTranspositionGraph(){
     await loadMemorizedShapes();
     await loadRoomReviews();
     const scopeKey = graphScopeKey(CURRENT_LINE, rootSeq);
-    const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq);
+    const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), castleScopeRoots(rootSeq));
     const {rooms, leaves, edges, entryRoomIds, needsStartNode} = graph;
     const { indegree, runs, boxes, boxOf, mergeCount, nodesInRuns, twoTrackCount }
       = analyzeCastleStructure(graph);
@@ -3496,13 +3527,23 @@ function populateGraphCastleSelect(){
   const castles = definedCastles();
   if(!castles.length){ wrap.style.display = 'none'; sel.innerHTML = ''; return; }
   wrap.style.display = '';
+  GRAPH_WING_OPTIONS = [];
   sel.innerHTML = '<option value="">All</option>' +
-    castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(castleScopeLabel(c))}</option>`).join('');
-  sel.value = focusedCastleName() || '';
+    castles.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(castleScopeLabel(c))}</option>` +
+      castleWingOptions(c).map(w => {
+        const idx = GRAPH_WING_OPTIONS.push(w) - 1;
+        return `<option value="wing:${idx}">${escapeHtml(castleScopeLabel(c, `wing \u2014 ${w.label}`))}</option>`;
+      }).join('')).join('');
+  const focus = (GRAPH_FOCUS_SEQ || FOCUSED_SEQ || []).join(',');
+  const wingIdx = focus ? GRAPH_WING_OPTIONS.findIndex(w => w.seq.join(',') === focus) : -1;
+  sel.value = wingIdx >= 0 ? `wing:${wingIdx}` : (focusedCastleName() || '');
 }
+// a castle's non-main wings, as offered by the digraph's "Show:" menu
+let GRAPH_WING_OPTIONS = [];
 $('graphCastleSelect').onchange = () => {
   const name = $('graphCastleSelect').value;
   if(!name){ GRAPH_FOCUS_SEQ = null; }
+  else if(name.startsWith('wing:')){ const w = GRAPH_WING_OPTIONS[+name.slice(5)]; GRAPH_FOCUS_SEQ = w ? w.seq : null; }
   else { const rs = castleRootRoomSeq(name); GRAPH_FOCUS_SEQ = rs || null; }
   /* Remembered for NEXT time, without touching the move table's live focus.
      GRAPH_FOCUS_SEQ itself is deliberately session-local -- it resets on every
@@ -4437,6 +4478,10 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrStoryStaged = saved?.story || '';
   $('attrError').textContent = '';
   refreshCastleOwnerSelect(saved, lineSeq);
+  // checked when this root IS the castle's main entrance now (flagged, or
+  // the shortest root by default) -- see castleRootRoomSeqs
+  const mainNow = saved?.isCastleRoot && saved?.reply && castleRootRoomSeq((saved.castleName || '').trim());
+  $('attrMainEntrance').checked = !!(mainNow && mainNow.join(',') === [...attrModalRoomSeq, saved.reply].join(','));
   refreshAttrFieldVisibility();
   refreshRedirectField(saved, attrModalRoomSeq);
   attributesModalSave = onSave;
@@ -4466,6 +4511,7 @@ function attrSnapshot(){
     castleName: $('attrCastleName').value.trim(),
     castleOwner: $('attrCastleOwner').value,
     streetNumber: $('attrStreetNumber').value.trim(),
+    mainEntrance: $('attrMainEntrance').checked,
     note: attrNoteStaged.trim(),
     story: attrStoryStaged.trim(),
     redirect: $('attrRedirectTo').value,
@@ -4507,7 +4553,42 @@ function refreshAttrFieldVisibility(){
   const isRoot = $('attrIsCastleRoot').checked;
   $('attrCastleNameField').style.display = isRoot ? '' : 'none';
   $('attrStreetNumberField').style.display = isRoot ? '' : 'none';
+  refreshAttrWingField();
   updateCastleOwnerAutoLabel(attrModalLineSeq);
+}
+/* The castle-wing part of the modal (see castleRootRoomSeqs). Shown only when
+   the castle named here already has another root elsewhere -- that is what
+   makes this move a wing. Says, as you type, which way in this wing has: the
+   street door (main entrance), a door from the castle above it, or none. */
+function refreshAttrWingField(){
+  const field = $('attrMainEntranceField'), note = $('attrWingNote');
+  const isRoot = $('attrIsCastleRoot').checked;
+  const name = $('attrCastleName').value.trim();
+  const own = (attrModalRoomSeq || []).join(',');
+  const others = (isRoot && name) ? castleRootRoomSeqs(name).filter(rs => rs.slice(0, -1).join(',') !== own) : [];
+  if(!others.length){ field.style.display = 'none'; return; }
+  field.style.display = '';
+  const main = $('attrMainEntrance').checked;
+  const reply = attrModalSaved?.reply;
+  const n = others.length;
+  if(main){
+    note.textContent = `"${name}" has ${n} other wing${n === 1 ? '' : 's'}. The street door opens into this one; `
+      + `the others are reached through the doors of the castles that lead into them.`;
+    note.style.color = '#888';
+    return;
+  }
+  // not the main entrance: the street number belongs to the main wing
+  $('attrStreetNumberField').style.display = 'none';
+  const above = reply ? inheritedCastle((attrModalRoomSeq || []).slice(0, -1)) : '';
+  if(reply && wingHasNoWayIn([...attrModalRoomSeq, reply], name)){
+    note.textContent = `No way in: this becomes a wing of "${name}", but no castle leads into it and the street door `
+      + `opens into the main entrance. Make it the main entrance, or give it a castle above it.`;
+    note.style.color = '#c62828';
+  } else {
+    note.textContent = `This becomes another wing of "${name}"`
+      + (above ? `, reached through the door from "${above}".` : '.');
+    note.style.color = '#888';
+  }
 }
 
 /* every castle defined in this opening system (distinct castle names on
@@ -4550,16 +4631,61 @@ function nextStreetNumber(exceptCastleName){
 /* the focusable ROOM seq (ends in OUR move) for a castle's root: the root flag
    lives on the opponent-move row (p.seq), so the room is one reply deeper. Picks
    the shallowest root if a name somehow tags more than one. */
-function castleRootRoomSeq(castleName){
-  let best = null;
+/* ---------- castle wings ----------
+   A castle can have more than one ROOT: several moves, each marked "starts a
+   new castle" with the SAME castle name. Each root and its subtree is a WING,
+   and the castle is built from all of them at once (buildCastleGraph takes a
+   list of roots), so two ways into one opening -- which may never share a
+   single position -- can live in one castle instead of two.
+
+   One wing is the MAIN ENTRANCE: the castle's building on the street opens
+   into it, with its entry pair outside the front door, exactly as a one-root
+   castle's does. It is the root flagged castleMainEntrance (Attributes), or
+   failing that the shortest -- today's rule for a single root, so nothing
+   about an existing castle changes. Every other wing is reached the way such
+   lines usually are: by the door in whichever castle leads into it, which
+   buildCastleGraph already turns into a teleport (its foreign-root redirect
+   is decided per move, not per castle). A wing that no castle leads into has
+   no way in; the Attributes modal says so (wingHasNoWayIn).
+
+   Returns the roots' ROOM seqs (each ending in our reply), main first, then
+   shortest first. castleRootRoomSeq keeps its old meaning: the main one. */
+function castleRootRoomSeqs(castleName){
+  const roots = [];
   for(const key in PREFS){
     const p = PREFS[key];
-    if(p?.isCastleRoot && p.castleName?.trim() === castleName && p.reply && Array.isArray(p.seq)){
-      const roomSeq = [...p.seq, p.reply];
-      if(!best || roomSeq.length < best.length) best = roomSeq;
-    }
+    if(p?.isCastleRoot && p.castleName?.trim() === castleName && p.reply && Array.isArray(p.seq))
+      roots.push({ seq: [...p.seq, p.reply], main: !!p.castleMainEntrance });
   }
-  return best;
+  roots.sort((a, b) => (b.main - a.main) || (a.seq.length - b.seq.length) || a.seq.join(',').localeCompare(b.seq.join(',')));
+  return roots.map(r => r.seq);
+}
+function castleRootRoomSeq(castleName){
+  return castleRootRoomSeqs(castleName)[0] || null;
+}
+// the castle's wings other than the main entrance: [{ seq, label }], for the
+// "Show:" menus -- labelled by the wing's first room name, else its move pair
+function castleWingOptions(castleName){
+  return castleRootRoomSeqs(castleName).slice(1).map(seq => ({
+    seq, label: (PREFS[prefKey(CURRENT_LINE.id, seq.slice(0, -1))]?.name || '').trim() || movePairLabel(seq) || seq.join(' ') }));
+}
+// A graph/table scope seq that is a castle's MAIN root stands for the whole
+// castle -- every wing -- so that is what gets drawn; any other seq (a wing's
+// own root included) is drawn as itself.
+function castleScopeRoots(seq){
+  if(!seq) return seq;
+  const key = seq.join(',');
+  const castle = definedCastles().find(c => (castleRootRoomSeq(c) || []).join(',') === key);
+  if(!castle) return seq;
+  const roots = castleRootRoomSeqs(castle);
+  return roots.length > 1 ? roots : seq;
+}
+// A wing (a root that is not the main entrance) with no castle above it on
+// its own line has no door leading in: nothing teleports into it, and the
+// street door goes to the main entrance.
+function wingHasNoWayIn(rootRoomSeq, castleName){
+  const above = inheritedCastle(rootRoomSeq.slice(0, -2));
+  return !above;
 }
 // resolves GRAPH_FOCUS_SEQ back to the castle name it belongs to (if any) --
 // shared by the "Show Castle" dropdown's current selection and the
@@ -4686,9 +4812,9 @@ function canonicalRoomSeq(seq){
   const roomSeq = [...seq, reply];
   const castle = inheritedCastle(roomSeq, CURRENT_LINE.id);
   if(!castle) return seq;
-  const rootSeq = castleRootRoomSeq(castle);
-  if(!rootSeq) return seq;
-  const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeq, false, castle);
+  const rootSeqs = castleRootRoomSeqs(castle);
+  if(!rootSeqs.length) return seq;
+  const graph = buildCastleGraph(CURRENT_LINE, gamesForLineColor(GAMES, CURRENT_LINE.color), rootSeqs, false, castle);
   const key = positionKey(fenForSeq(roomSeq));
   const room = graph.rooms.find(r => positionKey(r.fen) === key);
   return room ? room.seq.slice(0, -1) : seq;
@@ -4918,7 +5044,8 @@ function redirectChanged(before, after){
 }
 
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
-$('attrCastleName').addEventListener('input', () => updateCastleOwnerAutoLabel(attrModalLineSeq));
+$('attrCastleName').addEventListener('input', () => { updateCastleOwnerAutoLabel(attrModalLineSeq); refreshAttrWingField(); });
+$('attrMainEntrance').addEventListener('change', refreshAttrFieldVisibility);
 /* Writes what the modal is staging. The street-number rules that used to be
    checked in here now live in attrValidate, which runs on every keystroke and
    holds Save back -- so by the time this runs they have already passed, and a
@@ -4950,6 +5077,9 @@ function commitAttributes(){
     castleName,
     castleOwner: $('attrCastleOwner').value,
     castleStreetNumber: streetNumber,
+    // only meaningful when the castle has more than one root (the field is
+    // hidden otherwise, and then leaves the stored flag alone)
+    castleMainEntrance: $('attrMainEntranceField').style.display === 'none' ? null : $('attrMainEntrance').checked,
     note: attrNoteStaged.trim(),
     story: attrStoryStaged.trim(),
     redirectToCastle, redirectTargetLineId, redirectTargetSeq, redirectTargetRoomName,
@@ -4957,6 +5087,22 @@ function commitAttributes(){
   const cb = attributesModalSave;
   closeAttributesModal();
   if(cb) cb(v);
+}
+
+/* The Main entrance choice. Only one root of a castle carries the flag: setting
+   it here clears it from the castle's other roots, so there is never a tie to
+   resolve. null = the field was not shown (a one-root castle): leave it be. */
+function saveCastleMainEntrance(roomSeq, v){
+  if(v.castleMainEntrance == null) return;
+  const on = !!(v.isCastleRoot && v.castleMainEntrance);
+  savePrefField(roomSeq, 'castleMainEntrance', on);
+  if(!on) return;
+  const own = roomSeq.join(',');
+  for(const key in PREFS){
+    const p = PREFS[key];
+    if(p?.isCastleRoot && p.castleMainEntrance && p.castleName?.trim() === v.castleName && Array.isArray(p.seq) && p.seq.join(',') !== own)
+      savePrefField(p.seq, 'castleMainEntrance', false);
+  }
 }
 
 /* ---------- focus on a single line, hiding sibling branches above it ----------
@@ -5121,9 +5267,15 @@ function loadTableCastleRooms(){
     const rootSeq = castleRootRoomSeq(name);
     let roomOptions = '';
     if(rootSeq){
+      const wings = castleWingOptions(name);
+      const wingKeys = new Set(wings.map(w => w.seq.join(',')));
+      roomOptions = wings.map(w => {
+        const idx = TABLE_ROOM_OPTIONS.push({ name: w.label, seq: w.seq, wing: true }) - 1;
+        return `<option value="room:${idx}">${escapeHtml(castleScopeLabel(name, `wing \u2014 ${w.label}`))}</option>`;
+      }).join('');
       const { genRooms } = buildGeneratedCastle(CURRENT_LINE, lineGames, rootSeq, name);
-      roomOptions = genRooms
-        .filter(r => r.name && r.name.trim() && r.seq)
+      roomOptions += genRooms
+        .filter(r => r.name && r.name.trim() && r.seq && !wingKeys.has(r.seq.join(',')))
         .map(r => {
           const idx = TABLE_ROOM_OPTIONS.push({ name: r.name.trim(), seq: r.seq }) - 1;
           return `<option value="room:${idx}">${escapeHtml(castleScopeLabel(name, r.name.trim()))}</option>`;
@@ -6189,6 +6341,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
         savePrefField(roomSeq, 'castleName', v.castleName);
         savePrefField(roomSeq, 'castleOwner', v.castleOwner);
         savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+        saveCastleMainEntrance(roomSeq, v);
         savePrefField(roomSeq, 'name', v.roomName);
         savePrefField(roomSeq, 'note', v.note);
         savePrefField(roomSeq, 'story', v.story);
@@ -6657,6 +6810,7 @@ function renderBlackRoot(parent,games,trigger){
       savePrefField(roomSeq, 'castleName', v.castleName);
       savePrefField(roomSeq, 'castleOwner', v.castleOwner);
       savePrefField(roomSeq, 'castleStreetNumber', v.castleStreetNumber);
+      saveCastleMainEntrance(roomSeq, v);
       savePrefField(roomSeq, 'name', v.roomName);
       savePrefField(roomSeq, 'note', v.note);
       savePrefField(roomSeq, 'story', v.story);
@@ -7896,7 +8050,7 @@ async function buildBackupData(){
         hidden:p.hidden, manualReplies:p.manualReplies, eval:p.eval, evalLines:p.evalLines, name:p.name,
         collapsed:p.collapsed, moveQuality:p.moveQuality, compareGames:p.compareGames,
         isCastleRoot:p.isCastleRoot, castleName:p.castleName, castleOwner:p.castleOwner,
-        castleStreetNumber:p.castleStreetNumber,
+        castleStreetNumber:p.castleStreetNumber, castleMainEntrance:p.castleMainEntrance,
         redirectToCastle:p.redirectToCastle, redirectTargetLineId:p.redirectTargetLineId, redirectTargetSeq:p.redirectTargetSeq,
         redirectTargetRoomName:p.redirectTargetRoomName
       }))
@@ -8054,12 +8208,14 @@ async function applyBackupData(data, onMnemProgress){
       if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
       for(const pref of (lineData.prefs||[])){
         await setPref(line.id, pref.seq, {
-          reply:pref.reply||'', note:pref.note||'', mnemonic:pref.mnemonic||'',
+          // story/roomStory: exported since they were added, but never read
+          // back here, so a restore silently dropped every story written
+          reply:pref.reply||'', note:pref.note||'', story:pref.story||'', roomStory:pref.roomStory||'', mnemonic:pref.mnemonic||'',
           hidden:pref.hidden||false, manualReplies:pref.manualReplies||[],
           eval:pref.eval||null, evalLines:pref.evalLines||null, name:pref.name||'', collapsed:pref.collapsed||false,
           moveQuality:pref.moveQuality||'', compareGames:pref.compareGames||false,
           isCastleRoot:pref.isCastleRoot||false, castleName:pref.castleName||'', castleOwner:pref.castleOwner||'',
-          castleStreetNumber:pref.castleStreetNumber??'',
+          castleStreetNumber:pref.castleStreetNumber??'', castleMainEntrance:!!pref.castleMainEntrance,
           redirectToCastle:pref.redirectToCastle||'', redirectTargetLineId:pref.redirectTargetLineId||'',
           redirectTargetSeq:pref.redirectTargetSeq||null, redirectTargetRoomName:pref.redirectTargetRoomName||''
         });
@@ -8909,7 +9065,12 @@ async function gatherBuiltCastles(lines){
           const rootSeq = castleRootRoomSeq(name);
           if(!rootSeq) return null;   // named but not built yet — skip
           let streetNumber = null;
+          // the main entrance's own number first, then any wing's
+          const mainPref = PREFS[prefKey(line.id, rootSeq.slice(0, -1))];
+          const mainNum = parseInt(mainPref?.castleStreetNumber, 10);
+          if(Number.isFinite(mainNum) && mainNum >= 1) streetNumber = mainNum;
           for(const key in PREFS){
+            if(streetNumber != null) break;
             const p = PREFS[key];
             if(p?.isCastleRoot && p.castleName?.trim() === name){
               const n = parseInt(p.castleStreetNumber, 10);
@@ -10968,6 +11129,11 @@ async function withLinePrefs(line, fn){
 }
 const castlesForLine = line => withLinePrefs(line, definedCastles);
 const findCastleRootSeq = (line, castleName) => withLinePrefs(line, () => castleRootRoomSeq(castleName));
+// every root of the castle (its wings), or null when none is built
+const findCastleRootSeqs = (line, castleName) => withLinePrefs(line, () => {
+  const roots = castleRootRoomSeqs(castleName);
+  return roots.length ? roots : null;
+});
 
 /* rootSeq, when given, scopes coverage to a single castle's subtree (leadIn:false
    so the lead-in moves above the castle root aren't counted as "in" the castle,
@@ -11037,7 +11203,8 @@ async function resolveCoverageSelection(val, lines){
     const opt = MNEM_CASTLE_OPTIONS[+val.slice('castle:'.length)];
     const line = opt && lines.find(l=>l.id===opt.lineId);
     if(!line) return null;
-    const rootSeq = await findCastleRootSeq(line, opt.castleName);
+    // every wing's root: coverage of a castle is coverage of all of it
+    const rootSeq = await findCastleRootSeqs(line, opt.castleName);
     return { line, rootSeq, isCastle: true, castleName: opt.castleName };
   }
   const line = lines.find(l=>l.id===val);
@@ -11830,11 +11997,25 @@ function oqVisibleOpps(seq){
    that sequence, eligibility collapses to that single forced move (still
    something the user has to find and play, same as any other move); normal
    branching resumes once inside the castle's own subtree. */
+// the scope's root(s): a castle with wings has several, one per wing, and a
+// game heads for whichever the random walk picks
+function oqCoverageRoots(){
+  const r = OQ.coverageRootSeq;
+  if(!r || !r.length) return null;
+  return Array.isArray(r[0]) ? r : [r];
+}
+const oqSeqStartsWith = (seq, root) => seq.length >= root.length && root.every((m, i) => seq[i] === m);
+// inside one of the scope's wings (at or past its root)
+function oqInsideCoverageRoot(seq){
+  const roots = oqCoverageRoots();
+  return !roots || roots.some(r => oqSeqStartsWith(seq, r));
+}
 function oqCoverageEligible(seq, candidates){
-  const root = OQ.coverageRootSeq;
-  if(!root || seq.length >= root.length) return candidates;
-  const forced = root[seq.length];
-  return candidates.includes(forced) ? [forced] : [];
+  const roots = oqCoverageRoots();
+  if(!roots || oqInsideCoverageRoot(seq)) return candidates;
+  const forced = new Set(roots.filter(r => r.length > seq.length && seq.every((m, i) => r[i] === m)).map(r => r[seq.length]));
+  if(!forced.size) return candidates;
+  return candidates.filter(c => forced.has(c));
 }
 
 /* "only test memorized rooms" (VR toolbar toggle, see js/threeVR.js) support.
@@ -12055,8 +12236,7 @@ function oqMemorizedFilter(seq, candidates){
   // memorized status -- it's the same game, played in full, every time.
   // Only once seq reaches the root does memorized-gating (the whole point of
   // this feature) actually apply, and OQ.castleName is correct again there.
-  const root = OQ.coverageRootSeq;
-  if(root && seq.length < root.length) return candidates;
+  if(!oqInsideCoverageRoot(seq)) return candidates;
   if(seq.length === 0){
     // no room reached yet -- whole-system coverage's very first move (no
     // castle scope to force a lead-in through), or a black line's forced
@@ -15005,6 +15185,24 @@ if(localStorage.getItem('threeTestDebug')){
       recordEvalIfDeeper(saveField, currentSaved, document.createElement('span'), depth, rawScore, fen, pv, lines);
       return bag;
     },
+  };
+}
+
+// test-only hook for castle wings (several roots under one castle name)
+if(localStorage.getItem('threeTestDebug')){
+  window.__wingTestHooks = {
+    roots: (name) => castleRootRoomSeqs(name),
+    noWayIn: (rootRoomSeq, name) => wingHasNoWayIn(rootRoomSeq, name),
+    built: async () => (await gatherBuiltCastles(await getLines(LOCAL_USER))).map(c => ({
+      castleName: c.castleName, instanceId: c.instanceId, entryPosKey: c.entryPosKey,
+      rooms: c.genRooms.map(g => ({ posKey: g.posKey, seq: g.seq, foreign: (g.exits || []).filter(e => e.foreignKey).map(e => e.foreignKey) })) })),
+    posKey: (seq) => positionKey(fenForSeq(seq)),
+    roomKey: (castle, seq) => castleRoomKey(castleInstanceId(CURRENT_LINE.id, castle), positionKey(fenForSeq(seq))),
+    openAttributes: (optSeq) => openAttributesModal(PREFS[prefKey(CURRENT_LINE.id, optSeq)], () => {}, optSeq, optSeq),
+    closeAttributes: () => closeAttributesModal(),
+    setMain: (optSeq, name) => saveCastleMainEntrance(optSeq, { isCastleRoot: true, castleName: name, castleMainEntrance: true }),
+    graphWingOptions: () => { populateGraphCastleSelect(); return [...$('graphCastleSelect').options].map(o => ({ value: o.value, text: o.textContent })); },
+    scopeRoots: (seq) => castleScopeRoots(seq),
   };
 }
 
