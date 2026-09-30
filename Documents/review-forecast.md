@@ -626,7 +626,7 @@ Tests: phase RL, 440–446.
 The accuracy report showed the first 1-day review of a newly memorized room
 scoring about 65%, mostly B. At rung 0, B and C schedule identically, so
 the grade taught the scheduler nothing. The first retrieval simply came too
-late. A room now has to pass a same-day review about 6 hours after it is
+late. A room now has to pass a same-day review about 4 hours (originally 6) after it is
 memorized before it joins the ladder.
 
 ## How it is modelled

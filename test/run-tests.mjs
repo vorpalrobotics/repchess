@@ -23790,7 +23790,7 @@ try {
       'expected a learning review due later today in "Later today" -- not "Due now", not "Tomorrow"');
     assert(await H('bucket', rec, T0 + LMS) === 'due', 'expected it "Due now" once its time comes');
     const phrase = await H('duePhrase', rec, T0);
-    assert(/in 6 hours \(around .+\)/.test(phrase),
+    assert(/in 4 hours \(around .+\)/.test(phrase),
       `expected the due phrase in hours with a time of day, got ${JSON.stringify(phrase)}`);
     // demotion and softening leave it alone: it is already below the ladder,
     // and re-dating it from the ladder would push a same-day review out a day
@@ -26270,7 +26270,7 @@ try {
     assert(rec && rec.learning === true && rec.last === null,
       `expected memorizing to write a learning record, got ${JSON.stringify(rec)}`);
     const hrs = (rec.due - before) / 3600000;
-    assert(hrs > 5.9 && hrs < 6.1, `expected the same-day review ~6h out, got ${hrs.toFixed(2)}h`);
+    assert(hrs > 3.9 && hrs < 4.1, `expected the same-day review ~4h out, got ${hrs.toFixed(2)}h`);
 
     /* 541. ...and from the moment it is memorized the list shows it, under
             "Later today" with the time it falls due -- it used to be absent
