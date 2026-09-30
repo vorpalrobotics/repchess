@@ -8,8 +8,8 @@ how often that reply has actually occurred in your imported games.</p>
 <h3>Reading the graph</h3>
 <p>Node labels carry small status glyphs so you can scan a whole castle at
 a glance: &#129504; means the room is marked memorized, &#127912; means it's
-fully decorated (every prepared reply has a real image, every named door
-leads somewhere named), and &#9888;&#65039; means a new variation has added
+fully decorated (every move object has an image or at least a label, and
+every door leads to a named room), and &#9888;&#65039; means a new variation has added
 a door to this room since you memorized it -- worth a look before you trust
 your memory of its layout. A room with both memorized and decorated fills
 in dark green instead of the usual blue, so it's obvious even zoomed too far
@@ -55,7 +55,10 @@ reach 100%.</p>
 
 <h3>Focusing a castle</h3>
 <p>On a large repertoire, use the "Show Castle" dropdown to narrow the view
-to one castle's rooms instead of the whole tree.</p>
+to one castle's rooms instead of the whole tree. A castle with several wings
+(see <em>Building a Castle</em>) is drawn whole, every wing with the moves
+leading into it, and each wing also has an entry of its own. The choice is
+remembered for next time.</p>
 
 <p>Past <strong>500 moves</strong> in the current scope the graph declines to
 draw at all and says so instead. A whole opening system can run to thousands
@@ -67,7 +70,8 @@ a row's menu in the move table. There's a "draw it anyway" link if you want
 it regardless.</p>
 
 <h3>Jumping into VR</h3>
-<p>Click any node to open its room-info panel -- name, exits, and a
+<p>Click any node to open its room-info panel -- name, exits, the position
+on a small board (with its engine evaluation, if analysed), and a
 <strong>"Jump to VR"</strong> button that teleports you to that room in the 3D
 walkthrough, without navigating the street by hand.</p>
 
