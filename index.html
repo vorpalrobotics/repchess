@@ -272,7 +272,7 @@
   #lineStreetEditBtn{font-size:.8rem;color:#666}
   #menuBtn{font-size:1.4em;border:none;background:none;padding:.1em .4em}
 
-  #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10}
+  #menuList{position:absolute;right:1.2rem;top:3rem;background:#fff;border:1px solid #888;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;flex-direction:column;min-width:11em;z-index:10;max-height:calc(100vh - 4rem);overflow-y:auto}
   #menuList button{border:none;background:none;text-align:left;padding:.5em .9em;border-radius:0;font-weight:400}
   #menuList button:hover{background:#f0f0f0}
   /* the chosen item flashes (js/app.js, MENU_FLASH_MS) */
@@ -284,6 +284,8 @@
   #menuList .menu-sub{display:none;flex-direction:column}
   #menuList .menu-sub.open{display:flex}
   #menuList .menu-sub button{padding-left:1.9em;font-size:.95em;color:#333}
+  #menuList .menu-subhead{padding:.45em .9em .15em 1.3em;font-size:.75em;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#999}
+  #menuList .menu-badge:not(:empty){margin-left:.4em;padding:0 .45em;border-radius:.8em;background:#d9822b;color:#fff;font-size:.8em;font-weight:600}
 
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:20}
   .modal{background:#fff;border-radius:6px;padding:1.2rem 1.4rem;min-width:18em;box-shadow:0 4px 16px rgba(0,0,0,.25)}
@@ -1175,45 +1177,47 @@
     <div id="menuList">
       <button id="menuThreeTest" title="Shift+click or right-click to force a fresh rebuild">Run VR</button>
       <button id="menuReviewForecast" title="How much review is coming, and when — for pacing new memorization">VR Schedule</button>
-      <button id="menuAccuracy" title="How often you actually recall what you have memorized, by ladder rung, room size and quiz">Accuracy Report</button>
-      <hr class="row-menu-sep">
-      <button id="menuAssets">VR Assets</button>
-      <button id="menuImageQueue" title="Images generating in the background, and finished ones waiting for you to approve">Image Queue</button>
-      <button id="menuAiSpend" title="What AI image generation and brainstorming has cost, by castle and by object list">AI Spend</button>
-      <button id="menuObjectLists">VR Object Lists</button>
-      <button id="menuMnemonics">Mnemonics</button>
       <hr class="row-menu-sep">
       <button class="menu-parent" data-sub="subTest">Test</button>
       <div id="subTest" class="menu-sub">
-        <button id="menuQuiz">Mnemonics</button>
         <button id="menuTestChessboard">Chessboard</button>
+        <button id="menuQuiz">Mnemonics</button>
         <button id="menuTestObjectLists">Object Lists</button>
+        <hr class="row-menu-sep">
+        <button id="menuAccuracy" title="How often you actually recall what you have memorized, by ladder rung, room size and quiz">Accuracy Report</button>
       </div>
-      <hr class="row-menu-sep">
-      <button class="menu-parent" data-sub="subImport">Import</button>
-      <div id="subImport" class="menu-sub">
+      <button class="menu-parent" id="menuBuildParent" data-sub="subBuild" title="Everything you build the palace from: mnemonics, images, object lists">Build<span id="menuBuildBadge" class="menu-badge"></span></button>
+      <div id="subBuild" class="menu-sub">
+        <button id="menuMnemonics">Mnemonics</button>
+        <button id="menuAssets">VR Assets</button>
+        <button id="menuObjectLists">VR Object Lists</button>
+        <button id="menuImageQueue" title="Images generating in the background, and finished ones waiting for you to approve">Image Queue</button>
+        <button id="menuAiSpend" title="What AI image generation and brainstorming has cost, by castle and by object list">AI Spend</button>
+      </div>
+      <button class="menu-parent" data-sub="subAnalysis">Analysis</button>
+      <div id="subAnalysis" class="menu-sub">
+        <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
+        <button id="menuPerfectOpeningManage" title="Deep-search the objectively best opening line for White in the background: turn it on/off and tune its search settings">Perfect Opening: Manage</button>
+        <button id="menuPerfectOpeningProgress" title="See how far the background Perfect Opening search has gotten">Perfect Opening: Progress</button>
+      </div>
+      <button class="menu-parent" data-sub="subFind">Find</button>
+      <div id="subFind" class="menu-sub">
+        <button id="menuSearchLine">Search for a Variation</button>
+        <button id="menuBrowseGames">Browse Games</button>
+        <button id="menuFindTranspositions" title="Scan every built castle for positions reached by two or more different castles">Find Transpositions</button>
+      </div>
+      <button class="menu-parent" data-sub="subImportExport">Import / Export</button>
+      <div id="subImportExport" class="menu-sub">
+        <div class="menu-subhead">Import</div>
         <button id="menuImport" title="Import a backup, mnemonics, assets, or object-list JSON file (auto-detected)">Backup / Data File…</button>
         <button id="menuDownload" title="Download games from Lichess or Chess.com">Games</button>
         <button id="menuImportLine" title="Paste variations to import">Variations</button>
         <button id="menuImportMoveImages" title="Bulk-import move-image PNGs named like Nf6.png">Move Images</button>
-      </div>
-      <button class="menu-parent" data-sub="subExport">Export</button>
-      <div id="subExport" class="menu-sub">
+        <div class="menu-subhead">Export</div>
         <button id="menuExport">Full Backup</button>
         <button id="menuExportMnemonics">Mnemonics</button>
         <button id="menuExportAssets">Assets</button>
       </div>
-      <hr class="row-menu-sep">
-      <button id="menuAnalysisQueue" title="Background engine analysis queued from move rows">Analysis Queue</button>
-      <button class="menu-parent" data-sub="subPerfectOpening" title="Deep-search the objectively best opening line for White in the background">Perfect Opening</button>
-      <div id="subPerfectOpening" class="menu-sub">
-        <button id="menuPerfectOpeningManage" title="Turn the project on/off and tune its search settings">Manage</button>
-        <button id="menuPerfectOpeningProgress" title="See how far the background search has gotten">Progress</button>
-      </div>
-      <hr class="row-menu-sep">
-      <button id="menuSearchLine">Search for a Variation</button>
-      <button id="menuBrowseGames">Browse Games</button>
-      <button id="menuFindTranspositions" title="Scan every built castle for positions reached by two or more different castles">Find Transpositions</button>
       <hr class="row-menu-sep">
       <button id="menuSettings">Settings</button>
       <button id="menuHelp">Help</button>
@@ -2278,6 +2282,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20260930-480"></script>
+<script type="module" src="js/app.js?v=20260930-481"></script>
 </body>
 </html>

@@ -416,7 +416,7 @@ function renderEditor(a, initialType, allowTypes){
         <div class="asset-img-side">
           <div class="asset-img-info" id="assetImgInfo"></div>
           ${a && typeof a.genCost === 'number' && a.genCost > 0
-            ? `<div class="asset-img-info" data-gen-cost title="What generating this image cost, every attempt included (Menu → AI Spend)">Generated for $${a.genCost.toFixed(a.genCost >= 1 ? 2 : 4)}${a.genEstimated ? ' (estimated)' : ''}${a.genTries > 1 ? ` · ${a.genTries} tries` : ''}</div>` : ''}
+            ? `<div class="asset-img-info" data-gen-cost title="What generating this image cost, every attempt included (Menu → Build → AI Spend)">Generated for $${a.genCost.toFixed(a.genCost >= 1 ? 2 : 4)}${a.genEstimated ? ' (estimated)' : ''}${a.genTries > 1 ? ` · ${a.genTries} tries` : ''}</div>` : ''}
           <div class="asset-img-tools">
             <button type="button" id="assetGenBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate…</button>
             <button type="button" id="assetCropBtn"><i class="fa-solid fa-crop-simple"></i> Crop / Erase BG…</button>
@@ -1019,7 +1019,7 @@ function openGenerateModal(){
       </div>
       <div style="display:flex;gap:.4rem">
         <button type="button" id="genRunBtn">Generate</button>
-        <button type="button" id="genQueueBtn" title="Generate in the background and review it later in Menu → Image Queue">Add to queue</button>
+        <button type="button" id="genQueueBtn" title="Generate in the background and review it later in Menu → Build → Image Queue">Add to queue</button>
         <button type="button" id="genCloseBtn">Cancel</button>
       </div>
       <div id="genStatus" style="font-size:.78rem;color:#9aa;min-height:1.1em;margin-top:.5rem"></div>
@@ -1124,7 +1124,7 @@ function openGenerateModal(){
     await enqueueImageJob({ prompt: f.prompt, standing: f.standing, model: f.spec.id,
       customAir: f.spec.custom ? f.spec.air : '', quality: f.quality, size: f.sizeName,
       transparent: f.transparent, asset, target: { kind: 'asset' } });
-    q('genStatus').textContent = 'Queued. It will be waiting for you in Menu → Image Queue → Review.';
+    q('genStatus').textContent = 'Queued. It will be waiting for you in Menu → Build → Image Queue → Review.';
   };
 
   q('genRunBtn').onclick = async () => {
@@ -2000,7 +2000,7 @@ async function renderPicker(ov){
       p.className = 'assets-empty';
       p.textContent = pickerSearchText
         ? `No assets match "${pickerSearchText}".`
-        : 'No matching assets yet. Use "New Asset…" or add some via menu → Manage VR Assets.';
+        : 'No matching assets yet. Use "New Asset…" or add some via Menu → Build → VR Assets.';
       grid.appendChild(p);
     } else {
       for(const a of list){

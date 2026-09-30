@@ -19286,26 +19286,25 @@ try {
     ok('Perfect Opening: the home screen list refreshes on its own once the background scheduler creates the line');
   } catch(e){ bad('Perfect Opening: home screen auto-refreshes on line creation (regression)', e); }
 
-  // 285. The hamburger menu item is now a two-level submenu (Manage /
-  //      Progress) -- driven through the real menu-open -> parent-expand ->
+  // 285. Manage / Progress sit in the menu's Analysis group -- driven through the real menu-open -> parent-expand ->
   //      child-click flow, not just invoking the button's onclick directly,
   //      to actually exercise the shared .menu-parent wiring for this new
   //      submenu.
   try {
     await appDA.page.click('#menuBtn');
-    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
-    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('.menu-parent[data-sub="subAnalysis"]');
+    await appDA.page.waitForSelector('#subAnalysis.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningManage');
     await appDA.page.waitForSelector('#perfectOpeningOverlay', { state: 'visible', timeout: 5000 });
     await appDA.page.click('#poLeave');
 
     await appDA.page.click('#menuBtn');
-    await appDA.page.click('.menu-parent[data-sub="subPerfectOpening"]');
-    await appDA.page.waitForSelector('#subPerfectOpening.open', { timeout: 5000 });
+    await appDA.page.click('.menu-parent[data-sub="subAnalysis"]');
+    await appDA.page.waitForSelector('#subAnalysis.open', { timeout: 5000 });
     await appDA.page.click('#menuPerfectOpeningProgress');
     await appDA.page.waitForSelector('#perfectOpeningProgressOverlay', { state: 'visible', timeout: 5000 });
     await appDA.page.click('#poProgressLeave');
-    ok('Perfect Opening: the hamburger submenu opens both Manage and Progress');
+    ok('Perfect Opening: the Analysis submenu opens both Manage and Progress');
   } catch(e){ bad('Perfect Opening: hamburger submenu (Manage/Progress)', e); }
 
   // 286. Progress reports "moves fully explored" tracked by the scheduler
@@ -26829,6 +26828,70 @@ try {
     await appRM.page.evaluate(() => document.querySelector('#aboutOverlay .mb-leave').click());
     ok('menu: a chosen item flashes before its action runs, keeping modifier keys');
   } catch(e){ bad('menu: item flash', e); }
+  // 556. The menu's two levels: the top level is only the everyday items
+  //      and the group headings; opening one group closes any other, the
+  //      menu always reopens with every group collapsed (it does not
+  //      remember the last one), a real click on an item inside a group
+  //      still runs it, and the Build heading carries the Image Queue's
+  //      review count, since the item itself is hidden until Build opens.
+  try {
+    const menuState = () => appRM.page.evaluate(() => {
+      const list = document.getElementById('menuList');
+      const shown = el => el.getClientRects().length > 0;
+      return {
+        top: [...list.children].filter(el => el.tagName === 'BUTTON' && shown(el)).map(el => el.textContent),
+        open: [...list.querySelectorAll('.menu-sub')].filter(shown).map(el => el.id),
+        parentsOpen: [...list.querySelectorAll('.menu-parent.open')].map(el => el.dataset.sub),
+      };
+    });
+    await appRM.page.click('#menuBtn');
+    let st = await menuState();
+    const top = ['Run VR', 'VR Schedule', 'Test', 'Build', 'Analysis', 'Find', 'Import / Export', 'Settings', 'Help', 'About'];
+    assert(JSON.stringify(st.top) === JSON.stringify(top) && !st.open.length,
+      `expected the collapsed top level ${JSON.stringify(top)}, got ${JSON.stringify(st)}`);
+    const groups = await appRM.page.evaluate(() => Object.fromEntries(['subTest', 'subBuild', 'subAnalysis', 'subFind', 'subImportExport']
+      .map(id => [id, [...document.getElementById(id).querySelectorAll('button')].map(b => b.id)])));
+    const want = { subTest: ['menuTestChessboard', 'menuQuiz', 'menuTestObjectLists', 'menuAccuracy'],
+      subBuild: ['menuMnemonics', 'menuAssets', 'menuObjectLists', 'menuImageQueue', 'menuAiSpend'],
+      subAnalysis: ['menuAnalysisQueue', 'menuPerfectOpeningManage', 'menuPerfectOpeningProgress'],
+      subFind: ['menuSearchLine', 'menuBrowseGames', 'menuFindTranspositions'],
+      subImportExport: ['menuImport', 'menuDownload', 'menuImportLine', 'menuImportMoveImages', 'menuExport', 'menuExportMnemonics', 'menuExportAssets'] };
+    assert(JSON.stringify(groups) === JSON.stringify(want), `unexpected groups: ${JSON.stringify(groups)}`);
+
+    await appRM.page.click('.menu-parent[data-sub="subBuild"]');
+    st = await menuState();
+    assert(JSON.stringify(st.open) === '["subBuild"]' && JSON.stringify(st.parentsOpen) === '["subBuild"]', `Build: ${JSON.stringify(st)}`);
+    await appRM.page.click('.menu-parent[data-sub="subFind"]');
+    st = await menuState();
+    assert(JSON.stringify(st.open) === '["subFind"]', `expected Find to replace Build, got ${JSON.stringify(st)}`);
+    await appRM.page.click('.menu-parent[data-sub="subFind"]');
+    st = await menuState();
+    assert(!st.open.length, `expected a second click to close Find, got ${JSON.stringify(st)}`);
+
+    await appRM.page.click('.menu-parent[data-sub="subTest"]');
+    await appRM.page.click('#menuBtn');                          // close the menu with Test open
+    await appRM.page.click('#menuBtn');
+    st = await menuState();
+    assert(!st.open.length && !st.parentsOpen.length, `expected the menu to reopen collapsed, got ${JSON.stringify(st)}`);
+
+    await appRM.page.click('.menu-parent[data-sub="subTest"]');
+    await appRM.page.click('#menuAccuracy');
+    await appRM.page.waitForSelector('#accuracyOverlay', { state: 'visible', timeout: 5000 });
+    await appRM.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
+
+    const badge = await appRM.page.evaluate(() => {
+      const fire = n => window.dispatchEvent(new CustomEvent('imagequeue:change', { detail: { review: n } }));
+      fire(2);
+      const on = { badge: document.getElementById('menuBuildBadge').textContent,
+        parent: document.getElementById('menuBuildParent').textContent,
+        item: document.getElementById('menuImageQueue').textContent };
+      fire(0);
+      return { on, off: document.getElementById('menuBuildBadge').textContent };
+    });
+    assert(badge.on.badge === '2' && badge.on.parent === 'Build2' && /2 to review/.test(badge.on.item) && badge.off === '',
+      `expected the Build heading to carry the review count, got ${JSON.stringify(badge)}`);
+    ok('menu: grouped two-level menu, one group open at a time, reopens collapsed, Build shows the review count');
+  } catch(e){ bad('menu: two-level structure', e); }
   // 520. The slowdown recorder: a stall of over a second is noticed after
   //      the fact, with the tracked job that overlapped it, and listed in
   //      Settings.
