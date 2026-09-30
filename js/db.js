@@ -930,9 +930,9 @@ const DAY_MS = 86400000;
 
    A PHASE, flagged on the record, rather than a new rung at the front of the
    ladder, for three reasons:
-   1. Due dates snap to local midnight (startOfLocalDay), and a 6-hour rung
+   1. Due dates snap to local midnight (startOfLocalDay), and a few-hour rung
       would snap to either "already due" or "tomorrow" depending on the time
-      of day -- never actually six hours. A learning record keeps a real
+      of day -- never actually those few hours. A learning record keeps a real
       timestamp instead.
    2. Rungs are indexes. Inserting one at the front would renumber `step` on
       every stored review, every key in the grade tally and `r` on every log
@@ -942,8 +942,12 @@ const DAY_MS = 86400000;
 
    It also gives a failure somewhere to go that is not where a B goes. At
    rung 0 a C used to reset to rung 0 -- exactly where a B holds -- so the two
-   scheduled identically. A C at any rung now returns the room to learning. */
-const ROOM_LEARNING_MS = 6 * 3600 * 1000;
+   scheduled identically. A C at any rung now returns the room to learning.
+
+   Four hours (it was six): an afternoon's memorizing gets its review the
+   same evening rather than late at night. A record already scheduled keeps
+   the due date it was given. */
+const ROOM_LEARNING_MS = 4 * 3600 * 1000;
 // the tally/log key for a review taken during learning, so it never shares a
 // row with rung 0 and the report can show whether the step is earning its keep
 const LEARNING_RUNG = 'L';
