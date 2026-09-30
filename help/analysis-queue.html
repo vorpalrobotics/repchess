@@ -32,6 +32,23 @@ much CPU the background search may use.</p>
 finishes, so the evals simply appear on the rows as the queue works down the
 list. A finished item leaves the queue by itself.</p>
 
+<h3>Where the results show up</h3>
+<p>A finished analysis is kept on its position. Besides the row's own
+evaluation, every small board in the app shows the saved evaluation of the
+position it's showing -- score, depth and the start of the engine's line --
+whether or not you reached that position by the same move order:</p>
+<ul>
+  <li>the board that pops up when you hover a row's board button, or tap a
+  move in an engine line;</li>
+  <li>the Opening Graph's position preview and room-info panel;</li>
+  <li>the <strong>Position &amp; Note</strong> board opened from a move pair
+  in VR, and the VR toolbar's mini board.</li>
+</ul>
+<p>The position just after your reply gets one too: the engine's line from
+the position before it passes through your reply, so its score is that
+position's score. Where nothing has been analysed, the board shows nothing
+extra. Quiz boards never show one, since it would give the answer away.</p>
+
 <h3>It keeps its place</h3>
 <p>The queue is stored, not just held in memory. Close the tab mid-run and
 whatever hadn't finished is still there when you come back, and starts again

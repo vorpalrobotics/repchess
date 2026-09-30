@@ -4,6 +4,7 @@
   { "id": "importing-games", "title": "Importing Your Games", "file": "importing-games.html" },
   { "id": "exploring-games", "title": "Exploring Your Games", "file": "exploring-games.html" },
   { "id": "analysis-queue", "title": "Background Analysis", "file": "analysis-queue.html" },
+  { "id": "perfect-opening", "title": "Perfect Opening", "file": "perfect-opening.html" },
   { "id": "digraph-view", "title": "The Digraph View", "file": "digraph-view.html" },
   { "id": "transpositions", "title": "Transpositions Between Castles", "file": "transpositions.html" },
   { "id": "mnemonics-default", "title": "Move Mnemonics: The Default System", "file": "mnemonics-default.html" },
@@ -17,5 +18,6 @@
   { "id": "marking-memorized", "title": "Marking Rooms as Memorized", "file": "marking-memorized.html" },
   { "id": "review-schedule", "title": "Review Schedule and Accuracy", "file": "review-schedule.html" },
   { "id": "board-testing", "title": "Board Play Testing", "file": "board-testing.html" },
+  { "id": "settings", "title": "Settings", "file": "settings.html" },
   { "id": "backup-and-reset", "title": "Backup, Restore, and Starting Over", "file": "backup-and-reset.html" }
 ]

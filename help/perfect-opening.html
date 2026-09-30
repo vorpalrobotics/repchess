@@ -1,0 +1,37 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Perfect Opening</h2>
+
+<p>A research project that runs in the background: a deep engine search for
+the objectively best opening line for White. At every White move it keeps
+the engine's single best move; at every Black move it keeps every reply that
+scores within a tolerance of the best, and explores each one as a branch of
+its own. The result is written into an opening system of its own, <em>Perfect
+White Opening</em>, which you can browse like any other.</p>
+
+<h3>Manage</h3>
+<p>Menu &rarr; Perfect Opening &rarr; <strong>Manage</strong> turns the search
+on or off and tunes it:</p>
+<ul>
+  <li><strong>Pruning tolerance</strong> (in centipawns): how close to the best
+  a Black reply must score to be kept as a branch. Wider means many more
+  branches.</li>
+  <li><strong>Total variation cap</strong>: the search stops by itself once it
+  has this many lines.</li>
+  <li><strong>Search depth</strong> and <strong>Max Black replies kept</strong>,
+  set per move number, so the early moves can be searched deeply and widely
+  and later ones more cheaply as the tree grows.</li>
+  <li><strong>Hash</strong> and <strong>Threads</strong>: the engine resources
+  it may use.</li>
+</ul>
+<p>It only ever uses the engine when nothing else needs it: it waits while
+the Analysis Queue has work or live analysis is running, so it's safe to give
+it everything the machine has.</p>
+<p><strong>Reset</strong> deletes the generated opening system and all
+progress, and turns the project off. It asks first, since it can't be
+undone.</p>
+
+<h3>Progress</h3>
+<p>Menu &rarr; Perfect Opening &rarr; <strong>Progress</strong> shows whether
+it's running, how many variations it has generated, how many moves are fully
+explored, how many positions are waiting, the search speed, and an estimate
+of how long the current move will take to finish.</p>
