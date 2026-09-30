@@ -1,11 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260930-480';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260930-481';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
-         openImageQueue, resetImageQueue } from './assets.js?v=20260929-100';
+         openImageQueue, resetImageQueue } from './assets.js?v=20260930-101';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260929-78';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260930-79';
 import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-480';
+const BUILD_TAG = '-481';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -1303,7 +1303,7 @@ function showGamesAtNode(seq){
 // to populate GAMES, even though real imported games already exist in IDB.
 async function openBrowseGames({ seq = [], color = 'either' } = {}){
   if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
-  if(!GAMES || !GAMES.length){ alert('Import your games first (menu → Import Games) to see this.'); return; }
+  if(!GAMES || !GAMES.length){ alert('Import your games first (Menu → Import / Export → Games) to see this.'); return; }
   _gamesModalState = { mode: 'pos', color };
   $('gamesListMovesInput').value = seq.length ? movesToNumberedText(seq) : '';
   $('gamesListMovesError').textContent = '';
@@ -11050,10 +11050,14 @@ let imageQueueReviewSeen = null;
 window.addEventListener('imagequeue:change', (e) => {
   const n = (e.detail && e.detail.review) || 0;
   $('menuImageQueue').textContent = n ? `Image Queue (${n} to review)` : 'Image Queue';
+  // the item sits inside the collapsed Build submenu, so its parent shows the count too
+  $('menuBuildBadge').textContent = n ? String(n) : '';
+  $('menuBuildParent').title = n ? `Build — ${n} image${n === 1 ? '' : 's'} waiting for review in Image Queue`
+                                 : 'Everything you build the palace from: mnemonics, images, object lists';
   // the first report is what an earlier visit left behind, not news
   if(imageQueueReviewSeen !== null && n > imageQueueReviewSeen){
-    showAppToast(n === 1 ? 'An image is ready for review in Menu → Image Queue.'
-                         : `${n} images are ready for review in Menu → Image Queue.`);
+    showAppToast(n === 1 ? 'An image is ready for review in Menu → Build → Image Queue.'
+                         : `${n} images are ready for review in Menu → Build → Image Queue.`);
   }
   imageQueueReviewSeen = n;
 });

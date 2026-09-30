@@ -4,7 +4,7 @@
 <p>An "asset" is a piece of art the memory palace can use: an object to stand
 in a room, a texture for a floor or wall, a skin for a door or a sign.
 <span class="repchess-brand">REPchess</span> ships hundreds of them, and
-Menu &rarr; <strong>VR Assets</strong> is where you browse, edit, and add your
+Menu &rarr; Build &rarr; <strong>VR Assets</strong> is where you browse, edit, and add your
 own.</p>
 
 <h3>Types</h3>
@@ -62,7 +62,7 @@ which is remembered as well, and so is the size you last picked. It makes a larg
 GPT Image 2, low costs a fraction of a cent and high can cost well over ten
 times as much. The dialog shows what each image cost: the reported cost for
 Runware models, and an estimate from OpenAI's published prices for OpenAI's
-own models, which report none. Everything is also logged in Menu &rarr;
+own models, which report none. Everything is also logged in Menu &rarr; Build &rarr;
 <strong>AI Spend</strong> (below).</p>
 <p><strong>Transparent background</strong> is what you want for objects that
 stand in a room. The GPT models and FLUX.1 dev produce it directly. For the
@@ -80,7 +80,7 @@ models, still looks like a set.</p>
 leaves the dialog open for the next one. The queue takes the asset ID, type
 and keywords from the editor you opened it from, along with the dialog's
 model, quality, size and transparency settings.</p>
-<p>To queue many at once, open Menu &rarr; <strong>Image Queue</strong> &rarr;
+<p>To queue many at once, open Menu &rarr; Build &rarr; <strong>Image Queue</strong> &rarr;
 <strong>New batch&hellip;</strong> and type one subject per line. Each line
 becomes one image. Its asset ID is made from the line, or you can choose it
 by writing <code>id | prompt</code>. IDs already in use get a number added,
@@ -105,7 +105,8 @@ you to confirm first.</p>
   prompt edited if you like. <strong>Discard</strong> throws it away.</li>
 </ul>
 <p>The queue keeps working while you do other things, including walking and
-decorating in VR. The menu item shows how many images are waiting for review,
+decorating in VR. The menu item, and the <strong>Build</strong> heading above it, show how many
+images are waiting for review,
 and a message tells you when one is ready. The queue is saved, so closing the
 tab loses nothing, and an image interrupted mid-way is made again when you
 return. It only runs while <span class="repchess-brand">REPchess</span> is
@@ -115,7 +116,7 @@ one clears the queue.</p>
 
 <h3>What it costs</h3>
 <p>Every paid AI call is logged the moment it returns: each image generated
-(from the Generate dialog or the queue) and each list brainstorm. Menu &rarr;
+(from the Generate dialog or the queue) and each list brainstorm. Menu &rarr; Build &rarr;
 <strong>AI Spend</strong> adds it up:</p>
 <ul>
   <li>this month and all-time totals;</li>
@@ -144,7 +145,7 @@ Castle</em>.</p>
 
 <h3>Exporting</h3>
 <p>The manager exports your whole asset collection, either as one JSON bundle
-or as individual image + metadata file pairs. Menu &rarr; Export &rarr;
-Assets does the same thing from outside. This is separate from a full
+or as individual image + metadata file pairs. Menu &rarr; Import / Export &rarr;
+Assets (under Export) does the same thing from outside. This is separate from a full
 backup -- useful for sharing a set, or keeping your own artwork safe
 independently of your repertoire.</p>

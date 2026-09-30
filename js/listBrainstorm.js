@@ -522,7 +522,7 @@ async function onCardClick(e){
       const queued = (res && res.queued) || 0;
       await removeListIdea(idea.id, id);
       if(status) status.textContent = `Saved "${idea.candidate.name}" as a list`
-        + (queued ? `, and queued ${queued} image${queued === 1 ? '' : 's'} (Menu → Image Queue).` : '.');
+        + (queued ? `, and queued ${queued} image${queued === 1 ? '' : 's'} (Menu → Build → Image Queue).` : '.');
     } catch(err){
       if(status) status.textContent = 'Could not save it: ' + ((err && err.message) || err);
     }
