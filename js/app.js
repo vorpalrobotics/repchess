@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-481';
+const BUILD_TAG = '-482';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -8028,11 +8028,11 @@ async function buildBackupData(){
   return {
     // v5 adds threeLayout (VR memory-palace layout); v6 adds objectLists;
     // v7 adds perfectOpeningConfig + recentSurfaceColors; v8 adds
-    // reviewGradeStats. Every field below is read back through a `typeof`
+    // reviewGradeStats; v9 adds analysisQueue. Every field below is read back through a `typeof`
     // guard in applyBackupData, so an older backup restores into a newer build
     // unchanged -- the number says what a file CONTAINS, it is not a
     // compatibility gate.
-    version: 8,
+    version: 9,
     // per-platform handles (independent of each other -- see userColorInGame)
     // so restoring on a fresh browser/profile keeps matching "which color did
     // I play" for BOTH platforms, not just whichever one this app version
@@ -8098,7 +8098,17 @@ async function buildBackupData(){
     perfectOpeningConfig: await getMeta('perfectOpeningConfig'),
     recentSurfaceColors: await getMeta('recentSurfaceColors'),   // the colour picker's "Recently used" row
     assets: await getAllAssets(),
-    objectLists: await getAllObjectLists()       // ordered mnemonic object lists for castle room walls
+    objectLists: await getAllObjectLists(),      // ordered mnemonic object lists for castle room walls
+    /* Background engine jobs not yet finished. Queuing them is work you did
+       (often hundreds of nodes picked one at a time), and a finished job's
+       result already travels in its node's prefs, so what is left here is
+       exactly what a restore would otherwise lose. Exported as waiting: the
+       one being searched right now starts over on whichever machine resumes
+       it, since a half-finished search can't be carried across. */
+    analysisQueue: (await getAnalysisQueue(LOCAL_USER)).map(it => ({
+      id: it.id, lineId: it.lineId, seq: it.seq, depth: it.depth, multipv: it.multipv,
+      createdAt: it.createdAt, order: it.order, useLiveThreads: it.useLiveThreads,
+    }))
   };
 }
 
@@ -8118,8 +8128,7 @@ async function buildBackupData(){
    So: anything added to a store, or any new meta key, is a backup decision.
    Make it deliberately, here or in buildBackupData. */
 const BACKUP_EXCLUDED_STORES = {
-  analysisQueue: 'transient engine work queue -- jobs are re-queued from the tree on demand, and a queue restored onto a different machine would resume work that machine never started',
-  perfectOpeningQueue: 'same, for the unattended Perfect Opening run; its CONFIG is exported, its in-flight job list is not',
+  perfectOpeningQueue: 'transient job list for the unattended Perfect Opening run -- it regenerates its own work from its CONFIG, which is exported',
   safetyBackup: 'the pre-restore rollback snapshot itself -- backing up a backup, and clearAllData deliberately spares it',
 };
 const BACKUP_EXCLUDED_META = {
@@ -8201,12 +8210,14 @@ async function applyBackupData(data, onMnemProgress){
     if(Array.isArray(data.games) && data.games.length) await putGames(LOCAL_USER, data.games);
     GAMES = data.games || [];
 
+    const restoredLineIds = new Map();   // backup's line id -> the id it was restored under
     for(const lineData of (data.lines||[])){
       // reuse the original line id when present (older backups omit it) so VR
       // decoration keys that embed it — castle rooms, building facades/signs —
       // still resolve against the restored threeLayout.
       const line = await createLine(LOCAL_USER, {id:lineData.id, name:lineData.name, color:lineData.color, openingMoves:lineData.openingMoves, hideUnselectedGameMoves:lineData.hideUnselectedGameMoves});
       if(lineData.streetName) await updateLine(line.id, {streetName:lineData.streetName});
+      if(lineData.id) restoredLineIds.set(lineData.id, line.id);
       for(const pref of (lineData.prefs||[])){
         await setPref(line.id, pref.seq, {
           // story/roomStory: exported since they were added, but never read
@@ -8266,6 +8277,20 @@ async function applyBackupData(data, onMnemProgress){
     if(typeof data.recentSurfaceColors === 'string') await setMeta('recentSurfaceColors', data.recentSurfaceColors);
     for(const asset of (data.assets||[])) await setAsset(asset.id, asset);
     for(const list of (data.objectLists||[])) await setObjectList(list.id, list);
+    // v9: the analysis queue's unfinished jobs, all waiting again. A job whose
+    // opening system isn't in the backup has nothing to analyze and is dropped.
+    if(Array.isArray(data.analysisQueue)){
+      for(const it of data.analysisQueue){
+        const lineId = restoredLineIds.get(it?.lineId);
+        if(!lineId || !Array.isArray(it.seq) || typeof it.id !== 'string') continue;
+        await putAnalysisQueueItem({ id: it.id, user: LOCAL_USER, lineId, seq: it.seq,
+          depth: it.depth, multipv: it.multipv, status: 'queued', createdAt: it.createdAt || Date.now(),
+          ...(it.order != null ? { order: it.order } : {}), ...(it.useLiveThreads ? { useLiveThreads: true } : {}) });
+      }
+    }
+    await refreshAnalysisQueue();
+    renderAnalysisQueueModalIfOpen();
+    maybeResumeAnalysisQueue();
     log(`restored ${(data.lines||[]).length} opening system(s), ${(data.games||[]).length} game(s)`);
     await renderHome();
     _importBackupGen++;
