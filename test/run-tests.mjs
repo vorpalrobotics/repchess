@@ -10463,7 +10463,7 @@ try {
     const STORE_EXPORTERS = {
       games: 'getGames(', lines: 'getLines(', prefs: 'getAllPrefs(',
       mnemonics: 'getAllMnemonics(', assets: 'getAllAssets(',
-      objectLists: 'getAllObjectLists(', meta: 'getMeta(',
+      objectLists: 'getAllObjectLists(', meta: 'getMeta(', analysisQueue: 'getAnalysisQueue(',
     };
     const buildSrc = blockFrom(appSrc, 'async function buildBackupData');
     assert(buildSrc.length > 200, 'sanity: could not read buildBackupData');
@@ -10832,6 +10832,47 @@ try {
     assert(!after[0], `expected a v6 restore to leave no stale Perfect Opening config behind, got ${after[0]}`);
     ok('backup round trip: an older v6 backup still restores, leaving the v7 fields at their defaults');
   } catch(e){ bad('backup round trip: v6 backwards compatibility', e); }
+
+  // 86d. v9: the analysis queue's unfinished jobs travel in a full backup.
+  //      Restored as waiting (one exported mid-search starts over), the
+  //      in-memory mirror reloaded so the queue modal and loop see them, a
+  //      job whose opening system isn't in the backup dropped, and a fresh
+  //      export carries them again. A backup without the field leaves an
+  //      empty queue, as before.
+  try {
+    await seedBackup(appBH.page, {
+      version: 9, user: 'tester',
+      lines: [{ id: 'L-AQ', name: 'AQ', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [],
+      analysisQueue: [
+        { id: 'aq:1:keep', lineId: 'L-AQ', seq: ['d4', 'd5'], depth: 40, multipv: 3, createdAt: 1700000000000, order: 0 },
+        { id: 'aq:2:orphan', lineId: 'L-GONE', seq: ['e4'], depth: 30, multipv: 1, createdAt: 1700000000001 },
+      ],
+    });
+    const st = await appBH.page.evaluate(async () => ({
+      mem: window.__aqTestHooks.getQueue().map(it => ({ id: it.id, lineId: it.lineId, seq: it.seq, status: it.status })),
+      idb: (await getAnalysisQueue('local')).map(it => it.id),
+    }));
+    assert(JSON.stringify(st.mem) === JSON.stringify([{ id: 'aq:1:keep', lineId: 'L-AQ', seq: ['d4', 'd5'], status: 'queued' }]),
+      `expected only the job for a restored line, waiting, got ${JSON.stringify(st.mem)}`);
+    assert(JSON.stringify(st.idb) === '["aq:1:keep"]', `expected the job stored too, got ${JSON.stringify(st.idb)}`);
+
+    const rebuilt = await appBH.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    assert(rebuilt.version >= 9, `expected a fresh export to declare at least version 9, got ${rebuilt.version}`);
+    const job = (rebuilt.analysisQueue || [])[0];
+    assert(rebuilt.analysisQueue?.length === 1 && job.id === 'aq:1:keep' && job.depth === 40 && job.multipv === 3
+      && job.seq.join(',') === 'd4,d5' && !('status' in job) && !('user' in job),
+      `expected the job in a fresh export, got ${JSON.stringify(rebuilt.analysisQueue)}`);
+
+    await seedBackup(appBH.page, {
+      version: 8, user: 'tester',
+      lines: [{ id: 'L-AQ', name: 'AQ', color: 'white', openingMoves: ['d4'], prefs: [] }],
+      games: [],
+    });
+    const after = await appBH.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(after === 0, `expected a backup without a queue to leave it empty, got ${after} item(s)`);
+    ok('backup round trip: v9 carries the analysis queue\'s unfinished jobs, both directions');
+  } catch(e){ bad('backup round trip: v9 analysis queue', e); }
 
   // 87. If applyBackupData throws partway through the write phase (a record
   //     malformed in a way the shallow top-level validation -- data.lines is
