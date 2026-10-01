@@ -7060,6 +7060,73 @@ try {
 }
 } catch(e){ bad('Phase WG: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase WG2: making a wing on a move order that transposes. Inside the
+//     entry castle, two move orders reach the same position, and the room's
+//     attributes normally live on the canonical one. Marking the OTHER one
+//     "starts a new Castle" must still mark the row you opened -- it used to
+//     land on the canonical move order, leaving your row unlabelled. ---
+if(shouldRunPhase(['wings'])){
+try {
+const appWG2 = await launchApp();
+try {
+  const A = ['d4','Nf6','c4','e6','Nf3'], B = ['d4','Nf6','Nf3','e6','c4'];
+  await seedBackup(appWG2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Black vs d4', color: 'black', openingMoves: ['d4'], prefs: [
+      { seq: ['d4'], reply: 'Nf6', isCastleRoot: true, castleName: 'Gate', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6'], manualReplies: ['c4','Nf3','g3'] },
+      { seq: ['d4','Nf6','c4'], reply: 'e6' },
+      { seq: ['d4','Nf6','c4','e6'], manualReplies: ['Nf3'] },
+      { seq: A, reply: 'c5' },
+      { seq: [...A,'c5'], manualReplies: ['d5'] },
+      { seq: [...A,'c5','d5'], reply: 'exd5' },
+      { seq: ['d4','Nf6','Nf3'], reply: 'e6' },
+      { seq: ['d4','Nf6','Nf3','e6'], manualReplies: ['c4'] },
+      { seq: B, reply: 'c5' },
+      { seq: [...B,'c5'], manualReplies: ['d5'] },
+      { seq: [...B,'c5','d5'], reply: 'exd5' },
+      { seq: ['d4','Nf6','g3'], reply: 'c5', isCastleRoot: true, castleName: 'Benoni Mausoleum', castleStreetNumber: 2 },
+      { seq: ['d4','Nf6','g3','c5'], manualReplies: ['d5'] },
+      { seq: ['d4','Nf6','g3','c5','d5'], reply: 'b5' },
+    ]}],
+    games: [],
+  }, { defaultPlayerColor: 'black' });
+  await appWG2.page.click('.line-row');
+  await appWG2.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  // 559. Ticking "starts a new Castle" on the non-canonical move order saves
+  //      the wing, and its room name, on that row; the row shows the label;
+  //      the other move order is left as it was; and the row is now its own
+  //      canonical room, so reopening Set Attributes edits the wing.
+  try {
+    const canonB = await appWG2.page.evaluate(b => window.__oqTestHooks.canonicalRoomSeq(b), B);
+    assert(canonB.join(',') === A.join(','), `sanity: expected B to resolve to A inside Gate first, got ${JSON.stringify(canonB)}`);
+    const sel = `tr.data-row[data-seq="${B.join(',')}"]`;
+    await appWG2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), sel);
+    await appWG2.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), sel);
+    await appWG2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appWG2.page.fill('#attrRoomName', 'Wing Entry');
+    await appWG2.page.check('#attrIsCastleRoot');
+    await appWG2.page.fill('#attrCastleName', 'Benoni Mausoleum');
+    await appWG2.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
+    await appWG2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
+    await appWG2.page.waitForFunction(b => window.__aqTestHooks.getPref('L1', b).then(p => !!p?.isCastleRoot), B, { timeout: 5000 });
+    const st = await appWG2.page.evaluate(async ([a, b, s]) => ({
+      a: await window.__aqTestHooks.getPref('L1', a), b: await window.__aqTestHooks.getPref('L1', b),
+      label: document.querySelector(`${s} .branchName`)?.textContent,
+      canonB: window.__oqTestHooks.canonicalRoomSeq(b) }), [A, B, sel]);
+    assert(st.b?.isCastleRoot && st.b.castleName === 'Benoni Mausoleum' && st.b.name === 'Wing Entry',
+      `expected the wing saved on the row that was opened, got ${JSON.stringify(st.b)}`);
+    assert(!st.a?.isCastleRoot && !st.a?.name, `expected the other move order left alone, got ${JSON.stringify(st.a)}`);
+    assert(st.label === 'Benoni Mausoleum: Wing Entry', `expected the row labelled, got ${JSON.stringify(st.label)}`);
+    assert(st.canonB.join(',') === B.join(','), `expected the wing row to be its own room now, got ${JSON.stringify(st.canonB)}`);
+    ok('castle wings: "starts a new Castle" on a transposing move order marks that row, not the canonical one');
+  } catch(e){ bad('castle wings: wing on a transposing move order', e); }
+} finally {
+  await appWG2.close();
+}
+} catch(e){ bad('Phase WG2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase PE: the Position & Note modal shows the saved engine eval of its
 //     position (after our reply) under the caption, from whatever analysis
 //     already exists: the position's own, or the parent row's engine line

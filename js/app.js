@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-485';
+const BUILD_TAG = '-486';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4848,8 +4848,13 @@ function roomIsLockedForSaved(saved){
    (no room built here at all -- nothing to canonicalize) or it isn't part
    of any built castle (no room, no transposition to resolve). */
 function canonicalRoomSeq(seq){
-  const reply = PREFS[prefKey(CURRENT_LINE.id, seq)]?.reply;
+  const own = PREFS[prefKey(CURRENT_LINE.id, seq)];
+  const reply = own?.reply;
   if(!reply) return seq;
+  // a row that starts a castle (or a wing of one) IS that room's own move
+  // order -- the castle is walked from exactly here -- even when another move
+  // order reaches the same position somewhere else
+  if(own.isCastleRoot && own.castleName?.trim()) return seq;
   const roomSeq = [...seq, reply];
   const castle = inheritedCastle(roomSeq, CURRENT_LINE.id);
   if(!castle) return seq;
@@ -4859,6 +4864,16 @@ function canonicalRoomSeq(seq){
   const key = positionKey(fenForSeq(roomSeq));
   const room = graph.rooms.find(r => positionKey(r.fen) === key);
   return room ? room.seq.slice(0, -1) : seq;
+}
+/* Where a Set Attributes save lands. Normally the room's canonical seq,
+   resolved when the modal opened -- but that was resolved against the castle
+   the room was in THEN. Ticking "starts a new Castle" moves the room into a
+   castle that starts at this very row, so the save belongs on the row the
+   user opened, not on another move order that happens to reach the same
+   position in the old castle (which would leave this row unmarked and start
+   the castle from the other move order instead). */
+function attrSaveSeq(lineSeq, roomSeq, v){
+  return (v.isCastleRoot && (v.castleName || '').trim()) ? lineSeq : roomSeq;
 }
 /* Like inheritedCastle, but for THIS node uses the attributes modal's own
    live (unsaved) isCastleRoot/castleName fields instead of its last-saved
@@ -6369,7 +6384,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
     // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
     // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
     function openRoomAttributes(){
-      const roomSeq = canonicalRoomSeq(lineSeq);
+      let roomSeq = canonicalRoomSeq(lineSeq);
       const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
       const before = roomSaved();
       // a plain snapshot, NOT a reference to `before` -- savePrefField
@@ -6378,6 +6393,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
       openAttributesModal(before, v=>{
         invalidateBuiltCastlesCache();
+        roomSeq = attrSaveSeq(lineSeq, roomSeq, v);
         savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
         savePrefField(roomSeq, 'castleName', v.castleName);
         savePrefField(roomSeq, 'castleOwner', v.castleOwner);
@@ -6838,7 +6854,7 @@ function renderBlackRoot(parent,games,trigger){
   // reads -- everything else on this row (mnemonic, eval, hidden, ...) still
   // keys off lineSeq as usual. Notes are folded in here too, as a room attribute.
   function openRoomAttributes(){
-    const roomSeq = canonicalRoomSeq(lineSeq);
+    let roomSeq = canonicalRoomSeq(lineSeq);
     const roomSaved = () => PREFS[prefKey(CURRENT_LINE.id, roomSeq)];
     const before = roomSaved();
     // a plain snapshot, NOT a reference to `before` -- savePrefField mutates
@@ -6847,6 +6863,7 @@ function renderBlackRoot(parent,games,trigger){
     const beforeRedirect = { redirectToCastle: before?.redirectToCastle, redirectTargetLineId: before?.redirectTargetLineId };
     openAttributesModal(before, v=>{
       invalidateBuiltCastlesCache();
+      roomSeq = attrSaveSeq(lineSeq, roomSeq, v);
       savePrefField(roomSeq, 'isCastleRoot', v.isCastleRoot);
       savePrefField(roomSeq, 'castleName', v.castleName);
       savePrefField(roomSeq, 'castleOwner', v.castleOwner);
