@@ -8930,6 +8930,82 @@ try {
 
 } catch(e){ bad('Phase AT: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AT2: node statistics with a castle picked in "Show:" also count
+//     how many of the nodes below are in that castle. A node starting
+//     another castle's root belongs to that castle, and a "redirect to
+//     castle" node is a teleport: it and everything past it are elsewhere. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appAT2 = await launchApp();
+try {
+  await seedBackup(appAT2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },                                  // Alpha
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'Bd2' },                      // Alpha
+      { seq: ['d4','Nf6','c4','g6'], reply: 'Nc3', isCastleRoot: true, castleName: 'Beta', castleStreetNumber: 2 },
+      { seq: ['d4','Nf6','c4','g6','Nc3','Bg7'], reply: 'e4' },                       // Beta
+      { seq: ['d4','Nf6','c4','c5'], reply: 'd5', redirectToCastle: 'Gamma', redirectTargetLineId: 'L1' },
+      { seq: ['d4','Nf6','c4','c5','d5','e6'], reply: 'Nc3' },                        // past the teleport
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 Bd2', white: 'a', black: 'b', result: '*' },
+      { id: 'g2', moves: 'd4 Nf6 c4 g6 Nc3 Bg7 e4', white: 'a', black: 'b', result: '*' },
+      { id: 'g3', moves: 'd4 Nf6 c4 c5 d5 e6 Nc3', white: 'a', black: 'b', result: '*' },
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appAT2.page.click('.line-row');
+  await appAT2.page.waitForSelector('.data-row', { timeout: 40000 });
+
+  // 557. The count itself: from inside Alpha, from the top of the line, and
+  //      for Beta; without a castle the stats are what they always were.
+  try {
+    const st = (seq, castle) => appAT2.page.evaluate(([s, c]) => window.__statsTestHooks.computeNodeStats(s, c), [seq, castle]);
+    const a = await st(['d4','Nf6','c4'], 'Alpha');
+    assert(a.nodeCount === 6 && a.castleNodes === 2, `expected 6 below, 2 in Alpha, got ${JSON.stringify(a)}`);
+    const top = await st(['d4'], 'Alpha');
+    assert(top.nodeCount === 7 && top.castleNodes === 3, `expected 7 below the line's top, 3 in Alpha, got ${JSON.stringify(top)}`);
+    const b = await st(['d4','Nf6','c4'], 'Beta');
+    assert(b.castleNodes === 2, `expected 2 in Beta, got ${JSON.stringify(b)}`);
+    const plain = await st(['d4','Nf6','c4']);
+    assert(plain.nodeCount === 6 && !('castleNodes' in plain), `expected the plain stats unchanged, got ${JSON.stringify(plain)}`);
+    ok('node stats: counts the nodes below that are in a given castle (sub-castles and teleports excluded)');
+  } catch(e){ bad('node stats: castle node count', e); }
+
+  // 558. Through the menu: with Alpha picked in "Show:", the alert adds the
+  //      Alpha count; with "All", it doesn't.
+  try {
+    const statsAlert = async () => {
+      let msg = null;
+      appAT2.page.once('dialog', d => { msg = d.message(); });
+      const rowSel = '.data-row[data-seq="d4,Nf6"]';
+      await appAT2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+      await appAT2.page.evaluate(s => document.querySelector(`${s} [data-act="nodeStats"]`).click(), rowSel);
+      for(let i = 0; i < 40 && msg === null; i++) await appAT2.page.waitForTimeout(50);
+      return msg;
+    };
+    await appAT2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      sel.value = 'castle:Alpha'; sel.dispatchEvent(new Event('change'));
+    });
+    const scoped = await statsAlert();
+    assert(/Nodes below this point: 6/.test(scoped || '') && /in castle "Alpha": 2/.test(scoped || ''),
+      `expected the Alpha count in the alert, got ${JSON.stringify(scoped)}`);
+    await appAT2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      sel.value = ''; sel.dispatchEvent(new Event('change'));
+    });
+    const all = await statsAlert();
+    assert(/Nodes below this point: 6/.test(all || '') && !/in castle/.test(all || ''),
+      `expected no castle line with "All" shown, got ${JSON.stringify(all)}`);
+    ok('node stats: with a castle shown, the alert also says how many nodes below are in it');
+  } catch(e){ bad('node stats: castle line in the alert', e); }
+} finally {
+  await appAT2.close();
+}
+} catch(e){ bad('Phase AT2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AU: gatherBuiltCastles' in-memory cache -- a second "Run VR" in
 //     the same page load reuses the first one's result instead of rebuilding
 //     every castle from scratch, and a full backup restore drops the cache
@@ -13019,7 +13095,8 @@ try {
   //      Variation" in the menu, opens the SAME modal blank (no pre-filled
   //      moves, "Either" selected).
   try {
-    const menuOrder = [...await appAV2.page.evaluate(() => [...document.getElementById('menuList').children].map(el => el.id))];
+    // both live in the menu's Find group
+    const menuOrder = [...await appAV2.page.evaluate(() => [...document.getElementById('subFind').children].map(el => el.id))];
     const searchIdx = menuOrder.indexOf('menuSearchLine');
     const browseIdx = menuOrder.indexOf('menuBrowseGames');
     assert(searchIdx >= 0 && browseIdx === searchIdx + 1,
