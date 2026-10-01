@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-486';
+const BUILD_TAG = '-487';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -4518,13 +4518,17 @@ function openAttributesModal(saved, onSave, lineSeq, roomSeq){
   attrNoteStaged = saved?.note || '';
   attrStoryStaged = saved?.story || '';
   $('attrError').textContent = '';
+  // the castle name suggests the castles that already exist: joining one as a
+  // wing takes its name exactly, which is easy to get subtly wrong by typing
+  $('attrCastleNameList').innerHTML = definedCastles().map(c => `<option value="${escapeHtml(c)}">`).join('');
   refreshCastleOwnerSelect(saved, lineSeq);
   // checked when this root IS the castle's main entrance now (flagged, or
   // the shortest root by default) -- see castleRootRoomSeqs
   const mainNow = saved?.isCastleRoot && saved?.reply && castleRootRoomSeq((saved.castleName || '').trim());
   $('attrMainEntrance').checked = !!(mainNow && mainNow.join(',') === [...attrModalRoomSeq, saved.reply].join(','));
   refreshAttrFieldVisibility();
-  refreshRedirectField(saved, attrModalRoomSeq);
+  refreshRedirectField(saved, attrModalRoomSeq);   // decides its own visibility before its first await
+  syncAttrTranspSection();
   attributesModalSave = onSave;
   mountAttributesBar();
   $('attributesOverlay').style.display='flex';
@@ -4595,7 +4599,43 @@ function refreshAttrFieldVisibility(){
   $('attrCastleNameField').style.display = isRoot ? '' : 'none';
   $('attrStreetNumberField').style.display = isRoot ? '' : 'none';
   refreshAttrWingField();
+  refreshCastleNameNote();
   updateCastleOwnerAutoLabel(attrModalLineSeq);
+}
+/* Says, under the castle name, what saving will do with it: start a new
+   castle, join an existing one as a wing, or rename this one -- and catches a
+   name that is an existing castle's in all but capitals or spacing, since
+   joining needs the name exactly and a near miss silently makes a second
+   castle instead. */
+function refreshCastleNameNote(){
+  const note = $('attrCastleNameNote');
+  const name = $('attrCastleName').value.trim();
+  note.textContent = '';
+  note.style.color = '#888';
+  if(!$('attrIsCastleRoot').checked || !name) return;
+  const own = (attrModalRoomSeq || []).join(',');
+  const elsewhere = c => castleRootRoomSeqs(c).some(rs => rs.slice(0, -1).join(',') !== own);
+  const savedName = attrModalSaved?.isCastleRoot ? (attrModalSaved.castleName || '').trim() : '';
+  if(elsewhere(name)){
+    // already one of its wings: the wing note below says how it is reached
+    if(savedName !== name) note.textContent = `Joins "${name}" as a new wing.`;
+    return;
+  }
+  const norm = c => c.toLowerCase().replace(/\s+/g, ' ');
+  const near = definedCastles().find(c => c !== name && norm(c) === norm(name) && elsewhere(c));
+  if(near){
+    note.textContent = `Did you mean "${near}"? To join a castle the name must match exactly.`;
+    note.style.color = '#c62828';
+    return;
+  }
+  if(savedName === name) return;
+  note.textContent = savedName && !elsewhere(savedName)
+    ? `Renames "${savedName}" to "${name}".` : 'Creates a new castle.';
+}
+/* The Transpositions heading shows only above a field that applies here. */
+function syncAttrTranspSection(){
+  const shown = ['attrCastleOwnerField', 'attrRedirectField'].some(id => $(id).style.display !== 'none');
+  $('attrTranspHeading').style.display = shown ? '' : 'none';
 }
 /* The castle-wing part of the modal (see castleRootRoomSeqs). Shown only when
    the castle named here already has another root elsewhere -- that is what
@@ -4626,8 +4666,7 @@ function refreshAttrWingField(){
       + `opens into the main entrance. Make it the main entrance, or give it a castle above it.`;
     note.style.color = '#c62828';
   } else {
-    note.textContent = `This becomes another wing of "${name}"`
-      + (above ? `, reached through the door from "${above}".` : '.');
+    note.textContent = above ? `Reached through the door from "${above}".` : `Another wing of "${name}".`;
     note.style.color = '#888';
   }
 }
@@ -4891,9 +4930,14 @@ function updateCastleOwnerAutoLabel(lineSeq){
   const inherited = liveInheritedCastle(lineSeq);
   opt.textContent = `Auto${inherited ? ` (inherit: ${inherited})` : ' (no ancestor castle)'}`;
 }
-/* "Belongs to castle" override: Auto (inherit) + every defined castle. Only
-   needed to resolve a transposition shared by two castles; hidden when no
-   castles exist (and there's no stored override to preserve). */
+/* "Transposition marker shows castle" (stored as castleOwner): Auto (inherit)
+   + every defined castle. It only picks the castle name a transposition
+   marker shows for this position, so it is offered only where that question
+   exists -- this system reaches the position from two or more castles -- or
+   where a choice is already stored, so it can't be lost. It used to be shown
+   whenever any castle existed, and its old label ("Belongs to castle") read
+   like the way to add a route to a castle, which it never was. */
+let attrOwnerGen = 0;
 function refreshCastleOwnerSelect(saved, lineSeq){
   const sel = $('attrCastleOwner');
   const inherited = liveInheritedCastle(lineSeq);
@@ -4902,7 +4946,19 @@ function refreshCastleOwnerSelect(saved, lineSeq){
     `<option value="">Auto${inherited ? ` (inherit: ${escapeHtml(inherited)})` : ' (no ancestor castle)'}</option>` +
     castles.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   sel.value = saved?.castleOwner || '';
-  $('attrCastleOwnerField').style.display = (castles.length || saved?.castleOwner) ? '' : 'none';
+  const field = $('attrCastleOwnerField');
+  field.style.display = saved?.castleOwner ? '' : 'none';
+  const gen = ++attrOwnerGen;
+  if(saved?.castleOwner || !saved?.reply || !castles.length || !CURRENT_LINE) return;
+  const lineId = CURRENT_LINE.id;
+  const key = positionKey(fenForSeq([...(attrModalRoomSeq || lineSeq), saved.reply]));
+  repertoirePositionIndex().then(map => {
+    if(gen !== attrOwnerGen) return;   // the modal has moved on
+    const castlesHere = new Set((map.get(key) || []).filter(e => e.lineId === lineId && e.castle).map(e => e.castle));
+    if(castlesHere.size < 2) return;
+    field.style.display = '';
+    syncAttrTranspSection();
+  });
 }
 /* every OTHER built castle (any line, own castle excluded) whose own room
    graph reaches the exact same position as `roomSeq`'s own room -- these are
@@ -5100,7 +5156,7 @@ function redirectChanged(before, after){
 }
 
 $('attrIsCastleRoot').addEventListener('change', refreshAttrFieldVisibility);
-$('attrCastleName').addEventListener('input', () => { updateCastleOwnerAutoLabel(attrModalLineSeq); refreshAttrWingField(); });
+$('attrCastleName').addEventListener('input', () => { updateCastleOwnerAutoLabel(attrModalLineSeq); refreshAttrWingField(); refreshCastleNameNote(); });
 $('attrMainEntrance').addEventListener('change', refreshAttrFieldVisibility);
 /* Writes what the modal is staging. The street-number rules that used to be
    checked in here now live in attrValidate, which runs on every keystroke and

@@ -1764,25 +1764,30 @@
       <input type="text" id="attrRoomName" placeholder="e.g. Foyer, Entrance Hall, Throne Room">
     </div>
     <div class="field checkbox-field">
-      <label><input type="checkbox" id="attrIsCastleRoot"> This node starts a new Castle</label>
+      <label><input type="checkbox" id="attrIsCastleRoot"> A castle starts here, either a new castle or a new wing of an existing one</label>
     </div>
     <div class="field" id="attrCastleNameField">
       <label for="attrCastleName">Castle name</label>
-      <input type="text" id="attrCastleName" placeholder="e.g. Queen's Gambit Castle">
+      <input type="text" id="attrCastleName" list="attrCastleNameList" placeholder="e.g. Queen's Gambit Castle">
+      <datalist id="attrCastleNameList"></datalist>
+      <div id="attrCastleNameNote" style="font-size:.72rem;color:#888;margin-top:.2rem"></div>
     </div>
     <div class="field" id="attrMainEntranceField" style="display:none">
-      <label><input type="checkbox" id="attrMainEntrance"> Main entrance &mdash; the castle's street door opens here</label>
+      <label><input type="checkbox" id="attrMainEntrance"> Main entrance: the castle's street door opens into this wing</label>
       <div id="attrWingNote" style="font-size:.72rem;color:#888;margin-top:.2rem"></div>
     </div>
     <div class="field" id="attrStreetNumberField">
       <label for="attrStreetNumber">Street number</label>
       <input type="number" id="attrStreetNumber" min="1" step="1" style="width:6em" placeholder="auto">
-      <div style="font-size:.72rem;color:#888;margin-top:.2rem">Position on the opening system's street — lower numbers sit closer to Main Street. Leave blank to auto-assign at Preview time.</div>
+      <div style="font-size:.72rem;color:#888;margin-top:.2rem">The castle's position on the street (set on the main entrance). Lower numbers sit closer to Main Street. Leave blank to assign one at Preview time.</div>
     </div>
-    <div class="field" id="attrCastleOwnerField">
-      <label for="attrCastleOwner">Belongs to castle</label>
+    <!-- Transpositions: shown only when one of its fields applies (see
+         syncAttrTranspSection) -->
+    <h4 id="attrTranspHeading" style="display:none;margin:.9rem 0 .3rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#777">Transpositions</h4>
+    <div class="field" id="attrCastleOwnerField" style="display:none">
+      <label for="attrCastleOwner">Transposition marker shows castle</label>
       <select id="attrCastleOwner"></select>
-      <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only needed to resolve a transposition shared by two castles; otherwise leave on Auto.</div>
+      <div style="font-size:.72rem;color:#888;margin-top:.2rem">Only changes which castle's name the transposition marker shows when two castles reach this position. It doesn't move this room into that castle. To add this route to a castle, use &ldquo;A castle starts here&rdquo; above.</div>
     </div>
     <div class="field" id="attrRedirectField" style="display:none">
       <label for="attrRedirectTo">Redirect to castle (transposition)</label>
@@ -2282,6 +2287,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261001-486"></script>
+<script type="module" src="js/app.js?v=20261001-487"></script>
 </body>
 </html>
