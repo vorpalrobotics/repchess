@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-483';
+const BUILD_TAG = '-484';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -510,8 +510,12 @@ function formatOccurrence(count, tot){
    opponent move options) seen at any node in that subtree. Only nodes with
    an actual saved reply are counted/descended into — undecided branches
    don't contribute nodes of their own. Hidden branches (and everything
-   nested under them) are excluded entirely, same as the eye-toggle filter. */
-function computeNodeStats(games,seq){
+   nested under them) are excluded entirely, same as the eye-toggle filter.
+   `castle`, when given, also counts castleNodes: how many of those nodes
+   have their room in that castle (see nodeCastleAfter). `cur` is the castle
+   `seq` itself sits in, carried down the recursion rather than re-walked. */
+function computeNodeStats(games,seq,castle=null,cur=undefined){
+  if(castle && cur === undefined) cur = castleOfSeq(seq);
   let counts = replies(games,seq).counts;
   const manualReplies = PREFS[prefKey(CURRENT_LINE.id,seq)]?.manualReplies || [];
   manualReplies.forEach(m=>{ if(!(m in counts)) counts[m]=0; });
@@ -520,7 +524,7 @@ function computeNodeStats(games,seq){
   const visibleOpps = Object.keys(counts).filter(opp=>
     !PREFS[prefKey(CURRENT_LINE.id,[...seq,opp])]?.hidden);
 
-  let nodeCount = 0, maxBranchFactor = visibleOpps.length;
+  let nodeCount = 0, castleNodes = 0, maxBranchFactor = visibleOpps.length;
   // "complete to move N": the shallowest branch's move number, where a branch
   // is measured by OUR last move in it. Reaching our own move N is enough --
   // the opponent needn't have a reply to it. `seq` ends in our move, so its
@@ -538,27 +542,64 @@ function computeNodeStats(games,seq){
     const reply = PREFS[prefKey(CURRENT_LINE.id,lineSeq)]?.reply;
     if(!reply) continue;
     nodeCount++;
-    const sub = computeNodeStats(games,[...lineSeq,reply]);
+    const nodeCastle = castle ? nodeCastleAfter(lineSeq, cur) : undefined;
+    if(castle && nodeCastle === castle) castleNodes++;
+    const sub = computeNodeStats(games,[...lineSeq,reply],castle,nodeCastle);
     nodeCount += sub.nodeCount;
+    if(castle) castleNodes += sub.castleNodes;
     maxBranchFactor = Math.max(maxBranchFactor, sub.maxBranchFactor);
     completeToMove = Math.min(completeToMove, sub.completeToMove);
   }
-  return {nodeCount, maxBranchFactor, completeToMove};
+  return castle ? {nodeCount, castleNodes, maxBranchFactor, completeToMove} : {nodeCount, maxBranchFactor, completeToMove};
+}
+/* Which castle a node's room belongs to, given the castle of the room it
+   leaves from (`parent`) -- the same rules buildCastleGraph's processExit
+   walks by: a node marked "redirect to castle" is a teleport, so its room
+   and everything past it live in that other castle, not this line's; a node
+   that starts a castle root starts that castle; anything else stays in its
+   parent's castle. '' means no castle of this line. */
+function nodeCastleAfter(lineSeq, parent){
+  const p = PREFS[prefKey(CURRENT_LINE.id, lineSeq)];
+  if(p?.redirectToCastle && p.reply) return '';
+  if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
+  return parent || '';
+}
+// the castle a seq (ending in our move) sits in: nodeCastleAfter applied
+// from the top of the line down to it
+function castleOfSeq(seq){
+  let cur = '';
+  for(let i = 1; i <= seq.length; i++) cur = nodeCastleAfter(seq.slice(0, i), cur);
+  return cur;
+}
+// the castle the move table's "Show:" menu is scoped to -- a castle, or one
+// of its wings or named rooms -- or '' when it shows everything
+function tableShowCastle(){
+  const val = $('tableCastleSelect')?.value || '';
+  if(val.startsWith('castle:')) return val.slice('castle:'.length);
+  if(val.startsWith('room:')){
+    const opt = TABLE_ROOM_OPTIONS[+val.slice('room:'.length)];
+    return opt ? castleOfSeq(opt.seq) : '';
+  }
+  return '';
 }
 
 async function showNodeStats(games,seq){
   const spinner = showSpinner('Computing node statistics…');
   await nextPaint();
+  // with a castle picked in "Show:", also how much of what's below is in
+  // that castle -- what you need to know when balancing castles' contents
+  const castle = tableShowCastle();
   let stats;
   try {
-    stats = computeNodeStats(games,seq);
+    stats = computeNodeStats(games,seq,castle || null);
   } finally {
     hideSpinner(spinner);
   }
   const complete = Number.isFinite(stats.completeToMove)
     ? `\nComplete to move: ${stats.completeToMove}`
     : '';
-  alert(`Nodes below this point: ${stats.nodeCount}\nMax branch factor: ${stats.maxBranchFactor}${complete}`);
+  const inCastle = castle ? `\n…of which in castle "${castle}": ${stats.castleNodes}` : '';
+  alert(`Nodes below this point: ${stats.nodeCount}${inCastle}\nMax branch factor: ${stats.maxBranchFactor}${complete}`);
 }
 
 function formatNodeStats({nodeCount,maxBranchFactor}){
@@ -15572,7 +15613,7 @@ if(localStorage.getItem('threeTestDebug')){
 // row menu and capturing an alert.
 if(localStorage.getItem('threeTestDebug')){
   window.__statsTestHooks = {
-    computeNodeStats: (seq) => computeNodeStats(GAMES, seq),
+    computeNodeStats: (seq, castle) => computeNodeStats(GAMES, seq, castle || null),
   };
 }
 
