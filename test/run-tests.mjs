@@ -26619,6 +26619,17 @@ try {
       `expected a score from 50 reviews shown plainly, got ${JSON.stringify(many)}`);
     assert(none && /^[—-]$/.test(none.last),
       `expected the dash reserved for a rung with nothing recorded, got ${JSON.stringify(none)}`);
+    // short headings so the rung table fits a phone held upright, spelled out in tooltips
+    const head = await appAR.page.evaluate(() => {
+      const t = document.querySelector('#accuracyBody table.acc');
+      const th = [...t.querySelectorAll('tr:first-child th')];
+      const learn = t.rows[1].cells[0];
+      return { labels: th.slice(0, 3).map(x => x.textContent), tips: th.slice(1, 3).map(x => x.title),
+        learn: learn.textContent, learnTip: learn.title };
+    });
+    assert(JSON.stringify(head.labels) === '["Rung","NOM","ACT"]' && /^Nominal/.test(head.tips[0]) && /^Actual/.test(head.tips[1])
+      && head.learn === 'Learn' && /^Learning/.test(head.learnTip),
+      `expected the short NOM/ACT headings and Learn row, with tooltips, got ${JSON.stringify(head)}`);
     await appAR.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
     ok('accuracy report: a thin score is shown but marked provisional; the dash means no data');
   } catch(e){ bad('accuracy report: thin-sample marking', e); }
