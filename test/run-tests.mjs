@@ -26702,10 +26702,11 @@ try {
       const th = [...t.querySelectorAll('tr:first-child th')];
       const learn = t.rows[1].cells[0];
       return { labels: th.slice(0, 3).map(x => x.textContent), tips: th.slice(1, 3).map(x => x.title),
+        count: th[6] && th[6].textContent, countTip: th[6] && th[6].title,
         learn: learn.textContent, learnTip: learn.title };
     });
     assert(JSON.stringify(head.labels) === '["Rung","NOM","ACT"]' && /^Nominal/.test(head.tips[0]) && /^Actual/.test(head.tips[1])
-      && head.learn === 'Learn' && /^Learning/.test(head.learnTip),
+      && head.learn === 'Learn' && /^Learning/.test(head.learnTip) && head.count === '#' && head.countTip === 'Reviews',
       `expected the short NOM/ACT headings and Learn row, with tooltips, got ${JSON.stringify(head)}`);
     await appAR.page.evaluate(() => document.querySelector('#accuracyOverlay .mb-leave').click());
     ok('accuracy report: a thin score is shown but marked provisional; the dash means no data');

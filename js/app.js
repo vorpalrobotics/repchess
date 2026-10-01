@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-484';
+const BUILD_TAG = '-485';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -10190,7 +10190,7 @@ function renderAccuracyReport(rep){
   h += '<table class="acc"><tr><th>Rung</th>'
     + '<th title="Nominal: the interval the rung is meant to be">NOM</th>'
     + '<th title="Actual: how long the interval really lasted, on average">ACT</th>'
-    + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Score</th></tr>';
+    + '<th>A</th><th>B</th><th>C</th><th title="Reviews">#</th><th>Score</th></tr>';
   {
     const L = rep.learning;
     h += `<tr><td title="Learning: the same-day review after memorizing">Learn</td><td>${L.hours}h</td>`
@@ -10212,7 +10212,7 @@ function renderAccuracyReport(rep){
   h += '<p class="acc-sub">Whether bigger rooms fail more often &mdash; the confounder to rule out '
     + 'before reading a rung&rsquo;s rate as a verdict on its interval.</p>';
   h += '<table class="acc"><tr><th>Room size</th><th>A</th><th>B</th><th>C</th>'
-    + '<th>Reviews</th><th>Score</th></tr>';
+    + '<th title="Reviews">#</th><th>Score</th></tr>';
   for(const b of rep.sizes){
     h += `<tr><td>${b.label}</td><td>${b.A}</td><td>${b.B}</td><td>${b.C}</td>`
       + `<td>${b.total}</td><td>${accRate(b.scorePct, b.total)}</td></tr>`;
