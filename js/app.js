@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-482';
+const BUILD_TAG = '-483';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -10142,12 +10142,17 @@ function renderAccuracyReport(rep){
     + `Score weights A as 1, B as ${GRADE_WEIGHT.B} and C as 0 &mdash; so a rung sliding from mostly-A `
     + 'to mostly-B is getting long before anything actually fails. A rung you score near the top is '
     + 'too short; one well down the scale is too long. '
-    + '&ldquo;Ran&rdquo; is how long the interval actually lasted, which is usually longer than nominal.</p>';
-  h += '<table class="acc"><tr><th>Rung</th><th>Nominal</th><th>Ran</th>'
+    + '<abbr title="Nominal">NOM</abbr> is the interval the rung is meant to be; '
+    + '<abbr title="Actual">ACT</abbr> is how long it actually lasted, which is usually longer.</p>';
+  // short headings so the table fits a phone held upright; the tooltips and
+  // the paragraph above spell them out
+  h += '<table class="acc"><tr><th>Rung</th>'
+    + '<th title="Nominal: the interval the rung is meant to be">NOM</th>'
+    + '<th title="Actual: how long the interval really lasted, on average">ACT</th>'
     + '<th>A</th><th>B</th><th>C</th><th>Reviews</th><th>Score</th></tr>';
   {
     const L = rep.learning;
-    h += `<tr><td>Learning</td><td>${L.hours}h</td>`
+    h += `<tr><td title="Learning: the same-day review after memorizing">Learn</td><td>${L.hours}h</td>`
       + `<td>${L.elapsedHours == null ? '<span class="acc-none">&mdash;</span>' : L.elapsedHours + 'h'}</td>`
       + `<td>${L.A}</td><td>${L.B}</td><td>${L.C}</td><td>${L.total}</td>`
       + `<td>${accRate(L.scorePct, L.total)}</td></tr>`;
