@@ -2997,6 +2997,118 @@ try {
 
 } catch(e){ bad('Phase R: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase R2: "Add Unanswered to Analysis Queue" -- every opponent move
+//     below a row with no reply yet, just the row's children or every level,
+//     optionally up to a move number; hidden moves and anything past a
+//     redirect left out; the dialog remembers its choices. ---
+if(shouldRunPhase(['analysis-queue'])){
+try {
+const appR2 = await launchApp();
+try {
+  await seedBackup(appR2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','Nf6','c4','e6','Nc3','Bb4'], reply: 'e3' },
+      { seq: ['d4','Nf6','c4','c5'], hidden: true },                                  // hidden, unanswered
+      { seq: ['d4','Nf6','c4','b6'], reply: 'Nc3', redirectToCastle: 'Gamma', redirectTargetLineId: 'L1' },
+    ]}],
+    games: [
+      { id: 'g1', moves: 'd4 Nf6 c4 g6', white: 'a', black: 'b', result: '*' },                 // unanswered, our move 3
+      { id: 'g2', moves: 'd4 Nf6 c4 e6 Nc3 d5', white: 'a', black: 'b', result: '*' },          // unanswered, our move 4
+      { id: 'g3', moves: 'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O', white: 'a', black: 'b', result: '*' },  // unanswered, our move 5
+      { id: 'g4', moves: 'd4 Nf6 c4 c5', white: 'a', black: 'b', result: '*' },                 // hidden
+      { id: 'g5', moves: 'd4 Nf6 c4 b6 Nc3 Bb7', white: 'a', black: 'b', result: '*' },         // past a redirect
+      { id: 'g6', moves: 'd4 d5', white: 'a', black: 'b', result: '*' },                        // unanswered, our move 2
+    ],
+  }, { defaultPlayerColor: 'white' });
+  await appR2.page.click('.line-row');
+  await appR2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6"]', { timeout: 40000 });
+  const openFrom = async (rowSel) => {
+    await appR2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), rowSel);
+    await appR2.page.evaluate(s => document.querySelector(`${s} [data-act="analyzeUnanswered"]`).click(), rowSel);
+    await appR2.page.waitForFunction(() => document.getElementById('analysisAddOverlay').style.display === 'flex', null, { timeout: 5000 });
+  };
+  const title = () => appR2.page.evaluate(() => document.getElementById('analysisAddTitle').textContent);
+  const setOpts = (anyLevel, maxMove) => appR2.page.evaluate(([a, m]) => {
+    const cb = document.getElementById('analysisAddAnyLevel');
+    cb.checked = a; cb.dispatchEvent(new Event('change'));
+    const mm = document.getElementById('analysisAddMaxMove');
+    mm.value = m; mm.dispatchEvent(new Event('input'));
+  }, [anyLevel, maxMove]);
+
+  // 568. From the Nf6 row: every level finds g6, d5 and O-O (not the hidden
+  //      c5, nor Bb7 past the redirect); just the children finds g6; stopping
+  //      after move 4 drops O-O. Adding queues them shallowest first.
+  try {
+    await openFrom('tr.data-row[data-seq="d4,Nf6"]');
+    const shown = await appR2.page.evaluate(() => document.getElementById('analysisAddUnansweredOpts').style.display !== 'none');
+    assert(shown, 'expected the unanswered options shown');
+    await setOpts(true, '');
+    assert(await title() === 'Add 3 Unanswered to Analysis Queue', `every level: ${await title()}`);
+    await setOpts(false, '');
+    assert(await title() === 'Add 1 Unanswered to Analysis Queue', `children only: ${await title()}`);
+    await setOpts(true, '4');
+    assert(await title() === 'Add 2 Unanswered to Analysis Queue', `up to move 4: ${await title()}`);
+    await appR2.page.evaluate(() => { document.getElementById('analysisAddDepth').value = '22'; document.getElementById('analysisAddLines').value = '2'; });
+    await appR2.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-save').click());
+    await appR2.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, null, { timeout: 5000 });
+    const q = await appR2.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => ({ seq: it.seq.join(' '), depth: it.depth, multipv: it.multipv })));
+    assert(JSON.stringify(q) === JSON.stringify([
+      { seq: 'd4 Nf6 c4 g6', depth: 22, multipv: 2 }, { seq: 'd4 Nf6 c4 e6 Nc3 d5', depth: 22, multipv: 2 }]),
+      `expected g6 then d5 queued at 22/2, got ${JSON.stringify(q)}`);
+    ok('Add Unanswered: every level or just children, up to a move, hidden and redirected left out, shallowest first');
+  } catch(e){ bad('Add Unanswered: what it queues', e); }
+
+  // 569. The dialog reopens with the last choices -- depth, lines, every
+  //      level, the move limit -- and plain "Add to Analysis Queue" keeps the
+  //      depth and lines too, without the unanswered options.
+  try {
+    await openFrom('tr.data-row[data-seq="d4,Nf6"]');
+    const st = await appR2.page.evaluate(() => ({
+      depth: document.getElementById('analysisAddDepth').value, lines: document.getElementById('analysisAddLines').value,
+      any: document.getElementById('analysisAddAnyLevel').checked, max: document.getElementById('analysisAddMaxMove').value }));
+    assert(JSON.stringify(st) === JSON.stringify({ depth: '22', lines: '2', any: true, max: '4' }), `expected the last choices, got ${JSON.stringify(st)}`);
+    await appR2.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-leave').click());
+    await appR2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] .rowMenuBtn').click());
+    await appR2.page.evaluate(() => document.querySelector('tr.data-row[data-seq="d4,Nf6"] [data-act="addToAnalysisQueue"]').click());
+    const single = await appR2.page.evaluate(() => ({
+      depth: document.getElementById('analysisAddDepth').value,
+      opts: document.getElementById('analysisAddUnansweredOpts').style.display !== 'none' }));
+    assert(single.depth === '22' && !single.opts, `expected the depth kept and no unanswered options, got ${JSON.stringify(single)}`);
+    await appR2.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-leave').click());
+    ok('Add to Analysis Queue: remembers its choices from last time');
+  } catch(e){ bad('Add to Analysis Queue: remembered choices', e); }
+
+  // 570. From the move-1 heading the whole system is covered, d5 at move 1
+  //      included.
+  try {
+    await openFrom('tr.context-row');
+    await setOpts(true, '');
+    assert(await title() === 'Add 4 Unanswered to Analysis Queue', `from move 1: ${await title()}`);
+    await appR2.page.evaluate(() => document.querySelector('#analysisAddOverlay .modal-bar .mb-leave').click());
+    ok('Add Unanswered: from the move-1 heading it covers the whole opening system');
+  } catch(e){ bad('Add Unanswered: move-1 heading', e); }
+
+  // 571. The Analysis Queue's heading counts the queued items, and keeps up
+  //      as one is cancelled.
+  try {
+    await appR2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appR2.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    const head = () => appR2.page.evaluate(() => document.querySelector('#analysisQueueBar .modal-bar-title').textContent);
+    const n = await appR2.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(n === 2 && await head() === 'Analysis Queue (2)', `expected "Analysis Queue (2)", got ${JSON.stringify(await head())}`);
+    await appR2.page.evaluate(() => window.__aqTestHooks.cancelAnalysisQueueItem(window.__aqTestHooks.getQueue()[1].id));
+    await appR2.page.waitForFunction(() => document.querySelector('#analysisQueueBar .modal-bar-title').textContent === 'Analysis Queue (1)', null, { timeout: 5000 });
+    await appR2.page.evaluate(() => document.querySelector('#analysisQueueOverlay .mb-leave').click());
+    ok('Analysis Queue: the heading counts the queued items');
+  } catch(e){ bad('Analysis Queue: count in the heading', e); }
+} finally {
+  await appR2.close();
+}
+} catch(e){ bad('Phase R2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase S: "Search for a Variation" -- a not-found result pops up a
 //     clear "Variation not found" alert (in addition to the existing inline
 //     modal text) instead of silently doing nothing, and never touches the
@@ -3901,7 +4013,9 @@ try {
   //      selector came out of the old header row into the body -- it is a
   //      setting for the work, not this modal's lifecycle.
   try {
-    await assertInfoBar(app23.page, 'analysisQueueOverlay', 'Analysis Queue');
+    // the heading also counts the queue (568's phase checks that in detail)
+    const queued = await app23.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    await assertInfoBar(app23.page, 'analysisQueueOverlay', queued ? `Analysis Queue (${queued})` : 'Analysis Queue');
     const threadsInBody = await app23.page.evaluate(() => {
       const el = document.getElementById('aqThreadsField');
       return !!el && !el.closest('.modal-bar');
@@ -15154,8 +15268,8 @@ try {
     await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
     const acts = await appBW.page.evaluate(s =>
       [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act), ctxRowSel);
-    assert(JSON.stringify(acts) === JSON.stringify(['analyzeChildren','addMove','gamesHere','nodeStats']),
-      `expected move 1's context-row menu to offer exactly these 4 actions in order, got ${JSON.stringify(acts)}`);
+    assert(JSON.stringify(acts) === JSON.stringify(['analyzeChildren','analyzeUnanswered','addMove','gamesHere','nodeStats']),
+      `expected move 1's context-row menu to offer exactly these 5 actions in order, got ${JSON.stringify(acts)}`);
     ok('row menu: move 1\'s context-row now has a three-dot menu offering the actions that apply to it');
   } catch(e){ bad('row menu: move 1 context-row menu contents (regression)', e); }
 

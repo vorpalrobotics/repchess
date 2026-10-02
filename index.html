@@ -1878,6 +1878,17 @@
       <label for="analysisAddLines">Number of lines</label>
       <input type="number" id="analysisAddLines" min="1" max="6" step="1" value="4" style="width:6em">
     </div>
+    <!-- "Add Unanswered to Analysis Queue" only; the title counts what these select -->
+    <div id="analysisAddUnansweredOpts" style="display:none">
+      <div class="field checkbox-field">
+        <label><input type="checkbox" id="analysisAddAnyLevel"> At any level below this node</label>
+      </div>
+      <div class="field">
+        <label for="analysisAddMaxMove">Stop after move</label>
+        <input type="number" id="analysisAddMaxMove" min="1" step="1" style="width:6em" placeholder="no limit">
+        <div style="font-size:.72rem;color:#888;margin-top:.2rem">The move number of your reply. Leave blank for no limit.</div>
+      </div>
+    </div>
     <div id="analysisAddError" style="color:#c62828;font-size:.85em;min-height:1.2em"></div>
   </div>
 </div>
@@ -2297,6 +2308,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261002-490"></script>
+<script type="module" src="js/app.js?v=20261002-491"></script>
 </body>
 </html>
