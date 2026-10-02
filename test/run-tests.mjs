@@ -3224,6 +3224,40 @@ try {
     await appR2.page.evaluate(() => document.querySelector('#analysisQueueOverlay .mb-leave').click());
     ok('Analysis Queue: the heading counts the queued items');
   } catch(e){ bad('Analysis Queue: count in the heading', e); }
+
+  // 576. A queue that can't run says why: here the engine never loaded (it
+  //      can't in this harness), with a button to try again.
+  try {
+    await appR2.page.waitForFunction(() => window.__aqTestHooks.engineInit() === 'failed', null, { timeout: 30000 });
+    await appR2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appR2.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    const st = await appR2.page.evaluate(() => ({ text: document.getElementById('aqStatus').textContent,
+      shown: document.getElementById('aqStatus').style.display !== 'none', retry: !!document.getElementById('aqRetryEngine') }));
+    assert(st.shown && /engine couldn't be loaded/.test(st.text) && st.retry, `expected the reason and a retry, got ${JSON.stringify(st)}`);
+    await appR2.page.evaluate(() => document.querySelector('#analysisQueueOverlay .mb-leave').click());
+    ok('Analysis Queue: says why it is waiting when the engine failed to load, with a retry');
+  } catch(e){ bad('Analysis Queue: waiting reason', e); }
+
+  // 577. Closing the VR walk restarts a queue the walk paused -- it used to
+  //      sit there until something unrelated kicked it.
+  try {
+    await appR2.page.evaluate(() => {
+      const h = window.__aqTestHooks;
+      h.enterVrCpuGuard();
+      h.engine.ready = true;
+      h.engine.setThreadBudget = () => Promise.resolve();
+      h.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
+      h.maybeResumeAnalysisQueue();
+    });
+    await appR2.page.waitForTimeout(300);
+    const held = await appR2.page.evaluate(() => window.__aqTestHooks.getQueue().length);
+    assert(held === 1, `expected the queue held while the walk is open, got ${held} item(s)`);
+    const t0 = Date.now();
+    await appR2.page.evaluate(() => window.__aqTestHooks.exitVrCpuGuard());
+    await appR2.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 0, null, { timeout: 1500 });
+    assert(Date.now() - t0 < 1500, 'expected the queue to restart on closing the walk, not on the next safety poll');
+    ok('Analysis Queue: restarts as soon as the VR walk closes');
+  } catch(e){ bad('Analysis Queue: restart on VR close', e); }
 } finally {
   await appR2.close();
 }
