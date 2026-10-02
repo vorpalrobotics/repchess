@@ -142,10 +142,10 @@ const AUTO_CROP_ALPHA = 24;
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 import { OPENAI_STANDING_LS, GEN_MODEL_LS, GEN_CUSTOM_AIR_LS, GEN_QUALITY_LS, GEN_SIZE_LS, GEN_QUALITY_DEFAULT,
          GEN_MODELS, GEN_PROVIDERS, genModelById, lsGet, lsSet, generateOpenAI, generateRunware,
-         enqueueImageJob, configureImageQueue, logImageSpend } from './imageQueue.js?v=20260929-7';
+         enqueueImageJob, configureImageQueue, logImageSpend } from './imageQueue.js?v=20261003-8';
 // app.js reaches the queue through here, so imageQueue.js has a single importer
 export { openImageQueue, openImageQueueForList, resetImageQueue, imageQueueCounts,
-         runwareText, RUNWARE_KEY_LS, queueImagesForList, describeListImageSettings } from './imageQueue.js?v=20260929-7';
+         runwareText, RUNWARE_KEY_LS, queueImagesForList, describeListImageSettings } from './imageQueue.js?v=20261003-8';
 
 let containerEl = null;
 // shared modal button bar (Documents/modal-buttons.md). Two views in this one
@@ -1123,7 +1123,7 @@ function openGenerateModal(){
     };
     await enqueueImageJob({ prompt: f.prompt, standing: f.standing, model: f.spec.id,
       customAir: f.spec.custom ? f.spec.air : '', quality: f.quality, size: f.sizeName,
-      transparent: f.transparent, asset, target: { kind: 'asset' } });
+      transparent: f.transparent, asset, target: NEW_ASSET_TARGET || { kind: 'asset' } });
     q('genStatus').textContent = 'Queued. It will be waiting for you in Menu → Build → Image Queue → Review.';
   };
 
@@ -1692,7 +1692,12 @@ async function deleteEditor(id){
    Asset editor that opens already filled in, which is how the Image Queue's
    Approve lands a generated image: the normal editor and every check its
    Save makes, rather than a second path that writes assets. */
-export async function openNewAssetModal(initialType, allowTypes, preset = null){
+/* `target` (optional): where the new asset is going, as a placement the
+   picker was given (threeVR.js's placementTarget). A queued image made from
+   this editor's Generate... carries it, so approving the image later assigns
+   it there. */
+let NEW_ASSET_TARGET = null;
+export async function openNewAssetModal(initialType, allowTypes, preset = null, { target = null } = {}){
   // saveEditor's duplicate-id check reads the module-level ASSETS cache,
   // which is only ever populated by openAssetManager -- a caller that
   // reaches this modal without the full Asset Manager having been opened
@@ -1725,10 +1730,13 @@ export async function openNewAssetModal(initialType, allowTypes, preset = null){
     ov.style.display = 'flex';
     containerEl = ov;
 
+    const prevTarget = NEW_ASSET_TARGET;
+    NEW_ASSET_TARGET = target;
     let settled = false;
     const finish = (id) => {
       if(settled) return;
       settled = true;
+      NEW_ASSET_TARGET = prevTarget;
       if(!id) discardEditGen();   // left without saving
       ov.style.display = 'none';
       ov.innerHTML = '';
@@ -1780,7 +1788,13 @@ async function applyEditorPreset(preset){
 // Approve / Quick approve in the Image Queue: the New Asset editor filled in
 // from the job (and, for Quick approve, saved for you); plus the asset types
 // the batch form offers, so the queue needs no second copy of them
+/* app.js supplies how an approved image reaches its placement -- it has to
+   know whether the room still exists, which only the castle build can say
+   -- and threeVR.js does the assigning (see assignAssetToPlacement). */
+let placementAssigner = null;
+export function setPlacementAssigner(fn){ placementAssigner = fn; }
 configureImageQueue({
+  assignPlacement: (target, assetId) => placementAssigner ? placementAssigner(target, assetId) : null,
   approve: (job, image, { quick = false } = {}) => openNewAssetModal(job.asset.type || 'billboard-cylindrical', null, {
     image, id: job.asset.id, keywords: job.asset.keywords, resolution: job.asset.resolution,
     hint: String(job.prompt || '').split(/\s+/).slice(0, 5).join(' '), autoSave: quick,
@@ -2023,10 +2037,18 @@ async function renderPicker(ov){
     renderGridBody();
   };
   ov.querySelector('#pickerCloseBtn').onclick = () => closePicker();
+  /* A new asset made from here is the one you wanted: Save takes it all the
+     way back, assigned exactly as a click on its card would, instead of
+     leaving you to find it in the grid. The picker's placement goes along,
+     so an image queued from the editor's Generate... lands here on approval. */
   ov.querySelector('#pickerNewAssetBtn').onclick = async () => {
-    const initialType = (pickerOpts.allow && pickerOpts.allow[0]) || 'billboard-cylindrical';
-    const newId = await openNewAssetModal(initialType, pickerOpts.allow);
-    if(newId) await renderPicker(ov);   // refresh so the new asset shows up for the user to pick
+    const opts = pickerOpts;
+    const initialType = (opts.allow && opts.allow[0]) || 'billboard-cylindrical';
+    const newId = await openNewAssetModal(initialType, opts.allow, null, { target: opts.target || null });
+    if(!newId || pickerOpts !== opts) return;   // cancelled, or this picker is gone
+    const cb = opts.onPick;
+    closePicker();
+    if(cb) cb(newId);
   };
   if(pickerOpts.allowRemove){
     ov.querySelector('#pickerRemoveBtn').onclick = () => { const cb = pickerOpts.onRemove; closePicker(); if(cb) cb(); };

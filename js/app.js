@@ -1,11 +1,11 @@
 import { Engine } from './engine.js?v=20260804-9';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
-import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon } from './threeVR.js?v=20260930-481';
+import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon, assignAssetToPlacement } from './threeVR.js?v=20261003-482';
 import { openAssetManager, closeAssetManager, cropImage, fileToDataUrl, webpEncodeSupported, toWebpDataUrl,
-         openImageQueue, resetImageQueue } from './assets.js?v=20260930-101';
+         openImageQueue, resetImageQueue, setPlacementAssigner } from './assets.js?v=20261003-102';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
-import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20260930-79';
+import { openObjectListManager, closeObjectListManager, importObjectListsData, isObjectListFile, setCastleInfoProvider, openCastleQuizPicker } from './objectLists.js?v=20261003-80';
 import { openNoteEditor, renderNoteInto } from './notes.js?v=20260804-4';
 cytoscape.use(cytoscapeDagre);
 
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-491';
+const BUILD_TAG = '-492';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -11352,6 +11352,30 @@ function closeAssets(){
   }
 }
 const assetManagerOpts = () => ({ bar: $('assetsBar'), onClose: closeAssets });
+
+/* ---------- an approved image going to the place that asked for it ----------
+   A queued image made from a picker in the VR walk is assigned there when
+   it's approved (threeVR.js's assignAssetToPlacement does the assigning,
+   asking before it replaces another image). Only the castle build knows
+   whether the room is still there -- the line may have changed since it was
+   queued -- so that is checked here first; a room that has gone still gets
+   its asset saved, and is just told so. */
+setPlacementAssigner(async (target, assetId) => {
+  const exists = async (roomKey) => {
+    if(!roomKey || !String(roomKey).startsWith('cas:')) return true;   // street-level places are always there
+    const built = await gatherBuiltCastles(await getLines(LOCAL_USER));
+    return built.some(c => c.genRooms.some(r => castleRoomKey(c.instanceId, r.posKey) === roomKey));
+  };
+  // a façade / yard / sign lives on the street, keyed by its castle's entry room
+  const roomKey = ['facade', 'yard', 'sign'].includes(target.what) ? target.key : target.roomKey;
+  if(!(await exists(roomKey))){
+    showAppToast(`Saved "${assetId}", but ${target.label} no longer exists.`);
+    return;
+  }
+  const r = await assignAssetToPlacement(target, assetId);
+  if(r === 'assigned') showAppToast(`Assigned "${assetId}" to ${target.label}.`);
+  else if(r === 'kept') showAppToast(`Saved "${assetId}"; ${target.label} keeps its current image.`);
+});
 
 /* ---------- Image Queue (js/imageQueue.js) ----------
    The menu item carries the review count, and a finished image says so --

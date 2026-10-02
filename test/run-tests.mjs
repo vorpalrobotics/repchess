@@ -84,6 +84,18 @@ if(REQUESTED.includes('--list')){
 for(const name of REQUESTED){
   if(!SUBSYSTEMS[name]) { console.error(`Unknown subsystem "${name}" -- run with --list to see valid names.`); process.exit(1); }
 }
+/* page.waitForFunction does NOT await a predicate that returns a promise --
+   the promise itself is truthy, so the wait succeeds at once. For any check
+   that has to await something in the page (an IndexedDB read, a hook that
+   returns a promise), poll with this instead. */
+async function pollUntil(page, fn, arg = null, { timeout = 10000, interval = 100 } = {}){
+  const t0 = Date.now();
+  for(;;){
+    if(await page.evaluate(fn, arg)) return;
+    if(Date.now() - t0 > timeout) throw new Error(`timed out after ${timeout}ms waiting for: ${String(fn).slice(0, 120)}`);
+    await new Promise(r => setTimeout(r, interval));
+  }
+}
 function shouldRunPhase(tags){
   if(!REQUESTED.length) return true;
   return tags.includes('core') || tags.some(t => REQUESTED.includes(t));
@@ -7224,7 +7236,7 @@ try {
     await appWG2.page.fill('#attrCastleName', 'Benoni Mausoleum');
     await appWG2.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
     await appWG2.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
-    await appWG2.page.waitForFunction(b => window.__aqTestHooks.getPref('L1', b).then(p => !!p?.isCastleRoot), B, { timeout: 5000 });
+    await pollUntil(appWG2.page, b => window.__aqTestHooks.getPref('L1', b).then(p => !!p?.isCastleRoot), B, { timeout: 5000 });
     const st = await appWG2.page.evaluate(async ([a, b, s]) => ({
       a: await window.__aqTestHooks.getPref('L1', a), b: await window.__aqTestHooks.getPref('L1', b),
       label: document.querySelector(`${s} .branchName`)?.textContent,
@@ -7931,9 +7943,11 @@ try {
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: Generate/Crop stack above the New Asset modal', e); }
 
-  // 127. Saving a new asset from the picker's New Asset modal closes it and
-  //      refreshes the picker underneath so the new asset shows up right
-  //      away, ready to pick; Cancel discards without creating anything.
+  // 127. Saving a new asset from the picker's New Asset modal goes all the
+  //      way back: the picker closes and the new asset is assigned to what
+  //      the picker was opened for (here the north wall), as a click on its
+  //      card would. Cancel discards without creating anything and leaves
+  //      the picker open.
   try {
     await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
     await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
@@ -7944,13 +7958,17 @@ try {
     await appAL.page.waitForSelector('#assetImgPreview', { timeout: 5000 });
     await appAL.page.click('#assetNewOverlay .modal-bar .mb-save');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
-    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
-    const cardIds = await appAL.page.evaluate(() =>
-      [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
-    assert(cardIds.some(t => t.includes('test-wall-skin-1')), `expected the new asset in the picker grid, got ${JSON.stringify(cardIds)}`);
-    ok('New Asset: Save closes the modal and the new asset appears in the picker grid');
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    await appAL.page.waitForFunction(() => {
+      const lay = window.__threeTestEdit.layoutSnapshot(), room = window.__threeTestEdit.room();
+      const w = lay[room] && lay[room].walls && lay[room].walls.north;
+      return (w && typeof w === 'object' ? w.id : w) === 'test-wall-skin-1';
+    }, null, { timeout: 5000 });
+    ok('New Asset: Save closes the picker and assigns the new asset to what it was opened for');
 
-    // Cancel path: no second asset created.
+    // Cancel path: no second asset created, and the picker stays open.
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
     await appAL.page.click('#pickerNewAssetBtn');
     await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
     await appAL.page.fill('#assetIdInput', 'test-wall-skin-2');
@@ -7961,10 +7979,41 @@ try {
     const cardIdsAfterCancel = await appAL.page.evaluate(() =>
       [...document.querySelectorAll('#pickerGrid .asset-id')].map(el => el.textContent));
     assert(!cardIdsAfterCancel.some(t => t.includes('test-wall-skin-2')), 'expected Cancel to discard the in-progress new asset');
+    const pickerOpen = await appAL.page.evaluate(() => getComputedStyle(document.getElementById('assetPickerOverlay')).display !== 'none');
+    assert(pickerOpen, 'expected Cancel to leave the picker open');
     ok('New Asset: Cancel discards without creating an asset');
     await appAL.page.click('#pickerCloseBtn');
     await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
   } catch(e){ bad('picker New Asset: Save/Cancel outcomes', e); }
+
+  // 127b. Generate... "Add to queue" in a New Asset opened from the picker
+  //       stores the picker's placement on the job, labelled for the review
+  //       card -- so the image can be assigned there once approved.
+  try {
+    await appAL.page.evaluate(() => window.__threeTestEdit.target({ kind: 'wall', wall: 'north' }));
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.click('#pickerNewAssetBtn');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.fill('#assetIdInput', 'queued-wall-skin');
+    await appAL.page.click('#assetGenBtn');
+    await appAL.page.waitForSelector('#assetGenOverlay', { state: 'visible', timeout: 5000 });
+    await appAL.page.fill('#genApiKey', 'rw-test');
+    await appAL.page.fill('#genPrompt', 'oak panelling');
+    await appAL.page.evaluate(() => document.getElementById('genQueueBtn').click());
+    await pollUntil(appAL.page, async () => (await window.__imageQueueTestHooks.jobs()).some(j => j.asset.id === 'queued-wall-skin'), null, { timeout: 5000 });
+    const job = await appAL.page.evaluate(async () => (await window.__imageQueueTestHooks.jobs()).find(j => j.asset.id === 'queued-wall-skin'));
+    const room = await appAL.page.evaluate(() => window.__threeTestEdit.room());
+    assert(job.target.kind === 'vrPlacement' && job.target.what === 'wall' && job.target.key === 'north' && job.target.roomKey === room
+      && /^a wall in /.test(job.target.label), `expected the wall as the job's placement, got ${JSON.stringify(job.target)}`);
+    await appAL.page.evaluate((id) => window.__imageQueueTestHooks.remove(id), job.id);
+    await appAL.page.click('#genCloseBtn');
+    await appAL.page.waitForSelector('#assetGenOverlay', { state: 'hidden', timeout: 5000 });
+    await appAL.page.click('#assetNewOverlay .modal-bar .mb-leave');
+    await appAL.page.waitForSelector('#assetNewOverlay', { state: 'hidden', timeout: 5000 });
+    await appAL.page.click('#pickerCloseBtn');
+    await appAL.page.waitForSelector('#assetPickerOverlay', { state: 'hidden', timeout: 5000 });
+    ok('picker New Asset: a queued image carries the placement it was made for');
+  } catch(e){ bad('picker New Asset: queued image keeps its placement', e); }
 
   // 128. The New Asset modal's "click the backdrop to close" gesture must
   //      not misfire on an ordinary text-selection drag that starts inside a
@@ -28474,6 +28523,66 @@ try {
     assert(left.length === 0 && !stored, `expected the queue gone after a restore, got ${left.length} jobs, stored=${JSON.stringify(stored)}`);
     ok('Image Queue: a restore discards queued and unreviewed images');
   } catch(e){ bad('Image Queue: restore discards', e); }
+
+  // 572. A job queued from a picker in the VR walk carries where it goes:
+  //      its review card says so, approving it assigns it there -- here with
+  //      the walk closed, so straight into the saved layout -- and a second
+  //      image for the same object asks before replacing (the harness says
+  //      yes). "Don't assign" drops the target.
+  try {
+    const target = { kind: 'vrPlacement', what: 'slot', roomKey: 'testRoom', key: 's1', label: 'an object in Test Castle: Hall' };
+    const approveQuick = async (assetId) => {
+      const id = await appIQ.page.evaluate(async (aid) => (await window.__imageQueueTestHooks.jobs()).find(j => j.asset.id === aid).id, assetId);
+      await appIQ.page.evaluate((jid) => document.querySelector(`#iqBody .iq-card[data-id="${jid}"] [data-act="quick"]`).click(), id);
+      await pollUntil(appIQ.page, async (jid) => !(await window.__imageQueueTestHooks.jobs()).some(j => j.id === jid), id);
+    };
+    const slotNow = () => appIQ.page.evaluate(async () => {
+      const lay = JSON.parse(await getMeta('threeLayout') || '{}');
+      return (lay.testRoom && lay.testRoom.slots && lay.testRoom.slots.s1) || null;
+    });
+    await enqueue({ ...draft('a brass lamp', 'placed-lamp'), target });
+    await waitCounts('c.review >= 1');
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector('#iqBody .iq-target', { timeout: 5000 });
+    const note = await appIQ.page.evaluate(() => document.querySelector('#iqBody .iq-target').textContent.replace(/\s+/g, ' ').trim());
+    assert(/^This image will be assigned to an object in Test Castle: Hall\./.test(note), `expected the placement note, got ${JSON.stringify(note)}`);
+    await approveQuick('placed-lamp');
+    await pollUntil(appIQ.page, async () => {
+      const lay = JSON.parse(await getMeta('threeLayout') || '{}');
+      return lay.testRoom && lay.testRoom.slots && lay.testRoom.slots.s1 === 'placed-lamp';
+    }, null, { timeout: 5000 });
+    const toastSeen = await appIQ.page.waitForFunction(() => [...document.querySelectorAll('#toastStack .app-toast')]
+      .some(t => /Assigned "placed-lamp" to an object in Test Castle: Hall/.test(t.textContent)), null, { timeout: 5000 }).then(() => true, () => false);
+    const toasts = await appIQ.page.evaluate(() => [...document.querySelectorAll('#toastStack .app-toast')].map(t => t.textContent).slice(-4));
+    assert(toastSeen, `expected the assigned toast, got (last 4) ${JSON.stringify(toasts)}`);
+
+    await enqueue({ ...draft('a silver lamp', 'placed-lamp-2'), target });
+    await waitCounts('c.review >= 1');
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector('#iqBody .iq-card', { timeout: 5000 });
+    const dialogs = [];
+    const onDialog = d => dialogs.push(d.message());
+    appIQ.page.on('dialog', onDialog);
+    await approveQuick('placed-lamp-2');
+    await pollUntil(appIQ.page, async () => {
+      const lay = JSON.parse(await getMeta('threeLayout') || '{}');
+      return lay.testRoom.slots.s1 === 'placed-lamp-2';
+    }, null, { timeout: 5000 });
+    appIQ.page.off('dialog', onDialog);
+    assert(dialogs.some(m => /already shows "placed-lamp"\. Replace it with "placed-lamp-2"\?/.test(m)), `expected to be asked before replacing, got ${JSON.stringify(dialogs)}`);
+
+    await enqueue({ ...draft('a bronze lamp', 'placed-lamp-3'), target });
+    await waitCounts('c.review >= 1');
+    await appIQ.page.evaluate(() => window.__imageQueueTestHooks.open('review'));
+    await appIQ.page.waitForSelector('#iqBody [data-act="unassign"]', { timeout: 5000 });
+    await appIQ.page.evaluate(() => document.querySelector('#iqBody [data-act="unassign"]').click());
+    await pollUntil(appIQ.page, async () =>
+      (await window.__imageQueueTestHooks.jobs()).find(j => j.asset.id === 'placed-lamp-3').target.kind === 'asset', null, { timeout: 5000 });
+    await approveQuick('placed-lamp-3');
+    assert(await slotNow() === 'placed-lamp-2', `expected an unassigned image to leave the object alone, got ${await slotNow()}`);
+    await closeQueue();
+    ok('Image Queue: an image queued from the walk is assigned to its object on approval, asking before a replace');
+  } catch(e){ bad('Image Queue: VR placement on approval', e); }
 } finally {
   await appIQ.close();
 }

@@ -5,8 +5,8 @@
    iteration of this prototype, now reached by walking through its front
    door instead of just spawning inside it.
 */
-import { openAssetPicker } from './assets.js?v=20260930-101';
-import { openNewObjectListModal } from './objectLists.js?v=20260930-79';
+import { openAssetPicker } from './assets.js?v=20261003-102';
+import { openNewObjectListModal } from './objectLists.js?v=20261003-80';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 
 let THREE = null;
@@ -2274,11 +2274,78 @@ function ensureRoomLayout(roomKey){
 /* apply an edit (mutate LAYOUT), persist, refresh assets, and rebuild the
    current room in place (keeps the player's position/orientation). */
 async function applyEdit(mutator){
-  snapshotLayoutForUndo();
+  // with the walk closed (an Image Queue approval assigning its image, see
+  // assignAssetToPlacement) there is no room to rebuild and no undo history
+  if(renderer) snapshotLayoutForUndo();
   mutator();
   persistLayout();
   await refreshAssetMap();
-  buildRoom(currentRoomKey);
+  if(renderer) buildRoom(currentRoomKey);
+}
+
+/* ---------- placements: "this asset goes HERE" ----------
+   Every picker opened for something in the walk is also told where its
+   result belongs, as plain data: what (an object slot, a wall, a façade...),
+   the room, and the key within it, plus a readable label. The picker hands
+   it to New Asset, whose Generate... "Add to queue" stores it on the job --
+   so a queued image, approved long after the walk has closed, still lands
+   on the object that asked for it. */
+const PLACE_WHAT = { slot: 'an object', floor: 'the floor', wall: 'a wall', ceiling: 'the ceiling',
+  stair: 'the stairs', facade: 'the façade', yard: 'the yard', sign: 'the sign', door: 'a door',
+  deadEnd: 'the dead-end sign' };
+const BUILDING_PLACES = new Set(['facade', 'yard', 'sign']);   // keyed by building (its entry room), not a room
+function placementTarget(what, roomKey, key = null){
+  let label;
+  if(BUILDING_PLACES.has(what)){
+    const castle = (ROOMS[key] && ROOMS[key].ownerCastle) || '';
+    label = `${PLACE_WHAT[what]} of ${castle || 'a building'}`;
+  } else {
+    const castle = (ROOMS[roomKey] && ROOMS[roomKey].ownerCastle) || '';
+    label = `${PLACE_WHAT[what]} in ${castle ? castle + ': ' : ''}${reviewRoomLabel(roomKey)}`;
+  }
+  return { kind: 'vrPlacement', what, roomKey, key, label };
+}
+function placementCurrentId(t){
+  const r = LAYOUT[t.roomKey];
+  if(!r) return null;
+  const v = {
+    slot: r.slots && r.slots[t.key], floor: r.floor, wall: r.walls && r.walls[t.key], ceiling: r.ceiling,
+    stair: r.stairSurface, facade: r.buildings && r.buildings[t.key], yard: r.yards && r.yards[t.key],
+    sign: r.signs && r.signs[t.key], door: r.doors && r.doors[t.key],
+    deadEnd: t.key ? (r.deadEndTracks && r.deadEndTracks[t.key]) : r.deadEnd,
+  }[t.what];
+  return (v && typeof v === 'object') ? (v.id || null) : (v || null);   // a surface may carry {id, tint...}
+}
+// through the same setter a pick in the walk uses, so its side effects come too
+// (a placeholder label cleared, an entrance door's skin copied to the back door)
+function placementApply(t, id){
+  switch(t.what){
+    case 'slot': return setSlotOverride(t.roomKey, t.key, id);
+    case 'floor': return setFloorOverride(t.roomKey, id);
+    case 'wall': return setWallOverride(t.roomKey, t.key, id);
+    case 'ceiling': return setCeilingOverride(t.roomKey, id);
+    case 'stair': return setStairOverride(t.roomKey, id);
+    case 'facade': return setBuildingFacadeOverride(t.roomKey, t.key, id);
+    case 'yard': return setYardOverride(t.roomKey, t.key, id);
+    case 'sign': return setSignOverride(t.roomKey, t.key, id);
+    case 'door': return setDoorOverride(t.roomKey, t.key, id);
+    case 'deadEnd': return setDeadEndOverride(t.roomKey, id, t.key);
+  }
+}
+/* Puts an approved asset where its placement says, walk open or not. Asks
+   before replacing a different image put there since; a placeholder label
+   is not an image and is just replaced. Returns 'assigned', 'already' or
+   'kept'. Whether the room still exists at all is the caller's question
+   (app.js), since only the castle build knows. */
+export async function assignAssetToPlacement(t, assetId){
+  if(!t || t.kind !== 'vrPlacement' || !assetId || !PLACE_WHAT[t.what]) return 'kept';
+  if(!renderer) await loadLayout();   // walk closed: work on the saved layout, not a stale copy
+  const cur = placementCurrentId(t);
+  if(cur === assetId) return 'already';
+  const where = t.label.charAt(0).toUpperCase() + t.label.slice(1);
+  if(cur && !confirm(`${where} already shows "${cur}". Replace it with "${assetId}"?`)) return 'kept';
+  placementApply(t, assetId);
+  return 'assigned';
 }
 
 function setFloorOverride(roomKey, assetId){
@@ -8373,6 +8440,7 @@ function openPropManager(roomKey, slotId){
   openAssetPicker({
     allow: (slot && slot.allow) || PROP_TYPES, allowRemove: true,
     allowWord: true, currentWord: slotWordFor(roomKey, slotId),
+    target: placementTarget('slot', roomKey, slotId),
     onClose: () => { inputLocked = false; },
     onPick: id => setSlotOverride(roomKey, slotId, id),
     onRemove: () => { deselectProp(); setSlotOverride(roomKey, slotId, null); },
@@ -8384,6 +8452,7 @@ function openSignManager(roomKey, buildingKey){
   const current = signAssetFor(roomKey, buildingKey);
   openAssetPicker({
     allow: ['sign'], allowRemove: !!current,
+    target: placementTarget('sign', roomKey, buildingKey),
     onClose: () => { inputLocked = false; },
     onPick: id => setSignOverride(roomKey, buildingKey, id),
     onRemove: () => setSignOverride(roomKey, buildingKey, null)
@@ -8883,6 +8952,7 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ud.allow || PROP_TYPES, allowRemove: !!(current || slotWordFor(owner, ud.slotId)),
       allowWord: true, currentWord: slotWordFor(owner, ud.slotId),
+      target: placementTarget('slot', owner, ud.slotId),
       onClose: () => { inputLocked = false; },
       onPick: id => setSlotOverride(owner, ud.slotId, id),
       onRemove: () => setSlotOverride(owner, ud.slotId, null),
@@ -8907,6 +8977,7 @@ function handleEditTarget(ud){
   if(ud.kind === 'floor'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'floor', null, floorAssetFor(roomKey)),
+      target: placementTarget('floor', roomKey),
       onPick: id => setFloorOverride(roomKey, id),
       onRemove: () => setFloorOverride(roomKey, null),
       onAdjustApply: adj => setSurfaceAdjust(roomKey, 'floor', null, adj)
@@ -8914,6 +8985,7 @@ function handleEditTarget(ud){
   } else if(ud.kind === 'wall'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'wall', ud.wall, wallAssetFor(roomKey, ud.wall)),
+      target: placementTarget('wall', roomKey, ud.wall),
       onPick: id => setWallOverride(roomKey, ud.wall, id),
       onRemove: () => setWallOverride(roomKey, ud.wall, null),
       onAdjustApply: adj => setSurfaceAdjust(roomKey, 'wall', ud.wall, adj)
@@ -8921,6 +8993,7 @@ function handleEditTarget(ud){
   } else if(ud.kind === 'ceiling-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'ceiling', null, ceilingAssetFor(roomKey)),
+      target: placementTarget('ceiling', roomKey),
       onPick: id => setCeilingOverride(roomKey, id),
       onRemove: () => setCeilingOverride(roomKey, null),
       onAdjustApply: adj => setSurfaceAdjust(roomKey, 'ceiling', null, adj)
@@ -8928,6 +9001,7 @@ function handleEditTarget(ud){
   } else if(ud.kind === 'stair-surface'){
     openAssetPicker({
       allow: ['surface'], allowColor: true, onClose, ...surfacePickerExtras(roomKey, 'stair', null, stairAssetFor(roomKey)),
+      target: placementTarget('stair', roomKey),
       onPick: id => setStairOverride(roomKey, id),
       onRemove: () => setStairOverride(roomKey, null),
       onAdjustApply: adj => setSurfaceAdjust(roomKey, 'stair', null, adj)
@@ -8936,6 +9010,7 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ud.allow, onClose,
       allowWord: true, currentWord: slotWordFor(roomKey, ud.slotId),
+      target: placementTarget('slot', roomKey, ud.slotId),
       onPick: id => setSlotOverride(roomKey, ud.slotId, id),
       onWordApply: word => setSlotWordOverride(roomKey, ud.slotId, word)
     });
@@ -8943,6 +9018,7 @@ function handleEditTarget(ud){
     const current = buildingFacadeFor(ud.roomKey, ud.buildingKey);
     openAssetPicker({
       allow: ['facade'], allowRemove: !!current, onClose,
+      target: placementTarget('facade', ud.roomKey, ud.buildingKey),
       onPick: id => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setBuildingFacadeOverride(ud.roomKey, ud.buildingKey, null)
     });
@@ -8950,6 +9026,7 @@ function handleEditTarget(ud){
     const current = yardAssetFor(ud.roomKey, ud.buildingKey);
     openAssetPicker({
       allow: ['surface'], allowRemove: !!current, onClose,
+      target: placementTarget('yard', ud.roomKey, ud.buildingKey),
       onPick: id => setYardOverride(ud.roomKey, ud.buildingKey, id),
       onRemove: () => setYardOverride(ud.roomKey, ud.buildingKey, null)
     });
@@ -8964,6 +9041,7 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ['door'], onClose,
       allowRemove: !!override,
+      target: placementTarget('door', ud.roomKey, ud.doorKey),
       currentId: (eff && eff.id) || null,
       currentSource: override ? 'room' : (eff ? 'default' : null),
       defaultExists: !!def,
@@ -8991,6 +9069,7 @@ function handleEditTarget(ud){
     openAssetPicker({
       allow: ['door'], onClose,
       allowRemove: !!override,
+      target: placementTarget('deadEnd', ud.roomKey, ud.track || null),
       currentId: (override && override.id) || null,
       currentSource: override ? 'room' : null,
       onPick: id => setDeadEndOverride(ud.roomKey, id, ud.track),
@@ -10117,6 +10196,7 @@ function renderRoomGeomDialog(ov, roomKey){
       openAssetPicker({
         allow: PROP_TYPES, allowRemove: !!(slotAssetFor(target, slotId) || slotWordFor(target, slotId)),
         allowWord: true, currentWord: slotWordFor(target, slotId),
+        target: placementTarget('slot', target, slotId),
         onPick: id => { setSlotOverride(target, slotId, id); refresh(); },
         onRemove: () => { setSlotOverride(target, slotId, null); refresh(); },
         onWordApply: word => { setSlotWordOverride(target, slotId, word); refresh(); },
