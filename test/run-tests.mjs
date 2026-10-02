@@ -9258,6 +9258,19 @@ try {
     await appAU2.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
     ok('Set Attributes: no full castle rebuild when no other castle reaches the room');
   } catch(e){ bad('Set Attributes: redirect list without a rebuild', e); }
+
+  // 567. Settings lists this session's castle rebuilds -- time, castles,
+  //      rooms, new positions -- marking the background one (564's).
+  try {
+    await appAU2.page.evaluate(() => document.getElementById('menuSettings').click());
+    await appAU2.page.waitForFunction(() => document.getElementById('settingsOverlay').style.display === 'flex', null, { timeout: 5000 });
+    const items = await appAU2.page.evaluate(() => [...document.querySelectorAll('#setCastleBuilds li')].map(li => li.textContent));
+    assert(items.length >= 2 && items.every(t => /^\d+\.\ds at .+ — 1 castle, \d+ rooms/.test(t)),
+      `expected the rebuilds listed with their size, got ${JSON.stringify(items)}`);
+    assert(items.some(t => /\(background check\)/.test(t)), `expected the background rebuild marked, got ${JSON.stringify(items)}`);
+    await appAU2.page.evaluate(() => document.querySelector('#settingsOverlay .mb-leave').click());
+    ok('Settings: lists this session\'s castle rebuilds with their time and size');
+  } catch(e){ bad('Settings: castle rebuild list', e); }
 } finally {
   await appAU2.close();
 }
@@ -26736,6 +26749,28 @@ try {
       `expected the promotion PIECE not to change the beard count, got ${JSON.stringify(counts)}`);
     ok('beard: two pawns capture-promoting onto one square rank as two pieces, not eight moves');
   } catch(e){ bad('beard: promotion candidates are deduped by origin square', e); }
+
+  /* 566. The beard count's shortcut: a piece whose SAN names no origin, and
+          any pawn push, is settled without listing every legal move -- it
+          must agree with the full check. Two knights or two rooks able to
+          reach one square still rank youngest first; a pinned knight is no
+          rival (its SAN is plain and the full check agrees); two pawns able
+          to capture onto one square still need, and get, the full check. */
+  try {
+    const got = await appRL.page.evaluate(() => {
+      const p = window.__disambigProbe;
+      const knights = 'rnbqkbnr/pppppppp/8/8/3P4/5N2/PPP1PPPP/RNBQKB1R w KQkq - 0 1';
+      const pinned = '4k3/8/8/8/4b3/5N2/8/1N5K w - - 0 1';
+      const rooks = '4k3/8/8/8/8/8/8/R4RK1 w - - 0 1';
+      const pawns = '4k3/8/8/3p4/2P1P3/8/8/4K3 w - - 0 1';
+      return { Nbd2: p(knights, 'Nbd2'), Nfd2: p(knights, 'Nfd2'), Bd2: p(knights, 'Bd2'),
+               pinnedNd2: p(pinned, 'Nd2'), Rad1: p(rooks, 'Rad1'), Rfd1: p(rooks, 'Rfd1'),
+               cxd5: p(pawns, 'cxd5'), exd5: p(pawns, 'exd5'), e5: p(pawns, 'e5') };
+    });
+    const want = { Nbd2: 0, Nfd2: 1, Bd2: 0, pinnedNd2: 0, Rad1: 0, Rfd1: 1, cxd5: 0, exd5: 1, e5: 0 };
+    assert(JSON.stringify(got) === JSON.stringify(want), `expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+    ok('beard: same-kind pieces and pawn captures still counted; plain moves and pinned rivals draw none');
+  } catch(e){ bad('beard: disambiguator shortcut agrees with the full check', e); }
 
   /* 450. The underpromotion icon: the one dimension of a legal move the
           mnemonic image could not express, since the image is keyed by
