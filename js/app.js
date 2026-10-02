@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-489';
+const BUILD_TAG = '-490';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -139,6 +139,12 @@ const APP_TOAST_MS = 9000;
 const ACTIVITY_LOG = [];            // { label, start, end } for recent tracked jobs
 const STALLS = [];                  // { at, ms, during: [labels] }, most recent last
 const STALL_MIN_MS = 1000;
+/* Every castle rebuild this session, with how long it took and what it
+   covered, shown under Slowdowns in Settings -- the rebuild is the usual
+   suspect behind a stall, and its size says whether a slow one was the
+   repertoire's size or the first-time cost of working out new positions
+   (`fresh`: positions computed for the first time this page load). */
+const CASTLE_BUILDS = [];           // { at, ms, castles, rooms, fresh, background }
 function trackActivity(label, fn){
   const rec = { label, start: performance.now(), end: null };
   ACTIVITY_LOG.push(rec);
@@ -1501,7 +1507,9 @@ function fenForSeq(seq){
 
   const chess = new Chess(parentFen);
   const mv = seq[seq.length - 1];
-  if(!chess.move(mv, {sloppy:true})){
+  const parsed = chess.move(mv, {sloppy:true});
+  if(parsed) rememberMove(parentFen, mv, parsed);   // lastMoveInfo would parse it again otherwise
+  if(!parsed){
     console.warn(`[fenForSeq] move ${seq.length}/${seq.length} "${mv}" failed to apply; ` +
       `returning position after move ${seq.length-1} instead. seq=${JSON.stringify(seq)} ` +
       `fen-before-failure=${parentFen}`);
@@ -1586,21 +1594,43 @@ function plyLabel(seq){
    pieces of the same type that could reach the same square is ignored for
    now (rare in practice, e.g. doubled rooks/knights). */
 const MNEM_WORD_FOR_PIECE = {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
-function lastMoveInfo(seq){
-  if(!seq || !seq.length) return null;
-  // apply only the LAST move onto the (memoized, incremental) position after the
-  // parent seq, instead of replaying the whole line from move 1 each call. This
-  // is what the coverage walk calls per room/edge -- the old full replay made it
-  // ~O(moves^2) over the tree and was the cause of the slow coverage load.
-  const chess = new Chess(fenForSeq(seq.slice(0, -1)));
-  const mv = chess.move(seq[seq.length - 1], { sloppy:true });
+/* Memoized, like _FEN_CACHE: the answer depends only on the position before
+   the move and the move itself, neither of which ever changes, so it can
+   never go stale -- and keying on the position rather than the line lets
+   transpositions share it. It matters: parsing a move with chess.js generates
+   every legal move in the position, and building the castles asks again for
+   the same pair once per room and once more per door, which measured at ~90%
+   of a castle rebuild. Callers get a copy, so nothing can edit the cache. */
+const _MOVE_INFO_CACHE = new Map();   // `${parentFen}|${san}` -> chess.js move, or null
+// stores a parsed move -- fenForSeq hands over the one it already made, so
+// the same move is never parsed twice
+function rememberMove(parentFen, san, mv){
+  mv = mv || null;
   // Castling mnemonic convention: the king "moves onto its rook", so key it by
   // the rook's square (Kh1/Ka1/Kh8/Ka8) rather than chess.js's g1/c1 king
   // landing square. chess.js flags: 'k' = kingside, 'q' = queenside.
   if(mv && (mv.flags.includes('k') || mv.flags.includes('q'))){
     mv.to = (mv.flags.includes('k') ? 'h' : 'a') + (mv.color === 'w' ? '1' : '8');
   }
+  _MOVE_INFO_CACHE.set(parentFen + '|' + san, mv);
   return mv;
+}
+// the cached move itself -- read-only; lastMoveInfo hands out copies
+function moveAt(parentFen, san){
+  const mv = _MOVE_INFO_CACHE.get(parentFen + '|' + san);
+  if(mv !== undefined) return mv;
+  let parsed = null;
+  try { parsed = new Chess(parentFen).move(san, { sloppy:true }); } catch(_){}
+  return rememberMove(parentFen, san, parsed);
+}
+function lastMoveInfo(seq){
+  if(!seq || !seq.length) return null;
+  // apply only the LAST move onto the (memoized, incremental) position after the
+  // parent seq, instead of replaying the whole line from move 1 each call. This
+  // is what the coverage walk calls per room/edge -- the old full replay made it
+  // ~O(moves^2) over the tree and was the cause of the slow coverage load.
+  const mv = moveAt(fenForSeq(seq.slice(0, -1)), seq[seq.length - 1]);
+  return mv && { ...mv };
 }
 function mnemonicWordForSeq(seq, mnemonicsBySquare){
   const info = lastMoveInfo(seq);
@@ -1634,11 +1664,25 @@ function moveDisambiguatorCount(seq){
    rule can be tested against a hand-built endgame FEN -- the cases that
    exercise it (two pawns capture-promoting onto one square) take a contrived
    position that no sensible opening fixture reaches. */
+const _DISAMBIG_CACHE = new Map();   // `${parentFen}|${san}` -> beard count; pure, see _MOVE_INFO_CACHE
 function disambiguatorCountAt(parentFen, san){
-  let mv;
-  try { mv = new Chess(parentFen).move(san, { sloppy:true }); } catch(_){ return 0; }
+  const key = parentFen + '|' + san;
+  let n = _DISAMBIG_CACHE.get(key);
+  if(n === undefined){ n = computeDisambiguatorCount(parentFen, san); _DISAMBIG_CACHE.set(key, n); }
+  return n;
+}
+function computeDisambiguatorCount(parentFen, san){
+  const mv = moveAt(parentFen, san);
   if(!mv) return 0;
   if(mv.flags.includes('k') || mv.flags.includes('q')) return 0;   // castling is never ambiguous
+  /* Most moves can't be ambiguous, and saying so is far cheaper than listing
+     every legal move. A piece's own SAN names its origin ("Nbd2") exactly
+     when another piece of its kind could legally go there too -- chess.js
+     decides that from the same legal-move list used below -- so plain "Nd2"
+     means no beards. A pawn push never has a rival (a pawn in front blocks
+     the double step); only a pawn capture needs the full check. */
+  if(mv.piece !== 'p' && /^[NBRQK]x?[a-h][1-8]/.test(mv.san)) return 0;
+  if(mv.piece === 'p' && !mv.flags.includes('c') && !mv.flags.includes('e')) return 0;
   const candidates = new Chess(parentFen).moves({ verbose:true })
     .filter(m => m.to === mv.to && m.piece === mv.piece && m.color === mv.color);
   /* Ranked by ORIGIN SQUARE, not by move. chess.js enumerates a promotion as
@@ -9264,7 +9308,7 @@ function startBuiltCastlesBuild(lines){
         spinner = showSpinner('Building castles…');
         await paintOrTimeout();
       }
-      const t0 = performance.now();
+      const t0 = performance.now(), fen0 = _FEN_CACHE.size;
       if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
       // memorized-room-stability Phase 3 needs this loaded BEFORE buildGeneratedCastle
       // runs below (it's synchronous, called from inside a Promise.all/map) -- a cache
@@ -9344,7 +9388,11 @@ function startBuiltCastlesBuild(lines){
       // stamped with the current build so a later build detects the mismatch and
       // rebuilds instead of serving this copy after castle-gen logic has changed.
       setMeta(BUILT_CASTLES_CACHE_KEY, JSON.stringify({ version: BUILD_TAG, data: out }));   // fire-and-forget: persist across reloads
-      console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${Math.round(performance.now() - t0)}ms`);
+      const ms = Math.round(performance.now() - t0);
+      CASTLE_BUILDS.push({ at: Date.now(), ms, castles: out.length, rooms: out.reduce((n, c) => n + c.genRooms.length, 0),
+                           fresh: _FEN_CACHE.size - fen0, background: bgNote });
+      if(CASTLE_BUILDS.length > 20) CASTLE_BUILDS.shift();
+      console.log(`[VR] gatherBuiltCastles: built ${out.length} castle(s) in ${ms}ms`);
       return out;
     } finally {
       _builtCastlesBuildPromise = null;
@@ -10306,6 +10354,10 @@ function renderStalls(){
     + `${new Date(st.at).toLocaleTimeString()} &mdash; `
     + (st.during.length ? `during: ${escapeHtml(st.during.join(', '))}` : 'no tracked job was running')
     + '</li>').join('');
+  $('setCastleBuilds').innerHTML = [...CASTLE_BUILDS].reverse().map(b => `<li><strong>${(b.ms / 1000).toFixed(1)}s</strong> at `
+    + `${new Date(b.at).toLocaleTimeString()} &mdash; ${b.castles} castle${b.castles === 1 ? '' : 's'}, ${b.rooms} rooms`
+    + `${b.fresh ? `, ${b.fresh} new position${b.fresh === 1 ? '' : 's'} worked out` : ''}`
+    + `${b.background ? ' (background check)' : ''}</li>`).join('');
 }
 function openSettings(){
   renderStalls();
