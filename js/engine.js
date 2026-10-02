@@ -31,7 +31,7 @@ const STOCKFISH_BUILDS = [
 // isready -> readyok) during init. Generous because a cold wasm fetch/compile
 // can genuinely take a while on a slow connection/device; the point isn't to
 // be tight, it's to eventually fail instead of hanging forever.
-const INIT_TIMEOUT_MS = 20000;
+const INIT_TIMEOUT_MS = 30000;   // 30s: the threaded build's ~7MB download counts against it, and a phone hotspot needed more than 20
 
 export class Engine {
   constructor() {
