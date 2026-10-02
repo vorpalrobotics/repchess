@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-488';
+const BUILD_TAG = '-489';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5010,7 +5010,22 @@ async function refreshRedirectField(saved, roomSeq){
   const ownInstanceId = castleInstanceId(CURRENT_LINE.id, ownCastleName);
   const roomFen = fenForSeq([...roomSeq, saved.reply]);
   let candidates;
-  try { candidates = await redirectCandidatesForRoom(roomFen, ownInstanceId); }
+  try {
+    /* Finding the candidates means building every castle -- seconds, with
+       the page held -- and in most rooms there are none. The repertoire's
+       position index (the one the transposition markers use) answers the
+       cheap question first: does anything other than this castle reach this
+       position at all? Only then build, to list just the real rooms there
+       (the index also holds positions inside a corridor room, which are no
+       room a door could lead to). A redirect already saved always builds, so
+       its target is checked rather than shown as gone. */
+    let maybe = !!saved.redirectToCastle;
+    if(!maybe){
+      const entries = (await repertoirePositionIndex()).get(positionKey(roomFen)) || [];
+      maybe = entries.some(e => e.castle && !(e.lineId === CURRENT_LINE.id && e.castle === ownCastleName));
+    }
+    candidates = maybe ? await redirectCandidatesForRoom(roomFen, ownInstanceId) : [];
+  }
   catch(e){ console.warn('[redirect] failed to gather candidates', e); candidates = []; }
   if(myGen !== attrRedirectGen) return;   // modal moved on while this was in flight
   attrRedirectCandidates = candidates;
@@ -9163,13 +9178,56 @@ function confirmHideBreaksRedirects(count){
 // Fixed by having every caller share the SAME in-flight build instead of
 // starting a second, independent, racing one.
 let _builtCastlesBuildPromise = null;
-async function gatherBuiltCastles(lines){
+/* A rebuild takes seconds and holds the page while it runs, so whoever is
+   waiting on it gets a spinner -- shown only once the build knows it really
+   has to rebuild (a cache hit, in memory or persisted, never flashes one),
+   and only when nothing else already shows a spinner (opening VR has its
+   own). `background` callers -- the transposition scan, which nobody asked
+   for -- don't count: they show their own small indicator instead. */
+let _builtCastlesForeground = 0;    // non-background callers awaiting the in-flight build
+/* A rebuild with nobody waiting on it can only be a background caller's --
+   the transposition scan, at boot or after edits -- so that one shows the
+   small note in the corner instead: it still holds the page, and the note
+   says why, without a modal spinner over work nobody asked for. */
+function showBgWorkIndicator(label){
+  $('bgWorkIndicatorText').textContent = label;
+  $('bgWorkIndicator').classList.add('show');
+}
+function hideBgWorkIndicator(){ $('bgWorkIndicator').classList.remove('show'); }
+let _builtCastlesRebuilding = false;
+// a paint before a long synchronous stretch, but never stuck waiting on one:
+// a hidden tab runs no animation frames at all
+function paintOrTimeout(ms = 100){
+  return Promise.race([nextPaint(), new Promise(r => setTimeout(r, ms))]);
+}
+async function gatherBuiltCastles(lines, { background = false } = {}){
   if(_builtCastlesCache){
     console.log('[VR] gatherBuiltCastles: cache hit (memory), 0ms');
     return _builtCastlesCache;
   }
-  if(_builtCastlesBuildPromise) return _builtCastlesBuildPromise;
+  if(background){
+    if(!_builtCastlesBuildPromise) startBuiltCastlesBuild(lines);
+    return _builtCastlesBuildPromise;
+  }
+  // counted BEFORE starting the build: with the persisted copy already ruled
+  // out, the build reaches its "is anyone waiting?" check without a single
+  // await, before this function would otherwise get to count itself
+  _builtCastlesForeground++;
+  // joining a rebuild already under way (the background scan's, say): it
+  // decided about a spinner before anyone was waiting, so show one here
+  const joining = !!_builtCastlesBuildPromise;
+  if(!joining) startBuiltCastlesBuild(lines);
+  const build = _builtCastlesBuildPromise;
+  const spinner = (joining && _builtCastlesRebuilding && !activeSpinners.size) ? showSpinner('Building castles…') : null;
+  try { return await build; }
+  finally {
+    _builtCastlesForeground--;
+    if(spinner) hideSpinner(spinner);
+  }
+}
+function startBuiltCastlesBuild(lines){
   _builtCastlesBuildPromise = trackActivity('building castles', () => (async () => {
+    let spinner = null, bgNote = false;
     try {
       // the persisted copy is checked at most once per page load -- once we know
       // one way or the other, _builtCastlesCache itself (null or populated) is
@@ -9196,6 +9254,15 @@ async function gatherBuiltCastles(lines){
             console.log(`[VR cache] persisted copy is from a different build (${parsed && parsed.version}, want ${BUILD_TAG}) -- rebuilding`);
           }
         } catch(e){ console.warn('[VR cache] failed to read the persisted cache, rebuilding', e); }
+      }
+      _builtCastlesRebuilding = true;
+      if(!_builtCastlesForeground){
+        bgNote = true;
+        showBgWorkIndicator('Checking for transpositions…');
+        await paintOrTimeout();
+      } else if(!activeSpinners.size){
+        spinner = showSpinner('Building castles…');
+        await paintOrTimeout();
       }
       const t0 = performance.now();
       if(!GAMES){ GAMES = await getGames(LOCAL_USER); }
@@ -9281,9 +9348,11 @@ async function gatherBuiltCastles(lines){
       return out;
     } finally {
       _builtCastlesBuildPromise = null;
+      _builtCastlesRebuilding = false;
+      if(spinner) hideSpinner(spinner);
+      if(bgNote) hideBgWorkIndicator();
     }
   })());
-  return _builtCastlesBuildPromise;
 }
 
 /* ---------- Accuracy Report: the aggregation core ----------
@@ -10579,8 +10648,8 @@ mountInfoBar('aiSpendBar', 'AI Spend', () => { $('aiSpendOverlay').style.display
    the source side any more -- only the target's own entry is left, which
    is exactly 1 distinct castle instance, below this function's own "2+"
    threshold. So the count here naturally reflects what's still unhandled. */
-async function findTransposedRooms(lines){
-  const built = await gatherBuiltCastles(lines);
+async function findTransposedRooms(lines, opts = {}){
+  const built = await gatherBuiltCastles(lines, opts);
   const byPosKey = new Map();   // posKey -> [{ lineId, lineName, castleName, instanceId, room }]
   for(const c of built){
     const line = lines.find(l => l.id === c.lineId);
@@ -10979,14 +11048,15 @@ async function repairBrokenRedirects(broken){
    both callers. */
 async function runTranspositionScan(collisionLabel){
   const lines = await getLines(LOCAL_USER);
-  const groups = await findTransposedRooms(lines);
+  // nobody asked for this scan, so no modal spinner (see gatherBuiltCastles)
+  const groups = await findTransposedRooms(lines, { background: true });
   for(const entries of groups){
     const sig = transpGroupSignature(entries);
     if(transpSeenSignatures.has(sig)) continue;
     transpSeenSignatures.add(sig);
     transpPendingSignatures.add(sig);
   }
-  const built = await gatherBuiltCastles(lines);
+  const built = await gatherBuiltCastles(lines, { background: true });
   const broken = await findBrokenRedirects(lines, built);
   if(broken.length){
     await repairBrokenRedirects(broken);
@@ -15753,6 +15823,8 @@ if(localStorage.getItem('threeTestDebug')){
     // gatherBuiltCastles's own doc comment for the real bug this guards
     // against (withLinePrefs's shared PREFS global).
     gatherRaw: async () => gatherBuiltCastles(await getLines(LOCAL_USER)),
+    // the same, as the background transposition scan calls it
+    gatherBackground: async () => gatherBuiltCastles(await getLines(LOCAL_USER), { background: true }),
   };
 }
 

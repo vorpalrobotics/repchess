@@ -719,6 +719,13 @@
   /* new-transposition toast -- persistent (no auto-dismiss timer), sits
      there until the user clicks Show or dismisses it. */
   #newTranspToast{display:none}
+  /* a background job that holds the page for a while (the transposition
+     scan's castle rebuild) -- says why the page is briefly unresponsive,
+     without a modal spinner over a job nobody asked for */
+  #bgWorkIndicator{display:none;position:fixed;left:.8rem;bottom:.8rem;z-index:40;pointer-events:none;
+    background:rgba(40,40,40,.85);color:#fff;font-size:.8rem;padding:.35rem .75rem;border-radius:1rem;
+    align-items:center;gap:.45rem}
+  #bgWorkIndicator.show{display:flex}
   #newTranspToastShowBtn{white-space:nowrap;padding:.3rem .7rem}
   /* transient informational toast (see showAppToast) -- same card, fades
      itself out on a timer. */
@@ -1743,6 +1750,7 @@
   <!-- persistent toast: raised when an edit/import creates a new cross-castle
        transposition (see findTransposedRooms) -- stays up until Show or
        dismiss, doesn't survive a reload. -->
+  <div id="bgWorkIndicator" role="status"><i class="fa-solid fa-gear fa-spin"></i><span id="bgWorkIndicatorText"></span></div>
   <div id="newTranspToast" class="toast-card">
     <span id="newTranspToastText"></span>
     <button type="button" id="newTranspToastShowBtn">Show</button>
@@ -2287,6 +2295,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261002-488"></script>
+<script type="module" src="js/app.js?v=20261002-489"></script>
 </body>
 </html>
