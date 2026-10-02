@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-497';
+const BUILD_TAG = '-498';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -575,7 +575,9 @@ function nodeCastleAfter(lineSeq, parent){
 // the castle a seq (ending in our move) sits in: nodeCastleAfter applied
 // from the top of the line down to it
 function castleOfSeq(seq){
-  let cur = '';
+  // a White system's own first move can start a castle (its flag lives on the
+  // starting position's pref -- see the move-1 heading's Set Attributes)
+  let cur = nodeCastleAfter([], '');
   for(let i = 1; i <= seq.length; i++) cur = nodeCastleAfter(seq.slice(0, i), cur);
   return cur;
 }
@@ -2359,7 +2361,7 @@ function openCastleGenModal(games, seq){
   $('castleGenError').textContent = '';
   // street-number step: only when this node is a defined castle root (the flag
   // lives on the opponent-move pref one ply back from the room seq)
-  const rootPref = (seq && seq.length >= 2) ? PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))] : null;
+  const rootPref = (seq && seq.length >= 1) ? PREFS[prefKey(CURRENT_LINE.id, seq.slice(0,-1))] : null;
   const isRoot = !!(rootPref?.isCastleRoot && rootPref.castleName?.trim());
   PENDING_CASTLE_GEN.rootPref = isRoot ? rootPref : null;
   $('castleGenStreetField').style.display = isRoot ? '' : 'none';
@@ -4863,11 +4865,13 @@ function gatherLinkedCastles(startCastleName, startGenRooms){
    DIFFERENT line's data (e.g. mid-quiz-session, where PREFS is swapped to the
    quizzed line, which can differ from whatever's open in the tree view). */
 function inheritedCastle(lineSeq, lineId = CURRENT_LINE?.id){
-  for(let s = (lineSeq||[]).slice(); s.length; s = s.slice(0,-1)){
+  // down to and including the starting position ([]): a White system's first
+  // move can itself start a castle, flagged there
+  for(let s = (lineSeq||[]).slice(); ; s = s.slice(0,-1)){
     const p = PREFS[prefKey(lineId, s)];
     if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
+    if(!s.length) return '';
   }
-  return '';
 }
 /* The VR room key a pref's own room (one ply past it, via its `reply`) maps
    to -- for badging a move-table row's room name green when memorized. Takes
@@ -6023,9 +6027,10 @@ function addLineToRepertoireIndex(map, line, prefs){
     if(_FEN_BROKEN.has(seq.join('\x1f'))) return;   // a move that doesn't apply -- no real position here
     const key = positionKey(fen);
     let castle = (pref?.castleOwner || '').trim();
-    for(let s = seq.slice(); !castle && s.length; s = s.slice(0, -1)){
+    for(let s = seq.slice(); !castle; s = s.slice(0, -1)){   // down to [] -- see inheritedCastle
       const p = prefs[prefKey(line.id, s)];
       if(p?.isCastleRoot && p.castleName?.trim()) castle = p.castleName.trim();
+      if(!s.length) break;
     }
     const entry = { lineId: line.id, lineName: line.name || '', seq, castle, roomName: (pref?.name || '').trim() };
     const list = map.get(key) || [];
@@ -6265,14 +6270,47 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <button type="button" data-act="gamesHere"><i class="fa-solid fa-database"></i>Browse Games</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="nodeStats"><i class="fa-solid fa-diagram-project"></i>Node Statistics</button>
+             <button type="button" data-act="attributes"><i class="fa-solid fa-sliders"></i>Set Attributes</button>
            </div>
          </div>
        </td>
        <td class="move" style="padding-left:${depth}em">${depth+1}. ${pvChip(seq.at(-1), fenForSeq(seq))}</td>
        <td class="cnt-col"></td>
        <td class="eval-col"></td>
-       <td class="name-col"></td>`;
+       <td class="name-col"><span class="branchName" style="display:none"></span></td>`;
     tb.appendChild(ctxTr);
+    /* A White system's first move can start a castle -- a gatehouse for the
+       whole system, with a door to every castle further down. Castle starts
+       live on the row BEFORE a castle's first room, with your reply; for
+       1.d4 that is the starting position itself, with 1.d4 as the reply. So
+       its flag, name, street number and notes go on the empty sequence's
+       pref, and everything that resolves a castle start -- the castle build,
+       castleRootRoomSeqs, the street number -- works unchanged. The empty
+       sequence holds only one reply, so in a system with several first moves
+       only one of them can do this. */
+    const rootPrefNow = () => PREFS[prefKey(CURRENT_LINE.id, [])];
+    const ownsRoot = () => { const p = rootPrefNow(); return !p?.reply || p.reply === seq[0]; };
+    const ctxAttrBtn = ctxTr.querySelector('[data-act="attributes"]');
+    ctxAttrBtn.style.display = ownsRoot() ? '' : 'none';
+    refreshBranchName(ctxTr.querySelector('.branchName'), ownsRoot() ? rootPrefNow() : null);
+    ctxAttrBtn.onclick = e => {
+      e.stopPropagation();
+      ctxTr.querySelector('.row-menu').classList.remove('show');
+      openAttributesModal(rootPrefNow() || null, v => {
+        invalidateBuiltCastlesCache();
+        const root = [];
+        savePrefField(root, 'reply', seq[0]);   // claims the starting position for this first move
+        savePrefField(root, 'isCastleRoot', v.isCastleRoot);
+        savePrefField(root, 'castleName', v.castleName);
+        savePrefField(root, 'castleStreetNumber', v.castleStreetNumber);
+        saveCastleMainEntrance(root, v);
+        savePrefField(root, 'name', v.roomName);
+        savePrefField(root, 'note', v.note);
+        savePrefField(root, 'story', v.story);
+        renderTreeBody(CURRENT_LINE);   // the heading's label, and every row below now inside the castle
+        notifyDirty?.();
+      }, [], []);
+    };
     // this row is a real node (white's own trigger move) but has no
     // opp/lineSeq structure like a data-row -- computeSystemStats already
     // treats a white root the same way (computeNodeStats(games,[trigger])),
@@ -11083,7 +11121,7 @@ async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLine
   const answered = decisions.filter(d => d.reply).map(d => d.lineSeq.join(','));
   // the castle a seq sits in, by its own move order ('' when none)
   const castleOfTarget = (sq) => {
-    for(let k = sq.length; k >= 1; k--){
+    for(let k = sq.length; k >= 0; k--){   // down to [] -- see inheritedCastle
       const p = P(sq.slice(0, k));
       if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
     }

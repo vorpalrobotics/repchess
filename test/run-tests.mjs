@@ -7547,6 +7547,94 @@ try {
 }
 } catch(e){ bad('Phase WG2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase WG3: a White system's first move can start a castle -- a
+//     gatehouse over the whole system, with doors into the castles below it
+//     and the lines no castle claims inside it. Its flag lives on the
+//     starting position's pref, with the first move as its reply. ---
+if(shouldRunPhase(['wings'])){
+try {
+const appWG3 = await launchApp();
+try {
+  await seedBackup(appWG3.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'London', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4'], manualReplies: ['Nf6','d5','b5'] },
+      { seq: ['d4','Nf6'], reply: 'Bf4', isCastleRoot: true, castleName: 'London Keep', castleStreetNumber: 2 },
+      { seq: ['d4','d5'], reply: 'Bf4' },          // lead-in, in no castle until the gatehouse
+      { seq: ['d4','b5'], reply: 'e4' },           // an oddball line
+    ]}],
+    games: [],
+  }, { defaultPlayerColor: 'white' });
+  await appWG3.page.click('.line-row');
+  await appWG3.page.waitForSelector('tr.context-row', { timeout: 40000 });
+  const W = (fn, ...args) => appWG3.page.evaluate(({ f, a }) => window.__wingTestHooks[f](...a), { f: fn, a: args });
+
+  // 579. Set Attributes on the move-1 heading makes 1.d4 a castle: saved on
+  //      the starting position with 1.d4 as its reply, the heading labelled,
+  //      and the castle rooted at 1.d4.
+  try {
+    await appWG3.page.evaluate(() => document.querySelector('tr.context-row .rowMenuBtn').click());
+    await appWG3.page.evaluate(() => document.querySelector('tr.context-row [data-act="attributes"]').click());
+    await appWG3.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appWG3.page.fill('#attrRoomName', 'Gate');
+    await appWG3.page.check('#attrIsCastleRoot');
+    await appWG3.page.fill('#attrCastleName', 'London Gatehouse');
+    await appWG3.page.fill('#attrStreetNumber', '1');
+    await appWG3.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-save').click());
+    await appWG3.page.waitForSelector('#attributesOverlay', { state: 'hidden', timeout: 5000 });
+    await pollUntil(appWG3.page, () => window.__aqTestHooks.getPref('L1', []).then(p => !!p?.isCastleRoot), null, { timeout: 5000 });
+    const pref = await appWG3.page.evaluate(() => window.__aqTestHooks.getPref('L1', []));
+    assert(pref.reply === 'd4' && pref.castleName === 'London Gatehouse' && pref.name === 'Gate' && String(pref.castleStreetNumber) === '1',
+      `expected the castle saved on the starting position, got ${JSON.stringify(pref)}`);
+    await appWG3.page.waitForFunction(() => document.querySelector('tr.context-row .branchName')?.textContent === 'London Gatehouse: Gate', null, { timeout: 5000 });
+    const roots = await W('roots', 'London Gatehouse');
+    assert(JSON.stringify(roots) === '[["d4"]]', `expected the castle rooted at 1.d4, got ${JSON.stringify(roots)}`);
+    ok('move-1 castle: Set Attributes on the 1.d4 heading starts a castle there');
+  } catch(e){ bad('move-1 castle: Set Attributes on the heading', e); }
+
+  // 580. It builds: the lead-in and the oddball line are its rooms, and the
+  //      castle below is reached by a door, not built a second time; Node
+  //      Statistics counts the same way; a backup keeps it.
+  try {
+    const built = await W('built');
+    const gate = built.find(c => c.castleName === 'London Gatehouse');
+    assert(gate, `expected the gatehouse built, got ${JSON.stringify(built.map(c => c.castleName))}`);
+    const pk = async (sq) => W('posKey', sq);
+    const posKeys = gate.rooms.map(r => r.posKey);
+    for(const sq of [['d4'], ['d4','d5','Bf4'], ['d4','b5','e4']])
+      assert(posKeys.includes(await pk(sq)), `expected ${sq.join(' ')} to be a gatehouse room, got ${JSON.stringify(gate.rooms.map(r => r.seq))}`);
+    assert(!posKeys.includes(await pk(['d4','Nf6','Bf4'])), 'expected London Keep not built inside the gatehouse');
+    const keepKey = await W('roomKey', 'London Keep', ['d4','Nf6','Bf4']);
+    assert(gate.rooms.some(r => r.foreign.includes(keepKey)), 'expected a door from the gatehouse into London Keep');
+
+    const st = await appWG3.page.evaluate(() => window.__statsTestHooks.computeNodeStats(['d4'], 'London Gatehouse'));
+    assert(st.nodeCount === 3 && st.castleNodes === 2, `expected 2 of the 3 nodes in the gatehouse, got ${JSON.stringify(st)}`);
+
+    const backup = await appWG3.page.evaluate(() => window.__backupTestHooks.buildBackupData());
+    const rootPref = backup.lines[0].prefs.find(p => Array.isArray(p.seq) && p.seq.length === 0);
+    assert(rootPref && rootPref.isCastleRoot && rootPref.reply === 'd4' && rootPref.castleName === 'London Gatehouse',
+      `expected the backup to carry it, got ${JSON.stringify(rootPref)}`);
+    ok('move-1 castle: builds the unclaimed lines as rooms with doors to the castles below; stats and backup agree');
+  } catch(e){ bad('move-1 castle: build, stats, backup', e); }
+
+  // 581. In VR it is a real building: its first room (the position after
+  //      1.d4) and a lead-in room can be walked into.
+  try {
+    await openVR(appWG3.page);
+    const gateKey = await W('roomKey', 'London Gatehouse', ['d4']);
+    const d5Key = await W('roomKey', 'London Gatehouse', ['d4','d5','Bf4']);
+    for(const key of [gateKey, d5Key]){
+      await appWG3.page.evaluate((k) => window.__threeTestEdit.enter(k), key);
+      await appWG3.page.waitForFunction((k) => window.__threeTestEdit.room() === k, key, { timeout: 5000 });
+    }
+    await closeVRHelper(appWG3.page);
+    ok('move-1 castle: walkable in VR, its first room included');
+  } catch(e){ bad('move-1 castle: VR', e); }
+} finally {
+  await appWG3.close();
+}
+} catch(e){ bad('Phase WG3: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase PE: the Position & Note modal shows the saved engine eval of its
 //     position (after our reply) under the caption, from whatever analysis
 //     already exists: the position's own, or the parent row's engine line
@@ -15503,8 +15591,8 @@ try {
     await appBW.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), ctxRowSel);
     const acts = await appBW.page.evaluate(s =>
       [...document.querySelector(s).querySelectorAll('.row-menu button[data-act]')].map(b => b.dataset.act), ctxRowSel);
-    assert(JSON.stringify(acts) === JSON.stringify(['analyzeChildren','analyzeUnanswered','addMove','gamesHere','nodeStats']),
-      `expected move 1's context-row menu to offer exactly these 5 actions in order, got ${JSON.stringify(acts)}`);
+    assert(JSON.stringify(acts) === JSON.stringify(['analyzeChildren','analyzeUnanswered','addMove','gamesHere','nodeStats','attributes']),
+      `expected move 1's context-row menu to offer exactly these 6 actions in order, got ${JSON.stringify(acts)}`);
     ok('row menu: move 1\'s context-row now has a three-dot menu offering the actions that apply to it');
   } catch(e){ bad('row menu: move 1 context-row menu contents (regression)', e); }
 
