@@ -3009,6 +3009,104 @@ try {
 
 } catch(e){ bad('Phase R: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase TO: Find Transpose Opportunities -- within one system, a move of
+//     yours (instead of your reply, or where there is none yet) that lands on
+//     a position already in the system. Scored from saved analysis against a
+//     limit; the rest can be queued; Go to row opens the row. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appTO = await launchApp();
+try {
+  const D1 = ['d4','e6','c4','Nf6'];     // reply Nf3; Nc3 transposes to 1.d4 Nf6 2.c4 e6 3.Nc3
+  await seedBackup(appTO.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Queen Pawn', color: 'white', openingMoves: ['d4','c4'], prefs: [
+      { seq: ['d4'], manualReplies: ['Nf6','e6'] },
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4'], manualReplies: ['e6'] },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+      { seq: ['d4','e6'], reply: 'c4' },
+      { seq: ['d4','e6','c4'], manualReplies: ['Nf6'] },
+      { seq: D1, reply: 'Nf3', evalLines: [
+        { type: 'cp', value: 30, depth: 40, pv: '4.Nf3 b6', pvUci: ['g1f3','b7b6'] },
+        { type: 'cp', value: 22, depth: 40, pv: '4.Nc3 Bb4', pvUci: ['b1c3','f8b4'] },
+        { type: 'cp', value: 10, depth: 40, pv: '4.g3 d5', pvUci: ['g2g3','d7d5'] },
+        { type: 'cp', value: 5, depth: 40, pv: '4.e3 d5', pvUci: ['e2e3','d7d5'] } ] },
+      { seq: [...D1, 'Nf3'], manualReplies: ['b6'] },
+      { seq: [...D1, 'Nf3', 'b6'], reply: 'g3' },
+      { seq: ['c4'], manualReplies: ['e6'] },
+      { seq: ['c4','e6'], reply: 'd4' },
+      { seq: ['c4','e6','d4'], manualReplies: ['Nf6'] },     // 1.c4 e6 2.d4 Nf6: no reply yet
+    ]}],
+    games: [],
+  }, { defaultPlayerColor: 'white' });
+  await appTO.page.waitForSelector('.line-row', { timeout: 40000 });
+  const find = async ({ maxLoss = 15, depth = 40, lines = 4, maxMove = '' } = {}) => {
+    await appTO.page.evaluate(() => document.getElementById('menuFindTranspOpps').click());
+    await appTO.page.waitForFunction(() => document.getElementById('transpOppOverlay').style.display === 'flex', null, { timeout: 5000 });
+    await appTO.page.evaluate(([a, b, c, d]) => {
+      document.getElementById('toMaxLoss').value = a; document.getElementById('toDepth').value = b;
+      document.getElementById('toLines').value = c; document.getElementById('toMaxMove').value = d;
+      document.getElementById('toFindBtn').click();
+    }, [maxLoss, depth, lines, maxMove]);
+    await appTO.page.waitForFunction(() => /checked in/.test(document.getElementById('toStatus').textContent), null, { timeout: 15000 });
+    return appTO.page.evaluate(() => ({
+      status: document.getElementById('toStatus').textContent,
+      sections: [...document.querySelectorAll('#toResults .to-section')].map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+      rows: [...document.querySelectorAll('#toResults .to-row')].map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+    }));
+  };
+
+  // 573. Three decisions with a transposing move: Nc3 instead of Nf3 after
+  //      1.d4 e6 2.c4 Nf6 (scored: 8 cp below the best, within 15, saves
+  //      the one reply under Nf3); Nf3 instead of Nc3 after 1.d4 Nf6 2.c4 e6
+  //      (no analysis saved); and both of them where 1.c4 e6 2.d4 Nf6 has no
+  //      reply yet. Ranked by what they save.
+  try {
+    const r = await find();
+    assert(/4 opportunities found/.test(r.status), `expected 4 opportunities, got ${JSON.stringify(r.status)}`);
+    assert(r.sections[0] === 'Within your limit (1)' && /^Needs analysis \(3\)/.test(r.sections[1]), `sections: ${JSON.stringify(r.sections)}`);
+    assert(/1\.d4 e6 2\.c4 Nf6 — your move Instead of Nf3 \(\+0\.30\), Nc3 \(\+0\.22, 8 cp below the best\) transposes to/.test(r.rows[0])
+      && /saves 1 move/.test(r.rows[0]), `expected the scored one first, got ${JSON.stringify(r.rows[0])}`);
+    assert(r.rows.filter(t => /No reply yet/.test(t) && /nothing new to learn/.test(t)).length === 2, `expected both unanswered ones, got ${JSON.stringify(r.rows)}`);
+    assert(r.rows.some(t => /Instead of Nc3, Nf3 transposes/.test(t) && /no saved analysis/.test(t)), `expected the unscored one, got ${JSON.stringify(r.rows)}`);
+    ok('Transpose opportunities: answered and unanswered decisions, scored from saved analysis, ranked by savings');
+  } catch(e){ bad('Transpose opportunities: what it finds', e); }
+
+  // 574. The limits: at 5 cp the scored one is weaker than the limit; a
+  //      deeper depth requirement turns it into "needs analysis"; stopping
+  //      after move 2 finds nothing (every decision here is for move 3).
+  try {
+    let r = await find({ maxLoss: 5 });
+    assert(r.sections[0] === 'Within your limit (0)' && r.sections.some(t => /^Weaker than your limit \(1\)/.test(t)), `5 cp: ${JSON.stringify(r.sections)}`);
+    r = await find({ depth: 45 });
+    assert(r.sections[0] === 'Within your limit (0)' && /^Needs analysis \(4\)/.test(r.sections[1]), `depth 45: ${JSON.stringify(r.sections)}`);
+    r = await find({ maxMove: 2 });
+    assert(/0 opportunities found/.test(r.status), `stop after move 2: ${JSON.stringify(r.status)}`);
+    ok('Transpose opportunities: loss limit, analysis depth and move limit all apply');
+  } catch(e){ bad('Transpose opportunities: limits', e); }
+
+  // 575. "Queue analysis" queues each position needing it once, at the
+  //      dialog's depth and lines; Go to row opens the system and focuses it.
+  try {
+    await find();
+    await appTO.page.evaluate(() => document.getElementById('toQueueBtn').click());
+    await appTO.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 2, null, { timeout: 5000 });
+    const q = await appTO.page.evaluate(() => window.__aqTestHooks.getQueue().map(it => it.seq.join(' ') + '@' + it.depth + '/' + it.multipv).sort());
+    assert(JSON.stringify(q) === JSON.stringify(['c4 e6 d4 Nf6@40/4', 'd4 Nf6 c4 e6@40/4']), `queued: ${JSON.stringify(q)}`);
+    await appTO.page.evaluate(() => document.querySelector('#toResults [data-go="0"]').click());
+    await appTO.page.waitForFunction(() => {
+      const row = document.querySelector('tr.data-row[data-seq="d4,e6,c4,Nf6"]');
+      return document.getElementById('transpOppOverlay').style.display === 'none' && row && !row.closest('.focus-hidden')
+        && document.getElementById('unfocusBtn').style.display !== 'none';
+    }, null, { timeout: 15000 });
+    ok('Transpose opportunities: queue what needs analysis; Go to row opens the system on that row');
+  } catch(e){ bad('Transpose opportunities: queue and go to row', e); }
+} finally {
+  await appTO.close();
+}
+} catch(e){ bad('Phase TO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase R2: "Add Unanswered to Analysis Queue" -- every opponent move
 //     below a row with no reply yet, just the row's children or every level,
 //     optionally up to a move number; hidden moves and anything past a
@@ -27443,7 +27541,7 @@ try {
     const want = { subTest: ['menuTestChessboard', 'menuQuiz', 'menuTestObjectLists', 'menuAccuracy'],
       subBuild: ['menuMnemonics', 'menuAssets', 'menuObjectLists', 'menuImageQueue', 'menuAiSpend'],
       subAnalysis: ['menuAnalysisQueue', 'menuPerfectOpeningManage', 'menuPerfectOpeningProgress'],
-      subFind: ['menuSearchLine', 'menuBrowseGames', 'menuFindTranspositions'],
+      subFind: ['menuSearchLine', 'menuBrowseGames', 'menuFindTranspositions', 'menuFindTranspOpps'],
       subImportExport: ['menuImport', 'menuDownload', 'menuImportLine', 'menuImportMoveImages', 'menuExport', 'menuExportMnemonics', 'menuExportAssets'] };
     assert(JSON.stringify(groups) === JSON.stringify(want), `unexpected groups: ${JSON.stringify(groups)}`);
 
