@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-487';
+const BUILD_TAG = '-488';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -5306,18 +5306,46 @@ function focusOnLine(dataRow, seq=null){
   clearFocus();
   FOCUSED_SEQ = seq;
   FOCUSED_ROW_KEY = dataRow.dataset.seq || null;
-  let node = dataRow;
-  while(node){
-    const tbody = node.parentElement;
-    const keep = new Set(rowGroup(tbody, node));
+  /* A castle's main entrance stands for the whole castle (castleScopeRoots,
+     the same rule the digraph draws by), so focusing it keeps every wing's
+     row in view too, each with the path down to it. The focus itself is
+     still the main entrance -- FOCUSED_SEQ, the remembered scope and the
+     Show menu are unchanged. A wing whose row isn't in the table (folded
+     into a compact run) is left out, as focusing it alone would be. */
+  const rows = [dataRow];
+  const roots = castleScopeRoots(seq);
+  if(roots && Array.isArray(roots[0])){
+    for(const rs of roots.slice(1)){
+      const key = rs.slice(0, -1).join(',');
+      const row = Array.from($('tree').querySelectorAll('.data-row')).find(r => r.dataset.seq === key);
+      // already in view when it sits inside a kept row's own moves -- walking
+      // up from it would hide the rest of that row's content
+      const inside = r => rowGroup(r.parentElement, r).some(el => el !== r && el.contains(row));
+      if(row && row !== dataRow && !rows.some(inside)) rows.push(row);
+    }
+  }
+  // every table on the way down to any kept row keeps that row's own group;
+  // gathered for all of them first, so an ancestor two entrances share is
+  // kept for both rather than hidden while walking the other's path
+  const keepByBody = new Map();
+  for(const start of rows){
+    let node = start;
+    while(node){
+      const tbody = node.parentElement;
+      if(!keepByBody.has(tbody)) keepByBody.set(tbody, new Set());
+      const keep = keepByBody.get(tbody);
+      rowGroup(tbody, node).forEach(r => keep.add(r));
+      const branchRow = tbody.parentElement.closest('tr.branch-row');
+      if(!branchRow) break;
+      const metaRow = branchRow.previousElementSibling;
+      node = metaRow ? metaRow.previousElementSibling : null;
+    }
+  }
+  for(const [tbody, keep] of keepByBody){
     Array.from(tbody.children).forEach(row=>{
       if(row.classList.contains('context-row')) return; // "1. d4" header — always part of the lead-in, never a sibling option to hide
       if(!keep.has(row)){ row.classList.add('focus-hidden'); focusHidden.push(row); }
     });
-    const branchRow = tbody.parentElement.closest('tr.branch-row');
-    if(!branchRow) break;
-    const metaRow = branchRow.previousElementSibling;
-    node = metaRow ? metaRow.previousElementSibling : null;
   }
   $('unfocusBtn').style.display='inline-block';
   syncTableCastleSelect();
