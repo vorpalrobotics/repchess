@@ -460,6 +460,17 @@
   .games-row.no-link{cursor:default}
   /* cross-castle transposition report */
   .transp-group{border:1px solid #e0e0e0;border-radius:6px;padding:.4rem .6rem;margin-bottom:.5rem}
+  /* Find Transpose Opportunities */
+  .to-intro{font-size:.85em;color:#555;margin-top:0}
+  .to-settings{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center;font-size:.85rem;margin-bottom:.5rem}
+  .to-settings input[type=number]{width:4.5em}
+  .to-status{font-size:.85rem;color:#555;min-height:1.2em;margin-bottom:.3rem}
+  .to-section{margin:.6rem 0 .3rem;font-size:.85rem;font-weight:600;color:#444;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+  .to-row{border:1px solid #e0e0e0;border-radius:6px;padding:.35rem .6rem;margin-bottom:.35rem;font-size:.85rem;
+    display:flex;gap:.6rem;align-items:center;justify-content:space-between}
+  .to-row .to-where{color:#555}
+  .to-row .to-note{color:#888;font-size:.8rem}
+  .to-row button{flex:0 0 auto;white-space:nowrap;font-size:.78rem;padding:.25rem .6rem}
   .transp-group h3{margin:.1rem 0 .4rem;font-size:.85rem;color:#555;font-weight:600}
   .transp-entry{font-size:.85rem;padding:.3rem 0;display:flex;align-items:center;justify-content:space-between;gap:.6rem}
   .transp-entry+.transp-entry{border-top:1px dashed #eee}
@@ -1214,6 +1225,7 @@
         <button id="menuSearchLine">Search for a Variation</button>
         <button id="menuBrowseGames">Browse Games</button>
         <button id="menuFindTranspositions" title="Scan every built castle for positions reached by two or more different castles">Find Transpositions</button>
+        <button id="menuFindTranspOpps" title="Positions where another move of yours would land on a position already in your repertoire">Find Transpose Opportunities</button>
       </div>
       <button class="menu-parent" data-sub="subImportExport">Import / Export</button>
       <div id="subImportExport" class="menu-sub">
@@ -1719,6 +1731,29 @@
         <select id="reviewForecastScope" style="font-size:.9rem;padding:.15rem .3rem"></select>
       </div>
       <div id="reviewForecastBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Find Transpose Opportunities. Immediate: it stages nothing; Find runs the
+     search, Go to row leaves for the move table. -->
+<div id="transpOppOverlay" class="overlay">
+  <div class="modal" style="width:min(50em,94vw);max-height:88vh;display:flex;flex-direction:column">
+    <div id="transpOppBar" class="modal-bar-host"></div>
+    <div class="modal-body">
+      <p class="to-intro">Positions where another move of yours lands on a position already in this
+        opening system &mdash; switching to it means less to memorize. Moves are scored from saved engine
+        analysis; positions without enough of it can be queued for analysis.</p>
+      <div class="to-settings">
+        <label>Opening system <select id="toLine"></select></label>
+        <label>Max loss <input type="number" id="toMaxLoss" min="0" step="1"> cp</label>
+        <label>Analysis depth &ge; <input type="number" id="toDepth" min="1" step="1"></label>
+        <label>Lines &ge; <input type="number" id="toLines" min="1" max="6" step="1"></label>
+        <label>Stop after move <input type="number" id="toMaxMove" min="1" step="1" placeholder="no limit"></label>
+        <button type="button" id="toFindBtn">Find</button>
+      </div>
+      <div id="toStatus" class="to-status"></div>
+      <div id="toResults"></div>
     </div>
   </div>
 </div>
@@ -2310,6 +2345,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261003-492"></script>
+<script type="module" src="js/app.js?v=20261003-493"></script>
 </body>
 </html>

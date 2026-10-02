@@ -70,3 +70,30 @@ means reusing a branch you've already learned instead of memorizing a new one.
 The badge appears on a row's saved analysis lines, in the live engine panel,
 and on the Analysis Queue's lines as they come in. The reply you've already
 chosen on a row isn't flagged -- it would only be matching itself.</p>
+
+<h3>Transpositions you could be using</h3>
+<p>Menu &rarr; Find &rarr; <strong>Find Transpose Opportunities</strong> looks
+the other way: for places where a <em>different</em> move of yours would land
+on a position already in the same opening system. It checks every position
+where it's your move, both those where you've chosen a reply and those where
+you haven't yet. If switching to such a move is sound, everything under your
+current reply becomes unnecessary, and the report says how many moves of
+yours that saves. Where you have no reply yet, the move gives you one with
+nothing new to learn.</p>
+<p>Each move is scored from the engine analysis already saved at that
+position. Set the most you're willing to give up (<strong>Max loss</strong>,
+in centipawns) and how much analysis to trust (its depth and number of
+lines). The report then sorts what it finds into:</p>
+<ul>
+  <li><strong>Within your limit</strong>: worth a look.</li>
+  <li><strong>Needs analysis</strong>: nothing saved there, not deep enough,
+  or the move isn't among the saved lines. <strong>Queue analysis</strong>
+  sends all of these to the Analysis Queue at your depth and lines; run Find
+  again once it has finished.</li>
+  <li><strong>Weaker than your limit</strong>: folded away, for reference.</li>
+</ul>
+<p><strong>Stop after move</strong> leaves out anything deeper than where your
+repertoire ends. <strong>Go to row</strong> opens that position in the move
+table, where you decide. Nothing is changed for you. The search covers one
+opening system at a time and runs no engine itself, so it takes a few
+seconds at most; the settings are remembered.</p>

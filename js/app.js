@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-492';
+const BUILD_TAG = '-493';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -10953,6 +10953,288 @@ async function openTranspositionsReport(){
   await refreshTranspositionsReport();
 }
 $('menuFindTranspositions').onclick = openTranspositionsReport;
+
+/* ---------- Find Transpose Opportunities ----------
+   Within one opening system: every position where it's your move and
+   another move of yours -- not the reply you chose, or any move at all where
+   you haven't chosen one -- lands exactly on a position that already exists
+   in the system, after one of your replies. Switching to it would mean
+   nothing new to memorize from there, and everything under the old reply
+   could go: the report says how much.
+
+   Engine-free. Each candidate is scored from the analysis already saved at
+   that position (its top lines and their scores), against your limit: within
+   it ("good"), worse than it ("weaker"), or not knowable from what is saved
+   ("needs analysis" -- none saved, too shallow, too few lines, or the move
+   isn't among them while the saved lines are all within the limit). Those
+   can be queued in one go through the Analysis Queue; then Find again.
+
+   Speed: every legal move at every decision would be far too slow through
+   chess.js (each move it makes builds its SAN, with its own legal-move
+   pass), so moves are first applied to a bare piece layout and only one
+   whose layout matches a known position is played for real. */
+const LS_TRANSP_OPP_PREFS = 'repchess_transpOppPrefs';
+let TO_RESULTS = null;   // { line, rows } of the last Find
+function toPrefs(){
+  try { return { maxLoss: 15, depth: 40, lines: 4, maxMove: '', ...(JSON.parse(localStorage.getItem(LS_TRANSP_OPP_PREFS) || '{}') || {}) }; }
+  catch { return { maxLoss: 15, depth: 40, lines: 4, maxMove: '' }; }
+}
+async function openTranspOpps(){
+  $('menuList').style.display = 'none';
+  const lines = await getLines(LOCAL_USER);
+  const sel = $('toLine');
+  sel.innerHTML = lines.map(l => `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name || l.id)}</option>`).join('');
+  if(CURRENT_LINE && lines.some(l => l.id === CURRENT_LINE.id)) sel.value = CURRENT_LINE.id;
+  const p = toPrefs();
+  $('toMaxLoss').value = p.maxLoss; $('toDepth').value = p.depth; $('toLines').value = p.lines; $('toMaxMove').value = p.maxMove || '';
+  $('toStatus').textContent = lines.length ? 'Choose the settings and press Find.' : 'No opening systems yet.';
+  $('toResults').innerHTML = '';
+  TO_RESULTS = null;
+  $('transpOppOverlay').style.display = 'flex';
+}
+$('menuFindTranspOpps').onclick = openTranspOpps;
+mountInfoBar('transpOppBar', 'Transpose Opportunities', () => { $('transpOppOverlay').style.display = 'none'; });
+
+// the piece layout (FEN field 1) after a verbose chess.js move, from `grid`
+// (chess.board()) -- placement only, which is all the pre-filter needs
+function placementAfter(grid, m){
+  const g = grid.map(row => row.slice());
+  const at = sq => [8 - +sq[1], sq.charCodeAt(0) - 97];
+  const ch = (type, color) => color === 'w' ? type.toUpperCase() : type;
+  const [fr, fc] = at(m.from), [tr, tc] = at(m.to);
+  g[fr][fc] = null;
+  if(m.flags.includes('e')) g[fr][tc] = null;                       // en passant: the captured pawn sits beside
+  g[tr][tc] = { type: m.promotion || m.piece, color: m.color };
+  if(m.flags.includes('k')){ g[tr][7] = null; g[tr][5] = { type: 'r', color: m.color }; }
+  if(m.flags.includes('q')){ g[tr][0] = null; g[tr][3] = { type: 'r', color: m.color }; }
+  return g.map(row => {
+    let out = '', empty = 0;
+    for(const c of row){
+      if(!c){ empty++; continue; }
+      if(empty){ out += empty; empty = 0; }
+      out += ch(c.type, c.color);
+    }
+    return out + (empty || '');
+  }).join('/');
+}
+// a saved engine line's score from the side to move's point of view (`ourColor`)
+function toScore(l, ourColor){
+  const v = l.type === 'mate' ? (l.value > 0 ? 100000 - l.value : -100000 - l.value) : l.value;
+  return ourColor === 'white' ? v : -v;
+}
+function toFmt(cp){
+  if(Math.abs(cp) >= 90000) return cp > 0 ? 'mate' : 'mated';
+  return (cp >= 0 ? '+' : '') + (cp / 100).toFixed(2);
+}
+function evalLineFirstUci(l, fen){
+  if(l.pvUci && l.pvUci.length) return l.pvUci[0];
+  const tok = String(l.pv || '').trim().split(/\s+/)[0] || '';
+  const san = tok.replace(/^\d+\.(\.\.)?/, '');
+  return san ? sanToUci(fen, san) : null;
+}
+
+/* The search, for one line: { rows: [...], decisions } where each row is
+   { lineSeq, reply, move, uci, target, saves, status: 'good'|'weak'|'needs',
+     score, replyScore, loss, why }. Yields to the page every few dozen ms. */
+async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLines, maxMove }, onProgress){
+  const prefs = (CURRENT_LINE && line.id === CURRENT_LINE.id) ? PREFS : await getAllPrefs(line.id);
+  if(!GAMES) GAMES = await getGames(LOCAL_USER);
+  const games = gamesForLineColor(GAMES, line.color);
+  const P = sq => prefs[prefKey(line.id, sq)];
+  const ourColor = line.color;
+
+  // 1. walk the system: every position after one of your replies (the
+  //    targets), and every decision of yours, answered or not
+  const targets = new Map();       // positionKey -> [seq]
+  const placements = new Set();    // their piece layouts, for the pre-filter
+  const decisions = [];            // { lineSeq, reply }
+  const addTarget = sq => {
+    if(_FEN_BROKEN.has(sq.join('\x1f'))) return;
+    const fen = fenForSeq(sq);
+    const k = positionKey(fen);
+    const list = targets.get(k);
+    if(list) list.push(sq); else targets.set(k, [sq]);
+    placements.add(fen.split(' ')[0]);
+  };
+  let frontier = [];
+  const visitOpp = lineSeq => {
+    const p = P(lineSeq);
+    if(p?.hidden) return;
+    decisions.push({ lineSeq, reply: p?.reply || null });
+    if(!p?.reply) return;
+    const sq = [...lineSeq, p.reply];
+    addTarget(sq);
+    if(!p.redirectToCastle) frontier.push(sq);   // a redirected room's continuation lives in the other castle
+  };
+  for(const t of (line.openingMoves || [])){
+    if(line.color === 'black') visitOpp([t]);
+    else if(!P([t])?.hidden){ addTarget([t]); frontier.push([t]); }
+  }
+  while(frontier.length){
+    const cur = frontier; frontier = [];
+    for(const sq of cur){
+      let {counts, tot} = replies(games, sq);
+      const manual = P(sq)?.manualReplies || [];
+      manual.forEach(m => { if(!(m in counts)) counts[m] = 0; });
+      ({counts} = filterCountsForLine(counts, tot, manual, line));
+      for(const opp of Object.keys(counts)) visitOpp([...sq, opp]);
+    }
+  }
+  const answered = decisions.filter(d => d.reply).map(d => d.lineSeq.join(','));
+
+  // 2. at each decision, every move that lands on a target
+  const rows = [];
+  let tChunk = performance.now();
+  for(let i = 0; i < decisions.length; i++){
+    if(performance.now() - tChunk > 40){
+      onProgress?.(i, decisions.length);
+      await new Promise(r => setTimeout(r, 0));
+      tChunk = performance.now();
+    }
+    const { lineSeq, reply } = decisions[i];
+    if(maxMove && Math.ceil((lineSeq.length + 1) / 2) > maxMove) continue;   // your reply's move number
+    if(_FEN_BROKEN.has(lineSeq.join('\x1f'))) continue;
+    const fen = fenForSeq(lineSeq);
+    const chess = new Chess(fen);
+    const grid = chess.board();
+    const replyKey = reply ? positionKey(fenForSeq([...lineSeq, reply])) : null;
+    const under = reply ? [...lineSeq, reply].join(',') + ',' : null;
+    let saved = null;   // the scoring, worked out once per decision, only if needed
+    for(const m of chess.moves({ verbose: true })){
+      if(!placements.has(placementAfter(grid, m))) continue;
+      chess.move({ from: m.from, to: m.to, promotion: m.promotion });
+      const key = positionKey(chess.fen());
+      chess.undo();
+      if(key === replyKey) continue;
+      // a target reached only through the reply being replaced is no saving
+      const tgts = (targets.get(key) || []).filter(t => !under || !(t.join(',') + ',').startsWith(under));
+      if(!tgts.length) continue;
+      const target = tgts.sort((a, b) => a.length - b.length)[0];
+      if(!saved){
+        const p = P(lineSeq);
+        const lines = (p?.evalLines && p.evalLines.length) ? p.evalLines : (p?.eval ? [p.eval] : []);
+        const scored = lines.map(l => ({ uci: evalLineFirstUci(l, fen), score: toScore(l, ourColor), depth: l.depth || 0 }));
+        const minDepth = scored.length ? Math.min(...scored.map(x => x.depth)) : 0;
+        saved = { scored, minDepth, legal: chess.moves().length,
+                  replyUci: reply ? sanToUci(fen, reply) : null };
+      }
+      const uci = m.from + m.to + (m.promotion || '');
+      const { scored, minDepth, legal, replyUci } = saved;
+      const best = scored.length ? Math.max(...scored.map(x => x.score)) : null;
+      const mine = scored.find(x => x.uci === uci);
+      const rep = replyUci ? scored.find(x => x.uci === replyUci) : null;
+      let status, why = '', loss = null;
+      if(!scored.length){ status = 'needs'; why = 'no saved analysis'; }
+      else if(minDepth < depth){ status = 'needs'; why = `analysed only to depth ${minDepth}`; }
+      else if(mine){
+        loss = best - mine.score;
+        status = loss <= maxLoss ? 'good' : 'weak';
+      } else {
+        const worst = Math.min(...scored.map(x => x.score));
+        if(best - worst > maxLoss) status = 'weak';   // worse than every saved line, one of which is already past the limit
+        else if(scored.length >= legal) status = 'weak';
+        else { status = 'needs'; why = `not among the ${scored.length} saved line${scored.length === 1 ? '' : 's'}`; }
+        if(status === 'needs' && scored.length < minLines) why = `only ${scored.length} line${scored.length === 1 ? '' : 's'} saved`;
+      }
+      const saves = reply ? answered.filter(a => (a + ',').startsWith(under)).length : 0;
+      rows.push({ lineSeq, reply, move: m.san, uci, target, saves, status, why, loss,
+                  score: mine ? mine.score : null, replyScore: rep ? rep.score : null });
+    }
+  }
+  onProgress?.(decisions.length, decisions.length);
+  // the target's castle and room, for the report
+  for(const r of rows){
+    let castle = '';
+    for(let k = r.target.length; k >= 1 && !castle; k--){
+      const p = P(r.target.slice(0, k));
+      if(p?.isCastleRoot && p.castleName?.trim()) castle = p.castleName.trim();
+    }
+    const room = (P(r.target.slice(0, -1))?.name || '').trim();
+    r.targetLabel = castle ? `${castle}: ${room || movePairLabel(r.target) || seqToNotation(r.target)}` : (room || 'outside any castle');
+  }
+  rows.sort((a, b) => (b.saves - a.saves) || (a.lineSeq.length - b.lineSeq.length));
+  return { rows, decisions: decisions.length };
+}
+
+function renderTranspOpps(){
+  const box = $('toResults');
+  if(!TO_RESULTS){ box.innerHTML = ''; return; }
+  const { rows } = TO_RESULTS;
+  const rowHtml = (r, i) => {
+    const instead = r.reply
+      ? `Instead of <strong>${escapeHtml(r.reply)}</strong>${r.replyScore != null ? ` (${toFmt(r.replyScore)})` : ''}, `
+      : '<span class="to-note">No reply yet:</span> ';
+    const score = r.score != null ? ` (${toFmt(r.score)}${r.loss ? `, ${r.loss} cp below the best` : ''})` : '';
+    const gain = r.reply ? `saves ${r.saves} move${r.saves === 1 ? '' : 's'}` : 'nothing new to learn';
+    return `<div class="to-row" data-i="${i}">
+      <div>
+        <div class="to-where">${escapeHtml(seqToNotation(r.lineSeq))} &mdash; your move</div>
+        <div>${instead}<strong>${escapeHtml(r.move)}</strong>${score} transposes to <strong>${escapeHtml(r.targetLabel)}</strong></div>
+        <div class="to-note">via ${escapeHtml(seqToNotation(r.target))} &middot; ${gain}${r.why ? ` &middot; ${escapeHtml(r.why)}` : ''}</div>
+      </div>
+      <button type="button" data-go="${i}">Go to row</button>
+    </div>`;
+  };
+  const part = (status) => rows.map((r, i) => [r, i]).filter(([r]) => r.status === status);
+  const good = part('good'), needs = part('needs'), weak = part('weak');
+  const needSeqs = [...new Set(needs.map(([r]) => r.lineSeq.join(',')))];
+  box.innerHTML =
+    `<div class="to-section">Within your limit (${good.length})</div>` +
+    (good.length ? good.map(([r, i]) => rowHtml(r, i)).join('') : '<p class="to-note">None.</p>') +
+    `<div class="to-section">Needs analysis (${needs.length})` +
+      (needSeqs.length ? ` <button type="button" id="toQueueBtn">Queue analysis for ${needSeqs.length} position${needSeqs.length === 1 ? '' : 's'}</button>` : '') + `</div>` +
+    (needs.length ? needs.map(([r, i]) => rowHtml(r, i)).join('') : '<p class="to-note">None.</p>') +
+    (weak.length ? `<details><summary class="to-section">Weaker than your limit (${weak.length})</summary>${weak.map(([r, i]) => rowHtml(r, i)).join('')}</details>` : '');
+  box.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => toGoToRow(TO_RESULTS.rows[+b.dataset.go]); });
+  const q = $('toQueueBtn');
+  if(q) q.onclick = async () => {
+    const p = toPrefs();
+    await addChildrenToAnalysisQueue(TO_RESULTS.line.id, needSeqs.map(k => k.split(',')), p.depth, p.lines, 'position');
+    q.disabled = true;
+    q.textContent = 'Queued -- Find again once the queue has finished';
+  };
+}
+// the move table, opened on that system if another is showing, with the
+// decision's row revealed and focused -- the same as the VR's "open unanswered"
+async function toGoToRow(r){
+  if(!r || !TO_RESULTS) return;
+  const lineId = TO_RESULTS.line.id;
+  $('transpOppOverlay').style.display = 'none';
+  if(!CURRENT_LINE || CURRENT_LINE.id !== lineId){
+    const line = (await getLines(LOCAL_USER)).find(l => l.id === lineId);
+    if(line) await openLine(line);
+  }
+  if(CURRENT_LINE?.id === lineId) revealSeqInTree(r.lineSeq);
+}
+$('toFindBtn').onclick = async () => {
+  const num = (id, min) => { const v = parseInt($(id).value, 10); return Number.isFinite(v) && v >= min ? v : null; };
+  const maxLoss = num('toMaxLoss', 0), depth = num('toDepth', 1), lines = num('toLines', 1);
+  const mmRaw = $('toMaxMove').value.trim(), maxMove = mmRaw ? num('toMaxMove', 1) : null;
+  if(maxLoss == null || depth == null || lines == null || (mmRaw && maxMove == null)){
+    $('toStatus').textContent = 'Enter whole numbers for the settings (Stop after move may be blank).';
+    return;
+  }
+  try { localStorage.setItem(LS_TRANSP_OPP_PREFS, JSON.stringify({ maxLoss, depth, lines, maxMove: maxMove || '' })); } catch {}
+  const line = (await getLines(LOCAL_USER)).find(l => l.id === $('toLine').value);
+  if(!line) return;
+  $('toFindBtn').disabled = true;
+  $('toResults').innerHTML = '';
+  const spinner = showSpinner('Looking for transpositions…');
+  try {
+    await nextPaint();
+    const res = await trackActivity('finding transpose opportunities', () =>
+      findTransposeOpportunities(line, { maxLoss, depth, lines, maxMove }, (i, n) => {
+        $('spinnerLabel').textContent = `Looking for transpositions… ${i} of ${n} positions`;
+      }));
+    TO_RESULTS = { line, rows: res.rows };
+    $('toStatus').textContent = `${res.decisions} position${res.decisions === 1 ? '' : 's'} with your move checked in ${line.name || 'this system'}; `
+      + `${res.rows.length} opportunit${res.rows.length === 1 ? 'y' : 'ies'} found.`;
+    renderTranspOpps();
+  } finally {
+    hideSpinner(spinner);
+    $('toFindBtn').disabled = false;
+  }
+};
 mountInfoBar('transpBar', 'Transpositions Between Castles', ()=>{
   $('transpOverlay').style.display='none';
   // surface anything a background scan found (and suppressed) while the
