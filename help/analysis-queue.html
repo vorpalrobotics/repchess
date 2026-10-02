@@ -38,7 +38,14 @@ the count in its heading. The item
 being worked on reports its progress live -- current depth against the target,
 and the best lines found so far with their evaluations. Rows can be dragged to
 reorder them, or deleted outright. A <strong>Threads</strong> control sets how
-much CPU the background search may use.</p>
+much CPU the background search may use. If it isn't there, a note says why:
+usually the faster multi-threaded engine didn't load this time, and
+reloading the page fixes it.</p>
+<p>When the queue has work but isn't running it, a line at the top says what
+it's waiting for: the engine still loading, or failed to load (with a button
+to try again), live analysis using the engine, or the VR walk being open --
+the queue pauses at its next item while you walk, and carries on as soon as
+you close it.</p>
 <p>Results are written straight onto the repertoire tree as each position
 finishes, so the evals simply appear on the rows as the queue works down the
 list. A finished item leaves the queue by itself.</p>

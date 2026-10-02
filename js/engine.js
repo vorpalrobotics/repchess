@@ -71,12 +71,17 @@ export class Engine {
   async _doInit() {
     const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated === true
       && typeof SharedArrayBuffer !== 'undefined';
+    // why the engine ended up single-threaded, if it did -- the app says so
+    // instead of just hiding its Threads control (see app.js's queue status)
+    this.isolated = isolated;
+    this.threadedError = null;
     if (isolated) {
       try {
         await this._initThreaded();
         return;
       } catch (err) {
         console.warn('[engine] multi-threaded init failed, falling back to single-threaded', err);
+        this.threadedError = String((err && err.message) || err);
         this._teardownWorker();
       }
     }

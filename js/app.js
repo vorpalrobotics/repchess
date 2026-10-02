@@ -1,4 +1,4 @@
-import { Engine } from './engine.js?v=20260804-9';
+import { Engine } from './engine.js?v=20261004-10';
 import cytoscape from 'https://esm.sh/cytoscape@3.28.1';
 import cytoscapeDagre from 'https://esm.sh/cytoscape-dagre@2.5.0?deps=cytoscape@3.28.1';
 import { openThreeTest, closeThreeTest, refreshAssetsLive, setForeignModalOpen, jumpToRoom, refreshRoomStoryIcon, assignAssetToPlacement } from './threeVR.js?v=20261003-482';
@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-494';
+const BUILD_TAG = '-495';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -14193,7 +14193,16 @@ $('engineStopBtn').onclick = () => {
   }
 };
 
-engine.init().then(() => {
+/* Whether the engine has started, for the Analysis Queue's status line: a
+   queue waiting on an engine that never loaded used to look exactly like a
+   broken queue. 'loading' | 'ready' | 'failed' (+ ENGINE_INIT_ERROR). */
+let ENGINE_INIT = 'loading', ENGINE_INIT_ERROR = '';
+function startEngine(){
+  ENGINE_INIT = 'loading';
+  renderAnalysisQueueModalIfOpen();
+  return engine.init().then(() => {
+  ENGINE_INIT = 'ready';
+  renderAnalysisQueueModalIfOpen();
   // surface the engine mode as soon as it's ready, if nothing is analysing yet.
   // Without the board widget there's no live board to analyse on, so report the
   // engine as not available rather than "ready".
@@ -14208,8 +14217,17 @@ engine.init().then(() => {
   maybeResumePerfectOpening();
 }).catch(err => {
   console.error('[engine] init failed', err);
+  ENGINE_INIT = 'failed';
+  ENGINE_INIT_ERROR = String((err && err.message) || err);
   $('engineDepth').textContent = 'Engine unavailable';
+  renderAnalysisQueueModalIfOpen();
 });
+}
+startEngine();
+// a safety net, like Perfect Opening's own poll: whatever should have
+// restarted the queue and didn't, it starts again within a few seconds.
+// A no-op while it is already working, or while something holds it.
+setInterval(() => { if(ANALYSIS_QUEUE.length && !aqProcessing) maybeResumeAnalysisQueue(); }, 5000);
 
 function formatScore(score, turn){
   // engine scores are relative to the side to move; flip to a White-relative sign
@@ -15086,7 +15104,37 @@ async function aqGrabPointerUp(){
   if(targetIndex != null) await reorderAnalysisQueue(id, targetIndex);
 }
 
+/* What is holding the queue, if anything -- said in the modal, since a
+   queue that can't run otherwise looks just like a broken one. */
+function renderAnalysisQueueStatus(){
+  const el = $('aqStatus');
+  if(!el) return;
+  let html = '';
+  if(ANALYSIS_QUEUE.length && !aqCurrentItem){
+    if(ENGINE_INIT === 'failed'){
+      html = `Waiting: the engine couldn't be loaded${ENGINE_INIT_ERROR ? ` (${escapeHtml(ENGINE_INIT_ERROR)})` : ''}.
+        <button type="button" id="aqRetryEngine">Try loading it again</button>`;
+    } else if(!engine.ready) html = 'Waiting for the engine to finish loading…';
+    else if(vrActive) html = 'Paused while the VR walk is open; it carries on when you close it.';
+    else if(engineState === 'running') html = 'Waiting: live analysis is using the engine. Stop it and the queue carries on.';
+  }
+  el.innerHTML = html;
+  el.style.display = html ? '' : 'none';
+  const retry = $('aqRetryEngine');
+  if(retry) retry.onclick = () => { retry.disabled = true; startEngine(); };
+  // why there is no Threads choice, rather than the control just not being there
+  const note = $('aqThreadsNote');
+  if(note){
+    const single = engine.ready && (!engine.multithreaded || engine.maxThreads <= 1);
+    note.textContent = !single ? ''
+      : engine.multithreaded ? 'Threads: 1 (this device has a single core to spare).'
+      : `Threads: 1. The multi-threaded engine didn't load this time${engine.threadedError ? ` (${engine.threadedError})`
+          : engine.isolated === false ? ' (the page is not cross-origin isolated yet)' : ''}; reloading the page usually fixes it.`;
+    note.style.display = note.textContent ? '' : 'none';
+  }
+}
 function renderAnalysisQueueModal(){
+  renderAnalysisQueueStatus();
   const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
   // the heading counts what is waiting, and keeps up as items finish
   const titleEl = $('analysisQueueBar').querySelector('.modal-bar-title');
@@ -15706,6 +15754,11 @@ function enterVrCpuGuard(){
 function exitVrCpuGuard(){
   vrActive = false;
   engine.setThreadBudget(engine.threads).catch(()=>{});
+  // the queue stops at its next item while the walk is open, and nothing
+  // else restarts it when the walk closes -- it sat there until something
+  // unrelated (a new item, a tab switch) happened to kick it
+  maybeResumeAnalysisQueue();
+  renderAnalysisQueueModalIfOpen();
 }
 
 function maybeResumeAnalysisQueue(){
@@ -16170,6 +16223,9 @@ if(localStorage.getItem('threeTestDebug')){
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),
     reorderAnalysisQueue: (id, targetIndex) => reorderAnalysisQueue(id, targetIndex),
     maybeResumeAnalysisQueue: () => maybeResumeAnalysisQueue(),
+    enterVrCpuGuard: () => enterVrCpuGuard(),
+    exitVrCpuGuard: () => exitVrCpuGuard(),
+    engineInit: () => ENGINE_INIT,
     // drives the real live-analysis state machine (setEngineUI) so a test can
     // simulate "live analysis started" / "explicitly stopped" without needing
     // the cm-chessboard widget this harness can't load.
