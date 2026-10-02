@@ -7194,6 +7194,42 @@ try {
       `expected the choice, under Transpositions, where Gate and the Benoni wing share a position, got ${JSON.stringify(shared)}`);
     ok('Set Attributes: the transposition-marker castle choice appears only where two castles share the position');
   } catch(e){ bad('Set Attributes: castle-owner gating', e); }
+
+  // 562. "Show: <castle>" on a castle with several wings keeps every
+  //      entrance in view -- the main one and the wing made in 559 -- with
+  //      the path to each, and hides the rest; the focus itself stays the
+  //      main entrance. Picking the wing alone still shows just the wing.
+  try {
+    const hidden = (keys) => appWG2.page.evaluate(ks => Object.fromEntries(ks.map(k => {
+      const r = document.querySelector(`tr.data-row[data-seq="${k}"]`);
+      return [k, r ? !!r.closest('.focus-hidden') : 'missing'];
+    })), keys);
+    const MAIN = 'd4,Nf6,g3', WING = B.join(','), PATH = 'd4,Nf6,Nf3', OTHER = 'd4,Nf6,c4';
+    await appWG2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      sel.value = 'castle:Benoni Mausoleum'; sel.dispatchEvent(new Event('change'));
+    });
+    const all = await hidden([MAIN, WING, PATH, OTHER]);
+    assert(all[MAIN] === false && all[WING] === false && all[PATH] === false && all[OTHER] === true,
+      `expected both entrances and the path to the wing shown, the rest hidden, got ${JSON.stringify(all)}`);
+    const focus = await appWG2.page.evaluate(() => document.getElementById('tableCastleSelect').value);
+    assert(focus === 'castle:Benoni Mausoleum', `expected the focus to stay the castle's own entry, got ${JSON.stringify(focus)}`);
+
+    await appWG2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      sel.dispatchEvent(new Event('focus'));   // loads the wing / room entries
+      const opt = [...sel.options].find(o => /wing/.test(o.textContent) && /Benoni/.test(o.textContent));
+      sel.value = opt.value; sel.dispatchEvent(new Event('change'));
+    });
+    const one = await hidden([MAIN, WING]);
+    assert(one[MAIN] === true && one[WING] === false, `expected the wing alone, got ${JSON.stringify(one)}`);
+
+    await appWG2.page.evaluate(() => {
+      const sel = document.getElementById('tableCastleSelect');
+      sel.value = ''; sel.dispatchEvent(new Event('change'));
+    });
+    ok('Show: a castle with several wings shows every entrance; one wing shows just that wing');
+  } catch(e){ bad('Show: every wing of a castle', e); }
 } finally {
   await appWG2.close();
 }
