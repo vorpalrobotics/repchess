@@ -3069,6 +3069,7 @@ try {
     assert(/1\.d4 e6 2\.c4 Nf6 — your move Instead of Nf3 \(\+0\.30\), Nc3 \(\+0\.22, 8 cp below the best\) transposes to/.test(r.rows[0])
       && /saves 1 move/.test(r.rows[0]), `expected the scored one first, got ${JSON.stringify(r.rows[0])}`);
     assert(r.rows.filter(t => /No reply yet/.test(t) && /nothing new to learn/.test(t)).length === 2, `expected both unanswered ones, got ${JSON.stringify(r.rows)}`);
+    assert(r.rows.every(t => /transposes to a position not in any castle yet/.test(t)), `expected the castle-less wording, got ${JSON.stringify(r.rows)}`);
     assert(r.rows.some(t => /Instead of Nc3, Nf3 transposes/.test(t) && /no saved analysis/.test(t)), `expected the unscored one, got ${JSON.stringify(r.rows)}`);
     // every move shown is a chip: the four of the position, the reply, the
     // alternative, and the five of the move order it transposes into
@@ -3116,6 +3117,49 @@ try {
   await appTO.close();
 }
 } catch(e){ bad('Phase TO: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
+// --- Phase TO2: when several move orders reach the target, the report shows
+//     one inside a castle -- where its room is -- even if a castle-less one
+//     is met first. ---
+if(shouldRunPhase(['move-table'])){
+try {
+const appTO2 = await launchApp();
+try {
+  await seedBackup(appTO2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Queen Pawn', color: 'white', openingMoves: ['d4','c4'], prefs: [
+      { seq: ['d4'], manualReplies: ['Nf6','e6'] },
+      { seq: ['d4','Nf6'], reply: 'c4' },
+      { seq: ['d4','Nf6','c4'], manualReplies: ['e6'] },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },                 // the target, in no castle
+      { seq: ['d4','e6'], reply: 'c4' },
+      { seq: ['d4','e6','c4'], manualReplies: ['Nf6'] },
+      { seq: ['d4','e6','c4','Nf6'], reply: 'Nf3' },                 // Nc3 here transposes to it
+      { seq: ['c4'], manualReplies: ['e6'] },
+      { seq: ['c4','e6'], reply: 'd4', isCastleRoot: true, castleName: 'Catalan Keep', castleStreetNumber: 1 },
+      { seq: ['c4','e6','d4'], manualReplies: ['Nf6'] },
+      { seq: ['c4','e6','d4','Nf6'], reply: 'Nc3', name: 'Great Hall' },   // the same position, in a castle
+    ]}],
+    games: [],
+  }, { defaultPlayerColor: 'white' });
+  await appTO2.page.waitForSelector('.line-row', { timeout: 40000 });
+
+  // 578. The Nc3 opportunity is labelled by the castle move order.
+  try {
+    await appTO2.page.evaluate(() => document.getElementById('menuFindTranspOpps').click());
+    await appTO2.page.waitForFunction(() => document.getElementById('transpOppOverlay').style.display === 'flex', null, { timeout: 5000 });
+    await appTO2.page.evaluate(() => { document.getElementById('toMaxMove').value = ''; document.getElementById('toFindBtn').click(); });
+    await appTO2.page.waitForFunction(() => /checked in/.test(document.getElementById('toStatus').textContent), null, { timeout: 15000 });
+    const rows = await appTO2.page.evaluate(() => [...document.querySelectorAll('#toResults .to-row')].map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+    const row = rows.find(t => /^1\.d4 e6 2\.c4 Nf6 — your move Instead of Nf3, Nc3/.test(t));
+    assert(row && /transposes to Catalan Keep: Great Hall/.test(row) && /via 1\.c4 e6 2\.d4 Nf6 3\.Nc3/.test(row),
+      `expected the castle move order, got ${JSON.stringify(rows)}`);
+    ok('Transpose opportunities: a target reached several ways is shown by its move order inside a castle');
+  } catch(e){ bad('Transpose opportunities: prefer the castle move order', e); }
+} finally {
+  await appTO2.close();
+}
+} catch(e){ bad('Phase TO2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
 // --- Phase R2: "Add Unanswered to Analysis Queue" -- every opponent move
 //     below a row with no reply yet, just the row's children or every level,

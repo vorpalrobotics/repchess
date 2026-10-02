@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-496';
+const BUILD_TAG = '-497';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -11081,6 +11081,14 @@ async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLine
     }
   }
   const answered = decisions.filter(d => d.reply).map(d => d.lineSeq.join(','));
+  // the castle a seq sits in, by its own move order ('' when none)
+  const castleOfTarget = (sq) => {
+    for(let k = sq.length; k >= 1; k--){
+      const p = P(sq.slice(0, k));
+      if(p?.isCastleRoot && p.castleName?.trim()) return p.castleName.trim();
+    }
+    return '';
+  };
 
   // 2. at each decision, every move that lands on a target
   const rows = [];
@@ -11109,7 +11117,9 @@ async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLine
       // a target reached only through the reply being replaced is no saving
       const tgts = (targets.get(key) || []).filter(t => !under || !(t.join(',') + ',').startsWith(under));
       if(!tgts.length) continue;
-      const target = tgts.sort((a, b) => a.length - b.length)[0];
+      // several move orders can reach it: show one inside a castle if there
+      // is one -- that's where its room is -- and the shortest among those
+      const target = tgts.sort((a, b) => (!!castleOfTarget(b) - !!castleOfTarget(a)) || (a.length - b.length))[0];
       if(!saved){
         const p = P(lineSeq);
         const lines = (p?.evalLines && p.evalLines.length) ? p.evalLines : (p?.eval ? [p.eval] : []);
@@ -11144,13 +11154,11 @@ async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLine
   onProgress?.(decisions.length, decisions.length);
   // the target's castle and room, for the report
   for(const r of rows){
-    let castle = '';
-    for(let k = r.target.length; k >= 1 && !castle; k--){
-      const p = P(r.target.slice(0, k));
-      if(p?.isCastleRoot && p.castleName?.trim()) castle = p.castleName.trim();
-    }
+    const castle = castleOfTarget(r.target);
     const room = (P(r.target.slice(0, -1))?.name || '').trim();
-    r.targetLabel = castle ? `${castle}: ${room || movePairLabel(r.target) || seqToNotation(r.target)}` : (room || 'outside any castle');
+    // in the tree but in no castle: nothing wrong, it just has no room yet
+    r.targetLabel = castle ? `${castle}: ${room || movePairLabel(r.target) || seqToNotation(r.target)}`
+      : room ? `${room} (not in any castle yet)` : 'a position not in any castle yet';
   }
   rows.sort((a, b) => (b.saves - a.saves) || (a.lineSeq.length - b.lineSeq.length));
   return { rows, decisions: decisions.length };
