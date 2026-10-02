@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-490';
+const BUILD_TAG = '-491';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -256,6 +256,8 @@ const LS_COMPACT_MODE='repchess_compactMode';
    so opening the same system tomorrow lands where you were working today
    rather than on "All". See rememberShowScope. */
 const LS_SHOW_SCOPE='repchess_showScope';
+// the Add to Analysis Queue dialog's last choices: {depth, lines, anyLevel, maxMove}
+const LS_AQ_ADD_PREFS='repchess_aqAddPrefs';
 $('userIdLichess').value  = localStorage.getItem(LS_ID)  || '';
 $('userIdChesscom').value = localStorage.getItem(LS_ID_CHESSCOM) || '';
 $('maxGames').value= localStorage.getItem(LS_MAX)||300;
@@ -280,7 +282,7 @@ let AQ_LINE_COLORS = new Map();  // lineId -> 'white'/'black', for flagging tran
 let aqProcessing = false;        // true while processAnalysisQueueLoop's loop is actively running
 let aqCurrentItem = null;        // the queue item currently being searched, or null
 let aqCurrentProgress = null;    // {depth, lines} snapshot of the in-flight search, for the modal
-let aqAddCtx = null;             // {lineId, seqs} pending in the "Add to Analysis Queue" modal
+let aqAddCtx = null;             // {lineId, seqs} -- or {lineId, games, startSeq, unanswered:true} -- pending in the "Add to Analysis Queue" modal
 const AQ_DEFAULT_DEPTH = 40;
 const AQ_DEFAULT_LINES = 4;
 
@@ -6256,6 +6258,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
            <button class="iconbtn rowMenuBtn" title="More"><i class="fa-solid fa-ellipsis-vertical"></i></button>
            <div class="row-menu">
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
+             <button type="button" data-act="analyzeUnanswered"><i class="fa-solid fa-list-check"></i>Add Unanswered to Analysis Queue</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
              <hr class="row-menu-sep">
@@ -6295,6 +6298,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       e.stopPropagation();
       ctxRowMenu.classList.remove('show');
       showGamesAtNode(seq);
+    };
+    ctxRowMenu.querySelector('[data-act="analyzeUnanswered"]').onclick = e => {
+      e.stopPropagation();
+      ctxRowMenu.classList.remove('show');
+      openUnansweredAddModal(games, seq);
     };
     ctxRowMenu.querySelector('[data-act="analyzeChildren"]').onclick = e => {
       e.stopPropagation();
@@ -6362,6 +6370,7 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
              <hr class="row-menu-sep">
              <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
              <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
+             <button type="button" data-act="analyzeUnanswered"><i class="fa-solid fa-list-check"></i>Add Unanswered to Analysis Queue</button>
              <hr class="row-menu-sep">
              <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
              <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
@@ -6694,6 +6703,11 @@ function renderBranch(parent,games,seq,depth,flip=false,noCompactUntil=null,noti
       rowMenu.classList.remove('show');
       if(branchDiv) queueChildrenForAnalysis(childrenSeq, branchDiv);
     };
+    rowMenu.querySelector('[data-act="analyzeUnanswered"]').onclick = e => {
+      e.stopPropagation();
+      rowMenu.classList.remove('show');
+      if(childrenSeq) openUnansweredAddModal(games, childrenSeq);
+    };
     rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
       e.stopPropagation();
       rowMenu.classList.remove('show');
@@ -6863,6 +6877,7 @@ function renderBlackRoot(parent,games,trigger){
            <hr class="row-menu-sep">
            <button type="button" data-act="addToAnalysisQueue"><i class="fa-solid fa-hourglass-half"></i>Add to Analysis Queue</button>
            <button type="button" data-act="analyzeChildren"><i class="fa-solid fa-chess-board"></i>Add Children to Analysis Queue</button>
+             <button type="button" data-act="analyzeUnanswered"><i class="fa-solid fa-list-check"></i>Add Unanswered to Analysis Queue</button>
            <hr class="row-menu-sep">
            <button type="button" data-act="response"><i class="fa-solid fa-check"></i>Set Standard Response</button>
            <button type="button" data-act="addMove"><i class="fa-solid fa-plus"></i>Add Opponent Move</button>
@@ -7121,6 +7136,11 @@ function renderBlackRoot(parent,games,trigger){
     e.stopPropagation();
     rowMenu.classList.remove('show');
     if(branchDiv) queueChildrenForAnalysis(childrenSeq, branchDiv);
+  };
+  rowMenu.querySelector('[data-act="analyzeUnanswered"]').onclick = e => {
+    e.stopPropagation();
+    rowMenu.classList.remove('show');
+    if(childrenSeq) openUnansweredAddModal(games, childrenSeq);
   };
   rowMenu.querySelector('[data-act="addToAnalysisQueue"]').onclick = e => {
     e.stopPropagation();
@@ -14314,11 +14334,88 @@ function openAnalysisQueueAddModal(lineId, seqs){
   aqAddCtx = {lineId, seqs};
   $('analysisAddTitle').textContent = seqs.length > 1
     ? `Add ${seqs.length} Children to Analysis Queue` : 'Add to Analysis Queue';
-  $('analysisAddDepth').value = AQ_DEFAULT_DEPTH;
-  $('analysisAddLines').value = AQ_DEFAULT_LINES;
-  $('analysisAddError').textContent = '';
+  fillAnalysisAddFields(false);
   $('analysisAddOverlay').style.display='flex';
 }
+/* The dialog opens with whatever was used last (per browser), since the
+   same depth and line count are wanted run after run -- and so are
+   "Add Unanswered"'s own two choices. */
+function aqAddPrefs(){
+  try { return JSON.parse(localStorage.getItem(LS_AQ_ADD_PREFS) || '{}') || {}; } catch { return {}; }
+}
+function saveAqAddPrefs(patch){
+  try { localStorage.setItem(LS_AQ_ADD_PREFS, JSON.stringify({ ...aqAddPrefs(), ...patch })); } catch {}
+}
+function fillAnalysisAddFields(unanswered){
+  const prefs = aqAddPrefs();
+  $('analysisAddDepth').value = prefs.depth || AQ_DEFAULT_DEPTH;
+  $('analysisAddLines').value = prefs.lines || AQ_DEFAULT_LINES;
+  $('analysisAddUnansweredOpts').style.display = unanswered ? '' : 'none';
+  if(unanswered){
+    $('analysisAddAnyLevel').checked = prefs.anyLevel !== false;
+    $('analysisAddMaxMove').value = prefs.maxMove || '';
+  }
+  $('analysisAddError').textContent = '';
+}
+
+/* ---------- "Add Unanswered to Analysis Queue" ----------
+   Every opponent move below a row that has no reply chosen yet -- the
+   positions still waiting for a decision -- queued in one go. Just the
+   row's own children, or (the checkbox) every level below, following the
+   replies already chosen; optionally only up to a given move number, since
+   a repertoire usually stops somewhere around move 10-12.
+
+   Follows the move table's own rules for what is there: hidden moves (and
+   everything under them) are left out, and a redirected room is not walked
+   past, since its continuation lives in the other castle. Another castle
+   further down is walked into: you chose the starting row. Breadth-first, so
+   the shallowest positions -- the ones you meet first -- are queued first. */
+function collectUnanswered(games, startSeq, { anyLevel, maxMove }){
+  const lineId = CURRENT_LINE.id;
+  const out = [];
+  let frontier = [startSeq];
+  while(frontier.length){
+    const next = [];
+    for(const seq of frontier){
+      let {counts, tot} = replies(games, seq);
+      const manual = PREFS[prefKey(lineId, seq)]?.manualReplies || [];
+      manual.forEach(m => { if(!(m in counts)) counts[m] = 0; });
+      ({counts} = filterCountsForLine(counts, tot, manual, CURRENT_LINE));
+      const opps = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([opp]) => opp);
+      for(const opp of opps){
+        const lineSeq = [...seq, opp];
+        const p = PREFS[prefKey(lineId, lineSeq)];
+        if(p?.hidden) continue;
+        if(maxMove && Math.ceil((lineSeq.length + 1) / 2) > maxMove) continue;   // our reply's move number
+        if(!p?.reply){ out.push(lineSeq); continue; }
+        if(p.redirectToCastle) continue;
+        if(anyLevel) next.push([...lineSeq, p.reply]);
+      }
+    }
+    frontier = next;
+  }
+  return out;
+}
+function analysisAddUnansweredOpts(){
+  const raw = $('analysisAddMaxMove').value.trim();
+  const maxMove = raw === '' ? null : parseInt(raw, 10);
+  return { anyLevel: $('analysisAddAnyLevel').checked, maxMove: Number.isFinite(maxMove) && maxMove >= 1 ? maxMove : null };
+}
+// the title counts what the current choices would queue, as they change
+function refreshUnansweredAddTitle(){
+  if(!aqAddCtx?.unanswered) return;
+  const n = collectUnanswered(aqAddCtx.games, aqAddCtx.startSeq, analysisAddUnansweredOpts()).length;
+  $('analysisAddTitle').textContent = n
+    ? `Add ${n} Unanswered to Analysis Queue` : 'Nothing Unanswered Here';
+}
+function openUnansweredAddModal(games, startSeq){
+  aqAddCtx = { lineId: CURRENT_LINE.id, games, startSeq: startSeq.slice(), unanswered: true };
+  fillAnalysisAddFields(true);
+  refreshUnansweredAddTitle();
+  $('analysisAddOverlay').style.display='flex';
+}
+$('analysisAddAnyLevel').addEventListener('change', refreshUnansweredAddTitle);
+$('analysisAddMaxMove').addEventListener('input', refreshUnansweredAddTitle);
 /* Confirm: the depth and line count arrive pre-filled and the normal use is
    to press Add without touching them, so the primary is live from the moment
    it opens. Validation stays press-time with its message in the body -- it is
@@ -14339,6 +14436,19 @@ wireModalBar(
       const multipv = parseInt($('analysisAddLines').value, 10);
       if(!Number.isFinite(depth) || depth < 1){ $('analysisAddError').textContent = 'enter a valid depth'; return; }
       if(!Number.isFinite(multipv) || multipv < 1){ $('analysisAddError').textContent = 'enter a valid number of lines'; return; }
+      saveAqAddPrefs({ depth, lines: multipv });
+      if(aqAddCtx.unanswered){
+        const opts = analysisAddUnansweredOpts();
+        if($('analysisAddMaxMove').value.trim() && !opts.maxMove){ $('analysisAddError').textContent = 'enter a valid move number, or leave it blank'; return; }
+        saveAqAddPrefs({ anyLevel: opts.anyLevel, maxMove: opts.maxMove });
+        const { lineId, games, startSeq } = aqAddCtx;
+        const seqs = collectUnanswered(games, startSeq, opts);
+        if(!seqs.length){ $('analysisAddError').textContent = 'nothing unanswered with these settings'; return; }
+        $('analysisAddOverlay').style.display='none';
+        aqAddCtx = null;
+        await addChildrenToAnalysisQueue(lineId, seqs, depth, multipv, 'unanswered position');
+        return;
+      }
       const {lineId, seqs} = aqAddCtx;
       $('analysisAddOverlay').style.display='none';
       aqAddCtx = null;
@@ -14399,7 +14509,7 @@ async function addToAnalysisQueue(lineId, seq, depth, multipv, {silent=false}={}
    suppressing addToAnalysisQueue's per-item log() (which would otherwise
    have each child's message overwrite the last) in favor of one combined
    summary line. */
-async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
+async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv, noun = null){
   let added=0, toppedUp=0, skipped=0;
   for(const seq of seqs){
     const status = await addToAnalysisQueue(lineId, seq, depth, multipv, {silent:true});
@@ -14411,7 +14521,8 @@ async function addChildrenToAnalysisQueue(lineId, seqs, depth, multipv){
   if(added) bits.push(`${added} queued`);
   if(toppedUp) bits.push(`${toppedUp} target updated`);
   if(skipped) bits.push(`${skipped} already sufficient`);
-  log(`${seqs.length} child${seqs.length===1?'':'ren'}: ${bits.join(', ') || 'nothing to do'}`);
+  const what = noun ? `${seqs.length} ${noun}${seqs.length===1?'':'s'}` : `${seqs.length} child${seqs.length===1?'':'ren'}`;
+  log(`${what}: ${bits.join(', ') || 'nothing to do'}`);
 }
 
 /* ---------- "Analyze Others" (Compare Games' analyze-all icon) ----------
@@ -14664,6 +14775,9 @@ async function aqGrabPointerUp(){
 
 function renderAnalysisQueueModal(){
   const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
+  // the heading counts what is waiting, and keeps up as items finish
+  const titleEl = $('analysisQueueBar').querySelector('.modal-bar-title');
+  if(titleEl) titleEl.textContent = ANALYSIS_QUEUE.length ? `Analysis Queue (${ANALYSIS_QUEUE.length})` : 'Analysis Queue';
   if(!ANALYSIS_QUEUE.length){
     empty.style.display=''; table.style.display='none'; body.innerHTML='';
     return;
