@@ -9181,6 +9181,88 @@ try {
 }
 } catch(e){ bad('Phase AT2: uncaught error outside a numbered test (setup or otherwise)', e); }
 }
+// --- Phase AU2: feedback while castles rebuild. A rebuild holds the page
+//     for seconds: one somebody is waiting on gets the "Building castles…"
+//     spinner (never for a cache hit), the background scan's gets the small
+//     corner note instead, and Set Attributes no longer rebuilds every castle
+//     to fill its Redirect list when nothing else reaches the position. ---
+if(shouldRunPhase(['castle-generation'])){
+try {
+const appAU2 = await launchApp();
+try {
+  await seedBackup(appAU2.page, {
+    version: 6, user: 'tester',
+    lines: [{ id: 'L1', name: 'Test', color: 'white', openingMoves: ['d4'], prefs: [
+      { seq: ['d4','Nf6'], reply: 'c4', isCastleRoot: true, castleName: 'Alpha', castleStreetNumber: 1 },
+      { seq: ['d4','Nf6','c4','e6'], reply: 'Nc3' },
+    ]}],
+    games: [{ id: 'g1', moves: 'd4 Nf6 c4 e6 Nc3', white: 'a', black: 'b', result: '*' }],
+  }, { defaultPlayerColor: 'white' });
+  await appAU2.page.click('.line-row');
+  await appAU2.page.waitForSelector('tr.data-row[data-seq="d4,Nf6,c4,e6"]', { timeout: 40000 });
+  // records every spinner label shown, and whether the corner note appeared
+  const watch = () => appAU2.page.evaluate(() => {
+    window.__fb = { spinner: [], note: false };
+    const ov = document.getElementById('spinnerOverlay'), note = document.getElementById('bgWorkIndicator');
+    window.__fbObs?.disconnect();
+    window.__fbObs = new MutationObserver(() => {
+      if(ov.style.display !== 'none') window.__fb.spinner.push(document.getElementById('spinnerLabel').textContent);
+      if(note.classList.contains('show')) window.__fb.note = true;
+    });
+    window.__fbObs.observe(ov, { attributes: true, attributeFilter: ['style'] });
+    window.__fbObs.observe(note, { attributes: true, attributeFilter: ['class'] });
+  });
+  const seen = () => appAU2.page.evaluate(() => ({ ...window.__fb,
+    spinnerNow: document.getElementById('spinnerOverlay').style.display !== 'none',
+    noteNow: document.getElementById('bgWorkIndicator').classList.contains('show') }));
+
+  // 563. A rebuild someone waits on shows "Building castles…"; a cache hit
+  //      shows nothing; both are gone once it is done.
+  try {
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.invalidate());
+    await watch();
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.gatherRaw());
+    const built = await seen();
+    assert(built.spinner.includes('Building castles…') && !built.note && !built.spinnerNow,
+      `expected the spinner during the rebuild and gone after, got ${JSON.stringify(built)}`);
+    await watch();
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.gatherRaw());
+    const hit = await seen();
+    assert(!hit.spinner.length && !hit.note, `expected nothing for a cache hit, got ${JSON.stringify(hit)}`);
+    ok('castle rebuild: a rebuild someone waits on shows a spinner; a cache hit shows none');
+  } catch(e){ bad('castle rebuild: foreground spinner', e); }
+
+  // 564. A background rebuild (the transposition scan's) shows the corner
+  //      note, not the spinner.
+  try {
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.invalidate());
+    await watch();
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.gatherBackground());
+    const bg = await seen();
+    assert(bg.note && !bg.spinner.length && !bg.noteNow, `expected only the corner note, gone after, got ${JSON.stringify(bg)}`);
+    ok('castle rebuild: a background rebuild shows the corner note instead of a spinner');
+  } catch(e){ bad('castle rebuild: background note', e); }
+
+  // 565. Set Attributes on a castle room that nothing else reaches says so
+  //      without rebuilding every castle.
+  try {
+    await appAU2.page.evaluate(() => window.__vrCacheTestHooks.invalidate());
+    const before = await appAU2.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    const sel = 'tr.data-row[data-seq="d4,Nf6,c4,e6"]';
+    await appAU2.page.evaluate(s => document.querySelector(`${s} .rowMenuBtn`).click(), sel);
+    await appAU2.page.evaluate(s => document.querySelector(`${s} [data-act="attributes"]`).click(), sel);
+    await appAU2.page.waitForSelector('#attributesOverlay', { state: 'visible', timeout: 5000 });
+    await appAU2.page.waitForFunction(() => /No other castle/.test(document.getElementById('attrRedirectHint').textContent), null, { timeout: 5000 });
+    const after = await appAU2.page.evaluate(() => window.__vrCacheTestHooks.buildCount());
+    assert(after === before, `expected no castle rebuild for the Redirect list, build count went ${before} -> ${after}`);
+    await appAU2.page.evaluate(() => document.querySelector('#attributesOverlay .modal-bar .mb-leave').click());
+    ok('Set Attributes: no full castle rebuild when no other castle reaches the room');
+  } catch(e){ bad('Set Attributes: redirect list without a rebuild', e); }
+} finally {
+  await appAU2.close();
+}
+} catch(e){ bad('Phase AU2: uncaught error outside a numbered test (setup or otherwise)', e); }
+}
 // --- Phase AU: gatherBuiltCastles' in-memory cache -- a second "Run VR" in
 //     the same page load reuses the first one's result instead of rebuilding
 //     every castle from scratch, and a full backup restore drops the cache
