@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-493';
+const BUILD_TAG = '-494';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -11156,21 +11156,28 @@ async function findTransposeOpportunities(line, { maxLoss, depth, lines: minLine
   return { rows, decisions: decisions.length };
 }
 
+// a move sequence written out like seqToNotation, each move a chip that
+// floats the mini board at the position right after it
+function seqToChips(seq){
+  return seq.map((san, i) => pvChip(i % 2 === 0 ? `${Math.floor(i / 2) + 1}.${san}` : san, fenForSeq(seq.slice(0, i + 1)))).join(' ');
+}
 function renderTranspOpps(){
   const box = $('toResults');
   if(!TO_RESULTS){ box.innerHTML = ''; return; }
   const { rows } = TO_RESULTS;
   const rowHtml = (r, i) => {
+    // every move a chip: tap it for the mini board, as elsewhere in the app
+    const chip = (sq) => `<strong>${pvChip(sq.at(-1), fenForSeq(sq))}</strong>`;
     const instead = r.reply
-      ? `Instead of <strong>${escapeHtml(r.reply)}</strong>${r.replyScore != null ? ` (${toFmt(r.replyScore)})` : ''}, `
+      ? `Instead of ${chip([...r.lineSeq, r.reply])}${r.replyScore != null ? ` (${toFmt(r.replyScore)})` : ''}, `
       : '<span class="to-note">No reply yet:</span> ';
     const score = r.score != null ? ` (${toFmt(r.score)}${r.loss ? `, ${r.loss} cp below the best` : ''})` : '';
     const gain = r.reply ? `saves ${r.saves} move${r.saves === 1 ? '' : 's'}` : 'nothing new to learn';
     return `<div class="to-row" data-i="${i}">
       <div>
-        <div class="to-where">${escapeHtml(seqToNotation(r.lineSeq))} &mdash; your move</div>
-        <div>${instead}<strong>${escapeHtml(r.move)}</strong>${score} transposes to <strong>${escapeHtml(r.targetLabel)}</strong></div>
-        <div class="to-note">via ${escapeHtml(seqToNotation(r.target))} &middot; ${gain}${r.why ? ` &middot; ${escapeHtml(r.why)}` : ''}</div>
+        <div class="to-where">${seqToChips(r.lineSeq)} &mdash; your move</div>
+        <div>${instead}${chip([...r.lineSeq, r.move])}${score} transposes to <strong>${escapeHtml(r.targetLabel)}</strong></div>
+        <div class="to-note">via ${seqToChips(r.target)} &middot; ${gain}${r.why ? ` &middot; ${escapeHtml(r.why)}` : ''}</div>
       </div>
       <button type="button" data-go="${i}">Go to row</button>
     </div>`;

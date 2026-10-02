@@ -3070,6 +3070,16 @@ try {
       && /saves 1 move/.test(r.rows[0]), `expected the scored one first, got ${JSON.stringify(r.rows[0])}`);
     assert(r.rows.filter(t => /No reply yet/.test(t) && /nothing new to learn/.test(t)).length === 2, `expected both unanswered ones, got ${JSON.stringify(r.rows)}`);
     assert(r.rows.some(t => /Instead of Nc3, Nf3 transposes/.test(t) && /no saved analysis/.test(t)), `expected the unscored one, got ${JSON.stringify(r.rows)}`);
+    // every move shown is a chip: the four of the position, the reply, the
+    // alternative, and the five of the move order it transposes into
+    const chips = await appTO.page.evaluate(() => [...document.querySelectorAll('#toResults .to-row')][0].querySelectorAll('.pv-move').length);
+    assert(chips === 11, `expected every move in the first row tappable (11), got ${chips}`);
+    await appTO.page.evaluate(() => {
+      const alt = [...[...document.querySelectorAll('#toResults .to-row')][0].querySelectorAll('.pv-move')].find(c => c.textContent === 'Nc3');
+      alt.click();
+    });
+    await appTO.page.waitForFunction(() => getComputedStyle(document.getElementById('pvFloat')).display !== 'none', null, { timeout: 5000 });
+    await appTO.page.evaluate(() => document.body.click());   // a click elsewhere puts it away again
     ok('Transpose opportunities: answered and unanswered decisions, scored from saved analysis, ranked by savings');
   } catch(e){ bad('Transpose opportunities: what it finds', e); }
 
@@ -19667,10 +19677,10 @@ try {
     // cares about is that processing started at all once idle, evidenced by
     // the "Perfect White Opening" line actually getting created.
     await appCY.page.evaluate(() => window.__aqTestHooks.setEngineUI('idle'));
-    await appCY.page.waitForFunction(async () => {
+    await pollUntil(appCY.page, async () => {
       const q = await window.__perfectOpeningTestHooks.getQueue();
       return q.length === 0;
-    }, { timeout: 5000 });
+    }, null, { timeout: 5000 });
     const lines = await appCY.page.evaluate(() => window.__perfectOpeningTestHooks.getLines());
     assert(lines.some(l => l.name === 'Perfect White Opening'), `expected the White job processed automatically once idle, got lines ${JSON.stringify(lines)}`);
     ok('Perfect Opening scheduler: blocked by engineState "running", auto-resumes on the idle transition');
@@ -20141,10 +20151,10 @@ try {
       window.__aqTestHooks.engine.analyze = (fen, opts) => Promise.resolve({ depth: opts.depth, lines: { 1: { score: { type: 'cp', value: 0 }, depth: opts.depth, pv: ['e2e4'] } } });
     });
     await setVisibility('visible');
-    await appDA.page.waitForFunction(async () => {
+    await pollUntil(appDA.page, async () => {
       const q = await window.__perfectOpeningTestHooks.getQueue();
       return q.length === 0;
-    }, { timeout: 5000 });
+    }, null, { timeout: 5000 });
     aqQueue = await appDA.page.evaluate(() => window.__aqTestHooks.getQueue());
     assert(aqQueue.length === 0, `expected the manual queue item processed once visible, got ${JSON.stringify(aqQueue)}`);
     ok('Perfect Opening + Analysis Queue: a visibilitychange to "visible" immediately resumes both, rather than waiting out their own polling');
@@ -28506,10 +28516,10 @@ try {
     assert(r.fridge && r.fridge.purpose === 'listItem' && r.fridge.listId, `expected the list item's entry to carry its list, got ${JSON.stringify(r.fridge)}`);
 
     const id = await enqueue(draft('a spare lamp', 'spare-lamp'));
-    await appIQ.page.waitForFunction((id) => window.__imageQueueTestHooks.jobs().then(js => js.find(j => j.id === id)?.status === 'review'), id, { timeout: 10000 }).catch(() => {});
-    for(let i = 0; i < 100; i++){ if((await jobs()).find(j => j.id === id)?.status === 'review') break; await new Promise(res => setTimeout(res, 100)); }
+    const inReview = (id) => window.__imageQueueTestHooks.jobs().then(js => js.find(j => j.id === id)?.status === 'review');
+    await pollUntil(appIQ.page, inReview, id);
     await appIQ.page.evaluate((id) => window.__imageQueueTestHooks.redo(id), id);
-    for(let i = 0; i < 100; i++){ if((await jobs()).find(j => j.id === id)?.status === 'review') break; await new Promise(res => setTimeout(res, 100)); }
+    await pollUntil(appIQ.page, inReview, id);
     await appIQ.page.evaluate((id) => window.__imageQueueTestHooks.remove(id), id);
     await appIQ.page.evaluate(() => spendLogSettled());
     const spare = await appIQ.page.evaluate(async (id) => (await getSpendLog()).filter(e => e.jobId === id).map(e => e.outcome), id);
