@@ -22,7 +22,7 @@
    New Asset modal needs an actual import.
 */
 import { openNewAssetModal, openImageQueueForList, openImageQueue, runwareText, RUNWARE_KEY_LS,
-         queueImagesForList, describeListImageSettings } from './assets.js?v=20260930-101';
+         queueImagesForList, describeListImageSettings } from './assets.js?v=20261003-102';
 import { openListBrainstorm, removeListIdea } from './listBrainstorm.js?v=20260930-5';
 import { modalBarHtml, wireModalBar } from './modalBar.js?v=20260804-5';
 

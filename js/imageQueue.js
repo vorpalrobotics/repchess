@@ -361,6 +361,7 @@ let QUEUE_GEN = 0;               // bumped by a restore, so in-flight jobs from 
 const running = new Set();
 let saveChain = Promise.resolve();
 let approver = null;
+let placementAssigner = null;   // (target, assetId) => Promise -- a VR placement's image lands there on approval
 let ASSET_TYPE_LIST = [];        // [{ id, label, kind }] from assets.js
 let RESOLUTIONS = ['low', 'normal', 'high'];
 
@@ -536,8 +537,9 @@ export function resetImageQueue(){
 /* From assets.js, which this module cannot import (see the header):
      approve(job, image, { quick }) => Promise<savedAssetId|null>
      assetTypes: [{ id, label, kind }], resolutions: ['low', ...] */
-export function configureImageQueue({ approve, assetTypes, resolutions }){
+export function configureImageQueue({ approve, assetTypes, resolutions, assignPlacement }){
   if(approve) approver = approve;
+  if(assignPlacement) placementAssigner = assignPlacement;
   if(assetTypes) ASSET_TYPE_LIST = assetTypes;
   if(resolutions) RESOLUTIONS = resolutions;
 }
@@ -552,6 +554,9 @@ async function approveImageJob(id, quick = false){
   // every attempt the job made becomes this asset's cost
   await stampAssetCost(saved, job.ledgerIds || []);
   if(job.target && job.target.kind === 'objectListItem') await bindListItem(job.target, saved);
+  // queued from a picker in the VR walk: the object (or wall, façade...) that
+  // asked for it gets it now -- see assets.js's setPlacementAssigner
+  if(job.target && job.target.kind === 'vrPlacement' && placementAssigner) await placementAssigner(job.target, saved);
   await removeImageJob(id);
 }
 /* Approving an object-list item's image links the new asset to that item in
@@ -818,6 +823,8 @@ function renderImageQueue(){
           <div class="iq-prompt">${esc(j.prompt)}</div>
           <div class="iq-meta">${iqMeta(j)}${typeof j.cost === 'number' ? ` · $${j.cost.toFixed(4)}` : ''}</div>
           ${j.note ? `<div class="iq-note">${esc(j.note.trim())}</div>` : ''}
+          ${j.target && j.target.kind === 'vrPlacement' ? `<div class="iq-target">This image will be assigned to
+            ${esc(j.target.label)}. <button type="button" class="iq-link" data-act="unassign">Don't assign</button></div>` : ''}
           <label class="iq-id-row">Asset ID <input type="text" class="iq-id" value="${esc(j.asset.id || slugAssetId(j.prompt))}"
                  autocomplete="off" spellcheck="false"></label>
           <div class="iq-actions">
@@ -1001,6 +1008,11 @@ async function onIqClick(e){
   const id = card && card.dataset.id;
   if(!id) return;
   if(act === 'retry') return retryImageJob(id);
+  if(act === 'unassign'){
+    const job = findJob(id);
+    if(job){ job.target = { kind: 'asset' }; saveJobs(); emit(); }
+    return;
+  }
   if(act === 'remove' || act === 'discard') return removeImageJob(id);
   if(act === 'approve' || act === 'quick'){
     // an ID typed into the card and not yet committed by a change event
