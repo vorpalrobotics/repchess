@@ -95,7 +95,11 @@ its users have looked at -- often to depth 40 to 60 for anything commonly
 played. If it has the position at your depth and number of lines, the result
 is saved and the item is done in a second. If it has a shallower answer, that
 is saved straight away as a provisional evaluation and your engine still
-takes the position to your target. Rare positions it has never seen simply go
+takes the position to your target. Such an item shows the cloud's answer
+in its status -- e.g. <em>queued, &#9822; 35/4</em> for depth 35 with 4
+lines -- and moves to the back of the queue, so positions with no answer
+at all get the engine first. If the cloud's answer is already good enough,
+delete the item and save the engine the time. Rare positions it has never seen simply go
 to your engine as before. (It offers at most 5 lines; a sixth comes from your
 engine.)</p>
 <p>This runs alongside the engine, so a long queue of common positions clears

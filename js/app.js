@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-504';
+const BUILD_TAG = '-506';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -15060,9 +15060,20 @@ function aqPositionLabel(item){
   return `${escapeHtml(lineName)}<br><span class="aq-pos">${escapeHtml(seqToNotation(item.seq))}</span>`;
 }
 
+// "♞ 35/4" after an item's status when the Lichess cloud has already given
+// it a provisional answer (saved to the move table) -- if that's good enough,
+// the item can be cancelled before the engine spends more time on it
+function aqCloudMarkHtml(item){
+  const c = AQ_CLOUD_PARTIAL.get(item.id);
+  if(!c) return '';
+  const tip = `The Lichess cloud gave a provisional answer: depth ${c.depth}, ${c.lines} line${c.lines === 1 ? '' : 's'} `
+    + `(saved to the move table). Your engine continues to depth ${item.depth}; delete this item if that's already enough.`;
+  return `<span class="aq-cloud" title="${escapeHtml(tip)}"><i class="fa-solid fa-chess-knight"></i> ${c.depth}/${c.lines}</span>`;
+}
 function aqProgressHtml(item){
-  if(!aqCurrentItem || aqCurrentItem.id !== item.id) return `<span class="aq-status-queued">queued</span>`;
-  if(!aqCurrentProgress) return `<span class="aq-status-processing">starting…</span>`;
+  const cloud = aqCloudMarkHtml(item);
+  if(!aqCurrentItem || aqCurrentItem.id !== item.id) return `<span class="aq-status-queued">queued</span>${cloud ? ', ' + cloud : ''}`;
+  if(!aqCurrentProgress) return `<span class="aq-status-processing">starting…</span>${cloud ? ' ' + cloud : ''}`;
   const {depth, lines} = aqCurrentProgress;
   const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
   const fen = fenForSeq(item.seq);
@@ -15077,7 +15088,7 @@ function aqProgressHtml(item){
     const transp = line.pv?.length ? transpSlotHtml(fen, line.pv[0], item.lineId, AQ_LINE_COLORS.get(item.lineId), item.seq) : '';
     return `<div class="meta-pv-row">${scoreTag}${transp}<span class="meta-pv">${pvHtml}</span></div>`;
   }).join('');
-  return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}</div>` +
+  return `<div class="aq-status-processing">processing — depth ${depth}/${item.depth}${cloud ? ' ' + cloud : ''}</div>` +
     `<div class="aq-progress">${pvRows}</div>`;
 }
 
@@ -15925,6 +15936,8 @@ function cloudEval(fen, multiPv){
 // queue ids already put to the cloud this session -- kept apart from the item
 // objects, which refreshAnalysisQueue() swaps for fresh copies from the db
 const AQ_CLOUD_CHECKED = new Set();
+// id -> {depth, lines} of a provisional cloud answer that was saved
+const AQ_CLOUD_PARTIAL = new Map();
 async function aqCloudCheck(item){
   if(AQ_CLOUD_CHECKED.has(item.id)) return false;
   AQ_CLOUD_CHECKED.add(item.id);
@@ -15948,7 +15961,22 @@ async function aqCloudCheck(item){
     ANALYSIS_QUEUE.splice(idx, 1);
     await deleteAnalysisQueueItem(item.id);
     AQ_CLOUD_STATS.done++;
-  } else if(!full && saved) AQ_CLOUD_STATS.partial++;
+  } else if(!full && saved){
+    AQ_CLOUD_STATS.partial++;
+    AQ_CLOUD_PARTIAL.set(item.id, { depth: r.result.depth, lines: nLines });
+    // it has an answer of sorts now: let the unanswered ones go first
+    if(idx !== -1 && item !== aqCurrentItem && idx < ANALYSIS_QUEUE.length - 1){
+      ANALYSIS_QUEUE.splice(idx, 1);
+      ANALYSIS_QUEUE.push(item);
+      ANALYSIS_QUEUE.forEach((it, i) => { it.order = i; });
+      await Promise.all(ANALYSIS_QUEUE.map(it => putAnalysisQueueItem(it)));
+    }
+  } else if(!full){
+    // not saved because this same cloud answer already was (a reload since):
+    // still mark it, but leave its place in the queue alone
+    const ev = (await getPref(item.lineId, item.seq))?.eval;
+    if(ev?.source === 'lichess' && ev.depth === r.result.depth) AQ_CLOUD_PARTIAL.set(item.id, { depth: ev.depth, lines: nLines });
+  }
   renderAnalysisQueueModalIfOpen();
   refreshAnalysisQueueRowMarkers();
   return full && idx !== -1;
