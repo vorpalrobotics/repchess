@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-506';
+const BUILD_TAG = '-507';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -15015,7 +15015,23 @@ async function clearAnalysisQueue(){
 $('aqClearAll').onclick = clearAnalysisQueue;
 $('aqCloudToggle').onchange = () => {
   try { localStorage.setItem(LS_AQ_CLOUD, $('aqCloudToggle').checked ? '1' : '0'); } catch {}
+  renderAnalysisQueueStatus();
   if($('aqCloudToggle').checked) maybeResumeAnalysisQueue();
+};
+$('aqCloudAcceptDepth').onchange = $('aqCloudAcceptLines').onchange = async () => {
+  const depth = +$('aqCloudAcceptDepth').value, lines = +$('aqCloudAcceptLines').value;
+  try { localStorage.setItem(LS_AQ_CLOUD_ACCEPT, JSON.stringify({ depth, lines })); } catch {}
+  // items already holding a provisional cloud answer that is now good enough
+  // are finished on the spot (the answer is already saved to the move table)
+  for(const item of ANALYSIS_QUEUE.slice()){
+    const c = AQ_CLOUD_PARTIAL.get(item.id);
+    if(!c || !aqCloudAccepts(item, c.depth, c.lines, c.want)) continue;
+    AQ_CLOUD_PARTIAL.delete(item.id);
+    AQ_CLOUD_STATS.done++; AQ_CLOUD_STATS.partial = Math.max(0, AQ_CLOUD_STATS.partial - 1);
+    console.log(`[LICHESS CLOUD] accepted the cloud eval for position ${seqToNotation(item.seq)} (depth ${c.depth}, ${c.lines} line${c.lines === 1 ? '' : 's'}) -- done`);
+    await cancelAnalysisQueueItem(item.id);
+  }
+  renderAnalysisQueueModalIfOpen();
 };
 
 async function refreshAnalysisQueue(){
@@ -15208,6 +15224,13 @@ function renderAnalysisQueueStatus(){
   if(retry) retry.onclick = () => { retry.disabled = true; startEngine(); };
   const cloud = $('aqCloudToggle');
   if(cloud) cloud.checked = aqCloudEnabled();
+  const acceptRow = $('aqCloudAcceptRow');
+  if(acceptRow){
+    acceptRow.style.display = aqCloudEnabled() ? '' : 'none';
+    const a = aqCloudAcceptPrefs();
+    $('aqCloudAcceptDepth').value = String(a.depth);
+    $('aqCloudAcceptLines').value = String(a.lines);
+  }
   const cs = $('aqCloudStats');
   if(cs){
     const { done, partial } = AQ_CLOUD_STATS;
@@ -15880,6 +15903,26 @@ let cloudChain = Promise.resolve();
 let cloudPausedUntil = 0;
 const AQ_CLOUD_STATS = { done: 0, partial: 0 };
 function aqCloudEnabled(){ try { return localStorage.getItem(LS_AQ_CLOUD) !== '0'; } catch { return true; } }
+// how good a cloud answer must be to finish an item outright; 0 = the
+// item's own target (depth / lines it was queued with), the default
+const LS_AQ_CLOUD_ACCEPT = 'repchess_aqCloudAccept';
+const AQ_CLOUD_ACCEPT_DEPTHS = [20, 25, 30, 35, 40, 45, 50];
+const AQ_CLOUD_ACCEPT_LINES = [1, 2, 3, 4, 5];
+$('aqCloudAcceptDepth').innerHTML = `<option value="0">your target</option>` + AQ_CLOUD_ACCEPT_DEPTHS.map(d => `<option value="${d}">${d}</option>`).join('');
+$('aqCloudAcceptLines').innerHTML = `<option value="0">your target</option>` + AQ_CLOUD_ACCEPT_LINES.map(n => `<option value="${n}">${n}</option>`).join('');
+function aqCloudAcceptPrefs(){
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_AQ_CLOUD_ACCEPT) || '{}');
+    return { depth: AQ_CLOUD_ACCEPT_DEPTHS.includes(v.depth) ? v.depth : 0, lines: AQ_CLOUD_ACCEPT_LINES.includes(v.lines) ? v.lines : 0 };
+  } catch { return { depth: 0, lines: 0 }; }
+}
+// whether a cloud answer of this depth / line count finishes the item (never
+// asking for more than the item itself wants)
+function aqCloudAccepts(item, depth, lines, want){
+  const a = aqCloudAcceptPrefs();
+  return depth >= (a.depth ? Math.min(a.depth, item.depth) : item.depth)
+    && lines >= (a.lines ? Math.min(a.lines, want) : want);
+}
 // a Lichess PV move, normalised: castling may come as the king taking its
 // own rook (e1h1); chess.js wants the king's landing square (e1g1)
 function cloudUciMove(chess, uci){
@@ -15906,7 +15949,7 @@ function cloudToEngineResult(fen, data){
   if(!data.depth || !Object.keys(lines).length) return null;
   return { depth: data.depth, lines, source: 'lichess' };
 }
-if(localStorage.getItem('threeTestDebug')) window.__cloudTestHooks = { convert: (fen, data) => cloudToEngineResult(fen, data) };
+if(localStorage.getItem('threeTestDebug')) window.__cloudTestHooks = { convert: (fen, data) => cloudToEngineResult(fen, data), unpause: () => { cloudPausedUntil = 0; } };
 // one lookup: { status: 'hit', result } in the engine's own result shape
 // (scores relative to the side to move, as analyze() reports them),
 // 'miss' (Lichess hasn't analysed it), or 'unavailable' (try again later)
@@ -15950,8 +15993,8 @@ async function aqCloudCheck(item){
   const where = seqToNotation(item.seq);
   if(r.status !== 'hit'){ console.log(`[LICHESS CLOUD] not in the cloud: ${where}`); return false; }
   const saved = await saveAnalysisQueueResult(item, fen, r.result);
-  const full = r.result.depth >= item.depth && Object.keys(r.result.lines).length >= want;
   const nLines = Object.keys(r.result.lines).length;
+  const full = aqCloudAccepts(item, r.result.depth, nLines, want);
   console.log(saved
     ? `[LICHESS CLOUD] used Lichess cloud eval for position ${where} (depth ${r.result.depth}, ${nLines} line${nLines === 1 ? '' : 's'})`
       + (full ? ' -- done' : ` -- provisional, the engine continues to depth ${item.depth}`)
@@ -15963,7 +16006,7 @@ async function aqCloudCheck(item){
     AQ_CLOUD_STATS.done++;
   } else if(!full && saved){
     AQ_CLOUD_STATS.partial++;
-    AQ_CLOUD_PARTIAL.set(item.id, { depth: r.result.depth, lines: nLines });
+    AQ_CLOUD_PARTIAL.set(item.id, { depth: r.result.depth, lines: nLines, want });
     // it has an answer of sorts now: let the unanswered ones go first
     if(idx !== -1 && item !== aqCurrentItem && idx < ANALYSIS_QUEUE.length - 1){
       ANALYSIS_QUEUE.splice(idx, 1);
@@ -15975,7 +16018,7 @@ async function aqCloudCheck(item){
     // not saved because this same cloud answer already was (a reload since):
     // still mark it, but leave its place in the queue alone
     const ev = (await getPref(item.lineId, item.seq))?.eval;
-    if(ev?.source === 'lichess' && ev.depth === r.result.depth) AQ_CLOUD_PARTIAL.set(item.id, { depth: ev.depth, lines: nLines });
+    if(ev?.source === 'lichess' && ev.depth === r.result.depth) AQ_CLOUD_PARTIAL.set(item.id, { depth: ev.depth, lines: nLines, want });
   }
   renderAnalysisQueueModalIfOpen();
   refreshAnalysisQueueRowMarkers();

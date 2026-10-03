@@ -3038,9 +3038,10 @@ try {
     e6:  { status: 404 },
     c5:  { status: 200, body: { depth: 45, pvs: [pv('d4d5 e7e6', 35), pv('d4c5 e7e6', 0), pv('e2e3 c5d4', -5), pv('g1f3 c5d4', -5)] } },
     f5:  { status: 429 },
+    e5:  { status: 200, body: { depth: 32, pvs: [pv('d4e5 b8c6', 80), pv('g1f3 e5e4', 60), pv('d4d5 g8f6', 40)] } },
   };
   const byFen = {};
-  for(const m of ['d5','Nf6','e6','c5','f5','g6','b6'])
+  for(const m of ['d5','Nf6','e6','c5','f5','g6','b6','e5'])
     byFen[await appCE.page.evaluate((m) => window.__gamesListHooks.fenForSeq(['d4', m]), m)] = m;
   const blackMoveOf = (fen) => byFen[fen] || '?';
   await appCE.page.route(/lichess\.org\/api\/cloud-eval/, route => {
@@ -3128,6 +3129,47 @@ try {
     assert(requests.length === n1, `expected lookups paused after a 429, got ${JSON.stringify(requests.slice(n1))}`);
     ok('cloud evals: the setting turns them off, and a 429 pauses lookups');
   } catch(e){ bad('cloud evals: off switch and 429 pause', e); }
+
+  // 586. "Accept a cloud answer if depth >= / lines >=": shown only while the
+  //      cloud is on; lowering it finishes items already holding a good-enough
+  //      provisional answer, and a new lookup meeting it finishes outright.
+  try {
+    await appCE.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appCE.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    const shown = () => appCE.page.evaluate(() => document.getElementById('aqCloudAcceptRow').style.display !== 'none');
+    const setToggle = (on) => appCE.page.evaluate((on) => { const t = document.getElementById('aqCloudToggle'); t.checked = on; t.dispatchEvent(new Event('change')); }, on);
+    const defaults = await appCE.page.evaluate(() => [document.getElementById('aqCloudAcceptDepth').value, document.getElementById('aqCloudAcceptLines').value]);
+    assert(await shown() && defaults.join() === '0,0', `expected the row shown, defaulting to the item's targets, got ${await shown()} ${defaults}`);
+    await setToggle(false);
+    assert(!(await shown()), 'expected the accept row hidden while the cloud is off');
+    await setToggle(true);
+    assert(await shown(), 'expected the accept row back');
+    assert((await queued()).includes('Nf6'), `precondition: Nf6 still queued with its provisional answer, got ${JSON.stringify(await queued())}`);
+    await appCE.page.evaluate(() => {
+      const d = document.getElementById('aqCloudAcceptDepth'), l = document.getElementById('aqCloudAcceptLines');
+      d.value = '30'; l.value = '2'; d.dispatchEvent(new Event('change'));
+    });
+    await pollUntil(appCE.page, () => !window.__aqTestHooks.getQueue().some(it => it.seq[1] === 'Nf6'), null, { timeout: 5000 });
+    assert(appCE.consoleLogs.some(t => t === '[LICHESS CLOUD] accepted the cloud eval for position 1.d4 Nf6 (depth 30, 2 lines) -- done'),
+      `expected the acceptance logged, got ${JSON.stringify(appCE.consoleLogs.filter(t => /accepted/.test(t)))}`);
+    const nf6 = await pref('Nf6');
+    assert(nf6.eval.depth === 30 && nf6.eval.source === 'lichess', `expected the cloud eval still saved for Nf6, got ${JSON.stringify(nf6.eval)}`);
+    // a fresh lookup at depth 32 with 3 lines now finishes outright
+    // (f5 is still queued and always answers 429, which would pause again)
+    await appCE.page.evaluate(async () => {
+      const f5 = window.__aqTestHooks.getQueue().find(it => it.seq[1] === 'f5');
+      if(f5) await window.__aqTestHooks.cancelAnalysisQueueItem(f5.id);
+      window.__cloudTestHooks.unpause();
+    });
+    await add(['d4','e5']);
+    await pollUntil(appCE.page, () => !window.__aqTestHooks.getQueue().some(it => it.seq[1] === 'e5'), null, { timeout: 10000 });
+    const e5 = await pref('e5');
+    assert(requests.includes('e5') && e5.eval.depth === 32 && e5.evalLines.length === 3, `expected e5 finished from the cloud, got ${JSON.stringify(e5)}`);
+    const kept = await appCE.page.evaluate(() => localStorage.getItem('repchess_aqCloudAccept'));
+    assert(kept === '{"depth":30,"lines":2}', `expected the setting remembered, got ${kept}`);
+    await appCE.page.evaluate(() => { localStorage.removeItem('repchess_aqCloudAccept'); document.querySelector('#analysisQueueOverlay .mb-leave').click(); });
+    ok('cloud evals: the accept-at setting finishes good-enough answers, old and new');
+  } catch(e){ bad('cloud evals: accept-at setting', e); }
 
   // 585. Converting an answer: Lichess scores are White's, the engine's are
   //      the side to move's (so they flip with Black to move), and castling
