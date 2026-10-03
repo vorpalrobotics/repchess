@@ -3076,6 +3076,14 @@ try {
     assert(c5.eval.depth === 60 && !c5.eval.source, `expected the deeper local eval kept, got ${JSON.stringify(c5.eval)}`);
     await appCE.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
     await appCE.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    // the queue shows the provisional cloud answer on Nf6 (depth 30, 2 lines);
+    // c5's shallower cloud answer wasn't saved, so it has no mark
+    const qMarks = await appCE.page.evaluate(() => Object.fromEntries(window.__aqTestHooks.getQueue().map(it => {
+      const m = document.querySelector(`tr.aq-row[data-id="${it.id}"] .aq-cloud`);
+      return [it.seq[1], m ? { text: m.textContent.trim(), knight: !!m.querySelector('.fa-chess-knight'), tip: m.title } : null];
+    })));
+    assert(qMarks.Nf6?.text === '30/2' && qMarks.Nf6.knight && /depth 30, 2 lines/.test(qMarks.Nf6.tip) && !qMarks.c5 && !qMarks.e6,
+      `expected Nf6 marked 30/2 in the queue, got ${JSON.stringify(qMarks)}`);
     // the move table marks the cloud's evals with a small knight, and only those
     const marks = await appCE.page.evaluate(() => Object.fromEntries(['d4,d5', 'd4,c5'].map(k => {
       const tag = document.querySelector(`tr.data-row[data-seq="${k}"] .evaltag`);
