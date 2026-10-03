@@ -13,7 +13,9 @@ slow one, like a phone hotspot, it can take a couple of minutes. Until it
 arrives, nothing can be analysed. If it can't be loaded at all, the app falls
 back to a slower single-threaded engine.</p>
 <p>Once the engine has loaded, it runs entirely on your computer: analysis
-needs no network connection.</p>
+needs no network connection. With a connection, the Analysis Queue first
+asks Lichess's cloud for positions it already knows, which is far faster
+than analysing them yourself (see <em>Background Analysis</em>).</p>
 <p>The <strong>Analysis Queue</strong> shows which engine you have. Its
 <strong>Threads</strong> control appears only with the faster one, and when
 it's missing a note says why. Reloading the page tries the faster engine
