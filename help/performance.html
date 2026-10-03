@@ -1,0 +1,60 @@
+<!-- Fragment; see help/README.md. -->
+<h2>Performance</h2>
+
+<p>Most of <span class="repchess-brand">REPchess</span> is instant. The two
+heavy parts are the chess engine and rebuilding castles. Here is what to
+expect from each, and what to do when something seems stuck.</p>
+
+<h3>The engine's first load</h3>
+<p>There are two versions of the engine. The faster, multi-threaded one is a
+download of about 7&nbsp;MB, fetched each time the page loads (the browser
+often keeps a copy for a while). On a fast connection that takes seconds; on a
+slow one, like a phone hotspot, it can take a couple of minutes. Until it
+arrives, nothing can be analysed. If it can't be loaded at all, the app falls
+back to a slower single-threaded engine.</p>
+<p>Once the engine has loaded, it runs entirely on your computer: analysis
+needs no network connection.</p>
+<p>The <strong>Analysis Queue</strong> shows which engine you have. Its
+<strong>Threads</strong> control appears only with the faster one, and when
+it's missing a note says why. Reloading the page tries the faster engine
+again.</p>
+
+<h3>Keeping it running in a background tab</h3>
+<p>The Analysis Queue keeps working while you use other tabs or programs, but
+browsers save power by slowing down or freezing tabs you aren't looking at, and
+a deep engine search is exactly the kind of work they target. In Chrome:</p>
+<ul>
+  <li><strong>Energy Saver</strong> can freeze a background tab that uses a lot
+  of CPU, so the queue stops until you come back. On a laptop it's often on
+  whenever you're unplugged.</li>
+  <li><strong>Memory Saver</strong> can unload a tab you haven't looked at for a
+  while. When you return, the page reloads (which needs a network connection to
+  fetch the engine again), and the queue starts its current position over.</li>
+</ul>
+<p>To stop Chrome doing either to <span class="repchess-brand">REPchess</span>:
+open <strong>Settings &rarr; Performance</strong>, find <strong>Always keep
+these sites active</strong>, choose <strong>Add</strong>, and enter the
+site's address (for example <code>vorpalrobotics.github.io</code>). The Energy
+Saver options are on the same page. Other browsers have similar settings.</p>
+<p>On a phone, a tab in the background is paused no matter what, so the queue
+only runs while <span class="repchess-brand">REPchess</span> is on screen.</p>
+
+<h3>When the queue pauses on purpose</h3>
+<p>The queue also waits on its own, and says so at the top of its window:
+while the engine is still loading, while live analysis is using the engine,
+and while the VR walk is open (so walking stays smooth). It carries on by
+itself as soon as the reason goes away.</p>
+
+<h3>Rebuilding castles</h3>
+<p>After you change the repertoire, the castles are rebuilt the next time
+something needs them: opening VR, the VR Schedule, Find Transpositions and a
+few others. When that takes a moment you'll see <strong>Building
+castles&hellip;</strong>. The first rebuild after loading the page is the
+slowest; later ones are much quicker. A rebuild started by the app itself --
+the background check for new transpositions -- shows a small
+<strong>Checking for transpositions&hellip;</strong> note in the corner
+instead.</p>
+<p>Settings &rarr; <strong>Slowdowns</strong> lists every time the page
+stopped responding for more than a second since it was opened, and what was
+running then, along with how long each castle rebuild took. If something
+feels slow, that list is the first place to look.</p>
