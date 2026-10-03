@@ -31,7 +31,7 @@ const STOCKFISH_BUILDS = [
 // isready -> readyok) during init. Generous because a cold wasm fetch/compile
 // can genuinely take a while on a slow connection/device; the point isn't to
 // be tight, it's to eventually fail instead of hanging forever.
-const INIT_TIMEOUT_MS = 60000;   // 60s: the threaded build's ~7MB download counts against it, and a phone hotspot needed more than 30
+const INIT_TIMEOUT_MS = 60000;   // the threaded build's download no longer counts (see _initThreaded); the single-threaded fallback's still does
 
 export class Engine {
   constructor() {
@@ -47,6 +47,7 @@ export class Engine {
     this._currentThreads = 1;   // whatever Threads value is actually configured right now
     this._currentHash = 0;      // whatever Hash (MB) value is actually configured right now -- see init()/analyze()
     this._initPromise = null;   // in-flight init() call, if any -- see init()
+    this.initTimeoutMs = INIT_TIMEOUT_MS;   // per instance, so a test can shorten it
   }
 
   // Callers don't coordinate: app.js calls this unconditionally at boot AND
@@ -90,13 +91,26 @@ export class Engine {
 
   // multi-threaded, same-origin: the worker self-locates its .wasm and its
   // pthread workers from this script's URL, so no blob indirection here.
+  //
+  // The ~7MB .wasm is downloaded HERE first, with no time limit, and handed to
+  // the worker as a blob: URL (the worker reads its wasm location from its own
+  // URL's #fragment and fetches it from there). Left to the worker, the
+  // download counted against the start-up timeout below: on a phone hotspot
+  // it ran past 20, 30 and then 60 seconds, and the app quietly fell back to
+  // the single-threaded engine. Now a slow connection only means a slow
+  // start; the timeout is back to guarding against an engine that hangs.
+  // The blob URL is kept, not revoked: Threads changes start new pthread
+  // workers later, and nothing should depend on whether they reread it.
   async _initThreaded() {
     const scriptUrl = new URL(THREADED_BUILD.js, document.baseURI).href;
     const wasmUrl   = new URL(THREADED_BUILD.wasm, document.baseURI).href;
-    this._worker = new Worker(`${scriptUrl}#${encodeURIComponent(wasmUrl)}`);
+    const res = await fetch(wasmUrl, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`engine download failed (${res.status})`);
+    const wasmBlobUrl = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'application/wasm' }));
+    this._worker = new Worker(`${scriptUrl}#${encodeURIComponent(wasmBlobUrl)}`);
     this._worker.onmessage = ({ data }) => this._listener?.(data);
 
-    await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
+    await this._commandWithTimeout('uci', line => line === 'uciok', this.initTimeoutMs);
     // leave a core for the UI/main thread; the lite build scales well to a
     // handful of threads but oversubscribing past that gives little back, so
     // the DEFAULT stays conservative even though maxThreads (the ceiling a
@@ -116,7 +130,7 @@ export class Engine {
     // own `hash` option (see there for why that resets the table's contents).
     this._send('setoption name Hash value 512');
     this._currentHash = 512;
-    await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
+    await this._commandWithTimeout('isready', line => line === 'readyok', this.initTimeoutMs);
     this.multithreaded = true;
     this.ready = true;
     console.debug(`[engine] multi-threaded Stockfish ready (${this.threads} threads)`);
@@ -145,14 +159,14 @@ export class Engine {
     // failure), then revoke it -- otherwise it leaks the underlying Blob for
     // the rest of the page's life.
     try {
-      await this._commandWithTimeout('uci', line => line === 'uciok', INIT_TIMEOUT_MS);
+      await this._commandWithTimeout('uci', line => line === 'uciok', this.initTimeoutMs);
       // previously left unset here (unlike _initThreaded), silently falling
       // back to Stockfish's own tiny built-in default (typically 16MB) --
       // a single-threaded fallback usually means a more constrained device/
       // browser, so a modest explicit bump rather than _initThreaded's 512.
       this._send('setoption name Hash value 64');
       this._currentHash = 64;
-      await this._commandWithTimeout('isready', line => line === 'readyok', INIT_TIMEOUT_MS);
+      await this._commandWithTimeout('isready', line => line === 'readyok', this.initTimeoutMs);
     } finally {
       URL.revokeObjectURL(blobUrl);
     }
