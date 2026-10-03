@@ -3140,6 +3140,14 @@ try {
     const setToggle = (on) => appCE.page.evaluate((on) => { const t = document.getElementById('aqCloudToggle'); t.checked = on; t.dispatchEvent(new Event('change')); }, on);
     const defaults = await appCE.page.evaluate(() => [document.getElementById('aqCloudAcceptDepth').value, document.getElementById('aqCloudAcceptLines').value]);
     assert(await shown() && defaults.join() === '0,0', `expected the row shown, defaulting to the item's targets, got ${await shown()} ${defaults}`);
+    const layout = await appCE.page.evaluate(() => {
+      const lab = document.getElementById('aqCloudToggle').closest('label').getBoundingClientRect();
+      const modal = document.querySelector('#analysisQueueOverlay .modal').getBoundingClientRect();
+      return { h: lab.height, w: lab.width, modalW: modal.width,
+        depths: [...document.getElementById('aqCloudAcceptDepth').options].map(o => o.value).join() };
+    });
+    assert(layout.h < 40 && layout.w < layout.modalW * 0.8, `expected the checkbox label only as big as its text, got ${JSON.stringify(layout)}`);
+    assert(layout.depths === '0,24,26,28,30,32,34,36,38,40,42,44,46,48', `expected even depths 24-48, got ${layout.depths}`);
     await setToggle(false);
     assert(!(await shown()), 'expected the accept row hidden while the cloud is off');
     await setToggle(true);
@@ -3167,6 +3175,11 @@ try {
     assert(requests.includes('e5') && e5.eval.depth === 32 && e5.evalLines.length === 3, `expected e5 finished from the cloud, got ${JSON.stringify(e5)}`);
     const kept = await appCE.page.evaluate(() => localStorage.getItem('repchess_aqCloudAccept'));
     assert(kept === '{"depth":30,"lines":2}', `expected the setting remembered, got ${kept}`);
+    // a depth saved from the old list (35) snaps down to one offered
+    await appCE.page.evaluate(() => { localStorage.setItem('repchess_aqCloudAccept', '{"depth":35,"lines":0}'); document.getElementById('menuAnalysisQueue').click(); });
+    await appCE.page.waitForTimeout(300);
+    const snapped = await appCE.page.evaluate(() => document.getElementById('aqCloudAcceptDepth').value);
+    assert(snapped === '34', `expected 35 shown as 34, got ${snapped}`);
     await appCE.page.evaluate(() => { localStorage.removeItem('repchess_aqCloudAccept'); document.querySelector('#analysisQueueOverlay .mb-leave').click(); });
     ok('cloud evals: the accept-at setting finishes good-enough answers, old and new');
   } catch(e){ bad('cloud evals: accept-at setting', e); }

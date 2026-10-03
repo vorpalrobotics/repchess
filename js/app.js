@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-507';
+const BUILD_TAG = '-508';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -15906,14 +15906,17 @@ function aqCloudEnabled(){ try { return localStorage.getItem(LS_AQ_CLOUD) !== '0
 // how good a cloud answer must be to finish an item outright; 0 = the
 // item's own target (depth / lines it was queued with), the default
 const LS_AQ_CLOUD_ACCEPT = 'repchess_aqCloudAccept';
-const AQ_CLOUD_ACCEPT_DEPTHS = [20, 25, 30, 35, 40, 45, 50];
+// even numbers: Lichess's cloud depths almost always are
+const AQ_CLOUD_ACCEPT_DEPTHS = Array.from({ length: 13 }, (_, i) => 24 + 2 * i);   // 24..48
 const AQ_CLOUD_ACCEPT_LINES = [1, 2, 3, 4, 5];
 $('aqCloudAcceptDepth').innerHTML = `<option value="0">your target</option>` + AQ_CLOUD_ACCEPT_DEPTHS.map(d => `<option value="${d}">${d}</option>`).join('');
 $('aqCloudAcceptLines').innerHTML = `<option value="0">your target</option>` + AQ_CLOUD_ACCEPT_LINES.map(n => `<option value="${n}">${n}</option>`).join('');
 function aqCloudAcceptPrefs(){
   try {
     const v = JSON.parse(localStorage.getItem(LS_AQ_CLOUD_ACCEPT) || '{}');
-    return { depth: AQ_CLOUD_ACCEPT_DEPTHS.includes(v.depth) ? v.depth : 0, lines: AQ_CLOUD_ACCEPT_LINES.includes(v.lines) ? v.lines : 0 };
+    // a depth saved from an older list snaps down to the nearest one offered
+    const d = +v.depth > 0 ? [...AQ_CLOUD_ACCEPT_DEPTHS].reverse().find(x => x <= +v.depth) ?? AQ_CLOUD_ACCEPT_DEPTHS[0] : 0;
+    return { depth: d, lines: AQ_CLOUD_ACCEPT_LINES.includes(v.lines) ? v.lines : 0 };
   } catch { return { depth: 0, lines: 0 }; }
 }
 // whether a cloud answer of this depth / line count finishes the item (never
