@@ -3302,6 +3302,31 @@ try {
     assert(Date.now() - t0 < 1500, 'expected the queue to restart on closing the walk, not on the next safety poll');
     ok('Analysis Queue: restarts as soon as the VR walk closes');
   } catch(e){ bad('Analysis Queue: restart on VR close', e); }
+
+  // 582. "Clear all" (after a confirm, which the harness accepts) empties the
+  //      queue -- the stored items too -- and leaves the empty state.
+  try {
+    await appR2.page.evaluate(() => window.__aqTestHooks.enterVrCpuGuard());   // hold the queue so the items stay put
+    await appR2.page.evaluate(async () => {
+      for(const s of [['d4','d5'], ['d4','Nf6','c4','g6'], ['d4','Nf6','c4','e6','Nc3','d5']]) await window.__aqTestHooks.addToAnalysisQueue('L1', s, 60, 6);   // deeper than anything an earlier test saved, so none is skipped
+    });
+    await appR2.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
+    await appR2.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    const before = await appR2.page.evaluate(() => ({ n: window.__aqTestHooks.getQueue().length,
+      shown: document.getElementById('aqFooter').style.display !== 'none' }));
+    assert(before.n >= 3 && before.shown, `expected a full queue with Clear all shown, got ${JSON.stringify(before)}`);
+    let asked = '';
+    appR2.page.once('dialog', d => { asked = d.message(); });
+    await appR2.page.evaluate(() => document.getElementById('aqClearAll').click());
+    await appR2.page.waitForFunction(() => window.__aqTestHooks.getQueue().length === 0, null, { timeout: 5000 });
+    await pollUntil(appR2.page, async () => (await getAnalysisQueue('local')).length === 0, null, { timeout: 5000 });
+    const after = await appR2.page.evaluate(() => ({ empty: document.getElementById('analysisQueueEmpty').style.display !== 'none',
+      footer: document.getElementById('aqFooter').style.display }));
+    assert(/Remove all \d+ positions from the Analysis Queue\?/.test(asked), `expected a confirm, got ${JSON.stringify(asked)}`);
+    assert(after.empty && after.footer === 'none', `expected the empty state with Clear all hidden, got ${JSON.stringify(after)}`);
+    await appR2.page.evaluate(() => { document.querySelector('#analysisQueueOverlay .mb-leave').click(); window.__aqTestHooks.exitVrCpuGuard(); });
+    ok('Analysis Queue: Clear all empties it, after a confirm');
+  } catch(e){ bad('Analysis Queue: Clear all', e); }
 } finally {
   await appR2.close();
 }
