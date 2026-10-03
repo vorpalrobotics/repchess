@@ -1961,6 +1961,9 @@
     </label>
     <label style="font-size:.85rem;margin-bottom:.2rem" title="Ask lichess.org's shared cache of engine analyses first; only the position is sent">
       <input type="checkbox" id="aqCloudToggle"> Use Lichess cloud evaluations first</label>
+    <div id="aqCloudAcceptRow" style="font-size:.85rem;margin:0 0 .3rem 1.4rem" title="A cloud answer that meets these finishes the item; a shallower one is saved as provisional and your engine carries on. &quot;Your target&quot; means the depth / lines the item was queued with.">
+      Accept a cloud answer if depth &ge; <select id="aqCloudAcceptDepth"></select>
+      and lines &ge; <select id="aqCloudAcceptLines"></select></div>
     <p id="aqCloudStats" style="font-size:.8rem;color:#666;margin:0 0 .4rem"></p>
     <p id="aqThreadsNote" style="display:none;font-size:.8rem;color:#666;margin:0 0 .4rem"></p>
     <p id="aqStatus" style="display:none;font-size:.85rem;color:#8a5a00;margin:0 0 .5rem"></p>
@@ -2356,6 +2359,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261005-506"></script>
+<script type="module" src="js/app.js?v=20261005-507"></script>
 </body>
 </html>
