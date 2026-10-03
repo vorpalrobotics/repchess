@@ -88,6 +88,26 @@ interrupts whatever's running. That's deliberate: it's a quick "let me see"
 about moves you've actually played, not something to leave churning. See
 <em>Exploring Your Games</em>.</p>
 
+<h3>Lichess cloud evaluations</h3>
+<p>Before your own engine spends minutes on a position, the queue asks
+lichess.org, which keeps a shared store of deep engine analyses of positions
+its users have looked at -- often to depth 40 to 60 for anything commonly
+played. If it has the position at your depth and number of lines, the result
+is saved and the item is done in a second. If it has a shallower answer, that
+is saved straight away as a provisional evaluation and your engine still
+takes the position to your target. Rare positions it has never seen simply go
+to your engine as before. (It offers at most 5 lines; a sixth comes from your
+engine.)</p>
+<p>This runs alongside the engine, so a long queue of common positions clears
+quickly, even while the engine is still loading. A saved evaluation that came
+from Lichess says so in its tooltip, and the queue shows how many items it
+answered this session. Only the position is sent -- nothing about you or the
+rest of your repertoire -- and <strong>Use Lichess cloud evaluations
+first</strong> at the top of the queue turns it off. If Lichess can't be
+reached, or asks the app to slow down, it waits a minute and tries again;
+your engine carries on regardless. A deeper evaluation you already have is
+never replaced by a shallower one from the cloud.</p>
+
 <h3>A note on VR</h3>
 <p>Walking the memory palace is demanding on its own, so entering VR stops the
 queue from starting new work and caps the engine's threads while you're in

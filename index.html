@@ -1956,6 +1956,9 @@
     <label id="aqThreadsField" style="display:none;font-size:.85rem;margin-bottom:.4rem">Threads:
       <select id="aqThreadsSelect"></select>
     </label>
+    <label style="font-size:.85rem;margin-bottom:.2rem" title="Ask lichess.org's shared cache of engine analyses first; only the position is sent">
+      <input type="checkbox" id="aqCloudToggle"> Use Lichess cloud evaluations first</label>
+    <p id="aqCloudStats" style="font-size:.8rem;color:#666;margin:0 0 .4rem"></p>
     <p id="aqThreadsNote" style="display:none;font-size:.8rem;color:#666;margin:0 0 .4rem"></p>
     <p id="aqStatus" style="display:none;font-size:.85rem;color:#8a5a00;margin:0 0 .5rem"></p>
     <p id="analysisQueueEmpty" style="color:#666;font-size:.85rem">Nothing queued. Use a move row's ⋮ menu → "Add to Analysis Queue" to queue deep background analysis.</p>
@@ -2350,6 +2353,6 @@
       '<button onclick="location.reload()" style="padding:.45em 1.4em;font-size:1rem">Reload</button></div>';
   }, 15000);
 </script>
-<script type="module" src="js/app.js?v=20261005-502"></script>
+<script type="module" src="js/app.js?v=20261005-503"></script>
 </body>
 </html>

@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-502';
+const BUILD_TAG = '-503';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -14273,7 +14273,7 @@ startEngine();
 // a safety net, like Perfect Opening's own poll: whatever should have
 // restarted the queue and didn't, it starts again within a few seconds.
 // A no-op while it is already working, or while something holds it.
-setInterval(() => { if(ANALYSIS_QUEUE.length && !aqProcessing) maybeResumeAnalysisQueue(); }, 5000);
+setInterval(() => { if(ANALYSIS_QUEUE.length){ aqCloudSweep(); if(!aqProcessing) maybeResumeAnalysisQueue(); } }, 5000);
 
 function formatScore(score, turn){
   // engine scores are relative to the side to move; flip to a White-relative sign
@@ -14327,7 +14327,7 @@ function refreshEvalSpan(evalSpan, evalObj, lineCount){
     evalSpan.classList.add('evaltag-live');
     evalSpan.title = 'Live analysis in progress…' + pvSuffix;
   } else {
-    evalSpan.title = `Saved eval, depth ${evalObj.depth} — click Analyse to refresh${pvSuffix}`;
+    evalSpan.title = `Saved eval, depth ${evalObj.depth}${evalObj.source === 'lichess' ? ' (Lichess cloud)' : ''} — click Analyse to refresh${pvSuffix}`;
   }
   evalSpan.style.display='';
 }
@@ -15010,6 +15010,10 @@ async function clearAnalysisQueue(){
   log(`cleared ${n} position${n === 1 ? '' : 's'} from the analysis queue`);
 }
 $('aqClearAll').onclick = clearAnalysisQueue;
+$('aqCloudToggle').onchange = () => {
+  try { localStorage.setItem(LS_AQ_CLOUD, $('aqCloudToggle').checked ? '1' : '0'); } catch {}
+  if($('aqCloudToggle').checked) maybeResumeAnalysisQueue();
+};
 
 async function refreshAnalysisQueue(){
   ANALYSIS_QUEUE = await getAnalysisQueue(LOCAL_USER);
@@ -15188,6 +15192,13 @@ function renderAnalysisQueueStatus(){
   el.style.display = html ? '' : 'none';
   const retry = $('aqRetryEngine');
   if(retry) retry.onclick = () => { retry.disabled = true; startEngine(); };
+  const cloud = $('aqCloudToggle');
+  if(cloud) cloud.checked = aqCloudEnabled();
+  const cs = $('aqCloudStats');
+  if(cs){
+    const { done, partial } = AQ_CLOUD_STATS;
+    cs.textContent = (done || partial) ? `This session: ${done} finished from the cloud${partial ? `, ${partial} given a provisional answer` : ''}.` : '';
+  }
   // why there is no Threads choice, rather than the control just not being there
   const note = $('aqThreadsNote');
   if(note){
@@ -15778,20 +15789,22 @@ async function maybeResumePerfectOpening(){
 async function saveAnalysisQueueResult(item, fen, result){
   const {depth, lines} = result;
   const ranks = Object.keys(lines).map(Number).sort((a,b)=>a-b);
-  if(!depth || !ranks.length) return;   // interrupted before anything was reported
+  if(!depth || !ranks.length) return false;   // interrupted before anything was reported
 
   const existing = await getPref(item.lineId, item.seq);
   const existingEval = existing?.eval;
   const existingLineCount = existing?.evalLines?.length || (existingEval ? 1 : 0);
   const improves = !existingEval || depth > existingEval.depth ||
     (depth === existingEval.depth && ranks.length > existingLineCount);
-  if(!improves) return;
+  if(!improves) return false;
 
   const best = lines[ranks[0]];
-  const patch = { eval: toEvalLine(best.score, best.depth, best.pv, fen) };
+  // where it came from, when not this browser's engine (the Lichess cloud)
+  const tag = (ev) => result.source ? { ...ev, source: result.source } : ev;
+  const patch = { eval: tag(toEvalLine(best.score, best.depth, best.pv, fen)) };
   if(ranks.length > 1){
     patch.evalLines = ranks.map(idx => lines[idx]).filter(l => l?.score)
-      .map(l => toEvalLine(l.score, l.depth, l.pv, fen));
+      .map(l => tag(toEvalLine(l.score, l.depth, l.pv, fen)));
   }
   await setPref(item.lineId, item.seq, patch);
   noteSavedEvals({ seq: item.seq, ...patch });
@@ -15801,6 +15814,7 @@ async function saveAnalysisQueueResult(item, fen, result){
     PREFS[key] = {...(PREFS[key] ?? {key, lineId:item.lineId, seq:item.seq, reply:'', note:'', mnemonic:'', hidden:false}), ...patch};
     renderTreeBody(CURRENT_LINE);
   }
+  return true;
 }
 
 // true while the VR/three.js walkthrough is open -- gates Perfect Opening's
@@ -15828,7 +15842,121 @@ function exitVrCpuGuard(){
   renderAnalysisQueueModalIfOpen();
 }
 
+/* ---------- Lichess cloud evaluations ----------
+   lichess.org keeps a shared cache of deep engine analyses of positions its
+   users have analysed -- millions of them, often at depth 40-60 for anything
+   that gets played. It's free, needs no key or login, and answers CORS
+   requests, so before the local engine spends minutes on a queued position
+   the queue asks there first:
+     - deep enough, with enough lines: saved, and the item is done;
+     - shallower or fewer lines: saved as a provisional answer (only if it
+       beats what's saved -- saveAnalysisQueueResult's rule), and the item
+       stays for the engine to take to its target;
+     - not there, or Lichess unreachable: the engine as before.
+   A sweep runs over the whole queue in the background, independent of the
+   engine -- so it works while the engine is still loading, during live
+   analysis and in VR -- and the engine loop checks its next item first too.
+   Lichess asks for one request at a time and a minute's pause after a 429:
+   requests are chained, spaced, and paused (also after a network failure).
+   Only the position (a FEN) is sent. */
+const LS_AQ_CLOUD = 'repchess_aqCloud';
+const CLOUD_EVAL_URL = 'https://lichess.org/api/cloud-eval';
+const CLOUD_GAP_MS = 250;
+let cloudChain = Promise.resolve();
+let cloudPausedUntil = 0;
+const AQ_CLOUD_STATS = { done: 0, partial: 0 };
+function aqCloudEnabled(){ try { return localStorage.getItem(LS_AQ_CLOUD) !== '0'; } catch { return true; } }
+// a Lichess PV move, normalised: castling may come as the king taking its
+// own rook (e1h1); chess.js wants the king's landing square (e1g1)
+function cloudUciMove(chess, uci){
+  let from = uci.slice(0, 2), to = uci.slice(2, 4);
+  const p = chess.get(from), q = chess.get(to);
+  if(p && p.type === 'k' && q && q.type === 'r' && q.color === p.color) to = (to[0] > from[0] ? 'g' : 'c') + to[1];
+  return chess.move({ from, to, promotion: uci.slice(4, 5) || undefined }) ? from + to + (uci.slice(4, 5) || '') : null;
+}
+// a Lichess cloud-eval answer in the engine's own result shape, or null
+function cloudToEngineResult(fen, data){
+  const sign = fen.split(' ')[1] === 'w' ? 1 : -1;   // Lichess scores are White's; the engine's, the side to move's
+  const lines = {};
+  (data.pvs || []).forEach((pv, i) => {
+    const chess = new Chess(fen), uci = [];
+    for(const m of String(pv.moves || '').split(' ').filter(Boolean)){
+      const u = cloudUciMove(chess, m);
+      if(!u) break;
+      uci.push(u);
+    }
+    if(!uci.length) return;
+    const score = pv.mate != null ? { type: 'mate', value: pv.mate * sign } : { type: 'cp', value: (pv.cp || 0) * sign };
+    lines[i + 1] = { score, depth: data.depth, pv: uci };
+  });
+  if(!data.depth || !Object.keys(lines).length) return null;
+  return { depth: data.depth, lines, source: 'lichess' };
+}
+if(localStorage.getItem('threeTestDebug')) window.__cloudTestHooks = { convert: (fen, data) => cloudToEngineResult(fen, data) };
+// one lookup: { status: 'hit', result } in the engine's own result shape
+// (scores relative to the side to move, as analyze() reports them),
+// 'miss' (Lichess hasn't analysed it), or 'unavailable' (try again later)
+function cloudEval(fen, multiPv){
+  const run = async () => {
+    if(Date.now() < cloudPausedUntil) return { status: 'unavailable' };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 10000);
+    let res;
+    try {
+      res = await fetch(`${CLOUD_EVAL_URL}?fen=${encodeURIComponent(fen)}&multiPv=${multiPv}`, { credentials: 'omit', signal: ctl.signal });
+    } catch(e){ cloudPausedUntil = Date.now() + 60000; return { status: 'unavailable' }; }
+    finally { clearTimeout(timer); }
+    if(res.status === 404) return { status: 'miss' };
+    if(res.status === 429 || !res.ok){ cloudPausedUntil = Date.now() + 60000; return { status: 'unavailable' }; }
+    let data;
+    try { data = await res.json(); } catch { return { status: 'miss' }; }
+    const result = cloudToEngineResult(fen, data);
+    return result ? { status: 'hit', result } : { status: 'miss' };
+  };
+  const p = cloudChain.then(run);
+  cloudChain = p.catch(() => {}).then(() => new Promise(r => setTimeout(r, CLOUD_GAP_MS)));
+  return p;
+}
+// asks the cloud about one queued item; true when that answered it in full
+// (and the item has been taken off the queue)
+async function aqCloudCheck(item){
+  if(item.cloudChecked) return false;
+  item.cloudChecked = true;
+  const fen = fenForSeq(item.seq);
+  const legal = new Chess(fen).moves().length;
+  if(!legal) return false;
+  const want = Math.max(1, Math.min(item.multipv, legal));
+  const r = await cloudEval(fen, Math.min(want, 5));
+  if(r.status === 'unavailable'){ item.cloudChecked = false; return false; }   // ask again once it's back
+  if(r.status !== 'hit') return false;
+  const saved = await saveAnalysisQueueResult(item, fen, r.result);
+  const full = r.result.depth >= item.depth && Object.keys(r.result.lines).length >= want;
+  const idx = ANALYSIS_QUEUE.indexOf(item);
+  if(full && idx !== -1 && item !== aqCurrentItem){
+    ANALYSIS_QUEUE.splice(idx, 1);
+    await deleteAnalysisQueueItem(item.id);
+    AQ_CLOUD_STATS.done++;
+  } else if(!full && saved) AQ_CLOUD_STATS.partial++;
+  renderAnalysisQueueModalIfOpen();
+  refreshAnalysisQueueRowMarkers();
+  return full && idx !== -1;
+}
+// the background pass over the whole queue (one at a time, never twice at once)
+let aqCloudSweeping = false;
+async function aqCloudSweep(){
+  if(aqCloudSweeping || !aqCloudEnabled() || Date.now() < cloudPausedUntil) return;
+  aqCloudSweeping = true;
+  try {
+    for(const item of ANALYSIS_QUEUE.slice()){
+      if(!aqCloudEnabled() || Date.now() < cloudPausedUntil) break;
+      if(item.cloudChecked || item === aqCurrentItem || !ANALYSIS_QUEUE.includes(item)) continue;
+      await aqCloudCheck(item);
+    }
+  } finally { aqCloudSweeping = false; }
+}
+
 function maybeResumeAnalysisQueue(){
+  aqCloudSweep();
   if(aqProcessing) return;
   processAnalysisQueueLoop();
 }
@@ -15845,6 +15973,11 @@ async function processAnalysisQueueLoop(){
       // the queue again via analyze()'s own _stopCurrent()).
       if(engineState === 'running' || !engine.ready || vrActive) break;
       const item = ANALYSIS_QUEUE[0];
+      // the cloud first: an item it fully answers never takes engine time
+      if(aqCloudEnabled() && !item.cloudChecked){
+        if(await aqCloudCheck(item)) continue;
+        if(ANALYSIS_QUEUE[0] !== item) continue;   // the queue changed meanwhile
+      }
       aqCurrentItem = item;
       aqCurrentProgress = null;
       item.status = 'processing';
