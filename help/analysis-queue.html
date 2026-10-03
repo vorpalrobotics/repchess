@@ -100,8 +100,11 @@ to your engine as before. (It offers at most 5 lines; a sixth comes from your
 engine.)</p>
 <p>This runs alongside the engine, so a long queue of common positions clears
 quickly, even while the engine is still loading. A saved evaluation that came
-from Lichess says so in its tooltip, and the queue shows how many items it
-answered this session. Only the position is sent -- nothing about you or the
+from Lichess has a small knight
+(&#9822;)
+beside it in the move table (and says so in its tooltip), and the queue shows
+how many items it answered this session. The browser's developer console logs
+each lookup as <code>[LICHESS CLOUD] ...</code>. Only the position is sent -- nothing about you or the
 rest of your repertoire -- and <strong>Use Lichess cloud evaluations
 first</strong> at the top of the queue turns it off. If Lichess can't be
 reached, or asks the app to slow down, it waits a minute and tries again;

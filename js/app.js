@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-503';
+const BUILD_TAG = '-504';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -14317,7 +14317,10 @@ function evalClass({type, value}, lineColor){
 
 function refreshEvalSpan(evalSpan, evalObj, lineCount){
   if(!evalObj){ evalSpan.style.display='none'; return; }
-  evalSpan.textContent = formatEvalTag(evalObj);
+  // an eval from the Lichess cloud carries a small knight (Lichess's emblem),
+  // explained by the tooltip; it adds no text, so textContent is still the score
+  evalSpan.innerHTML = escapeHtml(formatEvalTag(evalObj))
+    + (evalObj.source === 'lichess' ? '<i class="fa-solid fa-chess-knight evaltag-cloud" title="Evaluation from the Lichess cloud" aria-label="Evaluation from the Lichess cloud"></i>' : '');
   evalSpan.className = `evaltag ${evalClass(evalObj, CURRENT_LINE.color)}`;
   evalSpan.dataset.depth = evalObj.depth;
   evalSpan.dataset.pv = evalObj.pv || '';
@@ -15919,18 +15922,27 @@ function cloudEval(fen, multiPv){
 }
 // asks the cloud about one queued item; true when that answered it in full
 // (and the item has been taken off the queue)
+// queue ids already put to the cloud this session -- kept apart from the item
+// objects, which refreshAnalysisQueue() swaps for fresh copies from the db
+const AQ_CLOUD_CHECKED = new Set();
 async function aqCloudCheck(item){
-  if(item.cloudChecked) return false;
-  item.cloudChecked = true;
+  if(AQ_CLOUD_CHECKED.has(item.id)) return false;
+  AQ_CLOUD_CHECKED.add(item.id);
   const fen = fenForSeq(item.seq);
   const legal = new Chess(fen).moves().length;
   if(!legal) return false;
   const want = Math.max(1, Math.min(item.multipv, legal));
   const r = await cloudEval(fen, Math.min(want, 5));
-  if(r.status === 'unavailable'){ item.cloudChecked = false; return false; }   // ask again once it's back
-  if(r.status !== 'hit') return false;
+  if(r.status === 'unavailable'){ AQ_CLOUD_CHECKED.delete(item.id); return false; }   // ask again once it's back
+  const where = seqToNotation(item.seq);
+  if(r.status !== 'hit'){ console.log(`[LICHESS CLOUD] not in the cloud: ${where}`); return false; }
   const saved = await saveAnalysisQueueResult(item, fen, r.result);
   const full = r.result.depth >= item.depth && Object.keys(r.result.lines).length >= want;
+  const nLines = Object.keys(r.result.lines).length;
+  console.log(saved
+    ? `[LICHESS CLOUD] used Lichess cloud eval for position ${where} (depth ${r.result.depth}, ${nLines} line${nLines === 1 ? '' : 's'})`
+      + (full ? ' -- done' : ` -- provisional, the engine continues to depth ${item.depth}`)
+    : `[LICHESS CLOUD] cloud eval for position ${where} (depth ${r.result.depth}) not used: a deeper eval is already saved`);
   const idx = ANALYSIS_QUEUE.indexOf(item);
   if(full && idx !== -1 && item !== aqCurrentItem){
     ANALYSIS_QUEUE.splice(idx, 1);
@@ -15949,7 +15961,7 @@ async function aqCloudSweep(){
   try {
     for(const item of ANALYSIS_QUEUE.slice()){
       if(!aqCloudEnabled() || Date.now() < cloudPausedUntil) break;
-      if(item.cloudChecked || item === aqCurrentItem || !ANALYSIS_QUEUE.includes(item)) continue;
+      if(AQ_CLOUD_CHECKED.has(item.id) || item === aqCurrentItem || !ANALYSIS_QUEUE.includes(item)) continue;
       await aqCloudCheck(item);
     }
   } finally { aqCloudSweeping = false; }
@@ -15974,7 +15986,7 @@ async function processAnalysisQueueLoop(){
       if(engineState === 'running' || !engine.ready || vrActive) break;
       const item = ANALYSIS_QUEUE[0];
       // the cloud first: an item it fully answers never takes engine time
-      if(aqCloudEnabled() && !item.cloudChecked){
+      if(aqCloudEnabled() && !AQ_CLOUD_CHECKED.has(item.id)){
         if(await aqCloudCheck(item)) continue;
         if(ANALYSIS_QUEUE[0] !== item) continue;   // the queue changed meanwhile
       }
@@ -16418,6 +16430,7 @@ if(localStorage.getItem('threeTestDebug')){
   window.__aqTestHooks = {
     getQueue: () => ANALYSIS_QUEUE,
     getCurrentItem: () => aqCurrentItem,
+    cloudChecked: (id) => AQ_CLOUD_CHECKED.has(id),
     addToAnalysisQueue: (lineId, seq, depth, multipv) => addToAnalysisQueue(lineId, seq, depth, multipv),
     addChildrenToAnalysisQueue: (lineId, seqs, depth, multipv) => addChildrenToAnalysisQueue(lineId, seqs, depth, multipv),
     cancelAnalysisQueueItem: (id) => cancelAnalysisQueueItem(id),

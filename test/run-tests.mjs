@@ -3059,7 +3059,10 @@ try {
   //      local eval kept.
   try {
     await add(['d4','d5']); await add(['d4','Nf6']); await add(['d4','e6']); await add(['d4','c5'], 70, 4);
-    await pollUntil(appCE.page, () => window.__aqTestHooks.getQueue().every(it => it.cloudChecked), null, { timeout: 10000 });
+    // every lookup answered (an item is marked checked as soon as its lookup
+    // STARTS), and the queue settled after the last of them
+    for(let i = 0; i < 100 && !['d5','Nf6','e6','c5'].every(k => requests.includes(k)); i++) await appCE.page.waitForTimeout(100);
+    await appCE.page.waitForTimeout(500);
     const q = await queued();
     assert(JSON.stringify(q.sort()) === JSON.stringify(['Nf6','c5','e6']), `expected d5 finished from the cloud, got queue ${JSON.stringify(q)}`);
     const d5 = await pref('d5');
@@ -3073,6 +3076,17 @@ try {
     assert(c5.eval.depth === 60 && !c5.eval.source, `expected the deeper local eval kept, got ${JSON.stringify(c5.eval)}`);
     await appCE.page.evaluate(() => document.getElementById('menuAnalysisQueue').click());
     await appCE.page.waitForFunction(() => document.getElementById('analysisQueueOverlay').style.display === 'flex', null, { timeout: 5000 });
+    // the move table marks the cloud's evals with a small knight, and only those
+    const marks = await appCE.page.evaluate(() => Object.fromEntries(['d4,d5', 'd4,c5'].map(k => {
+      const tag = document.querySelector(`tr.data-row[data-seq="${k}"] .evaltag`);
+      return [k, { cloud: tag?.querySelector('.evaltag-cloud')?.title === 'Evaluation from the Lichess cloud', text: tag?.textContent, tip: tag?.title || '' }];
+    })));
+    assert(marks['d4,d5'].cloud && marks['d4,d5'].text === '+0.3/50' && /\(Lichess cloud\)/.test(marks['d4,d5'].tip),
+      `expected the cloud eval marked, got ${JSON.stringify(marks)}`);
+    assert(!marks['d4,c5'].cloud, `expected the local eval unmarked, got ${JSON.stringify(marks)}`);
+    assert(appCE.consoleLogs.some(t => t === '[LICHESS CLOUD] used Lichess cloud eval for position 1.d4 d5 (depth 50, 4 lines) -- done')
+      && appCE.consoleLogs.some(t => t === '[LICHESS CLOUD] not in the cloud: 1.d4 e6'),
+      `expected the console lines, got ${JSON.stringify(appCE.consoleLogs.filter(t => /LICHESS/.test(t)))}`);
     const stats = await appCE.page.evaluate(() => ({ on: document.getElementById('aqCloudToggle').checked, text: document.getElementById('aqCloudStats').textContent }));
     assert(stats.on && stats.text === 'This session: 1 finished from the cloud, 1 given a provisional answer.', `stats: ${JSON.stringify(stats)}`);
     ok('cloud evals: a deep hit finishes an item, a shallow one is provisional, a miss and a deeper local eval are left alone');
@@ -3087,7 +3101,14 @@ try {
     assert(requests.length === n0, `expected no lookups while off, got ${JSON.stringify(requests.slice(n0))}`);
     await appCE.page.evaluate(() => { const t = document.getElementById('aqCloudToggle'); t.checked = true; t.dispatchEvent(new Event('change')); });
     await appCE.page.evaluate(() => document.querySelector('#analysisQueueOverlay .mb-leave').click());
-    await pollUntil(appCE.page, () => window.__aqTestHooks.getQueue().find(it => it.seq[1] === 'g6')?.cloudChecked, null, { timeout: 10000 });
+    for(let i = 0; i < 100 && !requests.includes('g6'); i++) await appCE.page.waitForTimeout(100);
+    assert(requests.includes('g6'), 'expected g6 asked about once turned back on');
+    // reopening the queue reloads its items from the db; nothing is asked twice
+    const asked = requests.length;
+    await appCE.page.evaluate(async () => { await window.__aqTestHooks.refreshAnalysisQueue(); window.__aqTestHooks.maybeResumeAnalysisQueue(); });
+    await appCE.page.waitForTimeout(800);
+    assert(requests.length === asked && await appCE.page.evaluate(() => window.__aqTestHooks.getQueue().every(it => window.__aqTestHooks.cloudChecked(it.id))),
+      `expected no repeat lookups, got ${JSON.stringify(requests.slice(asked))}`);
     await add(['d4','f5']);
     for(let i = 0; i < 50 && !requests.includes('f5'); i++) await appCE.page.waitForTimeout(100);
     assert(requests.includes('f5'), 'expected f5 asked about');
