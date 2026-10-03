@@ -3064,7 +3064,9 @@ try {
     for(let i = 0; i < 100 && !['d5','Nf6','e6','c5'].every(k => requests.includes(k)); i++) await appCE.page.waitForTimeout(100);
     await appCE.page.waitForTimeout(500);
     const q = await queued();
-    assert(JSON.stringify(q.sort()) === JSON.stringify(['Nf6','c5','e6']), `expected d5 finished from the cloud, got queue ${JSON.stringify(q)}`);
+    assert(JSON.stringify(q.slice().sort()) === JSON.stringify(['Nf6','c5','e6']), `expected d5 finished from the cloud, got queue ${JSON.stringify(q)}`);
+    // a provisional answer sends the item to the back of the queue
+    assert(q[q.length - 1] === 'Nf6', `expected Nf6 moved to the end, got queue ${JSON.stringify(q)}`);
     const d5 = await pref('d5');
     assert(d5.eval.depth === 50 && d5.eval.source === 'lichess' && d5.eval.value === 25 && d5.evalLines.length === 4
       && d5.evalLines[1].pvUci[0] === 'g1f3', `expected the cloud's 4 lines saved for d5, got ${JSON.stringify(d5)}`);

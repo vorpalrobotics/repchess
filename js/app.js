@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-505';
+const BUILD_TAG = '-506';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -15964,6 +15964,18 @@ async function aqCloudCheck(item){
   } else if(!full && saved){
     AQ_CLOUD_STATS.partial++;
     AQ_CLOUD_PARTIAL.set(item.id, { depth: r.result.depth, lines: nLines });
+    // it has an answer of sorts now: let the unanswered ones go first
+    if(idx !== -1 && item !== aqCurrentItem && idx < ANALYSIS_QUEUE.length - 1){
+      ANALYSIS_QUEUE.splice(idx, 1);
+      ANALYSIS_QUEUE.push(item);
+      ANALYSIS_QUEUE.forEach((it, i) => { it.order = i; });
+      await Promise.all(ANALYSIS_QUEUE.map(it => putAnalysisQueueItem(it)));
+    }
+  } else if(!full){
+    // not saved because this same cloud answer already was (a reload since):
+    // still mark it, but leave its place in the queue alone
+    const ev = (await getPref(item.lineId, item.seq))?.eval;
+    if(ev?.source === 'lichess' && ev.depth === r.result.depth) AQ_CLOUD_PARTIAL.set(item.id, { depth: ev.depth, lines: nLines });
   }
   renderAnalysisQueueModalIfOpen();
   refreshAnalysisQueueRowMarkers();
