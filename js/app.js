@@ -107,7 +107,7 @@ function formatBuildStamp(utcStamp){
 }
 // manual build tag — bump alongside the app.js?v= cache-buster in index.html so
 // the visible heading confirms exactly which build loaded, not just the deploy time.
-const BUILD_TAG = '-500';
+const BUILD_TAG = '-501';
 document.getElementById('buildStamp').textContent =
   `(${typeof APP_VERSION!=='undefined' ? formatBuildStamp(APP_VERSION) : 'dev'} ${BUILD_TAG})`;
 
@@ -14991,6 +14991,26 @@ async function cancelAnalysisQueueItem(id){
   refreshAnalysisQueueRowMarkers();
 }
 
+/* "Clear all", for a queue that got more than intended (a whole system's
+   unanswered moves, say). Only the waiting work goes: analysis already saved
+   onto positions stays. The item being searched right now is stopped, as a
+   single cancel would. Emptied in place (not reassigned) because the running
+   loop looks its item up in this same array afterwards. */
+async function clearAnalysisQueue(){
+  const n = ANALYSIS_QUEUE.length;
+  if(!n) return;
+  if(!confirm(`Remove all ${n} position${n === 1 ? '' : 's'} from the Analysis Queue?\n\n`
+    + 'Analysis already saved on your positions stays; only the work still waiting is dropped. This can\'t be undone.')) return;
+  const items = ANALYSIS_QUEUE.splice(0);
+  const wasProcessing = !!aqCurrentItem;
+  await Promise.all(items.map(it => deleteAnalysisQueueItem(it.id)));
+  if(wasProcessing) engine.stop();
+  renderAnalysisQueueModal();
+  refreshAnalysisQueueRowMarkers();
+  log(`cleared ${n} position${n === 1 ? '' : 's'} from the analysis queue`);
+}
+$('aqClearAll').onclick = clearAnalysisQueue;
+
 async function refreshAnalysisQueue(){
   ANALYSIS_QUEUE = await getAnalysisQueue(LOCAL_USER);
   const lines = await getLines(LOCAL_USER);
@@ -15181,6 +15201,7 @@ function renderAnalysisQueueStatus(){
 }
 function renderAnalysisQueueModal(){
   renderAnalysisQueueStatus();
+  $('aqFooter').style.display = ANALYSIS_QUEUE.length ? 'flex' : 'none';
   const empty = $('analysisQueueEmpty'), table = $('analysisQueueTable'), body = $('analysisQueueBody');
   // the heading counts what is waiting, and keeps up as items finish
   const titleEl = $('analysisQueueBar').querySelector('.modal-bar-title');
