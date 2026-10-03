@@ -102,6 +102,14 @@ at all get the engine first. If the cloud's answer is already good enough,
 delete the item and save the engine the time. Rare positions it has never seen simply go
 to your engine as before. (It offers at most 5 lines; a sixth comes from your
 engine.)</p>
+<p>Or let the queue decide: under the checkbox, <strong>Accept a cloud answer
+if depth &ge; ... and lines &ge; ...</strong> sets how good a cloud answer
+must be to finish an item outright. Both start at <em>your target</em> -- the
+depth and lines the item was queued with -- so nothing changes until you lower
+them. Depth 30 to 35 is plenty for most repertoire decisions. Lowering them
+also finishes any queued item whose provisional answer now qualifies (that
+answer is already in the move table), and the setting never asks for more than
+an item itself wants.</p>
 <p>This runs alongside the engine, so a long queue of common positions clears
 quickly, even while the engine is still loading. A saved evaluation that came
 from Lichess has a small knight
